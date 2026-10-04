@@ -28,15 +28,18 @@ def sample():
                          'call_started_at': '2026-10-04T12:30:00+03:00'},
             'primary_analysis': {'score': 47, 'level': '❌', 'analysis': {'rows': []},
                                  'short_report': {'result': 'Согласовано коммерческое предложение'}},
+            'configuration': {'show_full_phone': True},
             'auxiliary': {'combined': grade(), 'limitations': []}}
 
 
 class RendererTests(unittest.TestCase):
-    def test_one_report_score_active_phone_masked_no_keys_or_duplicates(self):
+    def test_combined_sections_score_active_full_phone_no_keys_or_duplicates(self):
         row = sample(); text = html.unescape(render.summary(row))
         self.assertIn('47/100', text); self.assertNotIn('100/100', text)
-        self.assertNotIn('79990001122', text); self.assertIn('1122', text)
-        self.assertIn('№123', text); self.assertIn('04.10.2026 12:30', text); self.assertIn('1:31', text)
+        for heading in ('🎯 Итог звонка', '📊 Оценка звонка', '✅ Что получилось', '💬 Что изменить', '🎯 Что сделать дальше', '👤 Руководителю'):
+            self.assertIn(heading, text)
+        self.assertIn('79990001122', text)
+        self.assertNotIn('№123', text); self.assertNotIn('Подтверждено действий', text); self.assertIn('04.10.2026 12:30', text); self.assertIn('1:31', text)
         self.assertEqual(text.count('Да, отправьте КП'), 1)
         self.assertNotIn('next_step', text); self.assertNotIn('readable_report', text)
         self.assertNotIn('{', text)
@@ -82,13 +85,16 @@ class RendererTests(unittest.TestCase):
         self.assertIn('Основная шкала', text); self.assertIn('Критерии', text)
         self.assertNotIn('Стоимость: $', text)
 
-    def test_number_inside_quote_is_masked_and_quote_not_repeated(self):
+    def test_number_inside_quote_is_full_and_quote_not_repeated(self):
         row = sample(); row['auxiliary'] = {}
         row['transcript'] += ' Клиент: Звоните +7 (999) 000-11-22.'
         row['primary_analysis']['short_report']['weak'] = [{'text': '«Звоните +7 (999) 000-11-22» — срок не уточнён'}]
         text = html.unescape(render.summary(row))
-        self.assertNotIn('999) 000', text)
-        self.assertEqual(text.count('[номер скрыт]'), 1)
+        self.assertIn('999) 000', text)
+        self.assertNotIn('[номер скрыт]', text)
+        row['configuration']['show_full_phone'] = False
+        old_text = html.unescape(render.summary(row))
+        self.assertNotIn('999) 000', old_text)
 
     def test_guide_ooxml_content_and_exact_button_names(self):
         from scripts.build_manager_guide import PAGES, NAME

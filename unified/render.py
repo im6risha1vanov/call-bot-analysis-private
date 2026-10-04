@@ -8,7 +8,7 @@ from datetime import datetime
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from methodology.evaluation import evidence_valid
 
-FORMAT_VERSION = 'unified_20261004_v1'
+FORMAT_VERSION = 'combined_style_20261004_v2'
 TITLES = {
     'implication_questions': 'Уточнить последствия проблемы',
     'problem_over_situational': 'Раскрыть затруднения клиента',
@@ -58,6 +58,8 @@ def phone_fingerprint(number):
 
 
 def redact_phone(text, row):
+    if (row.get('configuration') or {}).get('show_full_phone'):
+        return text
     digest = (row.get('configuration') or {}).get('phone_sha256') or phone_fingerprint(row['metadata'].get('phone'))
     if not digest:
         return text
@@ -92,9 +94,13 @@ def header(row):
         date = datetime.fromisoformat(stamp).strftime('%d.%m.%Y %H:%M') if stamp else 'дата не указана'
     except (TypeError, ValueError):
         date = 'дата не указана'
-    return (f"📞 Разбор звонка №{row['call_id']}\n"
-            f"{clean(meta.get('manager'), 75) or 'Менеджер не указан'} · {date} · {seconds // 60}:{seconds % 60:02d}\n"
-            f"Клиент: {mask_phone(meta.get('phone'))}")
+    phone = clean(meta.get('phone'), 50, expand=False) or 'номер не указан'
+    if not (row.get('configuration') or {}).get('show_full_phone'):
+        phone = mask_phone(phone)
+    zone = clean(meta.get('timezone'), 45, expand=False)
+    return (f"📞 {clean(meta.get('manager'), 75) or 'Менеджер не указан'} · {seconds // 60}:{seconds % 60:02d}\n"
+            f"{date}" + (f" · {zone}" if zone else '') + f"\nКлиент: {phone}")
+
 
 
 def observations(row):
@@ -190,67 +196,119 @@ def outcome(row):
     return text or 'Подтверждённый результат по доступной записи не установлен.', False
 
 
+def verdict(row):
+    """The established outcome/key-failure verdict, never a made-up score threshold."""
+    primary = row['primary_analysis']
+    if primary.get('analysis', {}).get('call_cut_short') or not row['transcript'].strip():
+        return '❔ Данных недостаточно для оценки'
+    return {'✅': '✅ Следующий шаг достигнут', '⚠️': '⚠️ Есть что улучшить',
+            '❌': '❌ Нужен разбор ключевых упущений'}.get(primary.get('level'), '❔ Данных недостаточно для оценки')
+
+
 def summary(row):
+    """Use the combined report's sections; keep the active score and pinned sources."""
+    from methodology.profiles import PRODUCT_LABELS, STAGE_LABELS, ROLE_LABELS
     good, weak, conflicts = observations(row)
+    combined = (row.get('auxiliary') or {}).get('combined') or {}
+    readable = combined.get('readable_report') or {}
     brief, confirmed = outcome(row)
-    readable = ((row.get('auxiliary') or {}).get('combined') or {}).get('readable_report') or {}
     conversation = clean(readable.get('summary'), 240)
-    # Reject unsupported quotes or numbers in the otherwise plain short summary.
     quoted = re.findall(r'«([^»]+)»|"([^"\n]+)"', conversation)
     if any(not quote(a or b, row['transcript']) for a, b in quoted) or any(n not in row['transcript'] for n in re.findall(r'\d+(?:[.,:]\d+)*', conversation)):
         conversation = ''
-    lines = [header(row)]
-    if conversation and conversation != brief and not quoted:
-        lines += ['', 'О разговоре: ' + conversation]
-    lines += ['', 'Итог: ' + brief, '', 'Качество: ' + quality(row)]
-    if good:
-        lines += ['', 'Что получилось:']
-        for item in good[:2]:
-            lines.append('• ' + (clean(item['text'], 150) or 'Подтверждённое сильное действие') + ' — «' + clean(item['quote'], 145, expand=False) + '».')
-    else:
-        lines += ['', 'Для уверенного вывода о сильных действиях недостаточно подтверждённых реплик.']
-    if weak:
-        lines += ['', 'Что улучшить:']
-        for item in weak[:3]:
-            lines.append('• ' + (clean(item['text'], 150) or 'Упущение в разговоре') + ' — «' + clean(item['quote'], 145, expand=False) + '».')
-    else:
-        lines += ['', 'Подтверждённых ошибок в доступных наблюдениях не найдено.' if row['transcript'].strip()
-                  else 'Запись не позволяет проверить ошибки.']
-    actions = list(dict.fromkeys(filter(None, [clean(readable.get('next_focus'), 220),
-                                             clean(readable.get('exercise'), 220)])))
-    example = next((w['suggestion'] for w in weak if w['suggestion']), '')
-    if not example:
-        example = clean((((row.get('auxiliary') or {}).get('combined') or {}).get('coaching') or {}).get('say_instead'), 260)
-    if weak and not actions:
-        actions = [TITLES.get(w['key']) for w in weak[:2] if w['key'] in TITLES]
-    if actions:
-        lines += ['', 'Следующий разговор:'] + ['• ' + a for a in actions[:3]]
-    if example:
-        lines.append('Пример улучшенной реплики: «' + example + '».')
-    limitations = (row.get('auxiliary') or {}).get('limitations') or []
+    classification = combined.get('classification') or {}
+    lookup = {quote(item.get('quote'), row['transcript']): item for name in ('strengths', 'moments')
+              for item in readable.get(name) or [] if quote(item.get('quote'), row['transcript'])}
+    miss = readable.get('main_miss') or {}
+    main = next((w for w in weak if w['key'] == miss.get('criterion')), None) if miss else None
+    if not main and weak:
+        main = weak[0]
+    main_quote = main['quote'] if main else None
+    moments = [w for w in weak if w['key'] != miss.get('criterion')] if main and miss else weak
+    if not moments and main and lookup.get(main_quote, {}).get('say_instead'):
+        moments = [main]
+    actions = list(dict.fromkeys(filter(None, [clean(readable.get('next_focus'), 220), clean(readable.get('exercise'), 220)])))
+    if not actions:
+        actions = list(dict.fromkeys(TITLES[w['key']] for w in weak[:2] if w['key'] in TITLES))
+    leader = readable.get('leader') or {}
+    leader_supported = any(quote(q, row['transcript']) for q in leader.get('quotes') or [])
+    causes = {'manager': 'Действия менеджера', 'script': 'Сценарий разговора',
+              'base': 'Соответствие контакта предложению', 'insufficient_data': 'Причина пока не установлена'}
+    notes = list((row.get('auxiliary') or {}).get('limitations') or []) + list(readable.get('limits') or []) + list(readable.get('validation_warnings') or [])
     if conflicts:
-        limitations = ['Методики расходятся в оценке части действий. Спорные наблюдения исключены; балл оставлен по действующей шкале.'] + limitations
-    # Different sales stages are precisely why the additional methodology exists.
-    if (row.get('auxiliary') or {}).get('combined'):
-        limitations += ['Дополнительная методика учитывает этап продажи; её наблюдения не изменяют балл основной шкалы.']
-        stage = (((row.get('auxiliary') or {}).get('combined') or {}).get('classification') or {}).get('stage')
-        if stage in {'presentation', 'demo_preparation', 'demo_results', 'support'}:
-            limitations += ['Основная шкала ориентирована на назначение встречи и ограниченно применима к этому этапу.']
-    if limitations:
-        lines += ['', 'Ограничение: ' + clean(' '.join(limitations), 370)]
-    # Bound the text BEFORE escaping. Escaped HTML is never cut mid-tag/entity.
-    text = redact_phone('\n'.join(lines), row)
-    if units(text) > 3800:
-        # Compact whole observations and advice first, preserving the report sections.
-        lines = [line if units(line) <= 260 else clean(line, 190, expand=False) for line in lines]
-        text = redact_phone('\n'.join(lines), row)
-    if units(html.escape(text)) > 4000:
-        # Bound escaped text too, without cutting HTML entities or citations.
-        lines = [clean(line, 155, expand=False) if units(html.escape(line)) > 230 else line for line in lines]
-        text = redact_phone('\n'.join(lines), row)
-    if units(html.escape(text)) > 4000:
+        notes.insert(0, 'Методики расходятся в оценке части действий. Спорные наблюдения исключены; балл оставлен по действующей шкале.')
+    if combined and not combined.get('narrow_profile_applied', True):
+        notes.append('Продукт или этап определён неуверенно: оценены только общие действия.')
+    if classification.get('stage') in {'presentation', 'demo_preparation', 'demo_results', 'support'}:
+        notes.append('Основной балл ориентирован на назначение встречи и ограниченно применим к этому этапу; предметные рекомендации учитывают задачу разговора.')
+    if (combined.get('honesty') or {}).get('unverified_claims'):
+        notes.append('Коммерческие обещания требуют проверки по утверждённым условиям.')
+
+    def compose(short=False):
+        blocks = []
+        limit = 110 if short else 170
+        quote_limit = 85 if short else 150
+        def section(title, lines):
+            body = '\n'.join(line for line in lines if line)
+            plain = redact_phone(body, row)
+            blocks.append('<b>' + html.escape(title) + '</b>\n' + html.escape(plain))
+        blocks.append(html.escape(header(row)))
+        result_lines = [conversation or brief]
+        if conversation and confirmed and brief != conversation:
+            result_lines.append('Результат: ' + clean(brief, 160 if short else 240))
+        if combined and classification:
+            result_lines.append(' · '.join(clean(labels.get(classification.get(key)), 65) for key, labels in
+                               (('product', PRODUCT_LABELS), ('stage', STAGE_LABELS), ('sales_role', ROLE_LABELS))))
+        if combined and not confirmed:
+            result_lines.append('Конкретный следующий шаг с согласием клиента не подтверждён.')
+        section('🎯 Итог звонка', result_lines)
+        score = row['primary_analysis'].get('score')
+        quality_lines = [verdict(row)]
+        if score is not None and not row['primary_analysis'].get('analysis', {}).get('call_cut_short') and row['transcript'].strip():
+            quality_lines += [f'Качество по действующей шкале: {score}/100.', 'Знак учитывает результат и ключевые упущения; балл — выполнение критериев.']
+        section('📊 Оценка звонка', quality_lines)
+        lines = []
+        for item in good[:2]:
+            detail = lookup.get(item['quote'], {})
+            lines += ['• ' + (clean(item['text'], limit) or 'Подтверждённое сильное действие'),
+                      '«' + clean(item['quote'], quote_limit, expand=False) + '»', clean(detail.get('why'), limit)]
+        section('✅ Что получилось', lines or ['В записи недостаточно подтверждений для отдельного сильного действия.'])
+        if main:
+            lines = [clean(miss.get('explanation') if miss else main['text'], 150 if short else 260)]
+            if not any(w['quote'] == main_quote for w in moments[:2]):
+                lines.append('«' + clean(main_quote, quote_limit, expand=False) + '»')
+            section('📌 Главный упущенный момент', lines)
+        for index, item in enumerate(moments[:2], 1):
+            detail = lookup.get(item['quote'], {})
+            lines = [clean(item['text'], limit), 'Менеджер: «' + clean(item['quote'], quote_limit, expand=False) + '»']
+            reaction = quote(detail.get('reaction_quote'), row['transcript'])
+            if reaction:
+                lines.append('Клиент: «' + clean(reaction, quote_limit, expand=False) + '»')
+            lines.append(clean(detail.get('why'), limit))
+            if item['suggestion']:
+                lines.append('Можно сказать: «' + clean(item['suggestion'], 145 if short else 220) + '»')
+            section('💬 Что изменить' + (f' · {index}' if len(moments[:2]) > 1 else ''), lines)
+        if not weak:
+            section('💬 Что изменить', ['Подтверждённых ошибок в доступных наблюдениях не найдено.' if row['transcript'].strip()
+                                        else 'Запись не позволяет проверить ошибки.'])
+        if actions:
+            section('🎯 Что сделать дальше', [('На следующий разговор: ' if i == 0 else 'Короткая практика: ') + clean(a, limit)
+                                              for i, a in enumerate(actions[:2])])
+        leader_lines = [causes.get(leader.get('cause'), 'Причина пока не установлена') + ': ' +
+                        (clean(leader.get('reason'), limit) if leader_supported and leader.get('cause') != 'insufficient_data'
+                         else 'По этой записи нельзя уверенно отделить недостаток навыка от ограничений сценария или контакта.')]
+        if clean(leader.get('action')):
+            leader_lines.append(clean(leader.get('action'), limit))
+        section('👤 Руководителю', leader_lines)
+        if notes:
+            section('ℹ️ Границы оценки', ['• ' + clean(' '.join(dict.fromkeys(notes)), 260 if short else 420)])
+        return '\n\n'.join(blocks)
+    text = compose()
+    if units(text) > 4000:
+        text = compose(short=True)
+    if units(text) > 4000:
         raise ValueError('Ordinary report exceeded Telegram limit')
-    return html.escape(text)
+    return text
 
 
 def expanded(row):

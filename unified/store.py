@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -11,6 +12,7 @@ from comparison.store import decode
 from methodology import runtime
 from queue_runner import RetryLater
 from tools import Forbidden, get_call, report_chat_ids, resolve_actor
+from reports import fmt_phone
 from . import render
 
 WAIT_FOR_AUXILIARY = timedelta(minutes=30)
@@ -32,7 +34,7 @@ async def capture(pool, call_id, client_id, source_key, *, deliver=False, fresh=
     from analysis import CRITERIA, MODEL, SCORE_PROMPT, LEVEL_CRITICAL_CRITERIA, VERDICT_MIN_FAILURES, VERDICT_MIN_FAILURES_WITH_SIGNAL
     from automatic.jobs import enabled
     from combined.evaluation import VERSION as combined_version
-    async with pool.acquire() as conn, conn.transaction():
+    async with (pool.acquire() if hasattr(pool, 'acquire') else nullcontext(pool)) as conn, conn.transaction():
         call = await conn.fetchrow('SELECT * FROM calls WHERE id=$1 AND client_id=$2', call_id, client_id)
         primary = await conn.fetchrow('SELECT * FROM astra_analysis WHERE call_id=$1', call_id)
         if not call or not primary or primary['status'] != 'analyzed':
@@ -42,11 +44,11 @@ async def capture(pool, call_id, client_id, source_key, *, deliver=False, fresh=
         metadata = {'manager': manager or f"доб. {call['extension']}",
                     'call_started_at': call['call_started_at'].astimezone(ZoneInfo(zone)).isoformat() if call['call_started_at'] else None,
                     'duration_seconds': call['duration_seconds'] or 0,
-                    'phone': render.mask_phone(call['client_number'])}
+                    'phone': fmt_phone(call['client_number']) or 'номер не указан', 'timezone': zone}
         base = {'analysis': decode(primary['analysis']) or {}, 'score': primary['score'], 'level': primary['level'],
                 'short_report': decode(primary['short_report']) or {}, 'detailed_report': decode(primary['detailed_report'])}
         cfg = {'format_version': render.FORMAT_VERSION, 'mode': runtime.settings()['mode'], 'active': 'original',
-               'phone_sha256': render.phone_fingerprint(call['client_number']),
+               'phone_sha256': render.phone_fingerprint(call['client_number']), 'show_full_phone': True,
                'course_version': runtime.VERSION, 'combined_version': combined_version,
                'expect_course': runtime.shadow_enabled(), 'expect_combined': enabled() and primary['level'] is not None,
                'original_source_known': fresh,
@@ -100,7 +102,10 @@ async def prepare(pool, run_id, *, wait=True):
         row = unpack(raw)
         if row['status'] == 'ready':
             return row
-        cfg = row['configuration']; aux = {}; waiting = False; limits = []
+        cfg = row['configuration']
+        if cfg.get('explicit_generation'):
+            raise ValueError('Новый разбор ещё готовится. Попробуйте позже.')
+        aux = {}; waiting = False; limits = []
         if not cfg.get('original_source_known'):
             limits.append('Для исторической оценки не сохранилась полная версия исходных настроек; используются её сохранённые результаты.')
         for key, table, version in (
@@ -158,13 +163,14 @@ async def recipients(pool, row):
     return sorted(people)
 
 
-async def deliver(pool, bot, row):
+async def deliver(pool, bot, row, *, only_to=None):
     """At-most-once on an unknown Telegram outcome; known rejections can retry.
 
     Bot API has no idempotency key. A crash after send but before storing the
     receipt cannot be distinguished from a failed send. Never blindly resend.
     """
-    for recipient in await recipients(pool, row):
+    targets = await recipients(pool, row) if only_to is None else [only_to]
+    for recipient in targets:
         actor = await resolve_actor(pool, recipient)
         try:
             await access(pool, actor, row['id'])
@@ -192,7 +198,8 @@ async def deliver(pool, bot, row):
     if await pool.fetchval("SELECT count(*) FROM call_report_delivery WHERE run_id=$1 AND status='pending'", row['id']):
         raise RetryLater(timedelta(minutes=2), 'Telegram отклонил доставку; повтор только недоставленным получателям', record_limit=False)
     # Compatibility counters remain aggregate counters; the ledger is authoritative.
-    await pool.execute('''UPDATE astra_analysis SET
+    if not row['configuration'].get('explicit_generation'):
+        await pool.execute('''UPDATE astra_analysis SET
         immediate_sent_manager = immediate_sent_manager OR EXISTS(
           SELECT 1 FROM call_report_delivery d JOIN employees e ON e.telegram_user_id=d.recipient
           WHERE d.run_id=$2 AND d.status='sent' AND e.client_id=$3 AND e.role='manager'),
