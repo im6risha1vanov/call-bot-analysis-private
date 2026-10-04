@@ -66,11 +66,25 @@ async def start_command(message):
 @router.message(Command('help'))
 async def help_command(message):
     actor = await resolve_actor(PG_POOL, message.from_user.id) if PG_POOL else None
+    if actor is None or actor.role == 'manager':
+        await message.answer(
+            'Это бот анализа рабочих звонков Averon. Записи поступают автоматически из телефонии — присылать аудио не нужно.\n\n'
+            'Разбор приходит одним сообщением: итог разговора, оценка качества, сильные действия и рекомендации. '
+            '«Расширенный обзор» под сообщением открывает критерии и цитаты того же разбора.\n\n'
+            'Менеджеру автоматически приходят звонки, требующие разбора; остальные результаты доступны в вечерней сводке. '
+            'Для сохранённого звонка можно использовать /review и его номер.\n\n'
+            'Тренировки: @averon_training_bot — откройте личный чат и нажмите /start. '
+            'Выбирайте ситуацию, отвечайте голосом или текстом.\n\n'
+            + ('Если доступ ещё не выдан, попросите своего руководителя подключить вас, затем снова отправьте /start.'
+               if actor is None else 'Выберите одну рекомендацию из разбора и отработайте её в тренажёре.'),
+            parse_mode=None)
+        return
     menu = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text='Сравнить методики'), KeyboardButton(text='Объединённый разбор')]], resize_keyboard=True, is_persistent=True) if actor and actor.role in {'head', 'owner'} else None
     await message.answer(
         'Звонки разбираются автоматически из Mango — присылать записи не нужно.\n\n'
-        'Под новым отчётом три кнопки: подробный разбор, разбор по курсу и объединённый разбор. '
-        'Два дополнительных варианта готовятся в фоне и открываются без повторной оплаты.\n\n'
+        'По одному звонку приходит один объединённый разбор: итог, качество, сильные действия и рекомендации. '
+        'Кнопка «Расширенный обзор» открывает сохранённые критерии, цитаты и подробности того же запуска.\n\n'
+        '/review &lt;номер звонка&gt; — открыть сохранённый разбор (запасной путь).\n\n'
         '<b>Команды</b>\n'
         '/check &lt;критерий&gt; [дней] — что модель увидела по критерию (руководителю)\n'
         '/assign_train &lt;добавочный&gt; [режим] — назначить тренировку в тренажёре (руководителю)\n'
@@ -577,6 +591,8 @@ from combined.ui import install as install_combined
 install_combined(router, lambda: PG_POOL)
 from automatic.ui import install as install_automatic
 install_automatic(router, lambda: PG_POOL)
+from unified.ui import install as install_unified
+install_unified(router, lambda: PG_POOL)
 
 
 @router.message(F.text)
@@ -618,72 +634,24 @@ async def audio_message(message):
 
 @router.callback_query(F.data.startswith('detail:astra:'))
 async def detail_callback(cq: CallbackQuery):
-    """«Подробный разбор» звонка из Mango. Права проверяются в момент
-    клика по таблице employees; результат кешируется в astra_analysis
-    (второй клик — без нового запроса к модели)."""
+    """Old buttons remain usable without a new paid request or rewriting history."""
+    await cq.answer()
+    from unified import store, ui
+    from tools import Forbidden
     try:
-        call_id = int(cq.data.rsplit(':', 1)[1])
-    except (ValueError, IndexError):
-        await cq.answer('Некорректные данные кнопки.', show_alert=True); return
-
-    call = await PG_POOL.fetchrow(
-        'SELECT c.*, a.analysis, a.detailed_report, a.cost_units FROM calls c '
-        'JOIN astra_analysis a ON a.call_id = c.id WHERE c.id=$1', call_id
-    )
-    if not call:
-        await cq.answer('Звонок не найден.', show_alert=True); return
-
-    client_tz = await PG_POOL.fetchval('SELECT timezone FROM clients WHERE id=$1', call['client_id'])
-    call_time = fmt_call_time(call['call_started_at'], client_tz)
-
-    employee = await PG_POOL.fetchrow(
-        'SELECT * FROM employees WHERE client_id=$1 AND telegram_user_id=$2',
-        call['client_id'], cq.from_user.id,
-    )
-    is_head_viewer = bool(employee) and employee['role'] in {'head','owner'}
-    is_own_manager = bool(employee) and employee['role'] == 'manager' and employee['extension'] == call['extension']
-    if not (is_head_viewer or is_own_manager):
-        await cq.answer('Доступ к разбору этого звонка закрыт.', show_alert=True); return
-
-    if not call['analysis']:
-        await cq.answer('Нет данных для разбора — звонок был слишком коротким.', show_alert=True); return
-
-    analysis = json.loads(call['analysis'])
-    rows = analysis.get('rows') or []
-    scores = {k: v for k, v in analysis.items() if k != 'rows'}
-
-    if call['detailed_report']:
-        await cq.answer()
-        detailed = json.loads(call['detailed_report'])
-    else:
-        await cq.answer('Готовлю подробный разбор, это займёт около минуты…')
-        try:
-            detailed, _cost = await review_call(call['transcript'] or '', scores, rows)
-        except Exception:
-            log.exception('не удалось построить подробный разбор (Astra), call id=%s', call_id)
-            await cq.bot.send_message(cq.from_user.id, 'Не удалось построить разбор, попробуйте ещё раз позже.')
-            return
-        await PG_POOL.execute(
-            'UPDATE astra_analysis SET detailed_report=$2::jsonb, detailed_report_requested_at=now() WHERE call_id=$1',
-            call_id, json.dumps(detailed, ensure_ascii=False),
-        )
-        try:
-            await cq.message.edit_reply_markup(reply_markup=detail_button(call_id, source='astra', ready=True))
-        except Exception:
-            pass
-
-    full = {**scores, **detailed, 'rows': rows}
-    if is_head_viewer:
-        manager = await PG_POOL.fetchrow(
-            "SELECT full_name FROM employees WHERE client_id=$1 AND extension=$2 AND role='manager'",
-            call['client_id'], call['extension'],
-        )
-        manager_name = (manager['full_name'] if manager else None) or f"доб. {call['extension']}"
-        text = render_head(full, manager_name, call['duration_seconds'] or 0, float(call['cost_units'] or 0), '(Astra)',
-                               call_time=call_time)
-    else:
-        text = render_manager(full, call['duration_seconds'] or 0, call_time=call_time)
-    await send_chunks(cq.bot, cq.from_user.id, text)
+        ui.private_action(cq)
+        bits = (cq.data or '').split(':')
+        if len(bits) != 3 or not bits[2].isascii() or not bits[2].isdigit() or len(bits[2]) > 18:
+            raise ValueError('Кнопка устарела. Откройте разбор через /review и номер звонка.')
+        actor = await resolve_actor(PG_POOL, cq.from_user.id)
+        run_id = await store.saved_view(PG_POOL, actor, int(bits[2]))
+        await ui.show(cq.bot, PG_POOL, actor, run_id, detailed=True,
+                      notice='В старой кнопке нет номера запуска. Открыт последний сохранённый разбор этого звонка.')
+    except (Forbidden, ValueError) as exc:
+        await cq.bot.send_message(cq.from_user.id, str(exc), parse_mode=None)
+    except Exception:
+        log.exception('не удалось открыть сохранённый обзор')
+        await cq.bot.send_message(cq.from_user.id, 'Не удалось открыть обзор. Попробуйте позже.', parse_mode=None)
 
 
 async def main():

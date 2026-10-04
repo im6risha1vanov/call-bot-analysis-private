@@ -85,8 +85,16 @@ async def collect(pool: asyncpg.Pool, window_hours: int = 24) -> dict:
     for r in by_type:
         counts.setdefault(r["type"], {})[r["status"]] = r["n"]
 
+    report_delivery = {}
+    if await pool.fetchval("SELECT to_regclass('call_report_delivery') IS NOT NULL"):
+        delivered = await pool.fetch('''SELECT status,count(*) n FROM call_report_delivery
+            WHERE updated_at >= now()-$1::interval OR status IN ('pending','sending','uncertain','forbidden')
+            GROUP BY status''', window)
+        report_delivery = {r['status']: r['n'] for r in delivered}
+
     return {
         "window_hours": window_hours,
+        "report_delivery": report_delivery,
         "tasks_by_type": counts,
         "failures": [
             {"task_id": r["id"], "type": r["type"], "attempts": r["attempts"],
@@ -121,6 +129,9 @@ def is_quiet(metrics: dict, spend_usd_threshold: float) -> bool:
         not metrics["failures"]
         and not metrics["stuck"]
         and not metrics["limit_hits"]
+        and not any(metrics.get('report_delivery', {}).get(s, 0) for s in ('pending', 'sending', 'uncertain', 'forbidden'))
+        and not metrics['queue']['new']
+        and not metrics['queue']['processing']
         and metrics["spend"]["rop_agent_usd_2d"] <= spend_usd_threshold
     )
 

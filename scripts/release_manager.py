@@ -76,8 +76,16 @@ async def database(action, *, release=None):
     conn = await asyncpg.connect(dsn)
     try:
         if action=='migrate':
-            migration=subprocess.check_output(['git','show',release+':migrations/001_course_methodology.sql'],cwd=PROJECT).decode()
-            await conn.execute(migration)
+            names=command(['git','ls-tree','-r','--name-only',release,'--','migrations']).splitlines()
+            migrations=sorted(n for n in names if re.fullmatch(r'migrations/\d{3}_[a-z_]+\.sql',n))
+            if not migrations:
+                raise RuntimeError('No release migrations found')
+            async with conn.transaction():
+                for name in migrations:
+                    migration=subprocess.check_output(['git','show',release+':'+name],cwd=PROJECT).decode()
+                    if migration.strip().startswith('BEGIN;') and migration.strip().endswith('COMMIT;'):
+                        migration=migration.strip().removeprefix('BEGIN;').removesuffix('COMMIT;')
+                    await conn.execute(migration)
             return
         processing=await conn.fetchval("SELECT count(*) FROM tasks WHERE status='processing'")
         course_active=0

@@ -54,10 +54,11 @@ class RetryLater(Exception):
     счётчике попыток — например, дневной бюджет клиента ещё не сброшен. Это
     отложенное состояние, а не сбой самой задачи."""
 
-    def __init__(self, delay: timedelta, reason: str = ""):
+    def __init__(self, delay: timedelta, reason: str = "", *, record_limit: bool = True):
         super().__init__(reason)
         self.delay = delay
         self.reason = reason
+        self.record_limit = record_limit
 
 
 class NeedsApproval(Exception):
@@ -143,10 +144,11 @@ async def run_once(pool: asyncpg.Pool, task_types: list[str] | None = None) -> b
         )
         # Раньше срабатывание лимита только логировалось — в суточный отчёт
         # надзора его было не собрать, лог к тому моменту уже уехал.
-        await pool.execute(
-            "INSERT INTO limit_hits (task_id, task_type, client_id, reason) VALUES ($1,$2,$3,$4)",
-            task["id"], task["type"], task["client_id"], exc.reason or "лимит без указания причины",
-        )
+        if exc.record_limit:
+            await pool.execute(
+                "INSERT INTO limit_hits (task_id, task_type, client_id, reason) VALUES ($1,$2,$3,$4)",
+                task["id"], task["type"], task["client_id"], exc.reason or "лимит без указания причины",
+            )
     except NeedsApproval as exc:
         log.info("задача id=%s type=%s ждёт подтверждения человека: %s", task["id"], task["type"], exc.summary)
         await pool.execute(
@@ -170,6 +172,7 @@ async def main() -> None:
     import handlers.compare_analysis  # noqa: F401
     import handlers.combined_analysis  # noqa: F401
     import handlers.automatic_combined_call  # noqa: F401
+    import handlers.publish_call_report  # noqa: F401
     import handlers.oversight_report  # noqa: F401
     import handlers.rop_digest  # noqa: F401
 

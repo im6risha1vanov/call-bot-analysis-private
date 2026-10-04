@@ -391,7 +391,9 @@ def _one_liner(short_report_json) -> str | None:
 async def build_manager_digest(pool: asyncpg.Pool, client: asyncpg.Record, extension: str, name: str,
                                 today_start: datetime, today_end: datetime) -> str | None:
     rows = await pool.fetch(
-        """SELECT a.level, a.short_report, a.immediate_sent_manager FROM astra_analysis a
+        """SELECT a.level, a.short_report, a.immediate_sent_manager,
+                  EXISTS(SELECT 1 FROM call_report_runs ur WHERE ur.call_id=c.id AND ur.client_id=c.client_id) AS has_unified_run
+           FROM astra_analysis a
            JOIN calls c ON c.id = a.call_id
            WHERE c.client_id=$1 AND c.extension=$2 AND a.status='analyzed'
              AND a.updated_at >= $3 AND a.updated_at < $4
@@ -409,7 +411,7 @@ async def build_manager_digest(pool: asyncpg.Pool, client: asyncpg.Record, exten
         f"<b>📊 Дайджест за день</b> · {esc(name)}",
         f"Звонков: {len(rows)} — {_fmt_levels(rows)}",
     ]
-    not_yet_sent = [r for r in rows if not r["immediate_sent_manager"] and r["level"] in ("⚠️", "❌")]
+    not_yet_sent = [r for r in rows if not r["immediate_sent_manager"] and not r["has_unified_run"] and r["level"] in ("⚠️", "❌")]
     if not_yet_sent:
         worst = min(not_yet_sent, key=lambda r: 0 if r["level"] == "❌" else 1)
         line = _one_liner(worst["short_report"])

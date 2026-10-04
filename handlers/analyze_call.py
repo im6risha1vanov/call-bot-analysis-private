@@ -23,8 +23,6 @@ from analysis import score_call, short_report_call
 from crypto_util import decrypt
 from deepgram_client import transcribe_bytes
 from queue_runner import RetryLater, on_startup, register
-from reports import detail_button, fmt_call_time, render_short, send_short_report
-from tools import report_chat_ids
 
 log = logging.getLogger("callbot-astra-worker.analyze_call")
 
@@ -54,69 +52,6 @@ async def _add_spend(pool: asyncpg.Pool, client: asyncpg.Record, units: float) -
         """,
         client["id"], datetime.now(ZoneInfo(client["timezone"])).date(), units,
     )
-
-
-async def _deliver_immediate(pool: asyncpg.Pool, client: asyncpg.Record, call: asyncpg.Record,
-                              short_report: dict, level: str | None) -> None:
-    # Руководителю уходит разбор КАЖДОГО звонка, а не только провального:
-    # раньше порог вердикта решал, что он увидит, и половина работы отдела была
-    # ему не видна.
-    #
-    # Исключение — звонки без вердикта: модель помечает их оборванными
-    # (слишком короткие, рваные или автоответчик вида «Вас приветствует
-    # компания…»). Разбирать там нечего, а в чат это летело бы мусором. Их
-    # число видно отдельной цифрой «без оценки» в вечернем дайджесте.
-    if level is None:
-        return
-
-    sent = await pool.fetchrow('SELECT immediate_sent_manager,immediate_sent_head FROM astra_analysis WHERE call_id=$1',call['id'])
-    call_time = fmt_call_time(call["call_started_at"], client["timezone"])
-
-    manager = await pool.fetchrow(
-        "SELECT * FROM employees WHERE client_id=$1 AND extension=$2 AND role='manager'",
-        client["id"], call["extension"],
-    )
-
-    # Менеджеру уходят все его провальные звонки — суточного лимита нет: он был
-    # нужен, чтобы не заваливать человека в рабочее время, но пропущенный разбор
-    # своего же провала хуже лишнего сообщения. Порог уровня остаётся: ❌ — это
-    # то, где надо разбираться, ✅ и ⚠️ он видит в вечернем дайджесте.
-    if manager and manager["telegram_user_id"] and level == "❌" and not (sent and sent["immediate_sent_manager"]):
-        try:
-            text = render_short(short_report, level, call["duration_seconds"] or 0, call_time=call_time,
-                                 client_number=call["client_number"])
-            await send_short_report(_bot, manager["telegram_user_id"], text, detail_button(call["id"], source="astra"))
-            await pool.execute(
-                "UPDATE astra_analysis SET immediate_sent_manager=true, updated_at=now() WHERE call_id=$1", call["id"]
-            )
-        except Exception:
-            log.exception("не удалось отправить менеджеру, call id=%s", call["id"])
-
-    # Получателей несколько: все руководители и владелец системы — отправляем
-    # каждому, а не «первому, какой попадётся». Отметка immediate_sent_head одна на звонок: она про то,
-    # что звонок уже разослан руководству, а не про конкретного человека.
-    # Суточного лимита у руководителя больше нет: он был нужен, когда приходили
-    # только провалы и важно было не завалить чат. Теперь задача обратная —
-    # видеть все звонки за день.
-    recipients = await report_chat_ids(pool, client["id"])
-    if recipients and not (sent and sent["immediate_sent_head"]):
-        manager_name = (manager["full_name"] if manager else None) or f"доб. {call['extension']}"
-        text = render_short(short_report, level, call["duration_seconds"] or 0, manager_name, call_time=call_time,
-                             client_number=call["client_number"])
-        if not (manager and manager["telegram_user_id"]):
-            text += (f"\n\n⚠️ Менеджер (доб. {call['extension']}) не подключён к боту — личный "
-                     f"разбор не отправлен.")
-        delivered = False
-        for chat_id in recipients:
-            try:
-                await send_short_report(_bot, chat_id, text, detail_button(call["id"], source="astra"))
-                delivered = True
-            except Exception:
-                log.exception("не удалось отправить руководителю chat_id=%s, call id=%s", chat_id, call["id"])
-        if delivered:
-            await pool.execute(
-                "UPDATE astra_analysis SET immediate_sent_head=true, updated_at=now() WHERE call_id=$1", call["id"]
-            )
 
 
 async def _enqueue_variants(pool,client,call,transcript,level):
@@ -212,6 +147,11 @@ async def analyze_call(pool: asyncpg.Pool, task: asyncpg.Record) -> dict:
             call["id"], json.dumps(analysis, ensure_ascii=False), score, level,
             json.dumps(short_report, ensure_ascii=False), cost,
             )
+    # A queue retry refers to the same immutable run. An explicit new task is
+    # another run. Already-delivered pre-upgrade jobs are not historical backfill.
+    from unified import store as unified_store
+    legacy_delivered = cached and (prior['immediate_sent_manager'] or prior['immediate_sent_head'])
+    run_id = await unified_store.capture(pool, call['id'], call['client_id'], f"task:{task['id']}", deliver=not legacy_delivered, fresh=not cached)
     enqueue_error = False
     try:
         await _enqueue_variants(pool,client,call,transcript,level)
@@ -220,11 +160,6 @@ async def analyze_call(pool: asyncpg.Pool, task: asyncpg.Record) -> dict:
         enqueue_error = True
     log.info("call id=%s разобран через очередь: уровень=%s стоимость=%.0f ед.", call["id"], level, cost)
 
-    try:
-        await _deliver_immediate(pool, client, call, short_report, level)
-    except Exception:
-        log.exception("ошибка немедленной доставки, call id=%s", call["id"])
-
     if enqueue_error:
         raise RetryLater(timedelta(seconds=20),'повтор постановки дополнительных разборов без повторной оплаты исходного')
-    return {"call_id": call["id"], "level": level, "cost_units": cost, "cached": bool(cached)}
+    return {"call_id": call["id"], "level": level, "cost_units": cost, "cached": bool(cached), "run_id": run_id}

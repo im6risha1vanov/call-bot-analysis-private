@@ -22,10 +22,11 @@ from aiogram.types import CallbackQuery,User,Message,Chat
 
 
 class AutomaticMenuTests(unittest.TestCase):
-    def test_button_order_and_ready_preserve_all_three_variants(self):
+    def test_ordinary_button_is_one_expanded_overview(self):
         for ready in (False,True):
             kb=detail_button(123456789123,source='astra',ready=ready)
-            self.assertEqual([r[0].callback_data for r in kb.inline_keyboard],['detail:astra:123456789123','av:c:123456789123','av:b:123456789123'])
+            self.assertEqual([r[0].callback_data for r in kb.inline_keyboard],['detail:astra:123456789123'])
+            self.assertEqual(kb.inline_keyboard[0][0].text,'Расширенный обзор')
             self.assertTrue(all(len(b.callback_data.encode())<=64 for r in kb.inline_keyboard for b in r))
         self.assertEqual(len(detail_button(1,source='pg').inline_keyboard),1)
 
@@ -38,6 +39,7 @@ class AutomaticPostgresTests(unittest.IsolatedAsyncioTestCase):
         root=Path(__file__).resolve().parents[1]
         await self.pool.execute((root/'migrations/001_course_methodology.sql').read_text())
         await self.pool.execute((root/'migrations/004_automatic_call_variants.sql').read_text())
+        await self.pool.execute((root/'migrations/005_unified_call_reports.sql').read_text())
         await self.pool.execute("""ALTER TABLE clients ADD COLUMN IF NOT EXISTS vpbx_api_key_enc TEXT;
           ALTER TABLE clients ADD COLUMN IF NOT EXISTS vpbx_api_salt_enc TEXT;
           ALTER TABLE employees ADD COLUMN IF NOT EXISTS id BIGSERIAL;
@@ -210,12 +212,10 @@ class AutomaticPostgresTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(original,'decrypt',return_value='synthetic'),patch.object(original.mango_client,'fetch_recording',AsyncMock(return_value=b'fake')),patch.object(original,'transcribe_bytes',AsyncMock(return_value=(TRANSCRIPT,90))),patch.object(original,'score_call',score),patch.object(original,'short_report_call',AsyncMock(return_value=(expected,2))),patch.object(original,'_bot',fakebot):
             await original.analyze_call(self.pool,{'id':999,'input':json.dumps({'call_id':self.call_id})})
         score.assert_awaited_once()
-        self.assertEqual([c.args[0] for c in fakebot.send_message.await_args_list],[123,900,901])
-        for sent in fakebot.send_message.await_args_list:
-            self.assertIn('Как раньше',sent.args[1])
-            self.assertEqual(len(sent.kwargs['reply_markup'].inline_keyboard),3)
+        fakebot.send_message.assert_not_awaited()
+        self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM call_report_runs'),1)
         types=await self.pool.fetch('SELECT type FROM tasks ORDER BY type')
-        self.assertEqual([r['type'] for r in types],['automatic_combined_call','evaluate_course'])
+        self.assertEqual([r['type'] for r in types],['automatic_combined_call','evaluate_course','publish_call_report'])
         saved=await self.pool.fetchrow('SELECT * FROM astra_analysis WHERE call_id=$1',self.call_id)
         self.assertEqual(saved['score'],80);self.assertEqual(saved['level'],'❌')
         self.assertEqual(decode(saved['short_report']),expected)
@@ -243,14 +243,14 @@ class AutomaticPostgresTests(unittest.IsolatedAsyncioTestCase):
         task={'id':999,'input':json.dumps({'call_id':self.call_id})}
         with patch.object(original,'decrypt',return_value='synthetic'),patch.object(original.mango_client,'fetch_recording',AsyncMock(return_value=b'fake')),patch.object(original,'transcribe_bytes',AsyncMock(return_value=(TRANSCRIPT,90))),patch.object(original,'score_call',fake_score),patch.object(original,'short_report_call',AsyncMock(return_value=(expected,2))),patch.object(original,'_bot',fakebot),patch.object(jobs,'enqueue',AsyncMock(side_effect=RuntimeError('synthetic sidecar DB failure'))):
             with self.assertRaises(RetryLater):await original.analyze_call(self.pool,task)
-        self.assertEqual(fakebot.send_message.await_count,3)
+        self.assertEqual(fakebot.send_message.await_count,0)
         self.assertEqual(await self.pool.fetchval('SELECT status FROM astra_analysis WHERE call_id=$1',self.call_id),'analyzed')
-        self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM tasks'),0)
+        self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM tasks'),1)
         with patch.object(original,'score_call',AsyncMock()) as paid,patch.object(original.mango_client,'fetch_recording',AsyncMock()) as download,patch.object(original,'_bot',fakebot):
             self.assertTrue((await original.analyze_call(self.pool,task))['cached'])
         paid.assert_not_awaited();download.assert_not_awaited()
-        self.assertEqual(fakebot.send_message.await_count,3)
-        self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM tasks'),2)
+        self.assertEqual(fakebot.send_message.await_count,0)
+        self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM tasks'),3)
         self.assertEqual(float(await self.pool.fetchval('SELECT sum(spent_units) FROM astra_daily_spend')),7)
 
     async def test_original_queue_progresses_during_combined_request(self):
@@ -280,7 +280,7 @@ class AutomaticPostgresTests(unittest.IsolatedAsyncioTestCase):
         fakebot.send_message.assert_not_awaited()
         self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM automatic_call_reports'),0)
 
-    async def test_course_callback_and_owner_original_button_preserve_other_buttons(self):
+    async def test_old_course_button_and_owner_detail_use_saved_data(self):
         from methodology import jobs as course_jobs,transport as course_transport
         import handlers.evaluate_course as course
         await course_jobs.enqueue(self.pool,1,'call',self.call_id,TRANSCRIPT)
@@ -295,8 +295,11 @@ class AutomaticPostgresTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('Разбор по методике курса',send.await_args.args[1]);self.assertIsNone(send.await_args.kwargs['parse_mode'])
         import demo_bot
         cq=cq.model_copy(update={'data':f'detail:astra:{self.call_id}'}).as_(telegram)
-        with patch.object(demo_bot,'PG_POOL',self.pool),patch.object(demo_bot,'review_call',AsyncMock(return_value=(fixtures.review(),2))) as review,patch.object(CallbackQuery,'answer',AsyncMock()) as ack,patch.object(Message,'edit_reply_markup',AsyncMock()) as edit,patch.object(demo_bot,'send_chunks',AsyncMock()) as send:
+        with patch.object(demo_bot,'PG_POOL',self.pool),patch.object(demo_bot,'review_call',AsyncMock(return_value=(fixtures.review(),2))) as review,patch.object(CallbackQuery,'answer',AsyncMock()) as ack,patch.object(Message,'edit_reply_markup',AsyncMock()) as edit,patch.object(Bot,'send_message',AsyncMock()) as send:
             await demo_bot.detail_callback(cq)
-        ack.assert_awaited_once();review.assert_awaited_once();send.assert_awaited_once()
-        self.assertEqual(len(edit.await_args.kwargs['reply_markup'].inline_keyboard),3)
+        ack.assert_awaited_once();review.assert_not_awaited()
+        self.assertTrue(send.await_count >= 1)
+        self.assertIn('Расширенный обзор',send.await_args_list[0].args[1])
+        self.assertIn('В старой кнопке нет номера запуска',send.await_args_list[0].args[1])
+        self.assertEqual(send.await_args.kwargs['reply_markup'].inline_keyboard[0][0].text,'К краткому разбору')
         await telegram.session.close()
