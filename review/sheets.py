@@ -1,6 +1,10 @@
-"""Зеркало в Google-таблицу: лист «Звонки» и лист «Перезвоны».
+"""Зеркало в Google-таблицу: «Сводка», «По дням», «Звонки», «Перезвоны».
 
-База остаётся источником правды: таблица целиком перезаписывается из неё раз
+Оформление в стиле таблицы владельца «Прозвон лидов»: Arial 10, тёмно-синяя
+шапка с белым жирным текстом, строки-разделители по датам, итоговая строка
+серым, цветные статусы. Содержание своё: разборы и перезвоны бота.
+
+База остаётся источником правды: листы целиком перезаписываются из неё раз
 в SHEETS_SYNC_MINUTES, правки в самой таблице не читаются (статус перезвона
 меняется кнопками в Telegram). Включается двумя переменными:
 GOOGLE_SHEET_ID и GOOGLE_SERVICE_ACCOUNT_FILE (JSON ключ сервисного аккаунта,
@@ -9,10 +13,12 @@ GOOGLE_SHEET_ID и GOOGLE_SERVICE_ACCOUNT_FILE (JSON ключ сервисног
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import logging
 import os
-from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -25,24 +31,68 @@ log = logging.getLogger(__name__)
 
 API = 'https://sheets.googleapis.com/v4/spreadsheets/'
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
-CALLS_SHEET, TASKS_SHEET = 'Звонки', 'Перезвоны'
+SUMMARY_SHEET, DAYS_SHEET, CALLS_SHEET, TASKS_SHEET = 'Сводка', 'По дням', 'Звонки', 'Перезвоны'
+STALE_SHEETS = ('Клиенты',)  # лист неудачной версии от 07.10, бот убирает его сам
 HISTORY_DAYS = int(os.getenv('SHEETS_HISTORY_DAYS', '60'))
+SUMMARY_DAYS = 30
 SYNC_MINUTES = int(os.getenv('SHEETS_SYNC_MINUTES', '10'))
 KIND_NAMES = {'cold_first': 'холодный', 'repeat': 'повторный', 'gatekeeper_only': 'секретарь'}
-CHANCE_NAMES = {'hot': 'горячий', 'normal': 'был', 'none': 'не было'}
 
-CALLS_HEADER = ['Дата', 'Менеджер', 'Номер', 'Компания', 'Собеседник', 'ЛПР', 'Тип звонка', 'Результат', 'Шанс',
-                'Где потерян', 'Ключевой момент', 'Как можно было', 'Потребность', 'Возражение', 'Следующий шаг', 'ID звонка']
-TASKS_HEADER = ['Дата', 'Время', 'Примерно', 'Что', 'Менеджер', 'Компания', 'Номер', 'Договорённость', 'Статус', 'ID звонка']
+CALLS_HEADER = ['Дата', 'Менеджер', 'Телефон', 'Компания', 'Итог', 'Результат', 'Где потерян', 'Ключевой момент',
+                'Как можно было', 'Собеседник', 'ЛПР', 'Потребность', 'Возражение', 'Следующий шаг', 'Тип звонка', 'ID звонка']
+CALLS_WIDTHS = [110, 140, 120, 170, 140, 160, 190, 300, 300, 160, 160, 200, 200, 220, 95, 80]
+TASKS_HEADER = ['Дата', 'Время', 'Менеджер', 'Компания', 'Телефон', 'Что', 'Договорённость', 'Статус', 'ID звонка']
+TASKS_WIDTHS = [95, 70, 140, 180, 120, 90, 320, 150, 80]
+DAYS_HEADER = ['Дата', 'Разговоров', 'С результатом', 'Встреч', 'Перезвонов на дату', 'КП', 'Потеряно с шансом']
+DAYS_WIDTHS = [110, 105, 115, 80, 140, 70, 140]
+SUMMARY_WIDTHS = [260, 110, 115, 100, 80, 140, 70, 110, 140, 120]
+
+# Цвета как в образце: шапка #1F4E78, разделитель #D1D8E0, итог #CCCCCC.
+HEADER_FILL, SECTION_FILL, TOTAL_FILL = '#1F4E78', '#D1D8E0', '#CCCCCC'
+OUTCOME_STATUS = {'success': 'Результат', 'hot': 'Горячий, потерян', 'normal': 'Потерян, шанс был', 'none': 'Без шанса'}
+CHIPS = {  # текст статуса: (фон, цвет текста)
+    'Результат': ('#D9EAD3', '#274E13'), 'Горячий, потерян': ('#F4CCCC', '#990000'),
+    'Потерян, шанс был': ('#FCE5CD', '#B45F06'), 'Без шанса': ('#E1E6EE', '#434343'),
+    'открыт': ('#FFF2CC', '#7F6000'), 'просрочен': ('#F4CCCC', '#990000'), 'выполнен': ('#D9EAD3', '#274E13'),
+    'отменён': ('#EFEFEF', '#666666'), 'закрыт новым звонком': ('#E1E6EE', '#434343'),
+}
+
+
+@dataclass
+class Table:
+    """Лист: строки значений и стиль каждой строки (header, section, title, total, note или None)."""
+    title: str
+    widths: list[int]
+    rows: list[list] = field(default_factory=list)
+    styles: list[str | None] = field(default_factory=list)
+    frozen: int = 0
+    filter_from: int | None = None  # строка шапки, с которой ставится фильтр
+    chip_column: int | None = None
+    bold_column: int | None = None
+
+    def add(self, values, style=None):
+        self.rows.append(list(values))
+        self.styles.append(style)
+
+    @property
+    def width(self) -> int:
+        return len(self.widths)
 
 
 def enabled() -> bool:
     return bool(os.getenv('GOOGLE_SHEET_ID') and os.getenv('GOOGLE_SERVICE_ACCOUNT_FILE'))
 
 
+def loads(value):
+    return json.loads(value) if isinstance(value, str) else value
+
+
+def outcome_status(data: dict) -> str:
+    return OUTCOME_STATUS['success'] if data.get('success') else OUTCOME_STATUS.get(data.get('chance'), 'Без шанса')
+
+
 def call_row(record, tz) -> list:
-    data = record['data']
-    data = json.loads(data) if isinstance(data, str) else data
+    data = loads(record['data'])
     client = data.get('client') or {}
     moment = data.get('key_moment') or {}
     started = record['call_started_at']
@@ -51,21 +101,128 @@ def call_row(record, tz) -> list:
         dmp = f"{dmp} {client['dmp_contact']}".strip()
     contact = ', '.join(filter(None, [client.get('contact_name'), client.get('contact_role')]))
     return [started.astimezone(tz).strftime('%d.%m.%Y %H:%M') if started else '', record['manager'] or record['extension'] or '',
-            fmt_phone(record['client_number']) or '', client.get('company') or '', contact, dmp,
-            KIND_NAMES.get(data.get('kind'), ''), ', '.join(OUTCOME_LABELS.get(o, o) for o in data.get('outcome') or []) or 'нет',
-            CHANCE_NAMES.get(data.get('chance'), ''), CATEGORY_LABELS.get(moment.get('category'), ''),
-            moment.get('what_happened') or '', moment.get('say_instead') or '', client.get('need') or '',
-            client.get('objection') or '', ((client.get('next_step') or {}).get('raw') or ''), record['call_id']]
+            fmt_phone(record['client_number']) or '', client.get('company') or '', outcome_status(data),
+            ', '.join(OUTCOME_LABELS.get(o, o) for o in data.get('outcome') or []), CATEGORY_LABELS.get(moment.get('category'), ''),
+            moment.get('what_happened') or '', moment.get('say_instead') or '', contact, dmp, client.get('need') or '',
+            client.get('objection') or '', ((client.get('next_step') or {}).get('raw') or ''),
+            KIND_NAMES.get(data.get('kind'), ''), record['call_id']]
 
 
-def task_row(record) -> list:
-    return [record['due_date'].strftime('%d.%m.%Y'), record['due_time'].strftime('%H:%M') if record['due_time'] else '',
-            'да' if record['date_is_estimate'] else '', KIND_LABELS.get(record['kind'], record['kind']),
+def task_status(record, today: date) -> str:
+    if record['status'] == 'open' and record['due_date'] < today:
+        return 'просрочен'
+    return STATUS_LABELS.get(record['status'], record['status'])
+
+
+def task_row(record, today: date) -> list:
+    return [record['due_date'].strftime('%d.%m.%Y'),
+            (record['due_time'].strftime('%H:%M') if record['due_time'] else '') + (' примерно' if record['date_is_estimate'] else ''),
             record['manager'] or record['extension'] or '', record['company'] or '', fmt_phone(record['client_number']) or '',
-            record['raw'] or '', STATUS_LABELS.get(record['status'], record['status']), record['call_id']]
+            KIND_LABELS.get(record['kind'], record['kind']), record['raw'] or '', task_status(record, today), record['call_id']]
 
 
-async def collect(pool) -> tuple[list[list], list[list]]:
+def local_day(record, tz) -> date | None:
+    started = record['call_started_at']
+    return started.astimezone(tz).date() if started else None
+
+
+def counts(datas: list[dict]) -> dict:
+    outcomes = collections.Counter(o for d in datas for o in d.get('outcome') or [])
+    lost = [d for d in datas if not d.get('success') and d.get('chance') in {'hot', 'normal'}]
+    return {'talks': len(datas), 'success': sum(bool(d.get('success')) for d in datas), 'meeting': outcomes['meeting'],
+            'callback': outcomes['callback_date'], 'proposal': outcomes['proposal'], 'dmp': outcomes['dmp_contact'],
+            'lost': len(lost), 'hot': sum(d.get('chance') == 'hot' for d in lost),
+            'categories': collections.Counter((d.get('key_moment') or {}).get('category') for d in lost)}
+
+
+def calls_table(calls, tz) -> Table:
+    table = Table(CALLS_SHEET, CALLS_WIDTHS, frozen=1, filter_from=0, chip_column=4, bold_column=2)
+    table.add(CALLS_HEADER, 'header')
+    day = None
+    for record in calls:
+        current = local_day(record, tz)
+        if current != day:
+            day = current
+            same = sum(local_day(r, tz) == day for r in calls)
+            table.add([f"Звонки за {day.strftime('%d.%m.%Y') if day else 'без даты'} · {same}"], 'section')
+        table.add(call_row(record, tz))
+    return table
+
+
+def tasks_table(tasks, today: date) -> Table:
+    table = Table(TASKS_SHEET, TASKS_WIDTHS, frozen=1, filter_from=0, chip_column=7, bold_column=4)
+    table.add(TASKS_HEADER, 'header')
+    groups = [('Просрочено', lambda t: t['status'] == 'open' and t['due_date'] < today),
+              ('На сегодня', lambda t: t['status'] == 'open' and t['due_date'] == today),
+              ('Дальше', lambda t: t['status'] == 'open' and t['due_date'] > today),
+              ('Закрыто', lambda t: t['status'] != 'open')]
+    for label, test in groups:
+        items = [t for t in tasks if test(t)]
+        if items:
+            table.add([f'{label} · {len(items)}'], 'section')
+            for task in items:
+                table.add(task_row(task, today))
+    return table
+
+
+def days_table(calls, tz) -> Table:
+    table = Table(DAYS_SHEET, DAYS_WIDTHS, frozen=1)
+    table.add(DAYS_HEADER, 'header')
+    by_day = collections.defaultdict(list)
+    for record in calls:
+        by_day[local_day(record, tz)].append(loads(record['data']))
+    for day in sorted((d for d in by_day if d), reverse=True):
+        c = counts(by_day[day])
+        table.add([day.strftime('%d.%m.%Y'), c['talks'], c['success'], c['meeting'], c['callback'], c['proposal'], c['lost']])
+    return table
+
+
+def summary_table(calls, tasks, tz, today: date) -> Table:
+    table = Table(SUMMARY_SHEET, SUMMARY_WIDTHS)
+    since = today - timedelta(days=SUMMARY_DAYS - 1)
+    recent = [r for r in calls if (local_day(r, tz) or date.min) >= since]
+    by_manager = collections.defaultdict(list)
+    for record in recent:
+        by_manager[record['manager'] or record['extension'] or 'Менеджер не указан'].append(loads(record['data']))
+
+    table.add([f"Итог по менеджерам за {SUMMARY_DAYS} дней ({since.strftime('%d.%m')}–{today.strftime('%d.%m.%Y')})"], 'title')
+    table.add(['Менеджер', 'Разговоров', 'С результатом', 'Конверсия', 'Встреч', 'Перезвонов на дату', 'КП',
+               'Контакт ЛПР', 'Потеряно с шансом', 'Из них горячих'], 'header')
+
+    def line(name, c):
+        share = f"{round(100 * c['success'] / c['talks'])}%" if c['talks'] else '—'
+        return [name, c['talks'], c['success'], share, c['meeting'], c['callback'], c['proposal'], c['dmp'], c['lost'], c['hot']]
+
+    for name, datas in sorted(by_manager.items(), key=lambda kv: -len(kv[1])):
+        table.add(line(name, counts(datas)))
+    total = counts([loads(r['data']) for r in recent])
+    table.add(line('ИТОГО', total), 'total')
+
+    table.add([])
+    table.add([f'Где теряем звонки с шансом за {SUMMARY_DAYS} дней'], 'title')
+    table.add(['Причина', 'Сколько раз'], 'header')
+    categories = total['categories']
+    categories.pop(None, None)
+    for category, times in categories.most_common():
+        table.add([CATEGORY_LABELS.get(category, category), times])
+    if not categories:
+        table.add(['Потерь с шансом нет', 0])
+
+    open_tasks = [t for t in tasks if t['status'] == 'open']
+    table.add([])
+    table.add(['Перезвоны'], 'title')
+    table.add(['Сейчас', 'Сколько'], 'header')
+    for label, value in (('Открыто всего', len(open_tasks)),
+                         ('Просрочено', sum(t['due_date'] < today for t in open_tasks)),
+                         ('На сегодня', sum(t['due_date'] == today for t in open_tasks))):
+        table.add([label, value])
+    table.add([])
+    table.add([f"Обновлено ботом {datetime.now(tz).strftime('%d.%m.%Y %H:%M')}. Таблица обновляется каждые "
+               f'{SYNC_MINUTES} минут из базы бота, ручные правки в ней не сохраняются.'], 'note')
+    return table
+
+
+async def collect(pool) -> list[Table]:
     since = datetime.now(timezone.utc) - timedelta(days=HISTORY_DAYS)
     calls = await pool.fetch(
         """SELECT r.call_id, r.extension, r.data, c.client_number, c.call_started_at, cl.timezone,
@@ -76,9 +233,11 @@ async def collect(pool) -> tuple[list[list], list[list]]:
     tasks = await pool.fetch(
         """SELECT t.*, (SELECT full_name FROM employees e WHERE e.client_id=t.client_id AND e.extension=t.extension AND e.role='manager' LIMIT 1) AS manager
            FROM callback_tasks t WHERE t.status='open' OR t.updated_at >= $1
-           ORDER BY (t.status <> 'open'), t.due_date, t.due_time NULLS LAST""", since)
-    return ([CALLS_HEADER] + [call_row(r, ZoneInfo(r['timezone'])) for r in calls],
-            [TASKS_HEADER] + [task_row(r) for r in tasks])
+           ORDER BY t.due_date, t.due_time NULLS LAST""", since)
+    zone = await pool.fetchval('SELECT timezone FROM clients WHERE processing_enabled ORDER BY id LIMIT 1')
+    tz = ZoneInfo(calls[0]['timezone'] if calls else zone or 'Europe/Moscow')
+    today = datetime.now(tz).date()
+    return [summary_table(calls, tasks, tz, today), days_table(calls, tz), calls_table(calls, tz), tasks_table(tasks, today)]
 
 
 def token() -> str:
@@ -89,28 +248,128 @@ def token() -> str:
     return credentials.token
 
 
-async def write(sheets: dict[str, list[list]], *, http=None, access_token=None) -> None:
-    sheet_id = os.environ['GOOGLE_SHEET_ID']
+def color(value: str) -> dict:
+    value = value.lstrip('#')
+    return {'red': int(value[0:2], 16) / 255, 'green': int(value[2:4], 16) / 255, 'blue': int(value[4:6], 16) / 255}
+
+
+def text(*, bold=False, size=10, fg='#000000') -> dict:
+    return {'fontFamily': 'Arial', 'fontSize': size, 'bold': bold, 'foregroundColor': color(fg)}
+
+
+def cells(sheet_id, row, end_row, end_col, fmt) -> dict:
+    return {'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': row, 'endRowIndex': end_row,
+                                     'startColumnIndex': 0, 'endColumnIndex': end_col},
+                           'cell': {'userEnteredFormat': fmt}, 'fields': 'userEnteredFormat'}}
+
+
+def layout(table: Table, sheet_id: int, grid_rows: int, grid_cols: int, old_rules: int) -> list[dict]:
+    """Оформление листа с нуля: прежние объединения, форматы и правила цвета снимаются."""
+    whole = {'sheetId': sheet_id, 'startRowIndex': 0, 'endRowIndex': grid_rows, 'startColumnIndex': 0, 'endColumnIndex': grid_cols}
+    base = {'textFormat': text(), 'backgroundColor': color('#FFFFFF'), 'verticalAlignment': 'TOP', 'wrapStrategy': 'WRAP'}
+    requests = [{'deleteConditionalFormatRule': {'sheetId': sheet_id, 'index': 0}} for _ in range(old_rules)]
+    requests += [{'unmergeCells': {'range': whole}},
+                 {'repeatCell': {'range': whole, 'cell': {'userEnteredFormat': base}, 'fields': 'userEnteredFormat'}},
+                 {'updateDimensionProperties': {'range': {'sheetId': sheet_id, 'dimension': 'ROWS', 'startIndex': 0, 'endIndex': grid_rows},
+                                                'properties': {'pixelSize': 21}, 'fields': 'pixelSize'}},
+                 {'updateSheetProperties': {'properties': {'sheetId': sheet_id, 'gridProperties': {'frozenRowCount': table.frozen}},
+                                            'fields': 'gridProperties.frozenRowCount'}}]
+    for i, width in enumerate(table.widths):
+        requests.append({'updateDimensionProperties': {
+            'range': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'startIndex': i, 'endIndex': i + 1},
+            'properties': {'pixelSize': width}, 'fields': 'pixelSize'}})
+    if table.bold_column is not None:
+        requests.append({'repeatCell': {'range': {'sheetId': sheet_id, 'startRowIndex': 0, 'endRowIndex': len(table.rows),
+                                                  'startColumnIndex': table.bold_column, 'endColumnIndex': table.bold_column + 1},
+                                        'cell': {'userEnteredFormat': {'textFormat': text(bold=True)}},
+                                        'fields': 'userEnteredFormat.textFormat'}})
+    for row, style in enumerate(table.styles):
+        if style == 'header':
+            requests.append(cells(sheet_id, row, row + 1, table.width, {
+                'backgroundColor': color(HEADER_FILL), 'textFormat': text(bold=True, fg='#FFFFFF'),
+                'horizontalAlignment': 'CENTER', 'verticalAlignment': 'MIDDLE', 'wrapStrategy': 'WRAP'}))
+            requests.append({'updateDimensionProperties': {
+                'range': {'sheetId': sheet_id, 'dimension': 'ROWS', 'startIndex': row, 'endIndex': row + 1},
+                'properties': {'pixelSize': 33}, 'fields': 'pixelSize'}})
+        elif style == 'section':
+            requests.append({'mergeCells': {'mergeType': 'MERGE_ALL', 'range': {
+                'sheetId': sheet_id, 'startRowIndex': row, 'endRowIndex': row + 1, 'startColumnIndex': 0, 'endColumnIndex': table.width}}})
+            requests.append(cells(sheet_id, row, row + 1, table.width, {
+                'backgroundColor': color(SECTION_FILL), 'textFormat': text(bold=True, size=11), 'verticalAlignment': 'MIDDLE'}))
+        elif style == 'title':
+            requests.append(cells(sheet_id, row, row + 1, table.width, {'textFormat': text(bold=True, size=13),
+                                                                         'wrapStrategy': 'OVERFLOW_CELL'}))
+        elif style == 'total':
+            requests.append(cells(sheet_id, row, row + 1, table.width, {
+                'backgroundColor': color(TOTAL_FILL), 'textFormat': text(bold=True)}))
+        elif style == 'note':
+            requests.append(cells(sheet_id, row, row + 1, table.width, {'textFormat': text(fg='#727272'),
+                                                                         'wrapStrategy': 'OVERFLOW_CELL'}))
+    if table.filter_from is not None and len(table.rows) > table.filter_from:
+        requests.append({'setBasicFilter': {'filter': {'range': {
+            'sheetId': sheet_id, 'startRowIndex': table.filter_from, 'endRowIndex': len(table.rows),
+            'startColumnIndex': 0, 'endColumnIndex': table.width}}}})
+    if table.chip_column is not None:
+        column = table.chip_column
+        for label, (fill, fg) in CHIPS.items():
+            requests.append({'addConditionalFormatRule': {'index': 0, 'rule': {
+                'ranges': [{'sheetId': sheet_id, 'startRowIndex': 1, 'endRowIndex': max(len(table.rows), 2),
+                            'startColumnIndex': column, 'endColumnIndex': column + 1}],
+                'booleanRule': {'condition': {'type': 'TEXT_EQ', 'values': [{'userEnteredValue': label}]},
+                                'format': {'backgroundColor': color(fill), 'textFormat': {'foregroundColor': color(fg), 'bold': True}}}}}})
+    return requests
+
+
+async def write(tables: list[Table], *, http=None, access_token=None) -> None:
+    spreadsheet = os.environ['GOOGLE_SHEET_ID']
     access_token = access_token or await asyncio.to_thread(token)
     headers = {'Authorization': 'Bearer ' + access_token}
     async with (http or httpx.AsyncClient(timeout=60)) as client:
-        meta = await client.get(API + sheet_id, params={'fields': 'sheets.properties.title'}, headers=headers)
+        async def batch(requests):
+            if not requests:
+                return {'replies': []}
+            response = await client.post(API + spreadsheet + ':batchUpdate', headers=headers, json={'requests': requests})
+            response.raise_for_status()
+            return response.json()
+
+        meta = await client.get(API + spreadsheet, headers=headers,
+                                params={'fields': 'sheets(properties(sheetId,title,gridProperties),conditionalFormats)'})
         meta.raise_for_status()
-        existing = {s['properties']['title'] for s in meta.json().get('sheets', [])}
-        missing = [title for title in sheets if title not in existing]
-        if missing:
-            response = await client.post(API + sheet_id + ':batchUpdate', headers=headers, json={
-                'requests': [{'addSheet': {'properties': {'title': title}}} for title in missing]})
+        existing = {s['properties']['title']: s for s in meta.json().get('sheets', [])}
+        grid = {}
+        for index, table in enumerate(tables):
+            rows = max(len(table.rows) + 50, 200)
+            if table.title not in existing:
+                reply = await batch([{'addSheet': {'properties': {
+                    'title': table.title, 'index': index, 'gridProperties': {'rowCount': rows, 'columnCount': max(table.width, 10)}}}}])
+                sheet_id = reply['replies'][0]['addSheet']['properties']['sheetId']
+                grid[table.title] = (sheet_id, rows, max(table.width, 10), 0)
+                continue
+            props = existing[table.title]['properties']
+            have_rows = props['gridProperties']['rowCount']
+            have_cols = props['gridProperties']['columnCount']
+            grow = []
+            if have_rows < len(table.rows) + 1:
+                grow.append({'appendDimension': {'sheetId': props['sheetId'], 'dimension': 'ROWS', 'length': rows - have_rows}})
+                have_rows = rows
+            if have_cols < table.width:
+                grow.append({'appendDimension': {'sheetId': props['sheetId'], 'dimension': 'COLUMNS', 'length': table.width - have_cols}})
+                have_cols = table.width
+            grow.append({'updateSheetProperties': {'properties': {'sheetId': props['sheetId'], 'index': index}, 'fields': 'index'}})
+            await batch(grow)
+            grid[table.title] = (props['sheetId'], have_rows, have_cols,
+                                 len(existing[table.title].get('conditionalFormats', [])))
+        await batch([{'deleteSheet': {'sheetId': existing[t]['properties']['sheetId']}} for t in STALE_SHEETS if t in existing])
+        for table in tables:
+            response = await client.post(API + spreadsheet + f"/values/'{table.title}':clear", headers=headers, json={})
             response.raise_for_status()
-        for title, rows in sheets.items():
-            response = await client.post(API + sheet_id + f'/values/{title}:clear', headers=headers, json={})
+            response = await client.put(API + spreadsheet + f"/values/'{table.title}'!A1", headers=headers,
+                                        params={'valueInputOption': 'RAW'}, json={'values': table.rows})
             response.raise_for_status()
-            response = await client.put(API + sheet_id + f"/values/{title}!A1", headers=headers,
-                                        params={'valueInputOption': 'RAW'}, json={'values': rows})
-            response.raise_for_status()
+        await batch([request for table in tables for request in layout(table, *grid[table.title])])
 
 
 async def sync(pool) -> None:
-    calls, tasks = await collect(pool)
-    await write({CALLS_SHEET: calls, TASKS_SHEET: tasks})
-    log.info('Google-таблица обновлена: звонков %s, перезвонов %s', len(calls) - 1, len(tasks) - 1)
+    tables = await collect(pool)
+    await write(tables)
+    log.info('Google-таблица обновлена: %s', ', '.join(f'{t.title} {len(t.rows)}' for t in tables))

@@ -49,24 +49,47 @@ class PureTests(unittest.TestCase):
 
 
 class SheetsWriteTests(unittest.IsolatedAsyncioTestCase):
-    async def test_adds_missing_tab_then_rewrites_values(self):
+    async def test_writes_styled_sheets_and_drops_stale_tab(self):
         seen = []
 
         def handler(request):
-            seen.append((request.method, request.url.path, request.headers['Authorization']))
+            body = json.loads(request.content) if request.content else None
+            seen.append((request.method, request.url.path, body))
+            self.assertEqual(request.headers['Authorization'], 'Bearer tok')
             if request.method == 'GET':
-                return httpx.Response(200, json={'sheets': [{'properties': {'title': 'Звонки'}}]})
-            if request.method == 'PUT':
-                self.assertEqual(json.loads(request.content)['values'][0], ['h'])
+                return httpx.Response(200, json={'sheets': [
+                    {'properties': {'sheetId': 5, 'title': 'Звонки', 'gridProperties': {'rowCount': 3, 'columnCount': 5}},
+                     'conditionalFormats': [{}, {}]},
+                    {'properties': {'sheetId': 6, 'title': 'Клиенты', 'gridProperties': {'rowCount': 1000, 'columnCount': 26}}}]})
+            if request.url.path.endswith(':batchUpdate') and 'addSheet' in body['requests'][0]:
+                return httpx.Response(200, json={'replies': [{'addSheet': {'properties': {'sheetId': 9}}}]})
             return httpx.Response(200, json={})
 
+        calls = sheets.Table('Звонки', [100, 100], frozen=1, filter_from=0, chip_column=1)
+        calls.add(['Дата', 'Итог'], 'header')
+        calls.add(['Звонки за 07.10.2026 · 2'], 'section')
+        calls.add(['07.10.2026 11:40', 'Результат'])
+        calls.add(['07.10.2026 11:00', 'Без шанса'])
+        summary = sheets.Table('Сводка', [200])
+        summary.add(['Итог'], 'title')
         with patch.dict(os.environ, {'GOOGLE_SHEET_ID': 'sheet1'}):
-            await sheets.write({'Звонки': [['h']], 'Перезвоны': [['h']]},
-                               http=httpx.AsyncClient(transport=httpx.MockTransport(handler)), access_token='tok')
-        methods = [m for m, _, _ in seen]
-        self.assertEqual(methods, ['GET', 'POST', 'POST', 'PUT', 'POST', 'PUT'])
-        self.assertTrue(seen[1][1].endswith(':batchUpdate'))
-        self.assertTrue(all(auth == 'Bearer tok' for _, _, auth in seen))
+            await sheets.write([summary, calls], http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+                               access_token='tok')
+        batches = [body['requests'] for method, path, body in seen if path.endswith(':batchUpdate')]
+        self.assertIn('addSheet', batches[0][0])  # «Сводка» создана
+        self.assertEqual(batches[1][0]['appendDimension']['dimension'], 'ROWS')  # в «Звонках» не хватало строк
+        self.assertEqual(batches[2], [{'deleteSheet': {'sheetId': 6}}])
+        puts = [(path, body) for method, path, body in seen if method == 'PUT']
+        self.assertEqual(puts[1][1]['values'][2], ['07.10.2026 11:40', 'Результат'])
+        styling = batches[3]
+        self.assertEqual(sum('deleteConditionalFormatRule' in r for r in styling), 2)
+        merges = [r['mergeCells']['range'] for r in styling if 'mergeCells' in r]
+        self.assertEqual([(m['sheetId'], m['startRowIndex']) for m in merges], [(5, 1)])
+        header = next(r['repeatCell'] for r in styling if 'repeatCell' in r and r['repeatCell']['range']['sheetId'] == 5
+                      and r['repeatCell']['range'].get('endRowIndex') == 1 and 'backgroundColor' in r['repeatCell']['cell']['userEnteredFormat']
+                      and r['repeatCell']['cell']['userEnteredFormat']['textFormat']['bold'])
+        self.assertAlmostEqual(header['cell']['userEnteredFormat']['backgroundColor']['red'], 0x1F / 255)
+        self.assertTrue(any('setBasicFilter' in r for r in styling))
 
     def test_enabled_needs_both_settings(self):
         with patch.dict(os.environ, {'GOOGLE_SHEET_ID': 'x', 'GOOGLE_SERVICE_ACCOUNT_FILE': ''}):
@@ -151,12 +174,20 @@ class CallbackStoreTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_sheet_rows_from_database(self):
         await self.add(TIMED)
-        calls, tasks = await sheets.collect(self.pool)
-        self.assertEqual(calls[0], sheets.CALLS_HEADER)
-        self.assertEqual(calls[1][:4], ['07.10.2026 11:40', 'Первый', calls[1][2], 'ООО Ромашка'])
-        self.assertEqual(calls[1][7], 'перезвон в конкретный день')
-        self.assertEqual(tasks[1][:4], ['09.10.2026', '11:00', '', 'Перезвон'])
-        self.assertEqual(tasks[1][8], 'открыт')
+        await self.add(LOST, TRANSCRIPT, number='79990003344')
+        summary, days, calls, tasks = await sheets.collect(self.pool)
+        self.assertEqual([t.title for t in (summary, days, calls, tasks)], ['Сводка', 'По дням', 'Звонки', 'Перезвоны'])
+        self.assertEqual(calls.rows[0], sheets.CALLS_HEADER)
+        self.assertEqual((calls.styles[1], calls.rows[1]), ('section', ['Звонки за 07.10.2026 · 2']))
+        won = next(r for r in calls.rows[2:] if r[3] == 'ООО Ромашка')
+        self.assertEqual([won[0], won[1], won[4]], ['07.10.2026 11:40', 'Первый', 'Результат'])
+        self.assertEqual(next(r for r in calls.rows[2:] if r[3] == '')[4], 'Потерян, шанс был')
+        self.assertEqual(days.rows[1][:3], ['07.10.2026', 2, 1])
+        total = summary.rows[summary.styles.index('total')]
+        self.assertEqual(total[:4], ['ИТОГО', 2, 1, '50%'])
+        self.assertIn(['не закреплён день перезвона', 1], summary.rows)
+        self.assertEqual([r[0] for r, s in zip(tasks.rows, tasks.styles) if s == 'section'], ['Дальше · 2'])
+        self.assertEqual(tasks.rows[2][7], 'открыт')
 
     async def test_train_assignment_and_scenario(self):
         import training_simulator
