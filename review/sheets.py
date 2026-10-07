@@ -69,6 +69,8 @@ class Table:
     filter_from: int | None = None  # строка шапки, с которой ставится фильтр
     chip_column: int | None = None
     bold_column: int | None = None
+    chip_span: int = 1  # сколько колонок подряд от chip_column раскрашиваются
+    chips: dict | None = None  # своя палитра статусов вместо CHIPS
 
     def add(self, values, style=None):
         self.rows.append(list(values))
@@ -311,10 +313,10 @@ def layout(table: Table, sheet_id: int, grid_rows: int, grid_cols: int, old_rule
             'startColumnIndex': 0, 'endColumnIndex': table.width}}}})
     if table.chip_column is not None:
         column = table.chip_column
-        for label, (fill, fg) in CHIPS.items():
+        for label, (fill, fg) in (table.chips or CHIPS).items():
             requests.append({'addConditionalFormatRule': {'index': 0, 'rule': {
                 'ranges': [{'sheetId': sheet_id, 'startRowIndex': 1, 'endRowIndex': max(len(table.rows), 2),
-                            'startColumnIndex': column, 'endColumnIndex': column + 1}],
+                            'startColumnIndex': column, 'endColumnIndex': column + table.chip_span}],
                 'booleanRule': {'condition': {'type': 'TEXT_EQ', 'values': [{'userEnteredValue': label}]},
                                 'format': {'backgroundColor': color(fill), 'textFormat': {'foregroundColor': color(fg), 'bold': True}}}}}})
     return requests

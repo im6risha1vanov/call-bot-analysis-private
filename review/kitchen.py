@@ -1,10 +1,13 @@
-"""Прозвон лидов по скрипту «Кухонные гарнитуры»: итог попытки в таблицу владельца.
+"""Прозвон лидов по скрипту «Кухонные гарнитуры»: итоги попыток на отдельных листах.
 
 У оператора (KITCHEN_EXTENSIONS) свой скрипт и своя таблица «Прозвон лидов»,
-которую раньше заполняли руками. После каждого исходящего звонка бот ставит
-итог следующей пустой попытки («Звонок 1/2/3») в строке лида с этим телефоном
-и дописывает строку в «Комментарий». Остальные колонки (даты, сумму, сводки)
-считают формулы самой таблицы; бот их не трогает и строк не добавляет.
+которую ведут руками (листы «Сводка», «По дням», «Кухонные гарнитуры»). Бот
+заводит в этой таблице три собственных листа в том же оформлении и пишет только
+в них: «<менеджер> · Звонки» (строка на лида, попытки «Звонок 1/2/3» с датами,
+сумма по тарифам, собранные данные), «<менеджер> · Сводка» и «<менеджер> · По дням».
+Лист базы бот только читает (id, проект и дата базы по телефону). Листы людей он
+не очищает, не оформляет и не пишет в них: каждый запрос на изменение
+проверяется на sheetId своих листов (own_only).
 
 Недозвон (звонок без разговора) записывается как НДЗ без запроса к модели;
 разговор разбирается промтом review/kitchen_prompt.md. «Заинтересованный»
@@ -13,18 +16,21 @@
 чего не хватает.
 
 Настройки: KITCHEN_EXTENSIONS (добавочные через запятую), KITCHEN_SHEET_ID,
-KITCHEN_SHEET_TAB (лист с лидами), KITCHEN_REGIONS (регионы доставки через
-запятую; пусто — регион не проверяется), KITCHEN_SINCE (ISO-время, с которого
-недозвоны пишутся в таблицу, чтобы не задним числом).
+KITCHEN_MANAGER (имя в названиях листов), KITCHEN_LEADS_TAB (лист с базой,
+только чтение), KITCHEN_PRICES (первичный, повторный, заинтересованный, ₽),
+KITCHEN_REGIONS (регионы доставки через запятую; пусто — регион не проверяется),
+KITCHEN_SINCE (ISO-время, с которого недозвоны пишутся в таблицу).
 """
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import logging
 import os
 import re
-from datetime import datetime, timezone
+import time
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -41,8 +47,6 @@ MAX_TOKENS = int(os.getenv('KITCHEN_MAX_TOKENS', '3000'))
 STATUSES = ('ndz', 'callback', 'not_relevant', 'interested')
 LABELS = {'callback': 'Перезвон', 'not_relevant': 'Неактуально', 'interested': 'Заинтересованный'}
 NDZ_LABELS = ('НДЗ', 'НДЗ 2', 'НДЗ 3')
-PHONE_COL, COMMENT_COL, ATTEMPT_COLS = 3, 7, (8, 9, 10)  # D, H, I/J/K
-LETTERS = 'ABCDEFGHIJK'
 STARTED = datetime.now(timezone.utc)
 
 
@@ -151,67 +155,277 @@ def digits(value) -> str:
     return re.sub(r'\D', '', str(value or ''))[-10:]
 
 
-def plan(grid: list[list], attempts, today: str) -> tuple[list[tuple[str, str]], dict]:
-    """Какие ячейки записать. grid — значения листа с A1, attempts — по порядку звонков.
-
-    Возвращает (обновления [(A1-ячейка, значение)], {call_id: (ячейка или None, ошибка или None)})."""
-    grid = [list(row) + [''] * (len(LETTERS) - len(row)) for row in grid]
-    updates, results = {}, {}
-    for attempt in attempts:
-        phone = digits(attempt['client_number'])
-        rows = [i for i, row in enumerate(grid) if phone and len(phone) == 10 and digits(row[PHONE_COL]) == phone]
-        if not rows:
-            results[attempt['call_id']] = (None, 'номер не найден в таблице')
-            continue
-        free = [i for i in rows if any(str(grid[i][c]).strip() == '' for c in ATTEMPT_COLS)]
-        index = (free or rows)[-1]  # нижняя строка: самая свежая загрузка базы
-        row = grid[index]
-        column = next((c for c in ATTEMPT_COLS if str(row[c]).strip() == ''), None)
-        cell = None
-        if column is not None:
-            number = ATTEMPT_COLS.index(column)
-            value = NDZ_LABELS[number] if attempt['status'] == 'ndz' else LABELS[attempt['status']]
-            cell = f'{LETTERS[column]}{index + 1}'
-            row[column] = value
-            updates[cell] = value
-        note = f"{today} {attempt['comment'] or ''}".strip() + ('' if column is not None else ' (сверх трёх попыток)')
-        row[COMMENT_COL] = (str(row[COMMENT_COL]).rstrip() + '\n' if str(row[COMMENT_COL]).strip() else '') + note
-        updates[f'{LETTERS[COMMENT_COL]}{index + 1}'] = row[COMMENT_COL]
-        results[attempt['call_id']] = (cell or f'{LETTERS[COMMENT_COL]}{index + 1}', None)
-    return list(updates.items()), results
+MANAGER = os.getenv('KITCHEN_MANAGER', 'Ольга')
+CALLS_TAB, SUMMARY_TAB, DAYS_TAB = (f'{MANAGER} · {name}' for name in ('Звонки', 'Сводка', 'По дням'))
+LEADS_TAB = os.getenv('KITCHEN_LEADS_TAB', 'Кухонные гарнитуры')
+SYNC_MINUTES = 10
+SLOTS = 3  # в таблице людей три попытки на лида, сумма считается по ним
+HEADER = ['Телефон', 'id', 'Проект', 'Дата базы', 'Напоминание', 'Комментарий', 'Звонок 1', 'Звонок 2', 'Звонок 3',
+          'Сумма, ₽', 'Дата звонка 1', 'Дата звонка 2', 'Дата звонка 3', 'Город', 'Материал', 'Бюджет', 'Имя',
+          'Удобное время']
+WIDTHS = [120, 95, 230, 90, 140, 360, 120, 120, 120, 75, 110, 110, 110, 120, 90, 100, 150, 140]
+CHIPS = {  # как чипы в листе базы: НДЗ серо-голубой, Неактуально красный, Заинтересованный зелёный
+    'НДЗ': ('#DDE4EE', '#3C4A5C'), 'НДЗ 2': ('#DDE4EE', '#3C4A5C'), 'НДЗ 3': ('#DDE4EE', '#3C4A5C'),
+    'Перезвон': ('#FFF2CC', '#7F6000'), 'Неактуально': ('#F4CCCC', '#990000'), 'Заинтересованный': ('#D9EAD3', '#274E13'),
+}
+FACTS = ('city', 'material', 'budget', 'name', 'callback_time')
+STATUS_ORDER = ('ndz', 'callback', 'not_relevant', 'interested')
 
 
-async def flush(pool, *, http=None, access_token=None) -> int:
-    attempts = await pool.fetch(
-        'SELECT * FROM lead_attempts WHERE written_at IS NULL ORDER BY call_started_at NULLS FIRST, call_id LIMIT 200')
-    if not attempts:
-        return 0
-    spreadsheet, tab = os.environ['KITCHEN_SHEET_ID'], os.getenv('KITCHEN_SHEET_TAB', 'Кухонные гарнитуры')
+def prices() -> tuple[int, int, int]:
+    """Первичный звонок, повторный (после НДЗ), «Заинтересованный» — как в «Сводке» таблицы."""
+    try:
+        first, repeat, interested = (int(p) for p in os.getenv('KITCHEN_PRICES', '10,5,150').split(','))
+        return first, repeat, interested
+    except ValueError:
+        return 10, 5, 150
+
+
+def price(status: str, number: int) -> int:
+    first, repeat, interested = prices()
+    if status == 'interested':
+        return interested
+    return first if number == 0 else repeat
+
+
+def attempt_label(status: str, number: int) -> str:
+    return NDZ_LABELS[min(number, 2)] if status == 'ndz' else LABELS[status]
+
+
+def loads(value) -> dict:
+    return value if isinstance(value, dict) else json.loads(value or '{}')
+
+
+def stamp(moment, tz, fmt='%d.%m.%Y %H:%M') -> str:
+    return moment.astimezone(tz).strftime(fmt) if moment else ''
+
+
+def leads_of(attempts) -> dict[str, list]:
+    """Попытки по номеру телефона в порядке звонков."""
+    leads = {}
+    for item in sorted(attempts, key=lambda a: (a['call_started_at'] or datetime.min.replace(tzinfo=timezone.utc), a['call_id'])):
+        leads.setdefault(digits(item['client_number']) or f"call-{item['call_id']}", []).append(item)
+    return leads
+
+
+def counted(attempts):
+    """Платные попытки: первые три на лида, с номером попытки."""
+    for items in leads_of(attempts).values():
+        for number, item in enumerate(items[:SLOTS]):
+            yield number, item
+
+
+def calls_table(attempts, base: dict, tz) -> sheets.Table:
+    """Строка на номер, как в листе базы: секции «База от …», попытки, сумма, данные клиента."""
+    table = sheets.Table(CALLS_TAB, WIDTHS, frozen=1, filter_from=0, chip_column=6, chip_span=SLOTS, bold_column=0, chips=CHIPS)
+    table.add(HEADER, 'header')
+    groups = collections.defaultdict(list)
+    for key, items in leads_of(attempts).items():
+        lead = base.get(key, {})
+        facts = {}
+        for item in items:
+            for name in FACTS:
+                value = (loads(item['data']).get('facts') or {}).get(name)
+                if value:
+                    facts[name] = value
+        last = items[-1]
+        remind = (loads(last['data']).get('facts') or {}).get('callback_time') if last['status'] == 'callback' else ''
+        notes = [f"{stamp(a['call_started_at'], tz, '%d.%m')} {a['comment'] or ''}".strip() for a in items]
+        if len(items) > SLOTS:
+            notes.append(f'Всего попыток: {len(items)}, в сумму идут первые {SLOTS}')
+        slots = items[:SLOTS]
+        row = ['+7' + key if len(key) == 10 else items[0]['client_number'] or '', lead.get('id', ''), lead.get('project', ''),
+               lead.get('base', ''), remind or '', '\n'.join(notes),
+               *[attempt_label(a['status'], i) for i, a in enumerate(slots)], *[''] * (SLOTS - len(slots)),
+               sum(price(a['status'], i) for i, a in enumerate(slots)),
+               *[stamp(a['call_started_at'], tz) for a in slots], *[''] * (SLOTS - len(slots)),
+               *[facts.get(name, '') for name in FACTS]]
+        groups[lead.get('base', '')].append((last['call_started_at'], row))
+
+    def base_day(label):
+        try:
+            return datetime.strptime(label, '%d.%m.%Y').date()
+        except ValueError:
+            return date.min
+
+    for label in sorted(groups, key=lambda b: (b != '', base_day(b)), reverse=True):
+        rows = groups[label]
+        table.add([f'База от {label} · лидов {len(rows)}' if label else f'Нет в листе «{LEADS_TAB}» · лидов {len(rows)}'], 'section')
+        for _, row in sorted(rows, key=lambda r: r[0] or datetime.min.replace(tzinfo=timezone.utc), reverse=True):
+            table.add(row)
+    return table
+
+
+def days_table(attempts, tz) -> sheets.Table:
+    table = sheets.Table(DAYS_TAB, [110, 105, 105, 100, 125, 90], frozen=1)
+    table.add(['Дата', 'Первичных звонков', 'Повторных звонков', 'Всего звонков', 'Заинтересованных', 'Сумма, ₽'], 'header')
+    by_day = collections.defaultdict(lambda: [0, 0, 0, 0])
+    for number, item in counted(attempts):
+        day = by_day[item['call_started_at'].astimezone(tz).date() if item['call_started_at'] else date.min]
+        day[0 if number == 0 else 1] += 1
+        day[2] += item['status'] == 'interested'
+        day[3] += price(item['status'], number)
+    for day in sorted(by_day, reverse=True):
+        first, repeat, interested, money = by_day[day]
+        table.add([day.strftime('%d.%m.%Y') if day != date.min else 'без даты', first, repeat, first + repeat, interested, money])
+    return table
+
+
+def summary_table(attempts, tz, now: datetime) -> sheets.Table:
+    table = sheets.Table(SUMMARY_TAB, [260, 110, 110, 125, 90])
+    first, repeat, interested = prices()
+    table.add(['Тарифы'], 'title')
+    table.add(['Вид звонка', 'Цена, ₽'], 'header')
+    table.add(['Первичный', first])
+    table.add(['Повторный (после НДЗ)', repeat])
+    table.add(['«Заинтересованный»', interested])
+    table.add([])
+    table.add([f'Итог: {MANAGER}'], 'title')
+    table.add(['Период', 'Первичных звонков', 'Повторных звонков', 'Заинтересованных', 'Сумма, ₽'], 'header')
+    today = now.astimezone(tz).date()
+    periods = (('Сегодня', today), ('С начала недели', today - timedelta(days=today.weekday())),
+               ('С начала месяца', today.replace(day=1)), ('Всего', date.min))
+    paid = [(n, a, a['call_started_at'].astimezone(tz).date() if a['call_started_at'] else date.min) for n, a in counted(attempts)]
+    for label, start in periods:
+        part = [(n, a) for n, a, day in paid if day >= start]
+        table.add([label, sum(n == 0 for n, _ in part), sum(n > 0 for n, _ in part),
+                   sum(a['status'] == 'interested' for _, a in part), sum(price(a['status'], n) for n, a in part)],
+                  'total' if label == 'Всего' else None)
+    table.add([])
+    table.add(['Итоги попыток'], 'title')
+    table.add(['Итог', 'Попыток'], 'header')
+    by_status = collections.Counter(a['status'] for a in attempts)
+    for status in STATUS_ORDER:
+        table.add(['НДЗ' if status == 'ndz' else LABELS[status], by_status[status]])
+    table.add(['Лидов (номеров)', len(leads_of(attempts))], 'total')
+    table.add([])
+    table.add([f"Обновлено ботом {now.astimezone(tz).strftime('%d.%m.%Y %H:%M')} по звонкам из телефонии. "
+               f'Сумма: первые {SLOTS} попытки на лида, «Заинтересованный» по своему тарифу вместо обычного. '
+               'Ручные правки на листах бота не сохраняются.'], 'note')
+    return table
+
+
+def own_only(requests: list[dict], sheet_ids) -> list[dict]:
+    """Последняя защита листов, которые ведут люди: любой запрос не к своему листу — ошибка."""
+    allowed = {sheet_ids} if isinstance(sheet_ids, int) else set(sheet_ids)
+
+    def ids(value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key == 'sheetId':
+                    yield item
+                else:
+                    yield from ids(item)
+        elif isinstance(value, list):
+            for item in value:
+                yield from ids(item)
+    foreign = {i for i in ids(requests) if i not in allowed}
+    if foreign:
+        raise RuntimeError(f'запрос к чужому листу {sorted(foreign)} отклонён')
+    return requests
+
+
+def own_title(title: str) -> str:
+    if title not in (CALLS_TAB, SUMMARY_TAB, DAYS_TAB) or title == LEADS_TAB:
+        raise RuntimeError(f'лист «{title}» не принадлежит боту')
+    return title
+
+
+async def write(tables: list[sheets.Table], *, http=None, access_token=None) -> None:
+    spreadsheet = os.environ['KITCHEN_SHEET_ID']
     access_token = access_token or await asyncio.to_thread(sheets.token)
     headers = {'Authorization': 'Bearer ' + access_token}
-    zone = await pool.fetchval('SELECT timezone FROM clients WHERE id=$1', attempts[0]['client_id'])
-    today = datetime.now(ZoneInfo(zone or 'Europe/Moscow')).strftime('%d.%m')
     async with (http or httpx.AsyncClient(timeout=60)) as client:
-        response = await client.get(sheets.API + spreadsheet + f"/values/'{tab}'!A1:K", headers=headers,
-                                    params={'valueRenderOption': 'UNFORMATTED_VALUE'})
-        response.raise_for_status()
-        updates, results = plan(response.json().get('values', []), attempts, today)
-        if updates:
-            response = await client.post(sheets.API + spreadsheet + '/values:batchUpdate', headers=headers, json={
-                'valueInputOption': 'RAW',
-                'data': [{'range': f"'{tab}'!{cell}", 'values': [[value]]} for cell, value in updates]})
+        async def batch(requests, sheet_ids):
+            response = await client.post(sheets.API + spreadsheet + ':batchUpdate', headers=headers,
+                                         json={'requests': own_only(requests, sheet_ids)})
             response.raise_for_status()
-    for call_id, (cell, error) in results.items():
-        await pool.execute('UPDATE lead_attempts SET written_at=now(), sheet_cell=$2, error=$3 WHERE call_id=$1',
-                           call_id, cell, error)
-        if error:
-            log.warning('прозвон кухонь: call id=%s — %s', call_id, error)
-    return len(results)
+            return response.json()
+
+        meta = await client.get(sheets.API + spreadsheet, headers=headers,
+                                params={'fields': 'sheets(properties(sheetId,title,gridProperties),conditionalFormats)'})
+        meta.raise_for_status()
+        existing = {s['properties']['title']: s for s in meta.json().get('sheets', [])}
+        for table in tables:
+            title = own_title(table.title)
+            rows = max(len(table.rows) + 50, 200)
+            own = existing.get(title)
+            if own is None:  # новый лист в конце таблицы, порядок листов людей не меняется
+                reply = await batch([{'addSheet': {'properties': {
+                    'title': title, 'gridProperties': {'rowCount': rows, 'columnCount': table.width}}}}], [])
+                sheet_id = reply['replies'][0]['addSheet']['properties']['sheetId']
+                grid_rows, grid_cols, rules = rows, table.width, 0
+            else:
+                sheet_id = own['properties']['sheetId']
+                grid_rows = own['properties']['gridProperties']['rowCount']
+                grid_cols = own['properties']['gridProperties']['columnCount']
+                rules = len(own.get('conditionalFormats', []))
+                grow = []
+                if grid_rows < len(table.rows) + 1:
+                    grow.append({'appendDimension': {'sheetId': sheet_id, 'dimension': 'ROWS', 'length': rows - grid_rows}})
+                    grid_rows = rows
+                if grid_cols < table.width:
+                    grow.append({'appendDimension': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'length': table.width - grid_cols}})
+                    grid_cols = table.width
+                if grow:
+                    await batch(grow, sheet_id)
+            response = await client.post(sheets.API + spreadsheet + f"/values/'{title}':clear", headers=headers, json={})
+            response.raise_for_status()
+            response = await client.put(sheets.API + spreadsheet + f"/values/'{title}'!A1", headers=headers,
+                                        params={'valueInputOption': 'RAW'}, json={'values': table.rows})
+            response.raise_for_status()
+            await batch(sheets.layout(table, sheet_id, grid_rows, grid_cols, rules), sheet_id)
+
+
+async def base(*, http=None, access_token=None) -> dict:
+    """id, проект и дата базы по телефону из листа базы. Только чтение."""
+    spreadsheet = os.environ['KITCHEN_SHEET_ID']
+    access_token = access_token or await asyncio.to_thread(sheets.token)
+    async with (http or httpx.AsyncClient(timeout=60)) as client:
+        response = await client.get(sheets.API + spreadsheet + f"/values/'{LEADS_TAB}'!A1:D",
+                                    headers={'Authorization': 'Bearer ' + access_token},
+                                    params={'valueRenderOption': 'FORMATTED_VALUE'})
+        if response.status_code == 400:  # листа нет или переименован: данные базы просто не подставляются
+            log.warning('лист базы «%s» не прочитан: %s', LEADS_TAB, response.text[:200])
+            return {}
+        response.raise_for_status()
+    found, current = {}, ''
+    for row in response.json().get('values', []):
+        cells = [str(c).strip() for c in row]
+        heading = re.match(r'База от (\d{2}\.\d{2}\.\d{4})', cells[0]) if cells else None
+        if heading and not any(cells[1:]):
+            current = heading.group(1)
+            continue
+        if len(cells) > 3 and len(digits(cells[3])) == 10:
+            found.setdefault(digits(cells[3]), {'id': cells[0], 'project': cells[1], 'base': current})
+    return found
+
+
+_last_sync = 0.0
+
+
+async def sync(pool, *, http_factory=httpx.AsyncClient, access_token=None, now: datetime | None = None) -> int:
+    attempts = await pool.fetch('SELECT * FROM lead_attempts ORDER BY call_started_at NULLS FIRST, call_id')
+    if not attempts:
+        return 0
+    access_token = access_token or await asyncio.to_thread(sheets.token)
+    zone = ZoneInfo(await pool.fetchval('SELECT timezone FROM clients WHERE id=$1', attempts[0]['client_id']) or 'Europe/Moscow')
+    leads = await base(http=http_factory(timeout=60), access_token=access_token)
+    tables = [calls_table(attempts, leads, zone), summary_table(attempts, zone, now or datetime.now(timezone.utc)),
+              days_table(attempts, zone)]
+    await write(tables, http=http_factory(timeout=60), access_token=access_token)
+    await pool.execute('UPDATE lead_attempts SET written_at=now() WHERE written_at IS NULL')
+    return len(attempts)
 
 
 async def tick(pool) -> None:
+    global _last_sync
     await record_missed(pool)
-    if sheet_enabled():
-        written = await flush(pool)
-        if written:
-            log.info('Прозвон лидов: записано попыток %s', written)
+    if not sheet_enabled():
+        return
+    pending = await pool.fetchval('SELECT count(*) FROM lead_attempts WHERE written_at IS NULL')
+    if pending or time.monotonic() - _last_sync > SYNC_MINUTES * 60:
+        _last_sync = time.monotonic()
+        count = await sync(pool)
+        if pending:
+            log.info('Прозвон лидов: листы «%s» обновлены, попыток %s, новых %s', MANAGER, count, pending)
