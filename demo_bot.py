@@ -593,6 +593,8 @@ from automatic.ui import install as install_automatic
 install_automatic(router, lambda: PG_POOL)
 from unified.ui import install as install_unified
 install_unified(router, lambda: PG_POOL)
+from review.ui import install as install_review
+install_review(router, lambda: PG_POOL)
 
 
 @router.message(F.text)

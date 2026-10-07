@@ -33,6 +33,7 @@ import mango_client
 from crypto_util import decrypt
 from reports import esc, send_long
 from tools import owner_chat_ids, report_chat_ids
+from review import engine as review_engine, render as review_render, store as review_store
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("callbot-astra-worker")
@@ -448,7 +449,12 @@ async def maybe_send_digest_for_client(pool: asyncpg.Pool, client: asyncpg.Recor
     by_ext = {e["extension"]: e for e in employees if e["role"] == "manager"}
     heads = await report_chat_ids(pool, client["id"])
 
-    for ext in sorted({p["extension"] for p in pending if p["extension"]}):
+    if review_engine.enabled():
+        await send_review_digests(pool, client, by_ext, heads, today_start, today_end, now_local.date())
+
+    # Сводки разбора по результату заменяют прежние персональные дайджесты.
+    legacy_exts = set() if review_engine.enabled() else {p["extension"] for p in pending if p["extension"]}
+    for ext in sorted(legacy_exts):
         emp = by_ext.get(ext)
         if not emp:
             continue
@@ -472,7 +478,7 @@ async def maybe_send_digest_for_client(pool: asyncpg.Pool, client: asyncpg.Recor
     # точные числа считает код, а недочёты и что с ними делать — рассуждение.
     # Здесь только ставим задачу в очередь: планировщик и исполнитель не
     # общаются напрямую, только через таблицу tasks.
-    if heads:
+    if heads and not review_engine.enabled():
         await pool.execute(
             """
             INSERT INTO tasks (type, client_id, input, dedup_key)
@@ -496,6 +502,34 @@ async def maybe_send_digest_for_client(pool: asyncpg.Pool, client: asyncpg.Recor
         client["id"], now_local.date(),
     )
     log.info("client id=%s дайджест за день отправлен, звонков=%s", client["id"], len(pending))
+
+
+async def send_review_digests(pool, client, by_ext, heads, start, end, today) -> None:
+    """Вечер: менеджеру итог дня с удачными моментами, РОПу цифры и потери с шансом."""
+    rows = await review_store.day_rows(pool, client["id"], start, end)
+    tomorrow = (today + timedelta(days=1)).isoformat()
+    for ext in sorted({r["extension"] for r in rows if r["extension"]}):
+        emp = by_ext.get(ext)
+        if not emp or not emp["telegram_user_id"]:
+            continue
+        text = review_render.manager_summary(emp["full_name"] or ext, [r for r in rows if r["extension"] == ext], tomorrow)
+        if text:
+            try:
+                await send_long(bot, emp["telegram_user_id"], text)
+            except Exception:
+                log.exception("не удалось отправить итог дня доб.=%s", ext)
+    summary = review_render.rop_summary(rows)
+    if not summary:
+        return
+    text, buttons = summary
+    for chat_id in heads:
+        try:
+            await send_long(bot, chat_id, text)
+            keyboard = review_render.list_keyboard(buttons)
+            if keyboard:
+                await bot.send_message(chat_id, "Открыть разбор:", reply_markup=keyboard)
+        except Exception:
+            log.exception("не удалось отправить итог дня РОПу, chat_id=%s", chat_id)
 
 
 async def maybe_send_digests(pool: asyncpg.Pool) -> None:
