@@ -49,24 +49,39 @@ class PureTests(unittest.TestCase):
 
 
 class SheetsWriteTests(unittest.IsolatedAsyncioTestCase):
-    async def test_adds_missing_tab_then_rewrites_values(self):
+    async def test_creates_client_sheet_drops_old_tabs_and_formats(self):
         seen = []
 
         def handler(request):
-            seen.append((request.method, request.url.path, request.headers['Authorization']))
+            body = json.loads(request.content) if request.content else None
+            seen.append((request.method, request.url.path, body))
+            self.assertEqual(request.headers['Authorization'], 'Bearer tok')
             if request.method == 'GET':
-                return httpx.Response(200, json={'sheets': [{'properties': {'title': 'Звонки'}}]})
-            if request.method == 'PUT':
-                self.assertEqual(json.loads(request.content)['values'][0], ['h'])
+                return httpx.Response(200, json={'sheets': [{'properties': {'sheetId': 5, 'title': 'Звонки'}},
+                                                            {'properties': {'sheetId': 6, 'title': 'Перезвоны'}}]})
+            if request.url.path.endswith(':batchUpdate') and 'addSheet' in body['requests'][0]:
+                return httpx.Response(200, json={'replies': [{'addSheet': {'properties': {'sheetId': 9}}}]})
             return httpx.Response(200, json={})
 
         with patch.dict(os.environ, {'GOOGLE_SHEET_ID': 'sheet1'}):
-            await sheets.write({'Звонки': [['h']], 'Перезвоны': [['h']]},
-                               http=httpx.AsyncClient(transport=httpx.MockTransport(handler)), access_token='tok')
-        methods = [m for m, _, _ in seen]
-        self.assertEqual(methods, ['GET', 'POST', 'POST', 'PUT', 'POST', 'PUT'])
-        self.assertTrue(seen[1][1].endswith(':batchUpdate'))
-        self.assertTrue(all(auth == 'Bearer tok' for _, _, auth in seen))
+            await sheets.write([sheets.HEADER], http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+                               access_token='tok')
+        self.assertEqual([m for m, _, _ in seen], ['GET', 'POST', 'POST', 'POST', 'PUT', 'POST'])
+        self.assertEqual(seen[2][2]['requests'], [{'deleteSheet': {'sheetId': 5}}, {'deleteSheet': {'sheetId': 6}}])
+        self.assertIn('/values/Клиенты', seen[4][1])
+        self.assertEqual(seen[4][2]['values'][0][:4], ['id', 'Проект', 'Тег проекта', 'Телефон'])
+        formats = seen[5][2]['requests']
+        self.assertEqual(formats[0]['updateSheetProperties']['properties']['sheetId'], 9)
+        self.assertTrue(any('addConditionalFormatRule' in r for r in formats))
+
+    def test_status_reads_like_crm(self):
+        open_task = {'status': 'open', 'kind': 'callback'}
+        self.assertEqual(sheets.status({'success': True, 'outcome': ['callback_date']}, open_task), 'Перезвон')
+        self.assertEqual(sheets.status({'success': True, 'outcome': ['callback_date']}, {'status': 'done', 'kind': 'callback'}),
+                         'Перезвон выполнен')
+        self.assertEqual(sheets.status({'success': True, 'outcome': ['proposal', 'meeting']}, None), 'Встреча')
+        self.assertEqual(sheets.status({'success': False, 'chance': 'normal'}, None), 'Потерян, шанс был')
+        self.assertEqual(sheets.status({'success': False, 'chance': 'none'}, None), 'Отказ')
 
     def test_enabled_needs_both_settings(self):
         with patch.dict(os.environ, {'GOOGLE_SHEET_ID': 'x', 'GOOGLE_SERVICE_ACCOUNT_FILE': ''}):
@@ -151,12 +166,20 @@ class CallbackStoreTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_sheet_rows_from_database(self):
         await self.add(TIMED)
-        calls, tasks = await sheets.collect(self.pool)
-        self.assertEqual(calls[0], sheets.CALLS_HEADER)
-        self.assertEqual(calls[1][:4], ['07.10.2026 11:40', 'Первый', calls[1][2], 'ООО Ромашка'])
-        self.assertEqual(calls[1][7], 'перезвон в конкретный день')
-        self.assertEqual(tasks[1][:4], ['09.10.2026', '11:00', '', 'Перезвон'])
-        self.assertEqual(tasks[1][8], 'открыт')
+        await self.add(LOST, TRANSCRIPT, number='79990003344')
+        await self.add(TIMED)  # повторный звонок тому же клиенту: одна строка, последний звонок
+        rows = await sheets.collect(self.pool)
+        self.assertEqual(rows[0], sheets.HEADER)
+        self.assertEqual(len(rows), 3)
+        mine = next(r for r in rows[1:] if r[3] == '79990001122')
+        self.assertEqual(mine[1:6], ['ООО Ромашка', 'Первый', '79990001122', '2026-10-07 11:40:00', '2026-10-09 11:00'])
+        self.assertIn('Возражение: дорого', mine[6])
+        self.assertIn('Договорились: созвон в пятницу в 11', mine[7])
+        self.assertEqual(mine[8], 'Перезвон')
+        lost = next(r for r in rows[1:] if r[3] == '79990003344')
+        self.assertEqual(lost[1], 'Компания не названа')
+        self.assertIn('Как можно было', lost[7])
+        self.assertEqual(lost[5], '2026-11-09 (примерно)')
 
     async def test_train_assignment_and_scenario(self):
         import training_simulator
