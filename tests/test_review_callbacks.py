@@ -88,7 +88,7 @@ class CallbackStoreTests(unittest.IsolatedAsyncioTestCase):
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS topic TEXT;
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS mode TEXT;
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS assigned_by_telegram_user_id BIGINT;""")
-        for name in ('007_call_reviews.sql', '008_callback_tasks.sql'):
+        for name in ('008_call_reviews.sql', '009_callback_tasks.sql'):
             await self.pool.execute((root / 'migrations' / name).read_text())
         await self.pool.execute('TRUNCATE clients CASCADE')
         await self.pool.execute("INSERT INTO clients VALUES(1,'Europe/Moscow',true)")

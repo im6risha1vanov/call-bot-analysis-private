@@ -5,6 +5,7 @@ import json
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
+from pathlib import Path
 
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from comparison.registry import sha
@@ -29,7 +30,7 @@ async def installed(pool):
     return bool(await pool.fetchval("SELECT to_regclass('call_report_runs') IS NOT NULL"))
 
 
-async def capture(pool, call_id, client_id, source_key, *, deliver=False, fresh=False):
+async def capture(pool, call_id, client_id, source_key, *, deliver=False, fresh=False, package=None):
     """Snapshot before a retry, mode switch or later reanalysis can change the source."""
     from analysis import CRITERIA, MODEL, SCORE_PROMPT, LEVEL_CRITICAL_CRITERIA, VERDICT_MIN_FAILURES, VERDICT_MIN_FAILURES_WITH_SIGNAL
     from automatic.jobs import enabled
@@ -56,6 +57,14 @@ async def capture(pool, call_id, client_id, source_key, *, deliver=False, fresh=
                'criteria': CRITERIA if fresh else [(r.get('key'), r.get('weight'), r.get('title')) for r in base['analysis'].get('rows', [])],
                'verdict': {'critical': sorted(LEVEL_CRITICAL_CRITERIA), 'failures': VERDICT_MIN_FAILURES,
                            'failures_with_signal': VERDICT_MIN_FAILURES_WITH_SIGNAL} if fresh else None}
+        # Historical views never claim provenance that was not saved. For new
+        # tasks the package was pinned at enqueue, before any selector change.
+        if fresh or package is not None:
+            from . import analysis_policy
+            cfg.update(package if package is not None else await analysis_policy.snapshot(conn, client_id))
+            cfg['format_version'] = cfg['display_version']
+            cfg['prompt_hashes'] = {name: sha((Path(__file__).parents[1] / name).read_text())
+                                   for name in ('prompt_score.md','prompt_short.md','prompt_review.md')}
         run_id = await conn.fetchval('''INSERT INTO call_report_runs(call_id,client_id,source_key,extension,transcript_sha256,transcript,metadata,primary_analysis,configuration)
             VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb)
             ON CONFLICT(client_id,call_id,source_key) DO UPDATE SET source_key=EXCLUDED.source_key RETURNING id''',
@@ -143,12 +152,34 @@ async def overview(pool, actor, run_id):
         row = unpack(await conn.fetchrow('SELECT * FROM call_report_runs WHERE id=$1 FOR UPDATE', run_id))
         if row['status'] != 'ready':
             raise ValueError('Итог ещё готовится. Попробуйте открыть обзор позже.')
-        if row['expanded'] is not None:
-            return row['expanded']
+        from . import overview_cache
+        from .extended_review import VERSION, build
+        from . import legacy_display
+        cache = overview_cache.decode(row['expanded'])
+        if legacy_display.selected(row):
+            key = legacy_display.cache_key(row)
+            cache['selected_version'] = key
+            saved = overview_cache.entry(cache)
+            if saved:
+                return saved['text']
+            text = render.expanded(row)
+            cache['entries'][key] = {'text': text, 'methodology_version': legacy_display.METHOD,
+                'display_version': legacy_display.VERSION, 'transcript_sha256': row.get('transcript_sha256'),
+                'delivery': {}}
+            await conn.execute('UPDATE call_report_runs SET expanded=$2 WHERE id=$1', run_id, overview_cache.encode(cache))
+            return text
+        saved = overview_cache.entry(cache)
+        if saved:
+            return saved['text']
         # The row lock protects simultaneous clicks. This is a local rendering
         # of pinned evaluations, not a new model request or historical rewrite.
         text = render.expanded(row)
-        await conn.execute('UPDATE call_report_runs SET expanded=$2 WHERE id=$1 AND expanded IS NULL', run_id, text)
+        facts = build(row)
+        cache['entries'][VERSION] = {'text': text, 'transcript_sha256': row.get('transcript_sha256'),
+            'facts': facts['facts'], 'strengths': facts['strengths'], 'improvements': facts['improvements'],
+            'sources': [{'id': t['id'], 'speaker': t['speaker'], 'start': t['start'], 'end': t['end']} for t in facts['turns']],
+            'delivery': {}}
+        await conn.execute('UPDATE call_report_runs SET expanded=$2 WHERE id=$1', run_id, overview_cache.encode(cache))
         return text
 
 

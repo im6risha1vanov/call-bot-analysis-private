@@ -44,7 +44,7 @@ class RendererTests(unittest.TestCase):
         self.assertNotIn('next_step', text); self.assertNotIn('readable_report', text)
         self.assertNotIn('{', text)
         self.assertIn('качество', text.lower()); self.assertIn('результат', text.lower())
-        self.assertEqual(render.keyboard(1).inline_keyboard[0][0].text, 'Расширенный обзор')
+        self.assertEqual(render.keyboard(1).inline_keyboard[0][0].text, '🔎 Расширенный обзор')
 
     def test_missing_data_does_not_invent_quality_or_errors(self):
         row = sample(); row.update(transcript='', auxiliary={})
@@ -77,12 +77,13 @@ class RendererTests(unittest.TestCase):
         parsed = ValidHTML(); parsed.feed(text); self.assertEqual(parsed.stack, [])
         self.assertIn('&lt;script&gt;', text)
 
-    def test_baseline_only_format_and_detailed_scales_are_separate(self):
+    def test_baseline_only_format_and_one_extended_narrative(self):
         row = sample(); row['auxiliary'] = {}
         self.assertIn('47/100', render.summary(row))
         row = sample(); text = render.expanded(row)
-        self.assertIn('Числовой балл этой методики не откалиброван', text)
-        self.assertIn('Основная шкала', text); self.assertIn('Критерии', text)
+        self.assertNotIn('Числовой балл этой методики не откалиброван', text)
+        self.assertNotIn('Основная шкала', text)
+        self.assertIn('1. Итог звонка', text); self.assertIn('7. Оценка и достоверность', text)
         self.assertNotIn('Стоимость: $', text)
 
     def test_number_inside_quote_is_full_and_quote_not_repeated(self):
@@ -326,13 +327,15 @@ class UnifiedPostgresTests(unittest.IsolatedAsyncioTestCase):
             cq = CallbackQuery(id='fake', from_user=User(id=user, is_bot=False, first_name='Person'), chat_instance='fake', data=data, message=message).as_(telegram)
             order = []
             async def ack(*args, **kwargs): order.append('ack')
-            async def send(*args, **kwargs): order.append('send')
+            async def send(*args, **kwargs):
+                order.append('send')
+                return SimpleNamespace(message_id=40 + len(order))
             with patch.object(CallbackQuery, 'answer', AsyncMock(side_effect=ack)) as answered, patch.object(Bot, 'send_message', AsyncMock(side_effect=send)) as sent, patch.object(transport, 'request', AsyncMock()) as paid:
                 await router.propagate_event('callback_query', cq)
                 answered.assert_awaited_once(); paid.assert_not_awaited(); self.assertEqual(order[0], 'ack')
                 return sent
         for user in (123, 900, 901):
-            self.assertIn('Расширенный обзор', (await click(user, f'uv:e:{row["id"]}')).await_args.args[1])
+            self.assertIn('Расширенный разбор', (await click(user, f'uv:e:{row["id"]}')).await_args.args[1])
         for user, data, chat in ((124, f'uv:e:{row["id"]}', None), (902, f'uv:e:{row["id"]}', None),
                                  (900, f'uv:e:{row["id"]}', 901), (900, 'uv:bad:1', None), (900, 'uv:e:999999', None)):
             self.assertNotIn('Основная шкала', (await click(user, data, chat=chat)).await_args.args[1])
@@ -341,7 +344,11 @@ class UnifiedPostgresTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_long_overview_is_file_and_return_is_pinned(self):
         row = await self.ready()
-        await self.pool.execute('UPDATE call_report_runs SET expanded=$2 WHERE id=$1', row['id'], 'Длинный обзор\n' * 2000)
+        from unified import overview_cache
+        from unified.extended_review import VERSION
+        cached = overview_cache.decode(None)
+        cached['entries'][VERSION] = {'text': 'Длинный обзор\n' * 2000, 'delivery': {}}
+        await self.pool.execute('UPDATE call_report_runs SET expanded=$2 WHERE id=$1', row['id'], overview_cache.encode(cached))
         await ui.show(self.bot, self.pool, self.actor, row['id'], detailed=True)
         self.bot.send_document.assert_awaited_once(); self.bot.send_message.assert_not_awaited()
         markup = self.bot.send_document.await_args.kwargs['reply_markup']

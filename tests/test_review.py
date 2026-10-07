@@ -177,7 +177,7 @@ class StoreTests(unittest.IsolatedAsyncioTestCase):
         if not await self.pool.fetchval("SELECT to_regclass('clients') IS NOT NULL"):
             await self.pool.execute((root / 'tests/bootstrap.sql').read_text())
         await self.pool.execute("ALTER TABLE calls ADD COLUMN IF NOT EXISTS duration_seconds INTEGER DEFAULT 90; ALTER TABLE calls ADD COLUMN IF NOT EXISTS client_number TEXT; ALTER TABLE employees ADD COLUMN IF NOT EXISTS id BIGSERIAL")
-        for name in ('007_call_reviews.sql', '008_callback_tasks.sql'):
+        for name in ('008_call_reviews.sql', '009_callback_tasks.sql'):
             await self.pool.execute((root / 'migrations' / name).read_text())
         await self.pool.execute('TRUNCATE clients CASCADE')
         await self.pool.execute("INSERT INTO clients VALUES(1,'Europe/Moscow',true)")
@@ -242,7 +242,10 @@ class StoreTests(unittest.IsolatedAsyncioTestCase):
             ALTER TABLE astra_analysis ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;""")
         call_id = await self.pool.fetchval(
             "INSERT INTO calls(client_id,extension,status,recording_id,client_number) VALUES(1,'101','new','rec','79990001122') RETURNING id")
-        task = {'id': 1, 'client_id': 1, 'input': json.dumps({'call_id': call_id})}
+        task_id = await self.pool.fetchval(
+            "INSERT INTO tasks(type,client_id,input,dedup_key) VALUES('analyze_call',1,$1::jsonb,'t') RETURNING id",
+            json.dumps({'call_id': call_id}))
+        task = {'id': task_id, 'client_id': 1, 'input': json.dumps({'call_id': call_id})}
         review = AsyncMock(return_value=(engine.validate(copy.deepcopy(LOST), TRANSCRIPT), 7.0))
         with patch.dict(os.environ, {'CALL_REVIEW_MODE': 'v2'}), patch.object(handler, '_bot', self.bot), \
                 patch.object(handler, 'decrypt', lambda value: 'x'), \

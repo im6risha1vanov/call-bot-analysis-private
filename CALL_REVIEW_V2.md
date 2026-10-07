@@ -12,7 +12,7 @@
 | Один запрос к модели вместо оценки и короткого отчёта | `review/engine.py`, промт `review/prompt.md` |
 | Проверка: цитата дословно в расшифровке, у того же спикера, ±5 с от таймкода; результат засчитывается только с подтверждающей репликой | `engine.validate` |
 | Если вывод модели не прошёл проверку, текст собирается из проверенных полей | `render.from_fields` |
-| Хранение | таблица `call_reviews` (`migrations/007_call_reviews.sql`) |
+| Хранение | таблица `call_reviews` (`migrations/008_call_reviews.sql`) |
 | Сразу менеджеру: без результата, но шанс был; сразу РОПу и владельцу: только «горячие» потери | `store.deliver_now` |
 | В `clients.digest_time`: менеджеру итог дня, удачные моменты, одна вещь на завтра, договорённости на завтра; РОПу цифры по менеджерам и список потерь с кнопками | `astra_worker.send_review_digests` |
 | Кнопка «Подробнее» (`rv:d:<call_id>`), права как у разборов: менеджер видит только свои | `review/ui.py` |
@@ -29,7 +29,7 @@
 
 ## Включение
 
-1. Применить `migrations/007_call_reviews.sql` и `migrations/008_callback_tasks.sql`;
+1. Применить `migrations/008_call_reviews.sql` и `migrations/009_callback_tasks.sql`;
    `pip install -r requirements.txt` (добавлены `google-auth`, `requests`).
 2. `CALL_REVIEW_MODE=v2` в `.env`, перезапустить queue-runner (разбор и
    отправка), основной бот (кнопки) и Mango-worker (сводки, перезвоны, таблица).

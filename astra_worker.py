@@ -95,14 +95,8 @@ async def _enqueue_analyze_call(pool: asyncpg.Pool, client_id: int, call_row_id:
     """Ключ дедупликации — идентификатор звонка в Манго: при пересечении окон
     опроса (POLL_OVERLAP_MIN) один и тот же звонок может встретиться повторно,
     но задача для него будет поставлена только один раз."""
-    await pool.execute(
-        """
-        INSERT INTO tasks (type, client_id, input, dedup_key)
-        VALUES ('analyze_call', $1, $2::jsonb, $3)
-        ON CONFLICT (type, dedup_key) DO NOTHING
-        """,
-        client_id, json.dumps({"call_id": call_row_id}), mango_entry_id,
-    )
+    from unified.analysis_policy import enqueue
+    await enqueue(pool, client_id, call_row_id, mango_entry_id)
 
 
 async def poll_client_calls(pool: asyncpg.Pool, client: asyncpg.Record) -> tuple[int, int]:

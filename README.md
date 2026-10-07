@@ -82,6 +82,17 @@ LLM roles: call analyst (`analysis.py`, production `gpt-6.1-sol` via `ai.starimg
 
 ## Historical status (as of 18.09.2026; not a current health check)
 
+**7 октября 2026: возврат старой методики подготовлен, ещё не внедрён.**
+Проверенный пакет `legacy_52e4d575` побайтно совпадает с исходным commit;
+добавлены отдельное оформление со смайликами, закрепление версий в очереди
+и клиентский переключатель. 123 офлайн-теста прошли. Для завершения нужны
+миграция 007 и загрузка кода main/worker/queue; текущая сессия не имеет доступа
+к systemd/.env/БД. Тренажёр, история, статистика и A/B сохраняются.
+Инструкции, backup и ограничения:
+[LEGACY_METHOD_ROLLBACK_20261007.md](docs/LEGACY_METHOD_ROLLBACK_20261007.md).
+После внедрения доступны `/analysis_status`, `/analysis_rollback`,
+`/analysis_restore` и кнопка «🔎 Расширенный обзор».
+
 - Astra units running on `bot-server`.
 - Old services `callbot.service`, `callbot-worker.service`, `callbot-api.service` stopped and disabled.
 - `/approvals` UI exists but is idle (nothing raises `NeedsApproval`).

@@ -98,9 +98,13 @@ async def _reset_orphaned(pool: asyncpg.Pool) -> None:
 @register("analyze_call")
 async def analyze_call(pool: asyncpg.Pool, task: asyncpg.Record) -> dict:
     payload = json.loads(task["input"])
+    from unified.analysis_policy import pin_task
+    package = await pin_task(pool, task, payload)
     call = await pool.fetchrow("SELECT * FROM calls WHERE id=$1", payload["call_id"])
     if call is None:
         raise RuntimeError(f"calls.id={payload['call_id']} не найден")
+    if call['client_id'] != task['client_id']:
+        raise ValueError('Задание и звонок относятся к разным клиентам.')
     client = await pool.fetchrow("SELECT * FROM clients WHERE id=$1", call["client_id"])
 
     if not client['processing_enabled']:
@@ -140,6 +144,8 @@ async def analyze_call(pool: asyncpg.Pool, task: asyncpg.Record) -> dict:
             else:
                 review = None
                 scores, score, level, rows, cost = await score_call(transcript)
+                from unified.analysis_policy import evaluate
+                score, level, rows = evaluate(scores, package)
                 short_report, short_cost = await short_report_call(transcript, scores, rows, level)
                 cost += short_cost
                 analysis = {**scores, "rows": rows}
@@ -178,10 +184,11 @@ async def analyze_call(pool: asyncpg.Pool, task: asyncpg.Record) -> dict:
     # another run. Already-delivered pre-upgrade jobs are not historical backfill.
     from unified import store as unified_store
     legacy_delivered = cached and (prior['immediate_sent_manager'] or prior['immediate_sent_head'])
-    run_id = await unified_store.capture(pool, call['id'], call['client_id'], f"task:{task['id']}", deliver=not legacy_delivered, fresh=not cached)
+    run_id = await unified_store.capture(pool, call['id'], call['client_id'], f"task:{task['id']}", deliver=not legacy_delivered, fresh=not cached, package=package)
     enqueue_error = False
     try:
-        await _enqueue_variants(pool,client,call,transcript,level)
+        if not package.get('isolate_primary'):
+            await _enqueue_variants(pool,client,call,transcript,level)
     except Exception:
         log.exception('не удалось поставить дополнительные разборы, call id=%s',call['id'])
         enqueue_error = True

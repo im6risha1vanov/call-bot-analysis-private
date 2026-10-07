@@ -79,13 +79,17 @@ async def help_command(message):
                if actor is None else 'Выберите одну рекомендацию из разбора и отработайте её в тренажёре.'),
             parse_mode=None)
         return
-    menu = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text='Сравнить методики'), KeyboardButton(text='Объединённый разбор')]], resize_keyboard=True, is_persistent=True) if actor and actor.role in {'head', 'owner'} else None
+    menu = ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text='Сравнить методики'), KeyboardButton(text='Объединённый разбор')],
+        [KeyboardButton(text='↩️ Старая методика'), KeyboardButton(text='🔄 Вернуть сохранённую версию')],
+        [KeyboardButton(text='ℹ️ Версия анализа')]], resize_keyboard=True, is_persistent=True) if actor and actor.role in {'head', 'owner'} else None
     await message.answer(
         'Звонки разбираются автоматически из Mango — присылать записи не нужно.\n\n'
         'По одному звонку приходит один объединённый разбор: итог, качество, сильные действия и рекомендации. '
         'Кнопка «Расширенный обзор» открывает сохранённые критерии, цитаты и подробности того же запуска.\n\n'
         '/review &lt;номер звонка&gt; — открыть сохранённый разбор (запасной путь).\n\n'
         '<b>Команды</b>\n'
+        '/analysis_status — версия анализа; /analysis_rollback — старая методика; /analysis_restore — сохранённая версия (вашему отделу)\n'
         '/check &lt;критерий&gt; [дней] — что модель увидела по критерию (руководителю)\n'
         '/assign_train &lt;добавочный&gt; [режим] — назначить тренировку в тренажёре (руководителю)\n'
         '/trainings — последние тренировки, /training &lt;номер&gt; — одна подробно\n'
