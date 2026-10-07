@@ -25,3 +25,5 @@ dumps/
 *.sql.gz
 *.log
 .DS_Store
+google-key.json
+*service-account*.json
