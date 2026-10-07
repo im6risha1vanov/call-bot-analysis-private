@@ -33,7 +33,7 @@ import mango_client
 from crypto_util import decrypt
 from reports import esc, send_long
 from tools import owner_chat_ids, report_chat_ids
-from review import callbacks as review_callbacks, engine as review_engine, render as review_render, sheets as review_sheets, store as review_store
+from review import callbacks as review_callbacks, engine as review_engine, kitchen as review_kitchen, render as review_render, sheets as review_sheets, store as review_store
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("callbot-astra-worker")
@@ -129,11 +129,15 @@ async def poll_client_calls(pool: asyncpg.Pool, client: asyncpg.Record) -> tuple
         started_raw = c.get("context_start_time")
         call_started_at = datetime.fromtimestamp(started_raw, tz=timezone.utc) if started_raw else None
 
-        passes = (
-            direction == 2
-            and duration >= client["min_call_seconds"]
-            and extension in (client["sales_extensions"] or [])
-        )
+        if review_kitchen.handles(extension):
+            # Оператор прозвона: любой разговор — попытка; недозвон пишет review_kitchen.record_missed.
+            passes = direction == 2 and duration > 0
+        else:
+            passes = (
+                direction == 2
+                and duration >= client["min_call_seconds"]
+                and extension in (client["sales_extensions"] or [])
+            )
         if not passes:
             new_status = "skipped"
         elif recording_id:
@@ -604,6 +608,11 @@ async def main() -> None:
                     await review_sheets.sync(pool)
                 except Exception:
                     log.exception("не удалось обновить Google-таблицу")
+            if review_kitchen.extensions():
+                try:
+                    await review_kitchen.tick(pool)
+                except Exception:
+                    log.exception("не удалось обновить таблицу прозвона лидов")
             await asyncio.sleep(POLL_INTERVAL_SEC)
     finally:
         await pool.close()

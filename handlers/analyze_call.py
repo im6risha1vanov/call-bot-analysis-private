@@ -23,7 +23,7 @@ from analysis import score_call, short_report_call
 from crypto_util import decrypt
 from deepgram_client import transcribe_bytes
 from queue_runner import RetryLater, on_startup, register
-from review import callbacks as review_callbacks, engine as review_engine, store as review_store
+from review import callbacks as review_callbacks, engine as review_engine, kitchen as review_kitchen, store as review_store
 
 log = logging.getLogger("callbot-astra-worker.analyze_call")
 
@@ -135,7 +135,14 @@ async def analyze_call(pool: asyncpg.Pool, task: asyncpg.Record) -> dict:
             transcript, dg_duration = await transcribe_bytes(audio)
             del audio
 
-            if review_engine.enabled():
+            kitchen = None
+            if review_kitchen.handles(call['extension']):
+                # Оператор прозвона лидов работает по своему скрипту: итог попытки
+                # идёт в его таблицу (review/kitchen.py), разбора Averon нет.
+                kitchen, cost = await review_kitchen.run(transcript)
+                analysis, score, level, review = kitchen, None, review_kitchen.level(kitchen), None
+                short_report = {"result": kitchen.get("comment"), "good": [], "weak": []}
+            elif review_engine.enabled():
                 # Разбор по результату: один запрос вместо оценки и короткого
                 # отчёта. Балла нет; level нужен только для статистики.
                 review, cost = await review_engine.run(transcript, await _review_meta(pool, client, call))
@@ -173,9 +180,14 @@ async def analyze_call(pool: asyncpg.Pool, task: asyncpg.Record) -> dict:
             call["id"], json.dumps(analysis, ensure_ascii=False), score, level,
             json.dumps(short_report, ensure_ascii=False), cost,
             )
+            if kitchen is not None:
+                await review_kitchen.record(conn, call, kitchen, cost)
             if review is not None:
                 await review_store.save(conn, call, review, cost)
                 await review_callbacks.record(conn, call, review)
+    if review_kitchen.handles(call['extension']):
+        log.info("call id=%s: попытка прозвона лидов, итог=%s", call["id"], short_report.get("result"))
+        return {"call_id": call["id"], "level": level, "cost_units": cost, "cached": bool(cached), "kitchen": True}
     if review_engine.enabled() and await pool.fetchval('SELECT 1 FROM call_reviews WHERE call_id=$1', call['id']):
         sent = await review_store.deliver_now(pool, _bot, call['id'])
         log.info("call id=%s разобран (разбор по результату): уровень=%s стоимость=%.0f ед.", call["id"], level, cost)
