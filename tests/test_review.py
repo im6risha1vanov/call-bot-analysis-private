@@ -228,6 +228,26 @@ class StoreTests(unittest.IsolatedAsyncioTestCase):
         previous = await store.previous(self.pool, 1, '79990001122', call_id + 1)
         self.assertEqual(previous['rop_line'], LOST['rop_line'])
 
+    async def test_backfill_reviews_old_calls_without_sending(self):
+        from scripts.review_backfill import backfill
+        old = await self.pool.fetchval(
+            "INSERT INTO calls(client_id,extension,transcript,status,call_started_at,client_number) VALUES(1,'101',$1,'analyzed',$2,'79990001122') RETURNING id",
+            TRANSCRIPT, datetime(2026, 10, 7, 8, tzinfo=timezone.utc))
+        await self.add(LOST)  # уже с новым разбором, не трогаем
+        since = datetime(2026, 10, 7, tzinfo=timezone.utc)
+
+        async def meta(pool, client, call):
+            return {'manager': 'Первый'}
+
+        async def run(transcript, meta):
+            return engine.validate(copy.deepcopy(LOST), transcript), 5.0
+
+        self.assertEqual(await backfill(self.pool, since, meta, run, dry_run=True), {'calls': 1, 'reviewed': 0, 'failed': 0})
+        self.assertEqual(await backfill(self.pool, since, meta, run), {'calls': 1, 'reviewed': 1, 'failed': 0})
+        self.assertEqual(await store.deliver_now(self.pool, self.bot, old), {})
+        self.bot.send_message.assert_not_awaited()
+        self.assertEqual((await backfill(self.pool, since, meta, run))['calls'], 0)
+
     async def test_queue_handler_uses_one_review_instead_of_score(self):
         import handlers.analyze_call as handler
         await self.pool.execute("""
