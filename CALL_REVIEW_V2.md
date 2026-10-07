@@ -29,6 +29,9 @@
 
 ## Включение
 
+На сервере всё ниже делает `scripts/deploy_review_v2.sh` (точка отката в
+`/root/review-v2-rollback`, откат: `bash /root/review-v2-rollback/rollback_review_v2.sh`).
+
 1. Применить `migrations/008_call_reviews.sql` и `migrations/009_callback_tasks.sql`;
    `pip install -r requirements.txt` (добавлены `google-auth`, `requests`).
 2. `CALL_REVIEW_MODE=v2` в `.env`, перезапустить queue-runner (разбор и
