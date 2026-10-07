@@ -167,7 +167,8 @@ class KitchenStoreTests(unittest.IsolatedAsyncioTestCase):
             await self.pool.execute((root / 'tests/bootstrap.sql').read_text())
         await self.pool.execute("""
             ALTER TABLE calls ADD COLUMN IF NOT EXISTS client_number TEXT;
-            ALTER TABLE calls ADD COLUMN IF NOT EXISTS raw_summary JSONB;""")
+            ALTER TABLE calls ADD COLUMN IF NOT EXISTS raw_summary JSONB;
+            ALTER TABLE calls ADD COLUMN IF NOT EXISTS recording_id TEXT;""")
         await self.pool.execute((root / 'migrations/010_lead_attempts.sql').read_text())
         await self.pool.execute('TRUNCATE clients CASCADE')
         await self.pool.execute("INSERT INTO clients VALUES(1,'Europe/Moscow',true)")
@@ -223,6 +224,31 @@ class KitchenStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(puts), {"'Ольга · Звонки'!A1", "'Ольга · Сводка'!A1", "'Ольга · По дням'!A1"})
         self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM lead_attempts WHERE written_at IS NULL'), 0)
         self.assertIsNotNone(missed)
+
+
+    async def test_backfill_today_without_touching_calls(self):
+        from scripts.kitchen_backfill import backfill
+        await self.call('79990001122', 0)
+        talked = await self.call('79990003344', 40, status='skipped', minutes=5)
+        await self.pool.execute("UPDATE calls SET recording_id='r1' WHERE id=$1", talked['id'])
+        await self.call('79990005566', 30, direction=1)  # входящий не берём
+        heard = []
+
+        async def transcribe(pool, call):
+            heard.append(call['id'])
+            return TALK
+
+        async def run(transcript):
+            return kitchen.decide(dict(READY), transcript), 2.0
+
+        since = datetime(2026, 10, 7, tzinfo=UTC)
+        self.assertEqual(await backfill(self.pool, since, transcribe, run, dry_run=True), {'ndz': 1, 'talks': 1, 'failed': 0})
+        self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM lead_attempts'), 0)
+        self.assertEqual(await backfill(self.pool, since, transcribe, run), {'ndz': 1, 'talks': 1, 'failed': 0})
+        self.assertEqual(heard, [talked['id']])
+        self.assertEqual(await self.pool.fetchval('SELECT status FROM lead_attempts WHERE call_id=$1', talked['id']), 'interested')
+        self.assertEqual(await self.pool.fetchval('SELECT status FROM calls WHERE id=$1', talked['id']), 'skipped')
+        self.assertEqual(await backfill(self.pool, since, transcribe, run), {'ndz': 0, 'talks': 0, 'failed': 0})
 
 
 class HandlerRouteTests(unittest.TestCase):
