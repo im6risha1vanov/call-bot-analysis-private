@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import collections
+import os
 from datetime import datetime
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -98,9 +99,16 @@ def details_message(meta: dict, data: dict) -> str:
     return header(meta, data, with_manager=True) + '\n\n' + '\n'.join(line for line in body_lines if line is not None).strip()
 
 
-def keyboard(call_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text='Подробнее', callback_data=f'rv:d:{call_id}')]])
+def train_bot() -> str:
+    return os.getenv('TRAIN_BOT_USERNAME', '').strip().lstrip('@')
+
+
+def keyboard(call_id: int, *, train: bool = False) -> InlineKeyboardMarkup:
+    """«Подробнее»; менеджеру при потере ещё «Потренировать» (если тренажёр подключён)."""
+    row = [InlineKeyboardButton(text='Подробнее', callback_data=f'rv:d:{call_id}')]
+    if train and train_bot():
+        row.append(InlineKeyboardButton(text='Потренировать', callback_data=f'rv:t:{call_id}'))
+    return InlineKeyboardMarkup(inline_keyboard=[row])
 
 
 def list_keyboard(items: list[tuple[int, str]]) -> InlineKeyboardMarkup | None:

@@ -177,7 +177,8 @@ class StoreTests(unittest.IsolatedAsyncioTestCase):
         if not await self.pool.fetchval("SELECT to_regclass('clients') IS NOT NULL"):
             await self.pool.execute((root / 'tests/bootstrap.sql').read_text())
         await self.pool.execute("ALTER TABLE calls ADD COLUMN IF NOT EXISTS duration_seconds INTEGER DEFAULT 90; ALTER TABLE calls ADD COLUMN IF NOT EXISTS client_number TEXT; ALTER TABLE employees ADD COLUMN IF NOT EXISTS id BIGSERIAL")
-        await self.pool.execute((root / 'migrations/007_call_reviews.sql').read_text())
+        for name in ('007_call_reviews.sql', '008_callback_tasks.sql'):
+            await self.pool.execute((root / 'migrations' / name).read_text())
         await self.pool.execute('TRUNCATE clients CASCADE')
         await self.pool.execute("INSERT INTO clients VALUES(1,'Europe/Moscow',true)")
         await self.pool.execute("INSERT INTO employees VALUES(1,'101',123,'manager','Первый'),(1,'102',124,'manager','Второй'),(1,'',900,'owner','Владелец'),(1,'head',901,'head','Руководитель')")

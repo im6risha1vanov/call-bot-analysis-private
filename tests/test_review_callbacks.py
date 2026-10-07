@@ -1,0 +1,179 @@
+"""Перезвоны, Google-таблица и тренировка по разбору. Данные вымышленные."""
+import copy
+import json
+import os
+import unittest
+from datetime import date, datetime, time
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+from zoneinfo import ZoneInfo
+
+import asyncpg
+import httpx
+
+os.environ.setdefault('BOT_TOKEN', '1:test')
+os.environ.setdefault('CVC_API_KEY', 'test')
+os.environ.setdefault('ANTHROPIC_API_KEY', 'test')
+
+from review import callbacks, engine, render, sheets, store
+from tests.test_review import CALLBACK, LOST, TRANSCRIPT, WON
+from tools import Actor, Forbidden
+
+DSN = os.environ.get('METHODOLOGY_TEST_DATABASE_URL')
+MSK = ZoneInfo('Europe/Moscow')
+MANAGER = Actor(123, 1, 'manager', '101')
+TIMED = {**WON, 'client': {'company': 'ООО Ромашка', 'need': 'больше заявок', 'objection': 'дорого',
+                           'next_step': {'type': 'callback', 'date': '2026-10-09', 'time': '11:00',
+                                         'date_is_estimate': False, 'raw': 'созвон в пятницу в 11'}}}
+
+
+class PureTests(unittest.TestCase):
+    def test_step_needs_date_and_parses_time(self):
+        self.assertIsNone(callbacks.step({'reviewed': True, 'client': {'next_step': {'date': None}}}))
+        found = callbacks.step({'reviewed': True, **TIMED})
+        self.assertEqual((found['kind'], found['due_date'], found['due_time']), ('callback', date(2026, 10, 9), time(11, 0)))
+        self.assertEqual(callbacks.step({'reviewed': True, 'outcome': ['meeting'], **{'client': TIMED['client']}})['kind'], 'meeting')
+        self.assertIsNone(callbacks.parse_time('после обеда'))
+
+    def test_next_workday_skips_weekend(self):
+        self.assertEqual(callbacks.next_workday(date(2026, 10, 9)), date(2026, 10, 12))
+
+    def test_train_button_only_with_trainer_bot(self):
+        with patch.dict(os.environ, {'TRAIN_BOT_USERNAME': ''}):
+            self.assertEqual(len(render.keyboard(5, train=True).inline_keyboard[0]), 1)
+        with patch.dict(os.environ, {'TRAIN_BOT_USERNAME': '@trainer_bot'}):
+            row = render.keyboard(5, train=True).inline_keyboard[0]
+            self.assertEqual([b.callback_data for b in row], ['rv:d:5', 'rv:t:5'])
+            self.assertEqual(len(render.keyboard(5).inline_keyboard[0]), 1)  # РОПу без тренировки
+
+
+class SheetsWriteTests(unittest.IsolatedAsyncioTestCase):
+    async def test_adds_missing_tab_then_rewrites_values(self):
+        seen = []
+
+        def handler(request):
+            seen.append((request.method, request.url.path, request.headers['Authorization']))
+            if request.method == 'GET':
+                return httpx.Response(200, json={'sheets': [{'properties': {'title': 'Звонки'}}]})
+            if request.method == 'PUT':
+                self.assertEqual(json.loads(request.content)['values'][0], ['h'])
+            return httpx.Response(200, json={})
+
+        with patch.dict(os.environ, {'GOOGLE_SHEET_ID': 'sheet1'}):
+            await sheets.write({'Звонки': [['h']], 'Перезвоны': [['h']]},
+                               http=httpx.AsyncClient(transport=httpx.MockTransport(handler)), access_token='tok')
+        methods = [m for m, _, _ in seen]
+        self.assertEqual(methods, ['GET', 'POST', 'POST', 'PUT', 'POST', 'PUT'])
+        self.assertTrue(seen[1][1].endswith(':batchUpdate'))
+        self.assertTrue(all(auth == 'Bearer tok' for _, _, auth in seen))
+
+    def test_enabled_needs_both_settings(self):
+        with patch.dict(os.environ, {'GOOGLE_SHEET_ID': 'x', 'GOOGLE_SERVICE_ACCOUNT_FILE': ''}):
+            self.assertFalse(sheets.enabled())
+
+
+@unittest.skipUnless(DSN, 'METHODOLOGY_TEST_DATABASE_URL не задан')
+class CallbackStoreTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.pool = await asyncpg.create_pool(DSN, min_size=1, max_size=4)
+        self.assertTrue((await self.pool.fetchval('SELECT current_database()')).startswith('callbot_methodology_test_'))
+        root = Path(__file__).resolve().parents[1]
+        if not await self.pool.fetchval("SELECT to_regclass('clients') IS NOT NULL"):
+            await self.pool.execute((root / 'tests/bootstrap.sql').read_text())
+        await self.pool.execute("""
+            ALTER TABLE calls ADD COLUMN IF NOT EXISTS duration_seconds INTEGER DEFAULT 90;
+            ALTER TABLE calls ADD COLUMN IF NOT EXISTS client_number TEXT;
+            ALTER TABLE employees ADD COLUMN IF NOT EXISTS id BIGSERIAL;
+            ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS topic TEXT;
+            ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS mode TEXT;
+            ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS assigned_by_telegram_user_id BIGINT;""")
+        for name in ('007_call_reviews.sql', '008_callback_tasks.sql'):
+            await self.pool.execute((root / 'migrations' / name).read_text())
+        await self.pool.execute('TRUNCATE clients CASCADE')
+        await self.pool.execute("INSERT INTO clients VALUES(1,'Europe/Moscow',true)")
+        await self.pool.execute("INSERT INTO employees VALUES(1,'101',123,'manager','Первый'),(1,'102',124,'manager','Второй'),(1,'head',901,'head','Руководитель')")
+        self.bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=1)))
+        self.client = await self.pool.fetchrow('SELECT * FROM clients WHERE id=1')
+
+    async def asyncTearDown(self):
+        await self.pool.close()
+
+    async def add(self, data, transcript=CALLBACK, number='79990001122'):
+        call_id = await self.pool.fetchval(
+            "INSERT INTO calls(client_id,extension,transcript,call_started_at,client_number) VALUES(1,'101',$1,$2,$3) RETURNING id",
+            transcript, datetime(2026, 10, 7, 11, 40, tzinfo=MSK), number)
+        call = await self.pool.fetchrow('SELECT * FROM calls WHERE id=$1', call_id)
+        review = engine.validate(copy.deepcopy(data), transcript)
+        async with self.pool.acquire() as conn:
+            await store.save(conn, call, review, 1.0)
+            task_id = await callbacks.record(conn, call, review)
+        return call_id, task_id
+
+    async def test_new_call_closes_open_task_and_creates_next(self):
+        first, task_id = await self.add(TIMED)
+        task = await self.pool.fetchrow('SELECT * FROM callback_tasks WHERE id=$1', task_id)
+        self.assertEqual((task['due_date'], task['due_time'], task['company']), (date(2026, 10, 9), time(11, 0), 'ООО Ромашка'))
+        second, second_task = await self.add(LOST, TRANSCRIPT)
+        closed = await self.pool.fetchrow('SELECT status, closed_call_id FROM callback_tasks WHERE id=$1', task_id)
+        self.assertEqual(tuple(closed), ('closed_by_call', second))
+        self.assertEqual(await self.pool.fetchval('SELECT due_date FROM callback_tasks WHERE id=$1', second_task), date(2026, 11, 9))
+        not_reviewed = {**LOST, 'kind': 'no_conversation'}
+        _, none = await self.add(not_reviewed, TRANSCRIPT)
+        self.assertIsNone(none)
+        self.assertEqual(await self.pool.fetchval("SELECT status FROM callback_tasks WHERE id=$1", second_task), 'open')
+
+    async def test_morning_list_and_reminder(self):
+        _, task_id = await self.add(TIMED)
+        await self.add(TIMED, number='79990003344')
+        morning = datetime(2026, 10, 9, 9, 5, tzinfo=MSK)
+        self.assertEqual(await callbacks.send_morning(self.pool, self.bot, self.client, morning), 1)
+        chat, text = self.bot.send_message.await_args.args
+        self.assertEqual(chat, 123)
+        self.assertIn('Перезвоны на сегодня', text)
+        self.assertIn('2. ', text)
+        self.assertEqual(len(self.bot.send_message.await_args.kwargs['reply_markup'].inline_keyboard), 2)
+        early = datetime(2026, 10, 9, 10, 0, tzinfo=MSK)
+        self.assertEqual(await callbacks.send_reminders(self.pool, self.bot, self.client, early), 0)
+        soon = datetime(2026, 10, 9, 10, 40, tzinfo=MSK)
+        self.assertEqual(await callbacks.send_reminders(self.pool, self.bot, self.client, soon), 2)
+        self.assertEqual(await callbacks.send_reminders(self.pool, self.bot, self.client, soon), 0)
+
+    async def test_buttons_change_status_only_for_own_tasks(self):
+        _, task_id = await self.add(TIMED)
+        with self.assertRaises(Forbidden):
+            await callbacks.change(self.pool, Actor(124, 1, 'manager', '102'), task_id, 'done')
+        note = await callbacks.change(self.pool, MANAGER, task_id, 'moved')
+        self.assertTrue(note.startswith('Перенесён на'))
+        self.assertGreater(await self.pool.fetchval('SELECT due_date FROM callback_tasks WHERE id=$1', task_id), date(2026, 10, 9))
+        self.assertEqual(await callbacks.change(self.pool, Actor(901, 1, 'head', None), task_id, 'done'), 'Отмечен как выполненный.')
+        self.assertEqual(await callbacks.change(self.pool, MANAGER, task_id, 'cancelled'), 'Уже выполнен.')
+
+    async def test_sheet_rows_from_database(self):
+        await self.add(TIMED)
+        calls, tasks = await sheets.collect(self.pool)
+        self.assertEqual(calls[0], sheets.CALLS_HEADER)
+        self.assertEqual(calls[1][:4], ['07.10.2026 11:40', 'Первый', calls[1][2], 'ООО Ромашка'])
+        self.assertEqual(calls[1][7], 'перезвон в конкретный день')
+        self.assertEqual(tasks[1][:4], ['09.10.2026', '11:00', '', 'Перезвон'])
+        self.assertEqual(tasks[1][8], 'открыт')
+
+    async def test_train_assignment_and_scenario(self):
+        import training_simulator
+        call_id, _ = await self.add({**LOST, 'client': {**LOST['client'], 'company': 'ООО Ромашка', 'objection': 'занят'}}, TRANSCRIPT)
+        with self.assertRaises(Forbidden):
+            await store.train_assignment(self.pool, Actor(124, 1, 'manager', '102'), call_id)
+        with self.assertRaises(Forbidden):
+            await store.train_assignment(self.pool, Actor(901, 1, 'head', None), call_id)
+        assignment = await store.train_assignment(self.pool, MANAGER, call_id)
+        topic = await self.pool.fetchval('SELECT topic FROM pending_train_assignments WHERE id=$1', assignment)
+        self.assertEqual(topic, f'review:{call_id}')
+        kind, scenario = await training_simulator.pick_scenario(self.pool, 1, '101', topic)
+        self.assertEqual(kind, 'review')
+        self.assertIn('ООО Ромашка', scenario['extra'])
+        self.assertIn('«наберите через месяц»', scenario['extra'])
+        self.assertIsNone(await training_simulator.review_scenario(self.pool, 2, topic))  # чужой клиент
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -33,7 +33,7 @@ import mango_client
 from crypto_util import decrypt
 from reports import esc, send_long
 from tools import owner_chat_ids, report_chat_ids
-from review import engine as review_engine, render as review_render, store as review_store
+from review import callbacks as review_callbacks, engine as review_engine, render as review_render, sheets as review_sheets, store as review_store
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("callbot-astra-worker")
@@ -586,6 +586,7 @@ async def main() -> None:
     log.info("astra worker started (poll + enqueue only; разбор — в queue_runner)")
     last_sweep = 0.0
     last_employee_sync = 0.0
+    last_sheets_sync = 0.0
     next_poll_at: dict[int, float] = {}
     try:
         while True:
@@ -597,9 +598,18 @@ async def main() -> None:
             if now - last_sweep > SWEEP_INTERVAL_SEC:
                 await sweep_timeouts(pool)
                 await maybe_send_digests(pool)
+                if review_engine.enabled():
+                    await review_callbacks.maybe_send(pool, bot)
                 await maybe_enqueue_rop_digests(pool)
                 await maybe_enqueue_oversight_report(pool)
                 last_sweep = now
+            if review_engine.enabled() and review_sheets.enabled() and (
+                    last_sheets_sync == 0.0 or now - last_sheets_sync > review_sheets.SYNC_MINUTES * 60):
+                last_sheets_sync = now
+                try:
+                    await review_sheets.sync(pool)
+                except Exception:
+                    log.exception("не удалось обновить Google-таблицу")
             await asyncio.sleep(POLL_INTERVAL_SEC)
     finally:
         await pool.close()

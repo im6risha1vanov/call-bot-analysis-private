@@ -23,7 +23,7 @@ from analysis import score_call, short_report_call
 from crypto_util import decrypt
 from deepgram_client import transcribe_bytes
 from queue_runner import RetryLater, on_startup, register
-from review import engine as review_engine, store as review_store
+from review import callbacks as review_callbacks, engine as review_engine, store as review_store
 
 log = logging.getLogger("callbot-astra-worker.analyze_call")
 
@@ -169,6 +169,7 @@ async def analyze_call(pool: asyncpg.Pool, task: asyncpg.Record) -> dict:
             )
             if review is not None:
                 await review_store.save(conn, call, review, cost)
+                await review_callbacks.record(conn, call, review)
     if review_engine.enabled() and await pool.fetchval('SELECT 1 FROM call_reviews WHERE call_id=$1', call['id']):
         sent = await review_store.deliver_now(pool, _bot, call['id'])
         log.info("call id=%s разобран (разбор по результату): уровень=%s стоимость=%.0f ед.", call["id"], level, cost)

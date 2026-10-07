@@ -127,6 +127,37 @@ GENERAL_SCENARIO = {
              "менеджера — данных для точного подбора пока недостаточно.",
 }
 
+REVIEW_TOPIC = "review:"  # тренировка ключевого момента из разбора звонка (review/ui.py)
+
+
+async def review_scenario(pool: asyncpg.Pool, client_id: int, topic: str | None) -> dict | None:
+    """Сценарий из реального звонка: тот же клиент, тот же момент, где результат был потерян."""
+    if not topic or not topic.startswith(REVIEW_TOPIC) or not topic[len(REVIEW_TOPIC):].isdigit():
+        return None
+    data = await pool.fetchval("SELECT data FROM call_reviews WHERE call_id=$1 AND client_id=$2",
+                               int(topic[len(REVIEW_TOPIC):]), client_id)
+    if data is None:
+        return None
+    data = json.loads(data) if isinstance(data, str) else data
+    moment, client = data.get("key_moment") or {}, data.get("client") or {}
+    about = ", ".join(filter(None, [client.get("company"), client.get("industry"), client.get("contact_role")]))
+    extra = ["Это повторение реального звонка, на котором менеджер потерял результат."]
+    if about:
+        extra.append(f"Ты: {about}.")
+    for label, key in (("Что тебе сейчас важно", "need"), ("Чем пользуешься сейчас", "current_solution"),
+                       ("Твоё главное возражение", "objection")):
+        if client.get(key):
+            extra.append(f"{label}: {client[key]}.")
+    if moment.get("what_happened"):
+        extra.append(f"Ключевой момент того звонка: {moment['what_happened']}")
+    if moment.get("speaker") == "client" and moment.get("quote"):
+        extra.append(f"Начни разговор с этой реплики или очень близкой к ней: «{moment['quote']}».")
+    extra.append("Если менеджер в этот момент сделает правильный ход (например, предложит конкретный день, "
+                 "спросит про ЛПР или ответит на твой вопрос), постепенно соглашайся на конкретный следующий "
+                 "шаг. Если не сделает — заверши разговор так же, как в реальном звонке.")
+    return {"title": "Ситуация из твоего звонка", "extra": " ".join(extra)}
+
+
 MIN_CALLS_FOR_TARGETED_SCENARIO = 10  # мягче правила 30 у РОПа: тренажёру нужна тенденция, а не строгий вывод
 
 
@@ -178,6 +209,9 @@ async def pick_scenario(pool: asyncpg.Pool, client_id: int, extension: str,
                          topic_hint: str | None) -> tuple[str, dict]:
     """Возвращает (scenario_kind, scenario). Явная тема от РОПа побеждает
     автоподбор, если совпадает с одним из известных сценариев по названию."""
+    scenario = await review_scenario(pool, client_id, topic_hint)
+    if scenario:
+        return "review", scenario
     if topic_hint:
         low = topic_hint.strip().lower()
         for key, sc in SCENARIOS.items():
@@ -232,7 +266,7 @@ async def start_session(pool: asyncpg.Pool, actor: Actor, topic: str | None,
     ДО вызова, чтобы дать пользователю понятное сообщение,
     а не проглатывать отказ здесь."""
     from methodology.runtime import training_enabled
-    if training_enabled():
+    if training_enabled() and not (topic or "").startswith(REVIEW_TOPIC):
         from methodology.training import start
         return await start(pool, actor, topic, assigned_by, 'dialog', assignment_id)
     scenario_kind, scenario = await pick_scenario(pool, actor.client_id, actor_key(actor), topic)
@@ -309,6 +343,8 @@ async def handle_manager_turn(pool: asyncpg.Pool, session: asyncpg.Record, manag
         return TurnResult("Время/лимит тренировки исчерпан — на этом закончим.", True, level)
 
     scenario = SCENARIOS.get(session["scenario_kind"], GENERAL_SCENARIO)
+    if session["scenario_kind"] == "review":
+        scenario = await review_scenario(pool, session["client_id"], session["topic"]) or GENERAL_SCENARIO
     system_text = _system_prompt(scenario)
 
     resp = await claude.messages.create(

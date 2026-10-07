@@ -69,6 +69,17 @@ async def access(pool, actor, call_id: int) -> dict:
     return row
 
 
+async def train_assignment(pool, actor, call_id: int) -> int:
+    """Назначение в тренажёр по ключевому моменту своего звонка (только сам менеджер)."""
+    row = await access(pool, actor, call_id)
+    if actor.role != 'manager' or not row['data'].get('key_moment'):
+        raise Forbidden('Тренировка по этому звонку недоступна.')
+    return await pool.fetchval(
+        """INSERT INTO pending_train_assignments(client_id, extension, topic, mode, assigned_by_telegram_user_id)
+           VALUES($1,$2,$3,'dialog',$4) RETURNING id""",
+        actor.client_id, actor.extension, f'review:{call_id}', actor.telegram_user_id)
+
+
 async def deliver_now(pool, bot, call_id: int) -> dict:
     """Сразу: менеджеру — потерянный шанс, РОПу — только горячий.
 
@@ -88,7 +99,7 @@ async def deliver_now(pool, bot, call_id: int) -> dict:
         if claimed:
             try:
                 await bot.send_message(chat, render.manager_message(row['meta'], row['data']), parse_mode='HTML',
-                                       reply_markup=render.keyboard(call_id))
+                                       reply_markup=render.keyboard(call_id, train=bool(row['data'].get('key_moment'))))
                 sent['manager'] = chat
             except Exception:
                 log.exception('разбор менеджеру не доставлен, call id=%s', call_id)
