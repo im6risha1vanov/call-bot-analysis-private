@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import re
 from zoneinfo import ZoneInfo
 
 from tools import Forbidden, report_chat_ids
@@ -80,8 +82,14 @@ async def train_assignment(pool, actor, call_id: int) -> int:
         actor.client_id, actor.extension, f'review:{call_id}', actor.telegram_user_id)
 
 
+def copy_chat_ids() -> list[int]:
+    """Telegram ID тех, кому уходит полная копия каждого разбора (REVIEW_COPY_TO через запятую)."""
+    return [int(x) for x in re.findall(r'-?\d+', os.getenv('REVIEW_COPY_TO', ''))]
+
+
 async def deliver_now(pool, bot, call_id: int) -> dict:
-    """Сразу: менеджеру — потерянный шанс, РОПу — только горячий.
+    """Сразу: менеджеру — потерянный шанс, РОПу — только горячий,
+    получателям из REVIEW_COPY_TO — полный текст каждого разбора с разговором.
 
     Отметка ставится до отправки: при сбое между отправкой и записью лучше
     недоставить, чем прислать дубль (то же правило, что в unified/store)."""
@@ -103,11 +111,24 @@ async def deliver_now(pool, bot, call_id: int) -> dict:
                 sent['manager'] = chat
             except Exception:
                 log.exception('разбор менеджеру не доставлен, call id=%s', call_id)
+    copies = copy_chat_ids()
+    if copies and row['data'].get('reviewed'):
+        claimed = await pool.fetchval(
+            'UPDATE call_reviews SET copy_sent_at=now() WHERE call_id=$1 AND copy_sent_at IS NULL RETURNING call_id', call_id)
+        if claimed:
+            for chat in copies:
+                try:
+                    await bot.send_message(chat, render.details_message(row['meta'], row['data']), parse_mode='HTML')
+                    sent.setdefault('copy', []).append(chat)
+                except Exception:
+                    log.exception('копия разбора не доставлена, call id=%s chat=%s', call_id, chat)
     if plan['rop']:
         claimed = await pool.fetchval(
             'UPDATE call_reviews SET rop_sent_at=now() WHERE call_id=$1 AND rop_sent_at IS NULL RETURNING call_id', call_id)
         if claimed:
             for chat in await report_chat_ids(pool, row['client_id']):
+                if chat in copies:
+                    continue  # уже получил полный разбор
                 try:
                     await bot.send_message(chat, render.rop_message(row['meta'], row['data']), parse_mode='HTML',
                                            reply_markup=render.keyboard(call_id))

@@ -177,7 +177,7 @@ class StoreTests(unittest.IsolatedAsyncioTestCase):
         if not await self.pool.fetchval("SELECT to_regclass('clients') IS NOT NULL"):
             await self.pool.execute((root / 'tests/bootstrap.sql').read_text())
         await self.pool.execute("ALTER TABLE calls ADD COLUMN IF NOT EXISTS duration_seconds INTEGER DEFAULT 90; ALTER TABLE calls ADD COLUMN IF NOT EXISTS client_number TEXT; ALTER TABLE employees ADD COLUMN IF NOT EXISTS id BIGSERIAL")
-        for name in ('008_call_reviews.sql', '009_callback_tasks.sql'):
+        for name in ('008_call_reviews.sql', '009_callback_tasks.sql', '011_review_copies.sql'):
             await self.pool.execute((root / 'migrations' / name).read_text())
         await self.pool.execute('TRUNCATE clients CASCADE')
         await self.pool.execute("INSERT INTO clients VALUES(1,'Europe/Moscow',true)")
@@ -209,6 +209,19 @@ class StoreTests(unittest.IsolatedAsyncioTestCase):
         sent = await store.deliver_now(self.pool, self.bot, call_id)
         self.assertEqual(sent, {'manager': 123, 'rop': [900, 901]})
         self.assertIn('Первый', self.bot.send_message.await_args_list[-1].args[1])
+
+    async def test_copies_get_every_review_once_and_skip_rop_duplicate(self):
+        with patch.dict(os.environ, {'REVIEW_COPY_TO': '900, 555'}):
+            won = await self.add(WON, CALLBACK)
+            self.assertEqual(await store.deliver_now(self.pool, self.bot, won), {'copy': [900, 555]})
+            hot = await self.add({**LOST, 'chance': 'hot'})
+            sent = await store.deliver_now(self.pool, self.bot, hot)
+            self.assertEqual(sent, {'manager': 123, 'copy': [900, 555], 'rop': [901]})
+            self.assertEqual(await store.deliver_now(self.pool, self.bot, hot), {})
+            empty = await self.add({'kind': 'no_conversation', 'rop_line': 'Автоответчик'}, '[00:01 Спикер 0] Алло')
+            self.assertEqual(await store.deliver_now(self.pool, self.bot, empty), {})
+        texts = [c.args[1] for c in self.bot.send_message.await_args_list if c.args[0] == 555]
+        self.assertTrue(texts[0].startswith('✅ · Первый'))
 
     async def test_success_waits_for_evening(self):
         call_id = await self.add(WON, CALLBACK)

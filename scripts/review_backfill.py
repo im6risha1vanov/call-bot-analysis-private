@@ -48,6 +48,8 @@ async def backfill(pool, since: datetime, meta=None, run=None, dry_run=False) ->
             async with pool.acquire() as conn, conn.transaction():
                 await store.save(conn, call, data, cost)
                 await conn.execute('UPDATE call_reviews SET manager_sent_at=now(), rop_sent_at=now() WHERE call_id=$1', call['id'])
+                if await conn.fetchval("SELECT 1 FROM information_schema.columns WHERE table_name='call_reviews' AND column_name='copy_sent_at'"):
+                    await conn.execute('UPDATE call_reviews SET copy_sent_at=now() WHERE call_id=$1', call['id'])
                 await callbacks.record(conn, call, data)
             done['reviewed'] += 1
             log.info('звонок %s %s: %s', call['id'], call['call_started_at'], data.get('outcome') or data.get('kind'))
