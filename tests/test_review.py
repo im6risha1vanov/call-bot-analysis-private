@@ -211,7 +211,8 @@ class StoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('Первый', self.bot.send_message.await_args_list[-1].args[1])
 
     async def test_copies_get_every_review_once_and_skip_rop_duplicate(self):
-        with patch.dict(os.environ, {'REVIEW_COPY_TO': '900, 555'}):
+        await self.pool.execute("INSERT INTO employees VALUES(1,'head:mark',NULL,'head','@mark')")
+        with patch.dict(os.environ, {'REVIEW_COPY_TO': '900, 555, head:mark'}):
             won = await self.add(WON, CALLBACK)
             self.assertEqual(await store.deliver_now(self.pool, self.bot, won), {'copy': [900, 555]})
             hot = await self.add({**LOST, 'chance': 'hot'})
@@ -220,6 +221,9 @@ class StoreTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await store.deliver_now(self.pool, self.bot, hot), {})
             empty = await self.add({'kind': 'no_conversation', 'rop_line': 'Автоответчик'}, '[00:01 Спикер 0] Алло')
             self.assertEqual(await store.deliver_now(self.pool, self.bot, empty), {})
+            await self.pool.execute("UPDATE employees SET telegram_user_id=777 WHERE extension='head:mark'")  # нажал /start
+            later = await self.add(WON, CALLBACK)
+            self.assertEqual(await store.deliver_now(self.pool, self.bot, later), {'copy': [900, 555, 777]})
         texts = [c.args[1] for c in self.bot.send_message.await_args_list if c.args[0] == 555]
         self.assertTrue(texts[0].startswith('✅ · Первый'))
 

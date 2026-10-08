@@ -2,7 +2,8 @@
 # Копии всех разборов менеджеров (кроме прозвона KITCHEN_EXTENSIONS) руководителям.
 # Запуск на сервере из /opt/callbot-astra:
 #   bash scripts/review_copies.sh                  — показать сотрудников бота и их Telegram ID
-#   bash scripts/review_copies.sh ID1 ID2 ID3      — включить копии этим Telegram ID
+#   bash scripts/review_copies.sh ID1 ID2 head:x   — включить копии: Telegram ID или добавочный сотрудника
+#                                                   (его ID подставится сам после /start)
 #   bash scripts/review_copies.sh off              — выключить копии
 # Человек должен хотя бы раз нажать /start у бота, иначе Telegram не даст ему написать.
 set -euo pipefail

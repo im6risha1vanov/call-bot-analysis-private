@@ -82,9 +82,25 @@ async def train_assignment(pool, actor, call_id: int) -> int:
         actor.client_id, actor.extension, f'review:{call_id}', actor.telegram_user_id)
 
 
-def copy_chat_ids() -> list[int]:
-    """Telegram ID тех, кому уходит полная копия каждого разбора (REVIEW_COPY_TO через запятую)."""
-    return [int(x) for x in re.findall(r'-?\d+', os.getenv('REVIEW_COPY_TO', ''))]
+async def copy_chat_ids(pool, client_id: int) -> list[int]:
+    """Кому уходит полная копия каждого разбора: REVIEW_COPY_TO через запятую.
+
+    Число — Telegram ID. Иначе сотрудник бота по добавочному или имени
+    (`head:marozeto`, `@marozeto`): его ID берётся из employees, когда он нажмёт
+    /start; до этого он просто пропускается."""
+    ids = []
+    for token in (t.strip() for t in os.getenv('REVIEW_COPY_TO', '').split(',')):
+        if re.fullmatch(r'-?\d+', token):
+            ids.append(int(token))
+        elif token:
+            chat = await pool.fetchval(
+                """SELECT telegram_user_id FROM employees
+                   WHERE client_id=$1 AND telegram_user_id IS NOT NULL
+                     AND (extension=$2 OR lower(full_name)=lower($2) OR lower(full_name)=lower('@' || ltrim($2, '@')))
+                   ORDER BY id LIMIT 1""", client_id, token)
+            if chat:
+                ids.append(chat)
+    return list(dict.fromkeys(ids))
 
 
 async def deliver_now(pool, bot, call_id: int) -> dict:
@@ -111,7 +127,7 @@ async def deliver_now(pool, bot, call_id: int) -> dict:
                 sent['manager'] = chat
             except Exception:
                 log.exception('разбор менеджеру не доставлен, call id=%s', call_id)
-    copies = copy_chat_ids()
+    copies = await copy_chat_ids(pool, row['client_id'])
     if copies and row['data'].get('reviewed'):
         claimed = await pool.fetchval(
             'UPDATE call_reviews SET copy_sent_at=now() WHERE call_id=$1 AND copy_sent_at IS NULL RETURNING call_id', call_id)
