@@ -35,7 +35,7 @@ OUTCOME_LABELS = {
     "do_not_call": "Не звонить",
 }
 BASE_COLUMNS = ["Дата", "Время", "Оператор", "Номер", "Режим", "Итог", "Комментарий"]
-TAIL_COLUMNS = ["Длительность, с", "Стоимость модели, $", "Разговор"]
+TAIL_COLUMNS = ["Длительность, с", "Стоимость модели", "Разговор"]
 
 
 def record(dialog: Dialog, *, phone: str = "", mode: str = "браузер", now: datetime | None = None) -> dict:
@@ -52,7 +52,8 @@ def record(dialog: Dialog, *, phone: str = "", mode: str = "браузер", now
         "facts": result.facts,
         "error": result.error,
         "duration_s": dialog.duration_s(),
-        "cost_usd": round(dialog.cost_usd, 5),
+        "cost": round(dialog.cost, 5),
+        "cost_unit": dialog.cost_unit,
         "model": dialog.model,
         "transcript": dialog.transcript,
     }
@@ -70,7 +71,7 @@ def sheet_row(rec: dict, fields: list[str], names: dict[str, str]) -> list:
     talk = "\n".join(f"{names.get(who, who)}: {text}" for who, text in rec["transcript"])
     return ([at.strftime("%d.%m.%Y"), at.strftime("%H:%M"), rec["operator"], rec["phone"], rec["mode"], outcome, rec["comment"]]
             + [rec["facts"].get(key, "") for key in fields]
-            + [rec["duration_s"], rec["cost_usd"], talk[:45000]])
+            + [rec["duration_s"], f"{rec['cost']} {rec['cost_unit']}", talk[:45000]])
 
 
 def save_jsonl(rec: dict, path: str | None = None) -> None:

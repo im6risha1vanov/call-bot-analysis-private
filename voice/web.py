@@ -48,6 +48,7 @@ async def operators(request: web.Request) -> web.Response:
         "operators": items,
         "asr": bool(os.getenv("DEEPGRAM_API_KEY")),
         "tts": speech.tts_configured(),
+        "llm": f"{os.getenv('VOICE_LLM', 'cvc')}: {os.getenv('VOICE_MODEL') or os.getenv('CVC_MODEL', 'gpt-6-astra')}",
     })
 
 

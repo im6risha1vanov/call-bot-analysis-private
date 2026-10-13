@@ -75,7 +75,7 @@ class CallSession:
                 self.tts_task.cancel()
         self.saved = await self.save(self.dialog, phone=self.phone, mode=self.mode)
         await self.send_event({"type": "result", "reason": reason, **{k: self.saved[k] for k in (
-            "outcome", "transfer", "comment", "facts", "duration_s", "cost_usd")},
+            "outcome", "transfer", "comment", "facts", "duration_s", "cost", "cost_unit")},
             "labels": {key: text.split(":")[0] for key, text in self.dialog.op.fields.items()}})
         self.done.set()
 

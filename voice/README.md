@@ -10,7 +10,8 @@
 |---|---|
 | `operators/kitchen.toml` | Анкета оператора, как в кабинете Соловья: имя, приветствие, план (до 10 шагов), правила, факты, поля для таблицы. Поведение робота меняют здесь. |
 | `operator.py` | Читает и проверяет анкету, собирает из неё системный промпт. |
-| `dialog.py` | Разговор с Claude потоком. Звонок заканчивается только инструментом `finish_call` или `transfer_to_specialist`, итог всегда структурный. |
+| `llm.py` | Модель: прокси ai.starimg.ru (Responses API, поток) или Claude напрямую. |
+| `dialog.py` | Разговор с моделью потоком. Звонок заканчивается только инструментом `finish_call` или `transfer_to_specialist`, итог всегда структурный. |
 | `call.py` | Один звонок: озвучка по фразам, перебивание, молчание, запись итога. Не зависит от транспорта. |
 | `speech.py` | Deepgram (поток) и Yandex SpeechKit (PCM 16 кГц), нарезка ответа на фразы. |
 | `results.py` | Итог в `VOICE_LOG` (jsonl) и, если задан `VOICE_SHEET_ID`, строкой на лист «Робот · Звонки». |
@@ -24,11 +25,12 @@
 
 ## Переменные
 
-Берутся из `.env` бота: `ANTHROPIC_API_KEY`, `DEEPGRAM_API_KEY`, `YANDEX_TTS_API_KEY`,
+Берутся из `.env` бота: `CVC_API_KEY` (или `ANTHROPIC_API_KEY`), `DEEPGRAM_API_KEY`, `YANDEX_TTS_API_KEY`,
 `GOOGLE_SERVICE_ACCOUNT_FILE`. Свои, все необязательные:
 
-- `VOICE_MODEL` (по умолчанию `claude-haiku-5-5`, быстрая модель: в живом разговоре важна задержка), `VOICE_EFFORT` (`low`).
-- `VOICE_SIM_MODEL` модель клиента в симуляторе (`claude-sonnet-5-5`).
+- `VOICE_LLM`: `cvc` (по умолчанию, прокси ai.starimg.ru, как у разборов) или `anthropic` (Claude напрямую).
+- `VOICE_MODEL`: для cvc по умолчанию `CVC_MODEL` бота, для anthropic `claude-haiku-5-5`. `VOICE_CVC_EFFORT` (`low`), `VOICE_EFFORT` (`low`, для anthropic).
+- `VOICE_SIM_MODEL` модель клиента в симуляторе (по умолчанию та же, что у робота).
 - `VOICE_TTS_SPEED` (1.05), `VOICE_ENDPOINTING_MS` (300, сколько тишины считать концом фразы), `VOICE_DG_MODEL`.
 - `VOICE_SHEET_ID` таблица для листа «Робот · Звонки», `VOICE_LOG` путь к jsonl.
 - `VOICE_WEB_HOST` / `VOICE_WEB_PORT` (127.0.0.1:8090).

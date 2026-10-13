@@ -13,6 +13,7 @@ import httpx
 from voice import results, speech
 from voice.call import CallSession
 from voice.dialog import Dialog, build_tools, parse_result
+from voice.llm import AnthropicBackend, CvcBackend
 from voice.operator import MAX_ITEMS, OperatorError, load
 
 
@@ -95,7 +96,6 @@ class OperatorTest(unittest.TestCase):
     def test_tools_follow_fields(self):
         op = load("kitchen")
         finish_tool = build_tools(op)[0]
-        self.assertTrue(finish_tool["eager_input_streaming"])
         self.assertEqual(set(finish_tool["input_schema"]["properties"]["facts"]["properties"]), set(op.fields))
 
     def test_parse_result_validates(self):
@@ -115,7 +115,7 @@ class DialogTest(unittest.IsolatedAsyncioTestCase):
             finish({"outcome": "interested", "comment": "Казань, плёнка", "facts": {"city": "Казань"}},
                    "Записала, специалист позвонит завтра после шести. ", "Хорошего дня!"),
         ])
-        dialog = Dialog(load("kitchen"), client, model="test-model")
+        dialog = Dialog(load("kitchen"), AnthropicBackend("test-model", client=client))
         self.assertIn("Мария", dialog.greet())
         heard = []
 
@@ -135,18 +135,19 @@ class DialogTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request["thinking"], {"type": "disabled"})
         self.assertEqual(request["system"][0]["cache_control"], {"type": "ephemeral"})
         self.assertEqual([m["role"] for m in request["messages"]], ["user", "assistant", "user"])
-        self.assertGreater(dialog.cost_usd, 0)
+        self.assertGreater(dialog.cost, 0)
+        self.assertTrue(all(t["eager_input_streaming"] for t in request["tools"]))
         with self.assertRaises(RuntimeError):
             await dialog.reply("ещё")
 
     async def test_silent_finish_uses_farewell_but_not_for_ndz(self):
         op = load("kitchen")
-        dialog = Dialog(op, FakeClient([finish({"outcome": "not_relevant", "comment": "Шаг 1: через полгода"})]))
+        dialog = Dialog(op, AnthropicBackend(client=FakeClient([finish({"outcome": "not_relevant", "comment": "Шаг 1: через полгода"})])))
         dialog.greet()
         turn = await dialog.reply("Нет, не актуально")
         self.assertEqual((turn.text, turn.fallback), (op.farewell, True))
 
-        dialog = Dialog(op, FakeClient([finish({"outcome": "ndz", "comment": "Автоответчик"})]))
+        dialog = Dialog(op, AnthropicBackend(client=FakeClient([finish({"outcome": "ndz", "comment": "Автоответчик"})])))
         dialog.greet("Оставьте сообщение после сигнала")
         turn = await dialog.reply("(молчание)")
         self.assertEqual((turn.text, turn.fallback, turn.result.outcome), ("", False, "ndz"))
@@ -156,16 +157,17 @@ class DialogTest(unittest.IsolatedAsyncioTestCase):
             finish({"outcome": "maybe", "comment": "x"}),
             finish({"outcome": "callback", "comment": "Вечером"}, "Хорошо, наберу вечером."),
         ])
-        dialog = Dialog(load("kitchen"), client)
+        dialog = Dialog(load("kitchen"), AnthropicBackend(client=client))
         dialog.greet()
         turn = await dialog.reply("Я за рулём")
         self.assertEqual(turn.result.outcome, "callback")
-        retry = client.requests[1]["messages"][-1]["content"][0]
-        self.assertEqual((retry["type"], retry["is_error"]), ("tool_result", True))
+        retry = client.requests[1]["messages"][-1]
+        self.assertEqual(retry["role"], "user")
+        self.assertIn("неверно", retry["content"])
 
     async def test_barge_in_keeps_history_valid(self):
         client = FakeClient([say("Отлично, ", "а в каком ", "городе?"), say("Поняла, Сочи.")], delay=0.05)
-        dialog = Dialog(load("kitchen"), client)
+        dialog = Dialog(load("kitchen"), AnthropicBackend(client=client))
         dialog.greet()
         task = asyncio.create_task(dialog.reply("Да"))
         await asyncio.sleep(0.08)
@@ -176,6 +178,73 @@ class DialogTest(unittest.IsolatedAsyncioTestCase):
         roles = [m["role"] for m in client.requests[1]["messages"]]
         self.assertEqual(roles, ["user", "assistant", "user", "assistant", "user"])
         self.assertTrue(client.requests[1]["messages"][3]["content"].endswith("…"))
+
+
+def sse(*events):
+    return "".join(f"event: {e['type']}\ndata: {json.dumps(e, ensure_ascii=False)}\n\n" for e in events)
+
+
+class CvcBackendTest(unittest.IsolatedAsyncioTestCase):
+    def backend(self, handler):
+        return CvcBackend("gpt-test", http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+                          base_url="https://proxy/v1", api_key="k")
+
+    async def test_streams_text_then_tool_call(self):
+        sent = []
+
+        def handler(request):
+            sent.append(json.loads(request.content))
+            return httpx.Response(200, headers={"content-type": "text/event-stream"}, text=sse(
+                {"type": "response.output_text.delta", "delta": "Записала, "},
+                {"type": "response.output_text.delta", "delta": "до свидания!"},
+                {"type": "response.completed", "response": {"status": "completed", "usage": {"input_tokens": 100, "output_tokens": 10},
+                 "output": [{"type": "message", "content": [{"type": "output_text", "text": "Записала, до свидания!"}]},
+                            {"type": "function_call", "name": "finish_call", "call_id": "c1",
+                             "arguments": json.dumps({"outcome": "interested", "comment": "Сочи", "facts": {"city": "Сочи"}})}]}},
+            ))
+
+        dialog = Dialog(load("kitchen"), self.backend(handler))
+        dialog.greet()
+        chunks = []
+
+        async def sink(c):
+            chunks.append(c)
+
+        turn = await dialog.reply("Да, Сочи", sink)
+        self.assertEqual(chunks, ["Записала, ", "до свидания!"])
+        self.assertEqual((turn.result.outcome, turn.result.facts, turn.text), ("interested", {"city": "Сочи"}, "Записала, до свидания!"))
+        body = sent[0]
+        self.assertTrue(body["stream"])
+        self.assertEqual(body["model"], "gpt-test")
+        self.assertEqual(body["tools"][0]["type"], "function")
+        self.assertEqual([m["role"] for m in body["input"]], ["user", "assistant", "user"])
+        self.assertIn("Мария", body["instructions"])
+        self.assertEqual((dialog.cost, dialog.cost_unit), (110 * 6.5, "ед."))
+
+    async def test_plain_json_answer_and_errors(self):
+        def plain(request):
+            return httpx.Response(200, json={"status": "completed", "output": [
+                {"type": "message", "content": [{"type": "output_text", "text": "В каком городе?"}]}]})
+
+        dialog = Dialog(load("kitchen"), self.backend(plain))
+        dialog.greet()
+        turn = await dialog.reply("Да")
+        self.assertEqual((turn.text, turn.result), ("В каком городе?", None))
+
+        def broken(request):
+            return httpx.Response(200, headers={"content-type": "text/event-stream"}, text=sse(
+                {"type": "response.completed", "response": {"status": "completed", "output": [
+                    {"type": "function_call", "name": "finish_call", "arguments": "{oops"}]}}))
+
+        dialog = Dialog(load("kitchen"), self.backend(broken))
+        dialog.greet()
+        turn = await dialog.reply("Нет")
+        self.assertEqual((turn.result.outcome, turn.text), ("callback", load("kitchen").farewell))
+
+        dialog = Dialog(load("kitchen"), self.backend(lambda r: httpx.Response(402, text="no credits")))
+        dialog.greet()
+        with self.assertRaisesRegex(RuntimeError, "402"):
+            await dialog.reply("Да")
 
 
 class SpeechTest(unittest.TestCase):
@@ -222,7 +291,7 @@ class CallSessionTest(unittest.IsolatedAsyncioTestCase):
             saved.append(kw)
             return results.record(dialog, **kw)
 
-        session = CallSession(Dialog(load("kitchen"), client), send_audio, send_event, synthesize=synth, save=save)
+        session = CallSession(Dialog(load("kitchen"), AnthropicBackend(client=client)), send_audio, send_event, synthesize=synth, save=save)
         await session.start()
         await session.heard("да", False)
         await session.heard("Да, актуально", True)
@@ -251,7 +320,7 @@ class CallSessionTest(unittest.IsolatedAsyncioTestCase):
         async def save(dialog, **kw):
             return results.record(dialog, **kw)
 
-        session = CallSession(Dialog(load("kitchen"), FakeClient([])), nothing, send_event, synthesize=synth, save=save)
+        session = CallSession(Dialog(load("kitchen"), AnthropicBackend(client=FakeClient([]))), nothing, send_event, synthesize=synth, save=save)
         await session.start()
         await session.hangup()
         self.assertEqual(events[-1]["outcome"], "callback")
@@ -260,7 +329,7 @@ class CallSessionTest(unittest.IsolatedAsyncioTestCase):
 class ResultsTest(unittest.IsolatedAsyncioTestCase):
     async def test_jsonl_and_sheet_append(self):
         client = FakeClient([finish({"outcome": "interested", "comment": "Казань", "facts": {"city": "Казань"}}, "Спасибо!")])
-        dialog = Dialog(load("kitchen"), client)
+        dialog = Dialog(load("kitchen"), AnthropicBackend(client=client))
         dialog.greet()
         await dialog.reply("Да, Казань")
         rec = results.record(dialog, phone="79990001122", now=datetime(2026, 10, 14, 9, 30, tzinfo=results.MSK))

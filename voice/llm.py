@@ -1,0 +1,191 @@
+"""
+Модели для голосового оператора. Две реализации с одним интерфейсом:
+
+- cvc (по умолчанию): прокси ai.starimg.ru, тот же ключ CVC_API_KEY, на котором
+  бот делает разборы. Responses API, ответ потоком (SSE).
+- anthropic: Claude напрямую, ключ ANTHROPIC_API_KEY.
+
+Выбор: VOICE_LLM=cvc|anthropic. Модель: VOICE_MODEL (для cvc по умолчанию
+CVC_MODEL бота, для anthropic claude-haiku-5-5).
+
+История разговора хранится в нейтральном виде: [{"role": "user"|"assistant", "content": str}].
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+from dataclasses import dataclass
+from typing import Awaitable, Callable
+
+import httpx
+
+log = logging.getLogger("voice.llm")
+
+TextSink = Callable[[str], Awaitable[None]]
+
+
+@dataclass
+class ModelReply:
+    text: str
+    tool_name: str | None = None
+    tool_input: object = None
+    stop: str = "end"        # end | tool | max_tokens | refusal
+    cost: float = 0.0
+
+
+class BadToolJSON(ValueError):
+    """Модель вернула вызов инструмента с неразборчивыми аргументами."""
+
+
+def neutral_tools(tools: list[dict]) -> list[dict]:
+    return [{"name": t["name"], "description": t["description"], "input_schema": t["input_schema"]} for t in tools]
+
+
+# ------------------------------------------------------------------ ai.starimg.ru
+
+
+class CvcBackend:
+    unit = "ед."  # биллинг прокси в кредит-токенах, не в долларах (см. analysis.py)
+
+    def __init__(self, model: str | None = None, *, http: httpx.AsyncClient | None = None,
+                 base_url: str | None = None, api_key: str | None = None) -> None:
+        self.model = model or os.getenv("VOICE_MODEL") or os.getenv("CVC_MODEL", "gpt-6-astra")
+        self.base_url = (base_url or os.getenv("CVC_BASE_URL", "https://ai.starimg.ru/v1")).rstrip("/")
+        self.api_key = api_key or os.environ["CVC_API_KEY"]
+        self.effort = os.getenv("VOICE_CVC_EFFORT", "low")
+        self.max_output = int(os.getenv("VOICE_CVC_MAX_OUTPUT", "2000"))
+        self.multiplier = float(os.getenv("CVC_MODEL_MULTIPLIER", "6.5"))
+        self.http = http
+
+    def _cost(self, usage: dict) -> float:
+        cached = (usage.get("input_tokens_details") or {}).get("cached_tokens", 0)
+        fresh = max(usage.get("input_tokens", 0) - cached, 0)
+        return (fresh + cached * 0.1 + usage.get("output_tokens", 0)) * self.multiplier
+
+    def body(self, system: str, messages: list[dict], tools: list[dict]) -> dict:
+        body = {
+            "model": self.model,
+            "instructions": system,
+            "input": [{"role": m["role"], "content": m["content"]} for m in messages],
+            "max_output_tokens": self.max_output,
+            "reasoning": {"effort": self.effort},
+            "stream": True,
+        }
+        if tools:
+            body["tools"] = [{"type": "function", "name": t["name"], "description": t["description"],
+                              "parameters": t["input_schema"]} for t in tools]
+            body["tool_choice"] = "auto"
+        return body
+
+    async def complete(self, system: str, messages: list[dict], tools: list[dict], on_text: TextSink) -> ModelReply:
+        if self.http is None:  # одно соединение на весь процесс: без TLS-рукопожатия на каждой реплике
+            self.http = httpx.AsyncClient(timeout=httpx.Timeout(60, connect=10))
+        async with self.http.stream("POST", self.base_url + "/responses", json=self.body(system, messages, tools),
+                                     headers={"Authorization": "Bearer " + self.api_key}) as r:
+            if r.status_code >= 300:
+                raise RuntimeError(f"ai.starimg.ru {r.status_code}: {(await r.aread()).decode(errors='replace')[:500]}")
+            if "text/event-stream" not in r.headers.get("content-type", ""):
+                data = json.loads(await r.aread())  # прокси ответил целиком, без потока
+                reply = self._from_response(data)
+                if reply.text:
+                    await on_text(reply.text)
+                return reply
+            streamed = []
+            final = None
+            async for line in r.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                payload = line[5:].strip()
+                if not payload or payload == "[DONE]":
+                    continue
+                event = json.loads(payload)
+                kind = event.get("type", "")
+                if kind == "response.output_text.delta":
+                    streamed.append(event.get("delta", ""))
+                    await on_text(event.get("delta", ""))
+                elif kind in ("response.completed", "response.incomplete"):
+                    final = event.get("response") or {}
+                elif kind in ("response.failed", "error"):
+                    raise RuntimeError(f"ai.starimg.ru: {json.dumps(event, ensure_ascii=False)[:500]}")
+        if final is None:
+            raise RuntimeError("ai.starimg.ru оборвал поток без итога")
+        reply = self._from_response(final)
+        reply.text = "".join(streamed) or reply.text
+        return reply
+
+    def _from_response(self, data: dict) -> ModelReply:
+        text = "".join(part.get("text", "") for item in data.get("output", []) if item.get("type") == "message"
+                       for part in item.get("content", []) if part.get("type") == "output_text")
+        reply = ModelReply(text, cost=self._cost(data.get("usage") or {}))
+        call = next((item for item in data.get("output", []) if item.get("type") == "function_call"), None)
+        if data.get("status") == "incomplete":
+            reply.stop = "max_tokens"
+        if call is not None:
+            reply.tool_name = call.get("name")
+            try:
+                reply.tool_input = json.loads(call.get("arguments") or "{}")
+            except json.JSONDecodeError as e:
+                raise BadToolJSON(str(e)) from None
+            if reply.stop != "max_tokens":
+                reply.stop = "tool"
+        return reply
+
+
+# ------------------------------------------------------------------ Anthropic
+
+
+class AnthropicBackend:
+    unit = "$"
+    PRICE_IN_MTOK = float(os.getenv("VOICE_PRICE_IN_MTOK", "0.10"))   # Haiku 5.5
+    PRICE_OUT_MTOK = float(os.getenv("VOICE_PRICE_OUT_MTOK", "0.50"))
+
+    def __init__(self, model: str | None = None, *, client=None) -> None:
+        if client is None:
+            from anthropic import AsyncAnthropic
+            client = AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+        self.client = client
+        self.model = model or os.getenv("VOICE_MODEL", "claude-haiku-5-5")
+        self.effort = os.getenv("VOICE_EFFORT", "low")
+
+    def _cost(self, usage) -> float:
+        if usage is None:
+            return 0.0
+        tokens_in = (usage.input_tokens or 0) + (getattr(usage, "cache_creation_input_tokens", 0) or 0) * 1.25 \
+            + (getattr(usage, "cache_read_input_tokens", 0) or 0) * 0.1
+        return tokens_in / 1e6 * self.PRICE_IN_MTOK + (usage.output_tokens or 0) / 1e6 * self.PRICE_OUT_MTOK
+
+    async def complete(self, system: str, messages: list[dict], tools: list[dict], on_text: TextSink) -> ModelReply:
+        kwargs = dict(
+            model=self.model, max_tokens=600, messages=messages,
+            system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+            thinking={"type": "disabled"}, output_config={"effort": self.effort},
+        )
+        if tools:
+            kwargs["tools"] = [{**t, "eager_input_streaming": True} for t in tools]
+        try:
+            async with self.client.messages.stream(**kwargs) as stream:
+                async for chunk in stream.text_stream:
+                    await on_text(chunk)
+                msg = await stream.get_final_message()
+        except ValueError as e:  # SDK не смог разобрать JSON инструмента
+            raise BadToolJSON(str(e)) from None
+        text = "".join(b.text for b in msg.content if b.type == "text")
+        reply = ModelReply(text, cost=self._cost(msg.usage))
+        tool = next((b for b in msg.content if b.type == "tool_use"), None)
+        if msg.stop_reason == "refusal":
+            reply.stop = "refusal"
+        elif tool is not None:
+            reply.tool_name, reply.tool_input = tool.name, tool.input
+            reply.stop = "max_tokens" if msg.stop_reason == "max_tokens" else "tool"
+        return reply
+
+
+def make_backend(kind: str | None = None, model: str | None = None):
+    kind = (kind or os.getenv("VOICE_LLM", "cvc")).strip().lower()
+    if kind == "cvc":
+        return CvcBackend(model)
+    if kind == "anthropic":
+        return AnthropicBackend(model)
+    raise ValueError(f"VOICE_LLM={kind!r}: можно cvc или anthropic")

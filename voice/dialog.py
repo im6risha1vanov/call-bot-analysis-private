@@ -4,35 +4,22 @@
 Модель отвечает потоком, чтобы синтез речи мог начать озвучку с первого
 предложения. Звонок заканчивается только инструментом (finish_call или
 transfer_to_specialist), поэтому итог всегда структурированный и сразу ложится
-в таблицу.
-
-Модель по умолчанию claude-haiku-5-5: в живом разговоре важна задержка
-ответа. Поменять можно переменной VOICE_MODEL без правки кода.
+в таблицу. Какая модель отвечает, задаёт voice/llm.py (VOICE_LLM, VOICE_MODEL).
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import time
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable
 
-from anthropic import AsyncAnthropic
-
+from voice.llm import BadToolJSON, TextSink, make_backend
 from voice.operator import OUTCOMES, Operator
 
 log = logging.getLogger("voice.dialog")
 
-MODEL = os.getenv("VOICE_MODEL", "claude-haiku-5-5")
-EFFORT = os.getenv("VOICE_EFFORT", "low")
-MAX_TOKENS = 600
 SILENCE = "(молчание)"
-
-# Цены Haiku 5.5 за миллион токенов, для оценки стоимости звонка в логах.
-PRICE_IN_MTOK = float(os.getenv("VOICE_PRICE_IN_MTOK", "0.10"))
-PRICE_OUT_MTOK = float(os.getenv("VOICE_PRICE_OUT_MTOK", "0.50"))
 
 FINISH = "finish_call"
 TRANSFER = "transfer_to_specialist"
@@ -66,7 +53,6 @@ def build_tools(op: Operator) -> list[dict]:
     tools = [{
         "name": FINISH,
         "description": "Завершить звонок и записать итог. Вызывай, когда разговор окончен по плану, правилам или по желанию клиента.",
-        "eager_input_streaming": True,
         "input_schema": {
             "type": "object",
             "properties": {
@@ -82,8 +68,7 @@ def build_tools(op: Operator) -> list[dict]:
         tools.append({
             "name": TRANSFER,
             "description": "Перевести клиента на живого специалиста прямо сейчас. Только если клиент подходит и сам хочет говорить с человеком.",
-            "eager_input_streaming": True,
-            "input_schema": {
+                "input_schema": {
                 "type": "object",
                 "properties": {"comment": comment, "facts": facts},
                 "required": ["comment"],
@@ -114,20 +99,18 @@ def parse_result(name: str, data, op: Operator) -> CallResult:
     return CallResult(outcome, comment.strip()[:300], facts)
 
 
-TextSink = Callable[[str], Awaitable[None]]
-
-
 class Dialog:
-    def __init__(self, operator: Operator, client: AsyncAnthropic | None = None, model: str = MODEL):
+    def __init__(self, operator: Operator, backend=None):
         self.op = operator
-        self.client = client or AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-        self.model = model
-        self.system = [{"type": "text", "text": operator.system_prompt(), "cache_control": {"type": "ephemeral"}}]
+        self.backend = backend or make_backend()
+        self.model = self.backend.model
+        self.system = operator.system_prompt()
         self.tools = build_tools(operator)
         self.messages: list[dict] = []
         self.transcript: list[tuple[str, str]] = []  # ("client" | "robot", текст)
         self.result: CallResult | None = None
-        self.cost_usd = 0.0
+        self.cost = 0.0
+        self.cost_unit = self.backend.unit
         self.started = time.monotonic()
 
     @property
@@ -137,25 +120,20 @@ class Dialog:
     def greet(self, first_words: str = "Алло") -> str:
         """Робот ждёт «Алло» и говорит приветствие из анкеты (без модели, сразу)."""
         self._add_client(first_words or SILENCE)
-        self.messages.append({"role": "assistant", "content": self.op.greeting})
-        self.transcript.append(("robot", self.op.greeting))
+        self._add_robot(self.op.greeting)
         return self.op.greeting
 
     def _add_client(self, text: str) -> None:
         text = text.strip() or SILENCE
         self.transcript.append(("client", text))
-        last = self.messages[-1] if self.messages else None
-        if last and last["role"] == "user" and isinstance(last["content"], str):
-            last["content"] += " " + text  # клиент перебил до того, как робот что-то сказал
+        if self.messages and self.messages[-1]["role"] == "user":
+            self.messages[-1]["content"] += " " + text  # клиент перебил до того, как робот что-то сказал
         else:
             self.messages.append({"role": "user", "content": text})
 
-    def _account(self, usage) -> None:
-        if usage is None:
-            return
-        tokens_in = (usage.input_tokens or 0) + (getattr(usage, "cache_creation_input_tokens", 0) or 0) * 1.25 \
-            + (getattr(usage, "cache_read_input_tokens", 0) or 0) * 0.1
-        self.cost_usd += tokens_in / 1e6 * PRICE_IN_MTOK + (usage.output_tokens or 0) / 1e6 * PRICE_OUT_MTOK
+    def _add_robot(self, text: str) -> None:
+        self.transcript.append(("robot", text))
+        self.messages.append({"role": "assistant", "content": text})
 
     def _finish(self, result: CallResult, spoken: str) -> Turn:
         self.result = result
@@ -175,61 +153,57 @@ class Dialog:
         said: list[str] = []
         for attempt in range(2):
             spoken: list[str] = []
+
+            async def sink(chunk: str) -> None:
+                nonlocal first_ms
+                if not chunk:
+                    return
+                if first_ms is None:
+                    first_ms = int((time.monotonic() - started) * 1000)
+                spoken.append(chunk)
+                if on_text:
+                    await on_text(chunk)
+
             try:
-                async with self.client.messages.stream(
-                    model=self.model,
-                    max_tokens=MAX_TOKENS,
-                    system=self.system,
-                    messages=self.messages,
-                    tools=self.tools,
-                    thinking={"type": "disabled"},
-                    output_config={"effort": EFFORT},
-                ) as stream:
-                    async for chunk in stream.text_stream:
-                        if first_ms is None:
-                            first_ms = int((time.monotonic() - started) * 1000)
-                        spoken.append(chunk)
-                        if on_text:
-                            await on_text(chunk)
-                    msg = await stream.get_final_message()
+                reply = await self.backend.complete(self.system, self.messages, self.tools, sink)
             except asyncio.CancelledError:
                 # Клиент перебил: в истории остаётся то, что робот успел начать.
                 partial = "".join(spoken).strip()
                 if partial:
-                    self.messages.append({"role": "assistant", "content": partial + "…"})
-                    self.transcript.append(("robot", partial + "…"))
+                    self._add_robot(partial + "…")
                 raise
-            except ValueError as e:  # SDK не смог разобрать JSON инструмента
+            except BadToolJSON as e:
                 log.warning("битый вход инструмента: %s", e)
                 said.append("".join(spoken))
-                return self._finish(CallResult("callback", "Сбой записи итога, проверить вручную", error=str(e)), " ".join(said))
+                return self._finish(CallResult("callback", "Сбой записи итога, проверить вручную", error=str(e)),
+                                    " ".join(said))
 
-            self._account(msg.usage)
-            text = "".join(spoken)
+            self.cost += reply.cost
+            text = ("".join(spoken) or reply.text).strip()
             said.append(text)
-            if text.strip():
-                self.transcript.append(("robot", text.strip()))
-            tool = next((b for b in msg.content if b.type == "tool_use"), None)
-
-            if msg.stop_reason == "refusal":
+            if reply.stop == "refusal":
+                if text:
+                    self.transcript.append(("robot", text))
                 return self._finish(CallResult("callback", "Модель отказалась отвечать, проверить вручную", error="refusal"), text)
-            if tool is None:
-                self.messages.append({"role": "assistant", "content": text.strip() or "…"})
-                return Turn(text.strip(), None, first_ms)
-            if msg.stop_reason == "max_tokens":
+            if reply.tool_name is None:
+                self._add_robot(text or "…")
+                return Turn(text, None, first_ms)
+            if text:
+                self.transcript.append(("robot", text))
+            if reply.stop == "max_tokens":
                 return self._finish(CallResult("callback", "Итог обрезан, проверить вручную", error="max_tokens"), text)
             try:
-                result = parse_result(tool.name, tool.input, self.op)
+                result = parse_result(reply.tool_name, reply.tool_input, self.op)
             except ValueError as e:
                 if attempt == 0:
-                    self.messages.append({"role": "assistant", "content": msg.content})
-                    self.messages.append({"role": "user", "content": [{
-                        "type": "tool_result", "tool_use_id": tool.id, "is_error": True,
-                        "content": f"Неверный вход инструмента: {e}. Вызови инструмент ещё раз, ничего не говоря клиенту.",
-                    }]})
+                    self.messages.append({"role": "assistant", "content": text or "…"})
+                    self.messages.append({"role": "user", "content":
+                        f"(служебно, клиент этого не слышит: итог записан неверно: {e}. "
+                        "Вызови инструмент ещё раз с правильными данными, клиенту ничего не говори.)"})
                     continue
-                return self._finish(CallResult("callback", "Сбой записи итога, проверить вручную", error=str(e)), " ".join(said))
-            turn = self._finish(result, " ".join(s for s in said if s.strip()))
+                return self._finish(CallResult("callback", "Сбой записи итога, проверить вручную", error=str(e)),
+                                    " ".join(s for s in said if s))
+            turn = self._finish(result, " ".join(s for s in said if s))
             turn.first_text_ms = first_ms
             return turn
         raise AssertionError("unreachable")

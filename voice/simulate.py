@@ -1,7 +1,7 @@
 """
 Прогон голосового оператора текстом против симулированных клиентов.
 
-Запуск на сервере (нужен ANTHROPIC_API_KEY в .env):
+Запуск на сервере (ключи модели из .env бота, см. voice/llm.py):
     python -m voice.simulate                    # все персонажи по разу
     python -m voice.simulate --persona busy -n 3
     python -m voice.simulate --out voice_sim.md # разговоры в файл
@@ -18,12 +18,11 @@ import os
 import sys
 from dataclasses import dataclass
 
-from anthropic import AsyncAnthropic
-
 from voice.dialog import Dialog
+from voice.llm import make_backend
 from voice.operator import load
 
-SIM_MODEL = os.getenv("VOICE_SIM_MODEL", "claude-sonnet-5-5")
+SIM_MODEL = os.getenv("VOICE_SIM_MODEL")  # модель клиента; по умолчанию та же, что у робота
 MAX_TURNS = 16
 HANGUP = "[ТРУБКА]"
 
@@ -87,7 +86,7 @@ class Run:
         return self.dialog.result is not None and self.dialog.result.outcome == self.persona.expected
 
 
-async def client_line(client: AsyncAnthropic, persona: Persona, dialog: Dialog, turn: int) -> str:
+async def client_line(client, persona: Persona, dialog: Dialog, turn: int) -> str:
     if persona.scripted is not None:
         return persona.scripted[turn] if turn < len(persona.scripted) else HANGUP
     # Для модели-клиента реплики робота это «user», свои реплики «assistant».
@@ -100,20 +99,21 @@ async def client_line(client: AsyncAnthropic, persona: Persona, dialog: Dialog, 
             messages.append({"role": role, "content": text})
     if messages[-1]["role"] == "assistant":
         messages.append({"role": "user", "content": "(молчание)"})
-    response = await client.messages.create(
-        model=SIM_MODEL, max_tokens=200, system=CLIENT_PROMPT.format(hangup=HANGUP, story=persona.story),
-        messages=messages, thinking={"type": "disabled"}, output_config={"effort": "low"},
-    )
-    return "".join(b.text for b in response.content if b.type == "text").strip()
+
+    async def ignore(_):
+        pass
+
+    reply = await client.complete(CLIENT_PROMPT.format(hangup=HANGUP, story=persona.story), messages, [], ignore)
+    return reply.text.strip()
 
 
-async def run_one(client: AsyncAnthropic, persona: Persona, operator_id: str) -> Run:
-    dialog = Dialog(load(operator_id), client)
+async def run_one(robot_backend, client_backend, persona: Persona, operator_id: str) -> Run:
+    dialog = Dialog(load(operator_id), robot_backend)
     dialog.greet(persona.scripted[0] if persona.scripted else "Алло")
     turns = persona.scripted[1:] if persona.scripted else None
     sim = Persona(persona.key, persona.expected, persona.story, turns)
     for turn in range(MAX_TURNS):
-        line = await client_line(client, sim, dialog, turn)
+        line = await client_line(client_backend, sim, dialog, turn)
         if HANGUP in line:
             line = line.replace(HANGUP, "").strip()
             if line:
@@ -135,7 +135,7 @@ def report(runs: list[Run]) -> str:
         lines.append(run.dialog.transcript_text())
         if r:
             lines.append(f"\nКомментарий: {r.comment}\nДанные: {r.facts}")
-        lines.append(f"Стоимость модели робота: ${run.dialog.cost_usd:.4f}\n")
+        lines.append(f"Стоимость модели робота: {run.dialog.cost:.4f} {run.dialog.cost_unit}\n")
     ok = sum(run.ok for run in runs)
     lines.append(f"Итог: верно {ok} из {len(runs)}")
     return "\n".join(lines)
@@ -153,8 +153,9 @@ async def main(argv: list[str] | None = None) -> int:
     if not chosen:
         print("нет таких персонажей, есть: " + ", ".join(p.key for p in PERSONAS), file=sys.stderr)
         return 2
-    client = AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-    runs = await asyncio.gather(*(run_one(client, p, args.operator) for p in chosen for _ in range(args.n)))
+    robot = make_backend()
+    client = make_backend(model=SIM_MODEL)
+    runs = await asyncio.gather(*(run_one(robot, client, p, args.operator) for p in chosen for _ in range(args.n)))
     text = report(list(runs))
     if args.out:
         with open(args.out, "w", encoding="utf-8") as f:

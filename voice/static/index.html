@@ -64,7 +64,7 @@ fetch('operators').then(r => r.json()).then(info => {
     $('operator').appendChild(o);
   }
   if (!info.asr) { $('mic').checked = false; $('mic').disabled = true; }
-  $('status').textContent = `Распознавание: ${info.asr ? 'есть' : 'нет ключа Deepgram, только текст'}. Синтез: ${info.tts ? 'есть' : 'нет ключа Яндекса, робот отвечает текстом'}.`;
+  $('status').textContent = `Распознавание: ${info.asr ? 'есть' : 'нет ключа Deepgram, только текст'}. Синтез: ${info.tts ? 'есть' : 'нет ключа Яндекса, робот отвечает текстом'}. Модель: ${info.llm}.`;
 }).catch(e => $('status').textContent = 'Сервер не отвечает: ' + e);
 
 function add(role, text, note) {
@@ -157,7 +157,7 @@ $('textform').onsubmit = e => {
 
 function showResult(m) {
   const rows = [['Итог', (OUTCOMES[m.outcome] || m.outcome) + (m.transfer ? ' (перевод на специалиста)' : '')], ['Комментарий', m.comment],
-    ...Object.entries(m.facts || {}).map(([k, v]) => [(m.labels || {})[k] || k, v]), ['Длительность', m.duration_s + ' с'], ['Стоимость модели', '$' + m.cost_usd]];
+    ...Object.entries(m.facts || {}).map(([k, v]) => [(m.labels || {})[k] || k, v]), ['Длительность', m.duration_s + ' с'], ['Стоимость модели', m.cost + ' ' + m.cost_unit]];
   const t = document.createElement('table');
   for (const [k, v] of rows) { const tr = t.insertRow(); tr.insertCell().textContent = k; tr.insertCell().textContent = v; }
   $('result').innerHTML = '<b>Итог звонка</b>'; $('result').appendChild(t); $('result').style.display = 'block';
