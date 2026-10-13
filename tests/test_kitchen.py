@@ -75,11 +75,11 @@ class SheetTests(unittest.TestCase):
     def test_lead_row_matches_base_sheet(self):
         table = kitchen.calls_table(self.ATTEMPTS, self.BASE, MSK)
         self.assertEqual(table.rows[0], kitchen.HEADER)
-        # Раздел по дню последнего звонка; номер без базы помечен в колонке «Дата базы».
+        # Раздел по дню последнего звонка; у номера без базы id, проект и дата базы пустые.
         self.assertEqual(table.rows[1], ['Звонки за 08.10.2026 · лидов 1'])
-        self.assertEqual(table.rows[3], ['Звонки за 07.10.2026 · лидов 1 · нет в листе «Кухонные гарнитуры»: 1'])
+        self.assertEqual(table.rows[3], ['Звонки за 07.10.2026 · лидов 1'])
         missing = dict(zip(kitchen.HEADER, table.rows[4]))
-        self.assertEqual((missing['Звонок 1'], missing['Дата базы']), ('Неактуально', 'нет в базе'))
+        self.assertEqual((missing['Звонок 1'], missing['id'], missing['Проект'], missing['Дата базы']), ('Неактуально', '', '', ''))
         row = dict(zip(kitchen.HEADER, table.rows[2]))
         self.assertEqual((row['Телефон'], row['id'], row['Дата базы']), ('+79990001122', '1801', '30.09.2026'))
         self.assertEqual((row['Звонок 1'], row['Звонок 2'], row['Звонок 3']), ('НДЗ', 'Перезвон', 'Заинтересованный'))
