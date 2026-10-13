@@ -187,6 +187,9 @@ async def poll_client_calls(pool: asyncpg.Pool, client: asyncpg.Record) -> tuple
 # опрос виден в логе (journalctl -u callbot-astra-worker), а не в чате.
 ERROR_NOTICE_COOLDOWN_SEC = 3600
 _last_error_notice: dict[int, float] = {}
+_rate_limited_since: dict[int, float] = {}
+RATE_LIMIT_RETRY_SEC = 120
+RATE_LIMIT_NOTICE_AFTER_SEC = 45 * 60
 
 
 async def _send_poll_error(pool: asyncpg.Pool, client: asyncpg.Record, error: str) -> None:
@@ -228,7 +231,19 @@ async def poll_all_clients(pool: asyncpg.Pool, next_poll_at: dict[int, float]) -
             found, to_analyze = await poll_client_calls(pool, client)
             log.info("client id=%s опрос завершён: найдено=%s, в разбор=%s", client["id"], found, to_analyze)
             _last_error_notice.pop(client["id"], None)
+            _rate_limited_since.pop(client["id"], None)
         except Exception as exc:
+            if " 429:" in str(exc):
+                # Общий лимит запросов ВАТС: его расходуют и другие интеграции Mango.
+                # Звонки не теряются (окно опроса начинается с прошлого успешного),
+                # поэтому владельцу пишем, только если лимит не отпускает долго.
+                since = _rate_limited_since.setdefault(client["id"], now)
+                log.warning("Mango: лимит запросов, client id=%s, повтор через %s сек", client["id"], RATE_LIMIT_RETRY_SEC)
+                next_poll_at[client["id"]] = now + RATE_LIMIT_RETRY_SEC
+                if now - since >= RATE_LIMIT_NOTICE_AFTER_SEC:
+                    await _send_poll_error(pool, client, f"лимит запросов Mango не отпускает больше "
+                                                         f"{int((now - since) // 60)} минут: {exc}")
+                continue
             log.exception("ошибка опроса Mango, client id=%s", client["id"])
             await _send_poll_error(pool, client, str(exc))
 
