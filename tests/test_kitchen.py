@@ -1,8 +1,9 @@
 """Прозвон лидов по скрипту кухонь: итог попытки и запись в таблицу. Данные вымышленные."""
+import asyncio
 import json
 import os
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from unittest.mock import patch
@@ -74,8 +75,11 @@ class SheetTests(unittest.TestCase):
     def test_lead_row_matches_base_sheet(self):
         table = kitchen.calls_table(self.ATTEMPTS, self.BASE, MSK)
         self.assertEqual(table.rows[0], kitchen.HEADER)
-        self.assertEqual(table.rows[1], ['База от 30.09.2026 · лидов 1'])
-        row = dict(zip(kitchen.HEADER, table.rows[2]))
+        # Свежие сверху: номер без базы с первым звонком 07.10 выше базы от 30.09.
+        self.assertEqual(table.rows[1], ['Нет в листе «Кухонные гарнитуры», первый звонок 07.10.2026 · лидов 1'])
+        self.assertEqual(table.rows[2][6:10], ['Неактуально', '', '', 10])
+        self.assertEqual(table.rows[3], ['База от 30.09.2026 · лидов 1'])
+        row = dict(zip(kitchen.HEADER, table.rows[4]))
         self.assertEqual((row['Телефон'], row['id'], row['Дата базы']), ('+79990001122', '1801', '30.09.2026'))
         self.assertEqual((row['Звонок 1'], row['Звонок 2'], row['Звонок 3']), ('НДЗ', 'Перезвон', 'Заинтересованный'))
         self.assertEqual(row['Сумма, ₽'], 10 + 5 + 150)
@@ -83,8 +87,22 @@ class SheetTests(unittest.TestCase):
         self.assertEqual(row['Имя'], 'Ирина Петровна')
         self.assertEqual(row['Напоминание'], '')  # последний итог не «Перезвон»
         self.assertTrue(row['Комментарий'].startswith('07.10 Не дозвонился\n07.10 Просит вечером'))
-        self.assertEqual(table.rows[3], ['Нет в листе «Кухонные гарнитуры» · лидов 1'])
-        self.assertEqual(table.rows[4][6:10], ['Неактуально', '', '', 10])
+
+    def test_base_sheet_formats_since_8_october(self):
+        grid = [['id', 'Тег проекта', 'Проект', 'Создано', 'Телефон'],
+                ['База от 30.09.2026'],
+                [1801.0, '', 'B3', '', 79990001122.0],
+                ['База от 8.10', '', '', '', 'итого 120'],
+                [1802, '', 'B1', '', '+7 (999) 000-33-44'],
+                ['База от 09.10.26'],
+                ['1803', '', 'B2', '', 89990005566]]
+        handler = lambda request: httpx.Response(200, json={'values': grid})
+        with patch.dict(os.environ, {'KITCHEN_SHEET_ID': 's1'}):
+            leads = asyncio.run(kitchen.base(http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+                                             access_token='t', today=date(2026, 10, 13)))
+        self.assertEqual(leads, {'9990001122': {'id': '1801', 'project': 'B3', 'base': '30.09.2026'},
+                                 '9990003344': {'id': '1802', 'project': 'B1', 'base': '08.10.2026'},
+                                 '9990005566': {'id': '1803', 'project': 'B2', 'base': '09.10.2026'}})
 
     def test_fourth_attempt_not_paid(self):
         many = [attempt(i, 'ndz', minutes=i) for i in range(1, 5)]
@@ -117,7 +135,7 @@ class WriteTests(unittest.IsolatedAsyncioTestCase):
         def handler(request):
             body = json.loads(request.content) if request.content else None
             seen.append((request.method, request.url.path, body))
-            if request.method == 'GET' and request.url.path.endswith('/values/\'Кухонные гарнитуры\'!A1:D'):
+            if request.method == 'GET' and request.url.path.endswith('/values/\'Кухонные гарнитуры\'!A1:Z'):
                 return httpx.Response(200, json={'values': GRID})
             if request.method == 'GET':
                 return httpx.Response(200, json=SHEETS)

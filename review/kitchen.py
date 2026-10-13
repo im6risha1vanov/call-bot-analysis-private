@@ -240,17 +240,20 @@ def calls_table(attempts, base: dict, tz) -> sheets.Table:
                sum(price(a['status'], i) for i, a in enumerate(slots)),
                *[stamp(a['call_started_at'], tz) for a in slots], *[''] * (SLOTS - len(slots)),
                *[facts.get(name, '') for name in FACTS]]
-        groups[lead.get('base', '')].append((last['call_started_at'], row))
+        # Номера, которых нет в листе базы, идут по дню первого звонка, а не одной кучей.
+        first_day = stamp(items[0]['call_started_at'], tz, '%d.%m.%Y') or 'без даты'
+        groups[('База от', lead['base']) if lead.get('base') else ('Нет в листе', first_day)].append((last['call_started_at'], row))
 
-    def base_day(label):
+    def day_of(label):
         try:
             return datetime.strptime(label, '%d.%m.%Y').date()
         except ValueError:
             return date.min
 
-    for label in sorted(groups, key=lambda b: (b != '', base_day(b)), reverse=True):
-        rows = groups[label]
-        table.add([f'База от {label} · лидов {len(rows)}' if label else f'Нет в листе «{LEADS_TAB}» · лидов {len(rows)}'], 'section')
+    for kind, label in sorted(groups, key=lambda g: (day_of(g[1]), g[0] == 'База от'), reverse=True):
+        rows = groups[(kind, label)]
+        table.add([f'База от {label} · лидов {len(rows)}' if kind == 'База от'
+                   else f'Нет в листе «{LEADS_TAB}», первый звонок {label} · лидов {len(rows)}'], 'section')
         for _, row in sorted(rows, key=lambda r: r[0] or datetime.min.replace(tzinfo=timezone.utc), reverse=True):
             table.add(row)
     return table
@@ -377,27 +380,57 @@ async def write(tables: list[sheets.Table], *, http=None, access_token=None) -> 
             await batch(sheets.layout(table, sheet_id, grid_rows, grid_cols, rules), sheet_id)
 
 
-async def base(*, http=None, access_token=None) -> dict:
-    """id, проект и дата базы по телефону из листа базы. Только чтение."""
+BASE_HEADING = re.compile(r'База\s+от\s+(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?', re.I)
+
+
+def base_label(cell: str, year: int) -> str | None:
+    """«База от 8.10» и «База от 08.10.2026 (120 номеров)» дают одинаковую метку 08.10.2026."""
+    found = BASE_HEADING.match(cell)
+    if not found:
+        return None
+    day, month, given = found.groups()
+    full = int(given) + 2000 if given and len(given) == 2 else int(given or year)
+    return f'{int(day):02d}.{int(month):02d}.{full}'
+
+
+def column(header: list[str], name: str, default: int) -> int:
+    names = [h.strip().lower() for h in header]
+    return names.index(name) if name in names else default
+
+
+async def base(*, http=None, access_token=None, today: date | None = None) -> dict:
+    """id, проект и дата базы по телефону из листа базы. Только чтение.
+
+    Колонки ищутся по шапке («id», «Проект», «Телефон»), числа читаются без
+    формата листа: телефон вида 7,98E+10 или с пробелами всё равно находится.
+    """
     spreadsheet = os.environ['KITCHEN_SHEET_ID']
     access_token = access_token or await asyncio.to_thread(sheets.token)
     async with (http or httpx.AsyncClient(timeout=60)) as client:
-        response = await client.get(sheets.API + spreadsheet + f"/values/'{LEADS_TAB}'!A1:D",
+        response = await client.get(sheets.API + spreadsheet + f"/values/'{LEADS_TAB}'!A1:Z",
                                     headers={'Authorization': 'Bearer ' + access_token},
-                                    params={'valueRenderOption': 'FORMATTED_VALUE'})
+                                    params={'valueRenderOption': 'UNFORMATTED_VALUE', 'dateTimeRenderOption': 'FORMATTED_STRING'})
         if response.status_code == 400:  # листа нет или переименован: данные базы просто не подставляются
             log.warning('лист базы «%s» не прочитан: %s', LEADS_TAB, response.text[:200])
             return {}
         response.raise_for_status()
+    rows = response.json().get('values', [])
+    header = [str(c) for c in rows[0]] if rows else []
+    at_id, at_project, at_phone = column(header, 'id', 0), column(header, 'проект', 1), column(header, 'телефон', 3)
+    year = (today or date.today()).year
     found, current = {}, ''
-    for row in response.json().get('values', []):
-        cells = [str(c).strip() for c in row]
-        heading = re.match(r'База от (\d{2}\.\d{2}\.\d{4})', cells[0]) if cells else None
-        if heading and not any(cells[1:]):
-            current = heading.group(1)
+    for row in rows[1:]:
+        first = str(row[0]).strip() if row else ''
+        label = base_label(first, year)
+        if label:
+            current = label
             continue
-        if len(cells) > 3 and len(digits(cells[3])) == 10:
-            found.setdefault(digits(cells[3]), {'id': cells[0], 'project': cells[1], 'base': current})
+        phone = digits(row[at_phone]) if len(row) > at_phone else ''
+        if len(phone) == 10:
+            cell = row[at_id] if len(row) > at_id else ''
+            found.setdefault(phone, {'id': str(int(cell) if isinstance(cell, float) and cell.is_integer() else cell).strip(),
+                                     'project': str(row[at_project]).strip() if len(row) > at_project else '',
+                                     'base': current})
     return found
 
 
