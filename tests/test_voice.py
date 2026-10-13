@@ -359,6 +359,31 @@ class ElevenTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((auth, body["voice"], body["model"], body["response_format"], body["speed"]),
                          ("Bearer or", "sarah", "elevenlabs/eleven-flash-v2.5", "pcm", 1.1))
 
+    async def test_direct_account_voice(self):
+        seen = []
+
+        def handler(request):
+            seen.append(request)
+            if request.url.path.endswith("/voices"):
+                return httpx.Response(200, json={"voices": [{"name": "Ольга клон", "voice_id": "vid123"}]})
+            return httpx.Response(200, content=b"\x00\x10" * 24)
+
+        os.environ["ELEVENLABS_API_KEY"] = "xi"
+        speech._http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        try:
+            await speech.load_eleven_voices()
+            self.assertIn("11:Ольга клон", speech.voices())
+            pcm = await speech.synthesize_pcm("Привет", speech.Voice("11:Ольга клон"))
+        finally:
+            speech._http = None
+            speech._eleven_direct.clear()
+            del os.environ["ELEVENLABS_API_KEY"]
+        tts = seen[-1]
+        self.assertTrue(tts.url.path.endswith("/text-to-speech/vid123"))
+        self.assertEqual((tts.url.params["output_format"], tts.headers["xi-api-key"]), ("pcm_24000", "xi"))
+        self.assertEqual(json.loads(tts.content)["model_id"], "eleven_flash_v2_5")
+        self.assertEqual(len(pcm), 48 * speech.TTS_RATE // 24000)
+
     def test_resample_keeps_level(self):
         import array
         src = array.array("h", [1000] * 100).tobytes()

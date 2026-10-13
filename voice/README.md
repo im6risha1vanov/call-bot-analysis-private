@@ -32,6 +32,7 @@
 - `VOICE_MODEL`: для cvc по умолчанию `CVC_MODEL` бота, для anthropic `claude-haiku-5-5`. `VOICE_CVC_EFFORT` (`low`), `VOICE_EFFORT` (`low`, для anthropic).
 - `VOICE_SIM_MODEL` модель клиента в симуляторе (по умолчанию та же, что у робота).
 - `OPENROUTER_API_KEY`: включает голоса ElevenLabs (в списке с префиксом `el:`), `VOICE_ELEVEN_MODEL` (`elevenlabs/eleven-flash-v2.5`), `VOICE_ELEVEN_PCM_RATE` (24000, если провайдер не пишет частоту).
+- `ELEVENLABS_API_KEY`: ElevenLabs напрямую, в списке все голоса аккаунта (и клоны) с префиксом `11:`; в анкете можно `voice = "11:<voice_id>"`. `VOICE_ELEVEN_DIRECT_MODEL` (`eleven_flash_v2_5`).
 - `VOICE_TTS_API` (`v3`, интонации; при отказе доступа сам уходит на v1), `VOICE_TTS_RATE` (48000), `VOICE_ENDPOINTING_MS` (300, сколько тишины считать концом фразы), `VOICE_DG_MODEL`.
 - `VOICE_SHEET_ID` таблица для листа «Робот · Звонки», `VOICE_LOG` путь к jsonl.
 - `VOICE_WEB_HOST` / `VOICE_WEB_PORT` (127.0.0.1:8090).

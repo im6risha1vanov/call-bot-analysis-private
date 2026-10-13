@@ -72,7 +72,7 @@ def _client() -> httpx.AsyncClient:
 
 
 def tts_configured() -> bool:
-    return bool(os.getenv("YANDEX_TTS_API_KEY", "").strip() or os.getenv("OPENROUTER_API_KEY", "").strip())
+    return any(os.getenv(k, "").strip() for k in ("YANDEX_TTS_API_KEY", "OPENROUTER_API_KEY", "ELEVENLABS_API_KEY"))
 
 
 # Голоса Yandex SpeechKit и их интонации (role), по документации Яндекса.
@@ -91,11 +91,33 @@ ELEVEN_MODEL = os.getenv("VOICE_ELEVEN_MODEL", "elevenlabs/eleven-flash-v2.5")
 OPENROUTER_TTS_URL = "https://openrouter.ai/api/v1/audio/speech"
 
 
+# ElevenLabs напрямую (ELEVENLABS_API_KEY): голоса аккаунта, включая клоны, с префиксом «11:».
+ELEVEN_API = "https://api.elevenlabs.io/v1"
+ELEVEN_DIRECT_MODEL = os.getenv("VOICE_ELEVEN_DIRECT_MODEL", "eleven_flash_v2_5")
+_eleven_direct: dict[str, str] = {}  # имя голоса -> voice_id
+
+
+async def load_eleven_voices() -> dict[str, str]:
+    """Голоса аккаунта ElevenLabs. Ошибку не бросает: без списка голоса можно задать по voice_id."""
+    key = os.getenv("ELEVENLABS_API_KEY", "").strip()
+    if not key:
+        return {}
+    try:
+        r = await _client().get(ELEVEN_API + "/voices", headers={"xi-api-key": key})
+        r.raise_for_status()
+        _eleven_direct.clear()
+        _eleven_direct.update({v["name"].strip(): v["voice_id"] for v in r.json().get("voices", []) if v.get("voice_id")})
+    except Exception as e:
+        log.warning("не получил голоса ElevenLabs: %s", e)
+    return dict(_eleven_direct)
+
+
 def voices() -> dict[str, list[str]]:
-    """Доступные голоса: Яндекс, если есть его ключ, и ElevenLabs, если есть ключ OpenRouter."""
+    """Доступные голоса: Яндекс, ElevenLabs через OpenRouter, ElevenLabs напрямую, смотря какие есть ключи."""
     out = dict(VOICES) if os.getenv("YANDEX_TTS_API_KEY", "").strip() else {}
     if os.getenv("OPENROUTER_API_KEY", "").strip():
         out.update({f"el:{name}": [] for name in ELEVEN_VOICES})
+    out.update({f"11:{name}": [] for name in _eleven_direct})
     return out
 
 
@@ -207,9 +229,22 @@ def _cache_path(text: str, voice: Voice):
         return None
     import hashlib
     from pathlib import Path
-    model = ELEVEN_MODEL if voice.name.startswith("el:") else os.getenv("VOICE_TTS_API", "v3")
+    model = {"el:": ELEVEN_MODEL, "11:": ELEVEN_DIRECT_MODEL}.get(voice.name[:3], os.getenv("VOICE_TTS_API", "v3"))
     key = json.dumps([model, voice.name, voice.role, round(voice.speed, 2), TTS_RATE, " ".join(text.split())], ensure_ascii=False)
     return Path(folder) / (hashlib.sha256(key.encode()).hexdigest() + ".pcm")
+
+
+async def _eleven_direct_tts(text: str, voice: Voice) -> bytes:
+    name = voice.name.removeprefix("11:")
+    voice_id = _eleven_direct.get(name, name)  # можно указать сразу voice_id
+    rate = int(os.getenv("VOICE_ELEVEN_PCM_RATE", "24000"))
+    body = {"text": text, "model_id": ELEVEN_DIRECT_MODEL, "language_code": "ru",
+            "voice_settings": {"stability": 0.5, "similarity_boost": 0.8, "speed": voice.speed}}
+    r = await _client().post(f"{ELEVEN_API}/text-to-speech/{voice_id}", params={"output_format": f"pcm_{rate}"},
+                             headers={"xi-api-key": os.environ["ELEVENLABS_API_KEY"]}, json=body)
+    if r.status_code != 200:
+        raise TTSRequestError(r.status_code, r.text)
+    return resample(r.content, rate, TTS_RATE)
 
 
 async def synthesize_pcm(text: str, voice: Voice) -> bytes:
@@ -233,6 +268,8 @@ async def _synthesize(text: str, voice: Voice) -> bytes:
     """Яндекс: сначала API v3 (там интонации), при отказе доступа v1. Голоса «el:» через OpenRouter."""
     if voice.name.startswith("el:"):
         return await _eleven(text, voice)
+    if voice.name.startswith("11:"):
+        return await _eleven_direct_tts(text, voice)
     if os.getenv("VOICE_TTS_API", "v3") == "v3":
         try:
             return await _yandex_v3(text, voice)

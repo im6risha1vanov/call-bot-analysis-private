@@ -37,6 +37,8 @@ async def index(request: web.Request) -> web.FileResponse:
 
 
 async def operators(request: web.Request) -> web.Response:
+    if os.getenv("ELEVENLABS_API_KEY") and not any(k.startswith("11:") for k in speech.voices()):
+        await speech.load_eleven_voices()
     items = []
     for path in sorted(OPERATORS_DIR.glob("*.toml")):
         try:
