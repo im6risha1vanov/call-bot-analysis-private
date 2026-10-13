@@ -175,7 +175,7 @@ class CallbackStoreTests(unittest.IsolatedAsyncioTestCase):
     async def test_sheet_rows_from_database(self):
         await self.add(TIMED)
         await self.add(LOST, TRANSCRIPT, number='79990003344')
-        summary, days, calls, tasks = await sheets.collect(self.pool)
+        summary, days, calls, tasks = await sheets.collect(self.pool, datetime(2026, 10, 7, 12, tzinfo=MSK))
         self.assertEqual([t.title for t in (summary, days, calls, tasks)], ['Сводка', 'По дням', 'Звонки', 'Перезвоны'])
         self.assertEqual(calls.rows[0], sheets.CALLS_HEADER)
         self.assertEqual((calls.styles[1], calls.rows[1]), ('section', ['Звонки за 07.10.2026 · 2']))

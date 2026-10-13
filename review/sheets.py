@@ -224,8 +224,9 @@ def summary_table(calls, tasks, tz, today: date) -> Table:
     return table
 
 
-async def collect(pool) -> list[Table]:
-    since = datetime.now(timezone.utc) - timedelta(days=HISTORY_DAYS)
+async def collect(pool, now: datetime | None = None) -> list[Table]:
+    now = now or datetime.now(timezone.utc)
+    since = now - timedelta(days=HISTORY_DAYS)
     calls = await pool.fetch(
         """SELECT r.call_id, r.extension, r.data, c.client_number, c.call_started_at, cl.timezone,
                   (SELECT full_name FROM employees e WHERE e.client_id=r.client_id AND e.extension=r.extension AND e.role='manager' LIMIT 1) AS manager
@@ -238,7 +239,7 @@ async def collect(pool) -> list[Table]:
            ORDER BY t.due_date, t.due_time NULLS LAST""", since)
     zone = await pool.fetchval('SELECT timezone FROM clients WHERE processing_enabled ORDER BY id LIMIT 1')
     tz = ZoneInfo(calls[0]['timezone'] if calls else zone or 'Europe/Moscow')
-    today = datetime.now(tz).date()
+    today = now.astimezone(tz).date()
     return [summary_table(calls, tasks, tz, today), days_table(calls, tz), calls_table(calls, tz), tasks_table(tasks, today)]
 
 
