@@ -200,8 +200,37 @@ async def _eleven(text: str, voice: Voice) -> bytes:
     return resample(r.content, rate, TTS_RATE)
 
 
+def _cache_path(text: str, voice: Voice):
+    """Файл кэша фразы. Одинаковые фразы (приветствие, вопросы анкеты, прощание) синтезируются один раз."""
+    folder = os.getenv("VOICE_TTS_CACHE", ".voice_tts_cache")
+    if folder in ("", "off"):
+        return None
+    import hashlib
+    from pathlib import Path
+    model = ELEVEN_MODEL if voice.name.startswith("el:") else os.getenv("VOICE_TTS_API", "v3")
+    key = json.dumps([model, voice.name, voice.role, round(voice.speed, 2), TTS_RATE, " ".join(text.split())], ensure_ascii=False)
+    return Path(folder) / (hashlib.sha256(key.encode()).hexdigest() + ".pcm")
+
+
 async def synthesize_pcm(text: str, voice: Voice) -> bytes:
-    """Фраза в PCM TTS_RATE Гц, 16 бит, моно. Яндекс: сначала API v3 (там интонации), при отказе доступа v1."""
+    """Фраза в PCM TTS_RATE Гц, 16 бит, моно, с кэшем на диске."""
+    path = _cache_path(text, voice)
+    if path is not None and path.exists():
+        return path.read_bytes()
+    pcm = await _synthesize(text, voice)
+    if path is not None:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_bytes(pcm)
+            tmp.replace(path)
+        except OSError as e:
+            log.warning("кэш синтеза не записан: %s", e)
+    return pcm
+
+
+async def _synthesize(text: str, voice: Voice) -> bytes:
+    """Яндекс: сначала API v3 (там интонации), при отказе доступа v1. Голоса «el:» через OpenRouter."""
     if voice.name.startswith("el:"):
         return await _eleven(text, voice)
     if os.getenv("VOICE_TTS_API", "v3") == "v3":

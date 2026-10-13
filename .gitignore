@@ -28,3 +28,4 @@ dumps/
 google-key.json
 *service-account*.json
 voice_calls.jsonl
+.voice_tts_cache/

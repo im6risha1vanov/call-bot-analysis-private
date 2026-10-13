@@ -271,6 +271,31 @@ class SpeechTest(unittest.TestCase):
 
 
 class SynthesisTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        os.environ["VOICE_TTS_CACHE"] = "off"
+
+    def tearDown(self):
+        del os.environ["VOICE_TTS_CACHE"]
+
+    async def test_cache_synthesizes_same_phrase_once(self):
+        calls = []
+
+        def handler(request):
+            calls.append(1)
+            return httpx.Response(200, content=b"pcm1")
+
+        os.environ["VOICE_TTS_API"] = "v1"
+        with tempfile.TemporaryDirectory() as d:
+            os.environ["VOICE_TTS_CACHE"] = d
+            try:
+                v = speech.Voice("alena")
+                self.assertEqual(await self.run_with(handler, v), b"pcm1")
+                self.assertEqual(await self.run_with(handler, v), b"pcm1")
+                await self.run_with(handler, speech.Voice("alena", speed=1.2))
+            finally:
+                del os.environ["VOICE_TTS_API"]
+        self.assertEqual(len(calls), 2)
+
     async def run_with(self, handler, voice):
         os.environ["YANDEX_TTS_API_KEY"] = "k"
         speech._http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -308,6 +333,12 @@ class SynthesisTest(unittest.IsolatedAsyncioTestCase):
 
 
 class ElevenTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        os.environ["VOICE_TTS_CACHE"] = "off"
+
+    def tearDown(self):
+        del os.environ["VOICE_TTS_CACHE"]
+
     async def test_openrouter_pcm_is_resampled(self):
         seen = []
 

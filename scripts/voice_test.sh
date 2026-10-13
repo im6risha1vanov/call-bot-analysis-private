@@ -33,7 +33,7 @@ update() {
 
 run() {  # одноразовый запуск с ключами бота от пользователя бота
   systemd-run --quiet --wait --pipe --collect --uid=callbot-astra --working-directory="$DIR" \
-    -p EnvironmentFile="$BOT/.env" -E VOICE_LOG="$DATA/calls.jsonl" "$PY" "$@"
+    -p EnvironmentFile="$BOT/.env" -E VOICE_LOG="$DATA/calls.jsonl" -E VOICE_TTS_CACHE="$DATA/tts-cache" "$PY" "$@"
 }
 
 case "$ACTION" in
@@ -42,7 +42,7 @@ case "$ACTION" in
     systemctl stop "$UNIT" 2>/dev/null || true
     systemctl reset-failed "$UNIT" 2>/dev/null || true
     systemd-run --quiet --unit="$UNIT" --uid=callbot-astra --working-directory="$DIR" \
-      -p EnvironmentFile="$BOT/.env" -E VOICE_LOG="$DATA/calls.jsonl" -p Restart=on-failure \
+      -p EnvironmentFile="$BOT/.env" -E VOICE_LOG="$DATA/calls.jsonl" -E VOICE_TTS_CACHE="$DATA/tts-cache" -p Restart=on-failure \
       "$PY" -m voice.web
     sleep 3
     systemctl is-active "$UNIT"
