@@ -72,7 +72,7 @@ def _client() -> httpx.AsyncClient:
 
 
 def tts_configured() -> bool:
-    return bool(os.getenv("YANDEX_TTS_API_KEY", "").strip())
+    return bool(os.getenv("YANDEX_TTS_API_KEY", "").strip() or os.getenv("OPENROUTER_API_KEY", "").strip())
 
 
 # Голоса Yandex SpeechKit и их интонации (role), по документации Яндекса.
@@ -84,6 +84,21 @@ VOICES = {
     "filipp": ["neutral"], "ermil": ["neutral", "good"], "zahar": ["neutral", "good"], "kirill": ["neutral", "strict", "good"],
     "anton": ["neutral", "good"], "alexander": ["neutral", "good"], "madirus": ["neutral"],
 }
+# ElevenLabs через OpenRouter: голос с префиксом «el:». Голоса многоязычные, по-русски говорят все.
+ELEVEN_VOICES = ["sarah", "alice", "jessica", "laura", "lily", "matilda", "bella",
+                 "george", "adam", "brian", "daniel", "eric", "liam", "roger", "will"]
+ELEVEN_MODEL = os.getenv("VOICE_ELEVEN_MODEL", "elevenlabs/eleven-flash-v2.5")
+OPENROUTER_TTS_URL = "https://openrouter.ai/api/v1/audio/speech"
+
+
+def voices() -> dict[str, list[str]]:
+    """Доступные голоса: Яндекс, если есть его ключ, и ElevenLabs, если есть ключ OpenRouter."""
+    out = dict(VOICES) if os.getenv("YANDEX_TTS_API_KEY", "").strip() else {}
+    if os.getenv("OPENROUTER_API_KEY", "").strip():
+        out.update({f"el:{name}": [] for name in ELEVEN_VOICES})
+    return out
+
+
 TTS_RATE = int(os.getenv("VOICE_TTS_RATE", "48000"))  # браузеру 48 кГц, телефону потом хватит 8
 TTS_BYTES_PER_SECOND = TTS_RATE * 2
 YANDEX_TTS_V3_URL = "https://tts.api.cloud.yandex.net/tts/v3/utteranceSynthesis"
@@ -152,8 +167,43 @@ async def _yandex_v1(text: str, voice: Voice) -> bytes:
     return r.content
 
 
+def resample(pcm: bytes, src: int, dst: int) -> bytes:
+    """Линейная передискретизация 16-битного моно PCM."""
+    if src == dst or not pcm:
+        return pcm
+    import array
+    x = array.array("h", pcm[: len(pcm) // 2 * 2])
+    n = int(len(x) * dst / src)
+    out = array.array("h", bytes(2 * n))
+    step = src / dst
+    last = len(x) - 1
+    for i in range(n):
+        pos = i * step
+        j = int(pos)
+        k = j + 1 if j < last else last
+        frac = pos - j
+        out[i] = int(x[j] + (x[k] - x[j]) * frac)
+    return out.tobytes()
+
+
+async def _eleven(text: str, voice: Voice) -> bytes:
+    body = {"model": ELEVEN_MODEL, "input": text, "voice": voice.name.removeprefix("el:"), "response_format": "pcm"}
+    if abs(voice.speed - 1.0) > 0.01:
+        body["speed"] = voice.speed
+    r = await _client().post(OPENROUTER_TTS_URL, json=body,
+                             headers={"Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}"})
+    if r.status_code != 200:
+        raise TTSRequestError(r.status_code, r.text)
+    # Частота PCM: из заголовка, если провайдер её пишет (audio/pcm;rate=24000), иначе из настройки.
+    match = re.search(r"rate=(\d+)", r.headers.get("content-type", ""))
+    rate = int(match.group(1)) if match else int(os.getenv("VOICE_ELEVEN_PCM_RATE", "24000"))
+    return resample(r.content, rate, TTS_RATE)
+
+
 async def synthesize_pcm(text: str, voice: Voice) -> bytes:
-    """Фраза в PCM TTS_RATE Гц, 16 бит, моно. Сначала API v3 (там интонации), при отказе доступа v1."""
+    """Фраза в PCM TTS_RATE Гц, 16 бит, моно. Яндекс: сначала API v3 (там интонации), при отказе доступа v1."""
+    if voice.name.startswith("el:"):
+        return await _eleven(text, voice)
     if os.getenv("VOICE_TTS_API", "v3") == "v3":
         try:
             return await _yandex_v3(text, voice)

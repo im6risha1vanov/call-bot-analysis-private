@@ -307,6 +307,34 @@ class SynthesisTest(unittest.IsolatedAsyncioTestCase):
             await self.run_with(lambda r: httpx.Response(400, text="bad role"), speech.Voice("dasha", "evil"))
 
 
+class ElevenTest(unittest.IsolatedAsyncioTestCase):
+    async def test_openrouter_pcm_is_resampled(self):
+        seen = []
+
+        def handler(request):
+            seen.append((request.headers["authorization"], json.loads(request.content)))
+            return httpx.Response(200, headers={"content-type": "audio/pcm;rate=24000"}, content=b"\x00\x10" * 240)
+
+        os.environ["OPENROUTER_API_KEY"] = "or"
+        speech._http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        try:
+            pcm = await speech.synthesize_pcm("Привет", speech.Voice("el:sarah", "", 1.1))
+            self.assertIn("el:sarah", speech.voices())
+        finally:
+            speech._http = None
+            del os.environ["OPENROUTER_API_KEY"]
+        self.assertEqual(len(pcm), 480 * speech.TTS_RATE // 24000)
+        auth, body = seen[0]
+        self.assertEqual((auth, body["voice"], body["model"], body["response_format"], body["speed"]),
+                         ("Bearer or", "sarah", "elevenlabs/eleven-flash-v2.5", "pcm", 1.1))
+
+    def test_resample_keeps_level(self):
+        import array
+        src = array.array("h", [1000] * 100).tobytes()
+        out = array.array("h", speech.resample(src, 8000, 16000))
+        self.assertEqual((len(out), min(out), max(out)), (200, 1000, 1000))
+
+
 class CallSessionTest(unittest.IsolatedAsyncioTestCase):
     async def test_call_flow_sends_audio_and_result(self):
         client = FakeClient([

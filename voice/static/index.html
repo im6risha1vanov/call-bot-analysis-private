@@ -87,6 +87,7 @@ fetch('operators').then(r => r.json()).then(data => {
 const ROLES = { neutral:'нейтрально', good:'доброжелательно', friendly:'дружелюбно', strict:'строго', evil:'раздражённо', whisper:'шёпотом' };
 function fillRoles(selected) {
   $('role').innerHTML = '';
+  $('role').style.display = (info.voices[$('voice').value] || []).length ? '' : 'none';
   for (const r of (info.voices[$('voice').value] || [])) { const o = document.createElement('option'); o.value = r; o.textContent = ROLES[r] || r; o.selected = r === selected; $('role').appendChild(o); }
   showVoiceCfg();
 }
