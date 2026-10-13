@@ -9,6 +9,7 @@ Yandex SpeechKit в сырой PCM (16 кГц, 16 бит, моно), плюс н
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -74,23 +75,93 @@ def tts_configured() -> bool:
     return bool(os.getenv("YANDEX_TTS_API_KEY", "").strip())
 
 
-async def synthesize_pcm(text: str, voice: str) -> bytes:
-    """Фраза в PCM 16 кГц 16 бит моно (little-endian)."""
-    data = {
+# Голоса Yandex SpeechKit и их интонации (role), по документации Яндекса.
+VOICES = {
+    "alena": ["neutral", "good"], "jane": ["neutral", "good", "evil"], "omazh": ["neutral", "evil"],
+    "marina": ["neutral", "whisper", "friendly"], "dasha": ["neutral", "good", "friendly"],
+    "julia": ["neutral", "strict"], "lera": ["neutral", "friendly"], "masha": ["good", "strict", "friendly"],
+    "alexandra": ["neutral"],
+    "filipp": ["neutral"], "ermil": ["neutral", "good"], "zahar": ["neutral", "good"], "kirill": ["neutral", "strict", "good"],
+    "anton": ["neutral", "good"], "alexander": ["neutral", "good"], "madirus": ["neutral"],
+}
+TTS_RATE = int(os.getenv("VOICE_TTS_RATE", "48000"))  # браузеру 48 кГц, телефону потом хватит 8
+TTS_BYTES_PER_SECOND = TTS_RATE * 2
+YANDEX_TTS_V3_URL = "https://tts.api.cloud.yandex.net/tts/v3/utteranceSynthesis"
+
+
+@dataclass
+class Voice:
+    name: str
+    role: str = ""
+    speed: float = 1.0
+
+
+class TTSRequestError(RuntimeError):
+    def __init__(self, status: int, text: str) -> None:
+        self.status = status
+        super().__init__(f"Yandex SpeechKit {status}: {text[:300]}")
+
+
+def _auth() -> dict:
+    headers = {"Authorization": f"Api-Key {os.environ['YANDEX_TTS_API_KEY']}"}
+    folder_id = os.getenv("YANDEX_TTS_FOLDER_ID", "").strip()
+    if folder_id:
+        headers["x-folder-id"] = folder_id
+    return headers
+
+
+async def _yandex_v3(text: str, voice: Voice) -> bytes:
+    hints = [{"voice": voice.name}, {"speed": str(voice.speed)}]
+    if voice.role:
+        hints.append({"role": voice.role})
+    body = {
         "text": text,
-        "lang": "ru-RU",
-        "voice": voice,
-        "format": "lpcm",
-        "sampleRateHertz": str(SAMPLE_RATE),
-        "speed": os.getenv("VOICE_TTS_SPEED", "1.05"),
+        "hints": hints,
+        "outputAudioSpec": {"rawAudio": {"audioEncoding": "LINEAR16_PCM", "sampleRateHertz": TTS_RATE}},
+        "loudnessNormalizationType": "LUFS",
     }
+    r = await _client().post(YANDEX_TTS_V3_URL, headers=_auth(), json=body)
+    if r.status_code != 200:
+        raise TTSRequestError(r.status_code, r.text)
+    audio = bytearray()
+    for line in r.text.splitlines():  # ответ: по JSON-объекту на строку, звук кусками в base64
+        if not line.strip():
+            continue
+        item = json.loads(line)
+        if "error" in item:
+            raise TTSRequestError(200, json.dumps(item["error"], ensure_ascii=False))
+        chunk = ((item.get("result") or {}).get("audioChunk") or {}).get("data")
+        if chunk:
+            audio += base64.b64decode(chunk)
+    if not audio:
+        raise TTSRequestError(200, "пустой ответ")
+    return bytes(audio)
+
+
+async def _yandex_v1(text: str, voice: Voice) -> bytes:
+    data = {"text": text, "lang": "ru-RU", "voice": voice.name, "format": "lpcm",
+            "sampleRateHertz": str(TTS_RATE), "speed": str(voice.speed)}
+    if voice.role in ("neutral", "good", "evil"):
+        data["emotion"] = voice.role
     folder_id = os.getenv("YANDEX_TTS_FOLDER_ID", "").strip()
     if folder_id:
         data["folderId"] = folder_id
-    r = await _client().post(YANDEX_TTS_URL, headers={"Authorization": f"Api-Key {os.environ['YANDEX_TTS_API_KEY']}"}, data=data)
+    r = await _client().post(YANDEX_TTS_URL, headers={"Authorization": _auth()["Authorization"]}, data=data)
     if r.status_code != 200:
-        raise RuntimeError(f"Yandex SpeechKit {r.status_code}: {r.text[:300]}")
+        raise TTSRequestError(r.status_code, r.text)
     return r.content
+
+
+async def synthesize_pcm(text: str, voice: Voice) -> bytes:
+    """Фраза в PCM TTS_RATE Гц, 16 бит, моно. Сначала API v3 (там интонации), при отказе доступа v1."""
+    if os.getenv("VOICE_TTS_API", "v3") == "v3":
+        try:
+            return await _yandex_v3(text, voice)
+        except TTSRequestError as e:
+            if e.status not in (401, 403, 404):
+                raise
+            log.warning("SpeechKit v3 недоступен (%s), синтезирую через v1", e)
+    return await _yandex_v1(text, voice)
 
 
 # ------------------------------------------------------------------ распознавание

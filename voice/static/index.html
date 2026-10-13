@@ -29,6 +29,8 @@
   #result table { border-collapse:collapse; width:100%; }
   #result td { padding:4px 8px 4px 0; border-top:1px solid var(--line); vertical-align:top; }
   #result td:first-child { color:var(--muted); width:40%; }
+  fieldset { border:1px solid var(--line); border-radius:12px; padding:8px 12px; margin:0 0 12px; }
+  legend { color:var(--muted); font-size:13px; padding:0 4px; }
   form { display:flex; gap:8px; margin-top:12px; }
   form input { flex:1; min-width:0; }
 </style>
@@ -44,6 +46,16 @@
     <button class="primary" id="call">Позвонить</button>
     <button class="danger" id="hangup" disabled>Положить трубку</button>
   </div>
+  <fieldset id="voicebox">
+    <legend>Голос</legend>
+    <div class="bar" style="margin:4px 0">
+      <select id="voice"></select>
+      <select id="role"></select>
+      <label>скорость <input type="range" id="speed" min="0.8" max="1.3" step="0.05" value="1"> <span id="speedv">1.0</span></label>
+      <button id="listen" type="button">Прослушать</button>
+    </div>
+    <div class="muted" id="voicecfg"></div>
+  </fieldset>
   <div class="muted">Говори в наушниках, иначе робот слышит сам себя. Можно и писать текстом внизу.</div>
 
   <div id="log" style="margin-top:12px"><div id="interim"></div></div>
@@ -54,18 +66,56 @@
 <script>
 const $ = id => document.getElementById(id);
 const OUTCOMES = { interested:'Заинтересованный', callback:'Перезвон', not_relevant:'Неактуально', ndz:'НДЗ', do_not_call:'Не звонить' };
-const RATE = 16000;
+const RATE = 16000;      // микрофон на сервер
+let ttsRate = 48000;     // голос робота с сервера
+let info = null;
 let ws = null, ctx = null, micStream = null, worklet = null, playAt = 0, sources = [];
 
-fetch('operators').then(r => r.json()).then(info => {
+fetch('operators').then(r => r.json()).then(data => {
+  info = data; ttsRate = info.tts_rate || ttsRate;
+  for (const v of Object.keys(info.voices || {})) { const o = document.createElement('option'); o.value = o.textContent = v; $('voice').appendChild(o); }
   for (const op of info.operators) {
     const o = document.createElement('option');
     o.value = op.id; o.textContent = op.error ? `${op.id}: ошибка анкеты` : `${op.name}, ${op.company}`; o.disabled = !!op.error;
     $('operator').appendChild(o);
   }
   if (!info.asr) { $('mic').checked = false; $('mic').disabled = true; }
+  pickOperatorVoice();
   $('status').textContent = `Распознавание: ${info.asr ? 'есть' : 'нет ключа Deepgram, только текст'}. Синтез: ${info.tts ? 'есть' : 'нет ключа Яндекса, робот отвечает текстом'}. Модель: ${info.llm}.`;
 }).catch(e => $('status').textContent = 'Сервер не отвечает: ' + e);
+
+const ROLES = { neutral:'нейтрально', good:'доброжелательно', friendly:'дружелюбно', strict:'строго', evil:'раздражённо', whisper:'шёпотом' };
+function fillRoles(selected) {
+  $('role').innerHTML = '';
+  for (const r of (info.voices[$('voice').value] || [])) { const o = document.createElement('option'); o.value = r; o.textContent = ROLES[r] || r; o.selected = r === selected; $('role').appendChild(o); }
+  showVoiceCfg();
+}
+function pickOperatorVoice() {
+  const op = info.operators.find(o => o.id === $('operator').value) || {};
+  if (op.voice) $('voice').value = op.voice;
+  $('speed').value = op.voice_speed || 1; $('speedv').textContent = Number($('speed').value).toFixed(2);
+  fillRoles(op.voice_role);
+}
+function voiceSettings() { return { voice: $('voice').value, role: $('role').value, speed: Number($('speed').value) }; }
+function showVoiceCfg() {
+  const v = voiceSettings();
+  $('voicecfg').textContent = `Для анкеты: voice = "${v.voice}", voice_role = "${v.role}", voice_speed = ${v.speed}`;
+}
+$('operator').onchange = pickOperatorVoice;
+$('voice').onchange = () => fillRoles();
+$('role').onchange = showVoiceCfg;
+$('speed').oninput = () => { $('speedv').textContent = Number($('speed').value).toFixed(2); showVoiceCfg(); };
+$('listen').onclick = async () => {
+  ctx = ctx || new AudioContext(); await ctx.resume();
+  const op = info.operators.find(o => o.id === $('operator').value) || {};
+  $('listen').disabled = true;
+  try {
+    const r = await fetch('preview', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...voiceSettings(), text: op.greeting || 'Здравствуйте! Подскажите, вопрос ещё актуален?' }) });
+    if (!r.ok) { const e = await r.json().catch(() => ({})); sys('Голос: ' + (e.error || r.status)); return; }
+    stopPlayback(); play(await r.arrayBuffer());
+  } finally { $('listen').disabled = false; }
+};
 
 function add(role, text, note) {
   const d = document.createElement('div');
@@ -78,7 +128,7 @@ function sys(text) { const d = document.createElement('div'); d.className = 'sys
 
 function play(buf) {
   const pcm = new Int16Array(buf);
-  const audio = ctx.createBuffer(1, pcm.length, RATE);
+  const audio = ctx.createBuffer(1, pcm.length, ttsRate);
   const ch = audio.getChannelData(0);
   for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 32768;
   const src = ctx.createBufferSource();
@@ -134,11 +184,11 @@ $('call').onclick = async () => {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${proto}://${location.host}${location.pathname.replace(/[^/]*$/, '')}ws`);
   ws.binaryType = 'arraybuffer';
-  ws.onopen = () => ws.send(JSON.stringify({ type: 'start', operator: $('operator').value, mic }));
+  ws.onopen = () => ws.send(JSON.stringify({ type: 'start', operator: $('operator').value, mic, ...voiceSettings() }));
   ws.onmessage = e => {
     if (typeof e.data !== 'string') { play(e.data); return; }
     const m = JSON.parse(e.data);
-    if (m.type === 'ready') { sys(`Звонок начат: ${m.operator}${m.mic ? ', говорите' : ', пишите ответы текстом'}`); $('call').disabled = true; $('hangup').disabled = false; $('text').disabled = $('send').disabled = false; $('text').focus(); }
+    if (m.type === 'ready') { ttsRate = m.tts_rate || ttsRate; sys(`Звонок начат: ${m.operator}${m.mic ? ', говорите' : ', пишите ответы текстом'}`); $('call').disabled = true; $('hangup').disabled = false; $('text').disabled = $('send').disabled = false; $('text').focus(); }
     else if (m.type === 'transcript') { $('interim').textContent = ''; add(m.role, m.text, m.first_text_ms ? `первые слова через ${m.first_text_ms} мс` : ''); }
     else if (m.type === 'interim') $('interim').textContent = m.text + '…';
     else if (m.type === 'clear') { stopPlayback(); sys('перебили робота'); }

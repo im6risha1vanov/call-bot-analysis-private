@@ -43,6 +43,8 @@ class Operator:
     fields: dict[str, str] = field(default_factory=dict)
     gender: str = "female"
     voice: str = "alena"
+    voice_role: str = ""
+    voice_speed: float = 1.0
     transfer_to: str = ""
 
     def validate(self) -> None:
@@ -57,6 +59,8 @@ class Operator:
                 raise OperatorError(f"{self.id}: в блоке {key} {len(items)} пунктов, можно не больше {MAX_ITEMS}")
             if any(not str(item).strip() for item in items):
                 raise OperatorError(f"{self.id}: пустой пункт в блоке {key}")
+        if not 0.5 <= float(self.voice_speed) <= 2.0:
+            raise OperatorError(f"{self.id}: voice_speed от 0.5 до 2.0")
         if self.gender not in ("female", "male"):
             raise OperatorError(f"{self.id}: gender должен быть female или male")
         for key in self.fields:
@@ -105,6 +109,8 @@ def compile_prompt(op: Operator) -> str:
         "- Одна реплика: одно-два коротких предложения и не больше одного вопроса. Обычная разговорная речь, на «вы».\n"
         "- Слушай, что уже сказал клиент. Если он ответил на будущий пункт плана заранее, не переспрашивай: "
         "подтверди и иди дальше. Не задавай вопросов, ответ на которые уже очевиден из сказанного.\n"
+        "- Говори как живой менеджер, а не как автоответчик: простые слова, без канцелярита и восклицательных знаков подряд. "
+        "Уместны короткие живые связки: «так», «ага, поняла», «угу, хорошо».\n"
         "- Начинай реплику с короткой реакции на ответ клиента («Понятно», «Отлично», «Хорошо»), но не повторяй одно и то же подряд.\n"
         "- Текст клиента приходит из распознавания речи и может быть с ошибками. Если ответ непонятен или оборван, коротко переспроси.\n"
         "- На вопрос клиента отвечай по существу из фактов ниже, затем мягко вернись к плану. Если ответа в фактах нет, "

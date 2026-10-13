@@ -26,7 +26,7 @@ SendEvent = Callable[[dict], Awaitable[None]]
 class CallSession:
     def __init__(self, dialog: Dialog, send_audio: SendAudio, send_event: SendEvent, *,
                  voice_enabled: bool = True, mode: str = "браузер", phone: str = "",
-                 synthesize=speech.synthesize_pcm, save=results.save) -> None:
+                 synthesize=speech.synthesize_pcm, save=results.save, voice: speech.Voice | None = None) -> None:
         self.dialog = dialog
         self.send_audio = send_audio
         self.send_event = send_event
@@ -34,6 +34,8 @@ class CallSession:
         self.mode = mode
         self.phone = phone
         self.synthesize = synthesize
+        op = dialog.op
+        self.voice = voice or speech.Voice(op.voice, op.voice_role, float(op.voice_speed))
         self.save = save
         self.phrases: asyncio.Queue[str | None] = asyncio.Queue()
         self.reply_task: asyncio.Task | None = None
@@ -156,7 +158,7 @@ class CallSession:
             if int(generation) != self.generation or not self.voice_enabled:
                 continue
             try:
-                pcm = await self.synthesize(phrase, self.dialog.op.voice)
+                pcm = await self.synthesize(phrase, self.voice)
             except Exception as e:
                 log.warning("синтез не удался: %s", e)
                 await self.send_event({"type": "error", "text": f"синтез: {e}"})
@@ -164,7 +166,7 @@ class CallSession:
             if int(generation) != self.generation:
                 continue
             now = time.monotonic()
-            self.speaking_until = max(now, self.speaking_until) + len(pcm) / speech.BYTES_PER_SECOND
+            self.speaking_until = max(now, self.speaking_until) + len(pcm) / speech.TTS_BYTES_PER_SECOND
             await self.send_audio(pcm)
 
     # ------------------------------------------------------------------ молчание

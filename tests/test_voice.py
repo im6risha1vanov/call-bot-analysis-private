@@ -270,6 +270,43 @@ class SpeechTest(unittest.TestCase):
         self.assertIn("encoding=linear16", speech.deepgram_url())
 
 
+class SynthesisTest(unittest.IsolatedAsyncioTestCase):
+    async def run_with(self, handler, voice):
+        os.environ["YANDEX_TTS_API_KEY"] = "k"
+        speech._http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        try:
+            return await speech.synthesize_pcm("Здравствуйте", voice)
+        finally:
+            speech._http = None
+            del os.environ["YANDEX_TTS_API_KEY"]
+
+    async def test_v3_with_role_then_v1_fallback(self):
+        import base64
+        seen = []
+
+        def v3(request):
+            seen.append(json.loads(request.content))
+            lines = [json.dumps({"result": {"audioChunk": {"data": base64.b64encode(b"ab").decode()}}}),
+                     json.dumps({"result": {"audioChunk": {"data": base64.b64encode(b"cd").decode()}}})]
+            return httpx.Response(200, text="\n".join(lines))
+
+        self.assertEqual(await self.run_with(v3, speech.Voice("dasha", "friendly", 1.1)), b"abcd")
+        self.assertIn({"role": "friendly"}, seen[0]["hints"])
+        self.assertEqual(seen[0]["outputAudioSpec"]["rawAudio"]["sampleRateHertz"], speech.TTS_RATE)
+
+        def no_v3(request):
+            if "v3" in request.url.path:
+                return httpx.Response(403, text="no access")
+            seen.append(dict(x.split("=") for x in request.content.decode().split("&")))
+            return httpx.Response(200, content=b"pcm")
+
+        self.assertEqual(await self.run_with(no_v3, speech.Voice("alena", "good")), b"pcm")
+        self.assertEqual((seen[-1]["voice"], seen[-1]["emotion"]), ("alena", "good"))
+
+        with self.assertRaisesRegex(speech.TTSRequestError, "400"):
+            await self.run_with(lambda r: httpx.Response(400, text="bad role"), speech.Voice("dasha", "evil"))
+
+
 class CallSessionTest(unittest.IsolatedAsyncioTestCase):
     async def test_call_flow_sends_audio_and_result(self):
         client = FakeClient([

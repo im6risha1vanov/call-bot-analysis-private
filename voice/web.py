@@ -41,15 +41,46 @@ async def operators(request: web.Request) -> web.Response:
     for path in sorted(OPERATORS_DIR.glob("*.toml")):
         try:
             op = load(path.stem)
-            items.append({"id": op.id, "name": op.name, "company": op.company})
+            items.append({"id": op.id, "name": op.name, "company": op.company, "greeting": op.greeting,
+                          "voice": op.voice, "voice_role": op.voice_role, "voice_speed": op.voice_speed})
         except OperatorError as e:
             items.append({"id": path.stem, "error": str(e)})
     return web.json_response({
         "operators": items,
         "asr": bool(os.getenv("DEEPGRAM_API_KEY")),
         "tts": speech.tts_configured(),
+        "tts_rate": speech.TTS_RATE,
+        "voices": speech.VOICES,
         "llm": f"{os.getenv('VOICE_LLM', 'cvc')}: {os.getenv('VOICE_MODEL') or os.getenv('CVC_MODEL', 'gpt-6-astra')}",
     })
+
+
+def voice_from(data: dict) -> speech.Voice | None:
+    """Голос, выбранный на странице: имя, интонация, скорость."""
+    name = str(data.get("voice") or "").strip()
+    if not name:
+        return None
+    try:
+        speed = min(max(float(data.get("speed") or 1.0), 0.5), 2.0)
+    except (TypeError, ValueError):
+        speed = 1.0
+    return speech.Voice(name, str(data.get("role") or "").strip(), speed)
+
+
+async def preview(request: web.Request) -> web.Response:
+    """Прослушать голос: короткая фраза, ответ сырым PCM."""
+    data = await request.json()
+    voice = voice_from(data)
+    text = str(data.get("text") or "").strip()[:400]
+    if voice is None or not text:
+        return web.json_response({"error": "нужны голос и текст"}, status=400)
+    if not speech.tts_configured():
+        return web.json_response({"error": "нет ключа Яндекса"}, status=400)
+    try:
+        pcm = await speech.synthesize_pcm(text, voice)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=502)
+    return web.Response(body=pcm, content_type="application/octet-stream")
 
 
 async def call_ws(request: web.Request) -> web.WebSocketResponse:
@@ -80,7 +111,7 @@ async def call_ws(request: web.Request) -> web.WebSocketResponse:
         return ws
 
     session = CallSession(Dialog(operator), send_audio, send_event,
-                          voice_enabled=speech.tts_configured(), mode="браузер")
+                          voice_enabled=speech.tts_configured(), mode="браузер", voice=voice_from(hello))
     use_mic = bool(hello.get("mic")) and bool(os.getenv("DEEPGRAM_API_KEY"))
     http = ClientSession()
     asr: speech.DeepgramStream | None = None
@@ -101,7 +132,8 @@ async def call_ws(request: web.Request) -> web.WebSocketResponse:
             await ws.close()
 
         tasks.append(asyncio.create_task(close_when_done()))
-        await send_event({"type": "ready", "operator": operator.name, "mic": use_mic, "tts": session.voice_enabled})
+        await send_event({"type": "ready", "operator": operator.name, "mic": use_mic, "tts": session.voice_enabled,
+                          "tts_rate": speech.TTS_RATE, "voice": session.voice.__dict__})
         await session.start(hello.get("first_words") or "Алло")
 
         async for msg in ws:
@@ -133,6 +165,7 @@ def app() -> web.Application:
     application.router.add_get("/", index)
     application.router.add_get("/operators", operators)
     application.router.add_get("/ws", call_ws)
+    application.router.add_post("/preview", preview)
     return application
 
 

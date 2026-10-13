@@ -5,7 +5,9 @@
 name = "Мария"
 gender = "female"                     # female | male: в каком роде робот говорит о себе
 company = "кухни на заказ"            # как представляется: «Мария, кухни на заказ»
-voice = "alena"                       # голос Yandex SpeechKit
+voice = "dasha"                       # голос Yandex SpeechKit, подобрать на странице теста
+voice_role = "friendly"               # интонация: neutral, good, friendly ... (у каждого голоса свои)
+voice_speed = 1.0
 transfer_to = "14"                    # внутренний Mango, куда переводить тёплого (Ольга)
 
 lead_source = "недавно интересовался кухней на заказ"

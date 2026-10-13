@@ -31,7 +31,7 @@
 - `VOICE_LLM`: `cvc` (по умолчанию, прокси ai.starimg.ru, как у разборов) или `anthropic` (Claude напрямую).
 - `VOICE_MODEL`: для cvc по умолчанию `CVC_MODEL` бота, для anthropic `claude-haiku-5-5`. `VOICE_CVC_EFFORT` (`low`), `VOICE_EFFORT` (`low`, для anthropic).
 - `VOICE_SIM_MODEL` модель клиента в симуляторе (по умолчанию та же, что у робота).
-- `VOICE_TTS_SPEED` (1.05), `VOICE_ENDPOINTING_MS` (300, сколько тишины считать концом фразы), `VOICE_DG_MODEL`.
+- `VOICE_TTS_API` (`v3`, интонации; при отказе доступа сам уходит на v1), `VOICE_TTS_RATE` (48000), `VOICE_ENDPOINTING_MS` (300, сколько тишины считать концом фразы), `VOICE_DG_MODEL`.
 - `VOICE_SHEET_ID` таблица для листа «Робот · Звонки», `VOICE_LOG` путь к jsonl.
 - `VOICE_WEB_HOST` / `VOICE_WEB_PORT` (127.0.0.1:8090).
 
