@@ -168,6 +168,7 @@ CHIPS = {  # как чипы в листе базы: НДЗ серо-голуб�
     'НДЗ': ('#DDE4EE', '#3C4A5C'), 'НДЗ 2': ('#DDE4EE', '#3C4A5C'), 'НДЗ 3': ('#DDE4EE', '#3C4A5C'),
     'Перезвон': ('#FFF2CC', '#7F6000'), 'Неактуально': ('#F4CCCC', '#990000'), 'Заинтересованный': ('#D9EAD3', '#274E13'),
 }
+NO_BASE = 'нет в базе'
 FACTS = ('city', 'material', 'budget', 'name', 'callback_time')
 STATUS_ORDER = ('ndz', 'callback', 'not_relevant', 'interested')
 
@@ -216,7 +217,11 @@ def counted(attempts):
 
 
 def calls_table(attempts, base: dict, tz) -> sheets.Table:
-    """Строка на номер, как в листе базы: секции «База от …», попытки, сумма, данные клиента."""
+    """Строка на номер, как в листе базы: попытки, сумма, данные клиента.
+
+    Разделы по дню последнего звонка («Звонки за 13.10.2026»), свежие сверху, чтобы
+    сразу было видно, когда звонили. Дата базы из листа базы стоит в своей колонке.
+    """
     table = sheets.Table(CALLS_TAB, WIDTHS, frozen=1, filter_from=0, chip_column=6, chip_span=SLOTS, bold_column=0, chips=CHIPS)
     table.add(HEADER, 'header')
     groups = collections.defaultdict(list)
@@ -235,14 +240,13 @@ def calls_table(attempts, base: dict, tz) -> sheets.Table:
             notes.append(f'Всего попыток: {len(items)}, в сумму идут первые {SLOTS}')
         slots = items[:SLOTS]
         row = ['+7' + key if len(key) == 10 else items[0]['client_number'] or '', lead.get('id', ''), lead.get('project', ''),
-               lead.get('base', ''), remind or '', '\n'.join(notes),
+               lead.get('base') or NO_BASE, remind or '', '\n'.join(notes),
                *[attempt_label(a['status'], i) for i, a in enumerate(slots)], *[''] * (SLOTS - len(slots)),
                sum(price(a['status'], i) for i, a in enumerate(slots)),
                *[stamp(a['call_started_at'], tz) for a in slots], *[''] * (SLOTS - len(slots)),
                *[facts.get(name, '') for name in FACTS]]
-        # Номера, которых нет в листе базы, идут по дню первого звонка, а не одной кучей.
-        first_day = stamp(items[0]['call_started_at'], tz, '%d.%m.%Y') or 'без даты'
-        groups[('База от', lead['base']) if lead.get('base') else ('Нет в листе', first_day)].append((last['call_started_at'], row))
+        day = stamp(last['call_started_at'], tz, '%d.%m.%Y') or 'без даты'
+        groups[day].append((last['call_started_at'], bool(lead.get('base')), row))
 
     def day_of(label):
         try:
@@ -250,11 +254,12 @@ def calls_table(attempts, base: dict, tz) -> sheets.Table:
         except ValueError:
             return date.min
 
-    for kind, label in sorted(groups, key=lambda g: (day_of(g[1]), g[0] == 'База от'), reverse=True):
-        rows = groups[(kind, label)]
-        table.add([f'База от {label} · лидов {len(rows)}' if kind == 'База от'
-                   else f'Нет в листе «{LEADS_TAB}», первый звонок {label} · лидов {len(rows)}'], 'section')
-        for _, row in sorted(rows, key=lambda r: r[0] or datetime.min.replace(tzinfo=timezone.utc), reverse=True):
+    for label in sorted(groups, key=day_of, reverse=True):
+        rows = groups[label]
+        missing = sum(not found for _, found, _ in rows)
+        table.add([f'Звонки за {label} · лидов {len(rows)}' + (f' · нет в листе «{LEADS_TAB}»: {missing}' if missing else '')],
+                  'section')
+        for _, _, row in sorted(rows, key=lambda r: r[0] or datetime.min.replace(tzinfo=timezone.utc), reverse=True):
             table.add(row)
     return table
 
