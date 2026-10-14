@@ -427,6 +427,23 @@ class ElevenTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json.loads(tts.content)["model_id"], "eleven_flash_v2_5")
         self.assertEqual(len(pcm), 48 * speech.TTS_RATE // 24000)
 
+    async def test_voice_name_prefix_and_unknown_name(self):
+        def handler(request):
+            if request.url.path.endswith("/voices"):
+                return httpx.Response(200, json={"voices": [{"name": "Eva - calm", "voice_id": "eva1"}]})
+            return httpx.Response(200, content=b"")
+
+        os.environ["ELEVENLABS_API_KEY"] = "xi"
+        speech._http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        try:
+            self.assertEqual(await speech._eleven_voice_id("eva"), "eva1")
+            with self.assertRaisesRegex(speech.TTSRequestError, "ElevenLabs 404.*Eva - calm"):
+                await speech._eleven_voice_id("Anna")
+        finally:
+            speech._http = None
+            speech._eleven_direct.clear()
+            del os.environ["ELEVENLABS_API_KEY"]
+
     def test_resample_keeps_level(self):
         import array
         src = array.array("h", [1000] * 100).tobytes()
@@ -468,6 +485,39 @@ class CallSessionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(audio), 4)  # приветствие + 2 фразы + прощание
         self.assertEqual(saved, [{"phone": "", "mode": "браузер"}])
         self.assertIn({"type": "interim", "text": "да"}, events)
+
+    async def test_broken_voice_falls_back_to_operator_voice(self):
+        audio, used = [], []
+
+        async def send_audio(pcm):
+            audio.append(pcm)
+
+        async def nothing(_):
+            pass
+
+        async def synth(text, voice):
+            used.append(voice.name)
+            if voice.name.startswith("11:"):
+                raise speech.TTSRequestError(401, "no permission", "ElevenLabs")
+            return b"\x00\x00" * 160
+
+        async def save(dialog, **kw):
+            return results.record(dialog, **kw)
+
+        os.environ["VOICE_VOICE"] = "11:Eva"
+        try:
+            session = CallSession(Dialog(load("kitchen"), AnthropicBackend(client=FakeClient([]))), send_audio, nothing,
+                                  synthesize=synth, save=save)
+        finally:
+            del os.environ["VOICE_VOICE"]
+        await session.start()
+        for _ in range(50):
+            if audio:
+                break
+            await asyncio.sleep(0.01)
+        await session.hangup()
+        self.assertEqual(used[:2], ["11:Eva", load("kitchen").voice])
+        self.assertEqual(len(audio), 1)
 
     async def test_hangup_without_result_records_callback(self):
         events = []

@@ -37,8 +37,10 @@ class CallSession:
         self.synthesize = synthesize
         op = dialog.op
         # VOICE_VOICE на сервере перекрывает голос из анкеты: так голос меняется без правки кода
-        self.voice = voice or speech.Voice(os.getenv("VOICE_VOICE") or op.voice,
-                                           "" if os.getenv("VOICE_VOICE") else op.voice_role, float(op.voice_speed))
+        own = speech.Voice(op.voice, op.voice_role, float(op.voice_speed))
+        self.voice = voice or (speech.Voice(os.environ["VOICE_VOICE"], "", float(op.voice_speed))
+                               if os.getenv("VOICE_VOICE") else own)
+        self.fallback_voice = own if self.voice.name != own.name else None  # если выбранный голос не работает
         self.save = save
         self.phrases: asyncio.Queue[str | None] = asyncio.Queue()
         self.reply_task: asyncio.Task | None = None
@@ -165,7 +167,15 @@ class CallSession:
             except Exception as e:
                 log.warning("синтез не удался: %s", e)
                 await self.send_event({"type": "error", "text": f"синтез: {e}"})
-                continue
+                if self.fallback_voice is None:
+                    continue
+                # до конца звонка говорим голосом из анкеты, чтобы клиент не слушал тишину
+                self.voice, self.fallback_voice = self.fallback_voice, None
+                try:
+                    pcm = await self.synthesize(phrase, self.voice)
+                except Exception as e2:
+                    log.warning("запасной голос тоже не сработал: %s", e2)
+                    continue
             if int(generation) != self.generation:
                 continue
             now = time.monotonic()

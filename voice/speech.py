@@ -134,9 +134,9 @@ class Voice:
 
 
 class TTSRequestError(RuntimeError):
-    def __init__(self, status: int, text: str) -> None:
+    def __init__(self, status: int, text: str, service: str = "Yandex SpeechKit") -> None:
         self.status = status
-        super().__init__(f"Yandex SpeechKit {status}: {text[:300]}")
+        super().__init__(f"{service} {status}: {text[:300]}")
 
 
 def _auth() -> dict:
@@ -215,7 +215,7 @@ async def _eleven(text: str, voice: Voice) -> bytes:
     r = await _client().post(OPENROUTER_TTS_URL, json=body,
                              headers={"Authorization": f"Bearer {os.environ['OPENROUTER_API_KEY']}"})
     if r.status_code != 200:
-        raise TTSRequestError(r.status_code, r.text)
+        raise TTSRequestError(r.status_code, r.text, "ElevenLabs")
     # Частота PCM: из заголовка, если провайдер её пишет (audio/pcm;rate=24000), иначе из настройки.
     match = re.search(r"rate=(\d+)", r.headers.get("content-type", ""))
     rate = int(match.group(1)) if match else int(os.getenv("VOICE_ELEVEN_PCM_RATE", "24000"))
@@ -234,18 +234,37 @@ def _cache_path(text: str, voice: Voice):
     return Path(folder) / (hashlib.sha256(key.encode()).hexdigest() + ".pcm")
 
 
-async def _eleven_direct_tts(text: str, voice: Voice) -> bytes:
-    name = voice.name.removeprefix("11:")
-    if name not in _eleven_direct:  # телефонный процесс список голосов заранее не грузит
+def _find_eleven(name: str) -> str | None:
+    """Голос аккаунта по имени: точно, без учёта регистра или по началу («Eva» найдёт «Eva - calm»)."""
+    if name in _eleven_direct:
+        return _eleven_direct[name]
+    low = name.casefold()
+    for known, voice_id in _eleven_direct.items():
+        if known.casefold() == low or known.casefold().startswith(low):
+            return voice_id
+    return None
+
+
+async def _eleven_voice_id(name: str) -> str:
+    found = _find_eleven(name)
+    if found is None:  # телефонный процесс список голосов заранее не грузит
         await load_eleven_voices()
-    voice_id = _eleven_direct.get(name, name)  # можно указать сразу voice_id
+        found = _find_eleven(name)
+    if found is None and _eleven_direct:
+        raise TTSRequestError(404, f"голоса «{name}» нет в My Voices, есть: {', '.join(sorted(_eleven_direct))[:250]}",
+                              "ElevenLabs")
+    return found or name  # можно указать сразу voice_id
+
+
+async def _eleven_direct_tts(text: str, voice: Voice) -> bytes:
+    voice_id = await _eleven_voice_id(voice.name.removeprefix("11:"))
     rate = int(os.getenv("VOICE_ELEVEN_PCM_RATE", "24000"))
     body = {"text": text, "model_id": ELEVEN_DIRECT_MODEL, "language_code": "ru",
             "voice_settings": {"stability": 0.5, "similarity_boost": 0.8, "speed": voice.speed}}
     r = await _client().post(f"{ELEVEN_API}/text-to-speech/{voice_id}", params={"output_format": f"pcm_{rate}"},
                              headers={"xi-api-key": os.environ["ELEVENLABS_API_KEY"]}, json=body)
     if r.status_code != 200:
-        raise TTSRequestError(r.status_code, r.text)
+        raise TTSRequestError(r.status_code, r.text, "ElevenLabs")
     return resample(r.content, rate, TTS_RATE)
 
 
