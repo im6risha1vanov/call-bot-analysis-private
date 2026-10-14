@@ -7,8 +7,10 @@
 # Запуск: bash scripts/voice_sip_setup.sh   (повторный запуск безопасен, перезаписывает только наши файлы)
 # Откат: systemctl disable --now asterisk; старые конфиги лежат в /root/asterisk-backup-*.
 set -euo pipefail
+trap 'echo "ошибка в строке $LINENO: $BASH_COMMAND"' ERR
 ENV=/opt/callbot-astra/.env
-getenv() { grep -m1 "^$1=" "$ENV" | cut -d= -f2- | sed "s/^[\"']//; s/[\"']\$//"; }
+# пустая строка, если ключа нет (иначе grep без совпадений молча роняет скрипт из-за set -e)
+getenv() { { grep -m1 "^$1=" "$ENV" || true; } | cut -d= -f2- | sed "s/^[\"']//; s/[\"']\$//"; }
 LOGIN=$(getenv MANGO_SIP_LOGIN); DOMAIN=$(getenv MANGO_SIP_DOMAIN); PASS=$(getenv MANGO_SIP_PASSWORD)
 [ -n "$LOGIN" ] && [ -n "$DOMAIN" ] && [ -n "$PASS" ] || { echo "нет MANGO_SIP_LOGIN / MANGO_SIP_DOMAIN / MANGO_SIP_PASSWORD в $ENV"; exit 1; }
 
