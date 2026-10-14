@@ -391,7 +391,7 @@ class SpeechTest(unittest.TestCase):
         self.assertEqual(speech.split_long("коротко"), ["коротко"])
 
     def test_collector_closes_on_pause(self):
-        c = speech.UtteranceCollector(gap=0.5, open_gap=1.0)
+        c = speech.UtteranceCollector(gap=0.5, open_gap=1.0, stale_tail=1.2)
         res = lambda t, final=False: {"type": "Results", "is_final": final, "speech_final": False, "channel": {"alternatives": [{"transcript": t}]}}
         self.assertIsNone(c.gap_left(0))  # ещё нечего закрывать
         c.handle(res("Город", final=True))  # без точки: клиент, скорее всего, ещё договаривает
