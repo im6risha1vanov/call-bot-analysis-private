@@ -447,6 +447,83 @@ class CallSessionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[-1]["outcome"], "callback")
 
 
+class PhoneTest(unittest.IsolatedAsyncioTestCase):
+    async def test_audiosocket_call_end_to_end(self):
+        import uuid as uuidlib
+        from voice import sip
+        saved = []
+
+        class ScriptASR:
+            def __init__(self, call):
+                self.call, self.got = call, 0
+
+            async def run(self):
+                await self.call.heard("Алло", True)
+                await asyncio.sleep(0.3)
+                await self.call.heard("Нет, не актуально", True)
+
+            async def send(self, pcm):
+                self.got += len(pcm)
+
+            async def close(self):
+                pass
+
+        async def synth(text, voice):
+            return b"\x10\x00" * (speech.TTS_RATE // 50)  # 20 мс
+
+        async def save(dialog, **kw):
+            saved.append(results.record(dialog, **kw))
+            return saved[-1]
+
+        client = FakeClient([finish({"outcome": "not_relevant", "comment": "Шаг 1: неактуально"}, "Поняла, всего доброго!")])
+        call_id = str(uuidlib.uuid4())
+        sip.PENDING[call_id] = sip.Pending("79990001122", "kitchen")
+
+        async def on_socket(reader, writer):
+            await sip.PhoneCall(reader, writer, make_dialog=lambda op: Dialog(op, AnthropicBackend(client=client)),
+                                make_asr=ScriptASR, synthesize=synth, save=save).run()
+
+        server = await asyncio.start_server(on_socket, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(sip.frame(sip.KIND_UUID, uuidlib.UUID(call_id).bytes))
+        writer.write(sip.frame(sip.KIND_AUDIO, b"\0" * sip.FRAME_BYTES))
+        await writer.drain()
+        audio_frames = 0
+        while True:
+            kind, payload = await asyncio.wait_for(sip.read_frame(reader), 5)
+            if kind == sip.KIND_AUDIO:
+                self.assertEqual(len(payload), sip.FRAME_BYTES)
+                audio_frames += 1
+            elif kind == sip.KIND_HANGUP:
+                break
+        writer.close()
+        server.close()
+        self.assertEqual(audio_frames, 2)  # приветствие и прощание, по 20 мс в 8 кГц
+        self.assertEqual((saved[0]["outcome"], saved[0]["phone"], saved[0]["mode"]), ("not_relevant", "79990001122", "телефон"))
+        self.assertTrue(sip.PENDING.get(call_id) is None)
+
+    async def test_dial_validates_and_registers(self):
+        from voice import sip
+        seen = []
+
+        async def originate(call_id, phone):
+            seen.append((call_id, phone))
+
+        call_id = await sip.dial("+7 (999) 000-11-22", originate=originate)
+        self.assertEqual(seen, [(call_id, "79990001122")])
+        self.assertIn(call_id, sip.PENDING)
+        sip.PENDING.clear()
+        with self.assertRaises(ValueError):
+            await sip.dial("123", originate=originate)
+
+    def test_downsample(self):
+        import array
+        from voice import sip
+        pcm = array.array("h", [600] * 48).tobytes()
+        self.assertEqual(array.array("h", sip.downsample(pcm, 48000, 8000)).tolist(), [600] * 8)
+
+
 class ResultsTest(unittest.IsolatedAsyncioTestCase):
     async def test_jsonl_and_sheet_append(self):
         client = FakeClient([finish({"outcome": "interested", "comment": "Казань", "facts": {"city": "Казань"}}, "Спасибо!")])

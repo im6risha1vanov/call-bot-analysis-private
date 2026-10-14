@@ -18,6 +18,14 @@
 | `simulate.py` | Прогон текстом против симулированных клиентов с известным правильным итогом. |
 | `web.py`, `static/index.html` | Страница теста: «Позвонить», говоришь в микрофон или пишешь текстом, в конце карточка итога. |
 
+## Телефон (Mango)
+
+`sip.py`: Asterisk на сервере зарегистрирован в Mango как сотрудник «Робот» (`scripts/voice_sip_setup.sh`,
+нужны `MANGO_SIP_LOGIN`, `MANGO_SIP_DOMAIN`, `MANGO_SIP_PASSWORD` в `.env`). Звонок заказывается через ARI,
+ответивший клиент приходит к роботу по AudioSocket (8 кГц), дальше тот же `CallSession`, что и в браузере.
+Не взял трубку: итог `ndz` «Не взял трубку». `VOICE_CALLER_ID`, `VOICE_RING_TIMEOUT` (40 с), `VOICE_SIP_TRUNK` (`mango`).
+Запуск: `scripts/voice_test.sh sip`, звонок: `scripts/voice_test.sh dial 7999…`.
+
 ## Итоги звонка
 
 `interested` (подходит, специалист перезвонит или перевод), `callback`, `not_relevant`,

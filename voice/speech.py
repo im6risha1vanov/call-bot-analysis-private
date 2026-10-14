@@ -283,12 +283,12 @@ async def _synthesize(text: str, voice: Voice) -> bytes:
 # ------------------------------------------------------------------ распознавание
 
 
-def deepgram_url() -> str:
+def deepgram_url(rate: int = SAMPLE_RATE) -> str:
     params = {
         "model": os.getenv("VOICE_DG_MODEL", os.getenv("DG_MODEL", "nova-2")),
         "language": os.getenv("DG_LANG", "ru"),
         "encoding": "linear16",
-        "sample_rate": SAMPLE_RATE,
+        "sample_rate": rate,
         "channels": 1,
         "interim_results": "true",
         "smart_format": "true",
@@ -340,14 +340,15 @@ class UtteranceCollector:
 class DeepgramStream:
     """Потоковое распознавание: send(pcm) на вход, async for heard in stream на выходе."""
 
-    def __init__(self, session) -> None:  # aiohttp.ClientSession
+    def __init__(self, session, rate: int = SAMPLE_RATE) -> None:  # aiohttp.ClientSession
         self.session = session
+        self.rate = rate
         self.ws = None
         self.collector = UtteranceCollector()
 
     async def open(self) -> None:
         self.ws = await self.session.ws_connect(
-            deepgram_url(), headers={"Authorization": f"Token {os.environ['DEEPGRAM_API_KEY']}"}, heartbeat=10)
+            deepgram_url(self.rate), headers={"Authorization": f"Token {os.environ['DEEPGRAM_API_KEY']}"}, heartbeat=10)
 
     async def send(self, pcm: bytes) -> None:
         if self.ws is not None and not self.ws.closed:
