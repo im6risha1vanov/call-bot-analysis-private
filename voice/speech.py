@@ -247,11 +247,11 @@ def _find_eleven(name: str) -> str | None:
 
 async def _eleven_voice_id(name: str) -> str:
     found = _find_eleven(name)
+    if found is None and re.fullmatch(r"[A-Za-z0-9]{20}", name):
+        return name  # voice_id из Voice Library («Copy voice ID»), список голосов не нужен
     if found is None:  # телефонный процесс список голосов заранее не грузит
         await load_eleven_voices()
         found = _find_eleven(name)
-    if found is None and re.fullmatch(r"[A-Za-z0-9]{20}", name):
-        return name  # voice_id из Voice Library («Copy voice ID»)
     if found is None and _eleven_direct:
         raise TTSRequestError(404, f"голоса «{name}» нет в My Voices, есть: {', '.join(sorted(_eleven_direct))[:250]}",
                               "ElevenLabs")

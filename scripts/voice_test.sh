@@ -50,6 +50,10 @@ case "$ACTION" in
     systemctl is-active "$UNIT"
     curl -s http://127.0.0.1:8090/operators; echo
     ;;
+  bench)  # скорость моделей: bench МОДЕЛЬ...
+    update
+    run -m voice.bench "${@:2}" || true
+    ;;
   sim)
     update
     run -m voice.simulate --out "$DATA/sim.md" "${@:2}" || true
@@ -86,5 +90,5 @@ case "$ACTION" in
     journalctl -u "$UNIT" -u "$SIP_UNIT" -n 40 --no-pager
     ;;
   *)
-    echo "действие: start | sim | sip | dial НОМЕР | stop | status"; exit 2 ;;
+    echo "действие: start | sim | bench МОДЕЛИ | sip | dial НОМЕР | stop | status"; exit 2 ;;
 esac
