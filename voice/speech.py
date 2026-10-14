@@ -364,21 +364,33 @@ TURN_GAP_S = int(os.getenv("VOICE_TURN_GAP_MS", "700")) / 1000  # 500 мс ре�
 OPEN_GAP_S = int(os.getenv("VOICE_TURN_GAP_OPEN_MS", "1000")) / 1000
 
 
+STALE_TAIL_S = int(os.getenv("VOICE_STALE_TAIL_MS", "1500")) / 1000  # промежуточные Deepgram шлёт примерно раз в секунду
+
+
 class UtteranceCollector:
     """Склеивает сообщения Deepgram в реплики: is_final копим, speech_final или UtteranceEnd закрывают реплику.
     По телефону speech_final часто не приходит (шум линии), а UtteranceEnd ждёт секунду и больше, поэтому
-    реплику закрывает и пауза TURN_GAP_S после окончательного текста, если новых слов не слышно."""
+    реплику закрывает и пауза TURN_GAP_S после окончательного текста, если новых слов не слышно.
+    Бывает, что окончательного текста нет секунды (числа: «около трёхсот тысяч»), есть только промежуточный,
+    и он не меняется: такая реплика закрывается через STALE_TAIL_S по промежуточному тексту."""
 
-    def __init__(self, gap: float = TURN_GAP_S, open_gap: float = OPEN_GAP_S) -> None:
+    def __init__(self, gap: float = TURN_GAP_S, open_gap: float = OPEN_GAP_S, stale_tail: float = STALE_TAIL_S) -> None:
         self.parts: list[str] = []
         self.gap = gap
         self.open_gap = max(open_gap, gap)
+        self.stale_tail = stale_tail
         self.tail = ""          # промежуточный текст после последнего окончательного: клиент ещё говорит
+        self.tail_at = 0.0      # когда промежуточный текст последний раз менялся
         self.final_at = 0.0
+        self.closed_tail = ""   # реплику закрыли по промежуточному тексту: его запоздалый is_final не повторяем
 
     def gap_left(self, now: float) -> float | None:
         """Сколько ещё ждать до закрытия реплики по паузе; None, если закрывать нечего."""
-        if not self.parts or self.tail or self.gap <= 0:
+        if self.gap <= 0:
+            return None
+        if self.tail:
+            return max(self.tail_at + self.stale_tail - now, 0.0) if self.stale_tail > 0 else None
+        if not self.parts:
             return None
         finished = self.parts[-1].rstrip().endswith((".", "!", "?", "…"))
         return max(self.final_at + (self.gap if finished else self.open_gap) - now, 0.0)
@@ -396,23 +408,35 @@ class UtteranceCollector:
         text = (alternatives[0].get("transcript") or "").strip()
         if message.get("is_final"):
             self.tail = ""
+            if text and self.closed_tail and _same_words(text, self.closed_tail):
+                self.closed_tail = ""
+                return None  # это уже сказано и отвечено
+            self.closed_tail = ""
             if text:
                 self.parts.append(text)
                 self.final_at = time.monotonic()
             if message.get("speech_final"):
                 return self._close()
             return Heard(" ".join(self.parts), False) if text else None
-        self.tail = text
+        if text != self.tail:
+            self.tail, self.tail_at = text, time.monotonic()
         if text:
             return Heard(" ".join(self.parts + [text]), False)
         return None
 
     def _close(self) -> Heard | None:
-        self.tail = ""
-        if not self.parts:
+        words = self.parts + ([self.tail] if self.tail else [])
+        self.closed_tail = self.tail
+        self.tail, self.parts = "", []
+        if not words:
             return None
-        text, self.parts = " ".join(self.parts), []
-        return Heard(text, True)
+        return Heard(" ".join(words), True)
+
+
+def _same_words(a: str, b: str) -> bool:
+    norm = lambda t: re.sub(r"[^\w ]", "", t.lower()).split()
+    wa, wb = norm(a), norm(b)
+    return bool(wa) and (wa == wb or " ".join(wa) in " ".join(wb) or " ".join(wb) in " ".join(wa))
 
 
 class DeepgramStream:

@@ -398,12 +398,25 @@ class SpeechTest(unittest.TestCase):
         self.assertAlmostEqual(c.gap_left(c.final_at + 0.2), 0.8)
         c.handle(res("Краснодар.", final=True))
         self.assertAlmostEqual(c.gap_left(c.final_at + 0.2), 0.3)
-        c.handle(res("и ещё"))  # клиент продолжает говорить: по паузе не закрываем
-        self.assertIsNone(c.gap_left(c.final_at + 1))
+        c.handle(res("и ещё"))  # клиент продолжает говорить: ждём не паузу, а пока промежуточный текст застынет
+        self.assertAlmostEqual(c.gap_left(c.tail_at + 1), 0.2)
         c.handle(res("и ещё Сочи", final=True))
         self.assertEqual(c.gap_left(c.final_at + 1), 0.0)
         self.assertEqual(c.close_on_gap(), speech.Heard("Город Краснодар. и ещё Сочи", True))
         self.assertIsNone(c.gap_left(10))
+
+    def test_collector_closes_on_stale_interim(self):
+        c = speech.UtteranceCollector(gap=0.7, open_gap=1.0, stale_tail=1.2)
+        res = lambda t, final=False: {"type": "Results", "is_final": final, "speech_final": False, "channel": {"alternatives": [{"transcript": t}]}}
+        c.handle(res("Около 300"))
+        c.handle(res("Около 300 тысяч"))
+        c.handle(res("Около 300 тысяч"))  # тот же текст: таймер не сдвигается
+        self.assertEqual(c.gap_left(c.tail_at + 1.5), 0.0)
+        self.assertEqual(c.close_on_gap(), speech.Heard("Около 300 тысяч", True))
+        self.assertIsNone(c.handle(res("Около 300 тысяч.", final=True)))  # запоздалый is_final не повторяем
+        self.assertIsNone(c.gap_left(10))
+        c.handle(res("Краснодар", final=True))
+        self.assertEqual(c.parts, ["Краснодар"])
 
 
 class SynthesisTest(unittest.IsolatedAsyncioTestCase):
