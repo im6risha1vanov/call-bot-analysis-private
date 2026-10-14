@@ -285,6 +285,19 @@ class ToolTextGateTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(gate.call())
 
 
+    def test_tool_call_marker_and_invented_dialog_are_not_spoken(self):
+        from voice.llm import ToolTextGate
+        gate = ToolTextGate(["finish_call"])
+        spoken = gate.feed("Спасибо, до свидания!\n\n[TOOL_") + gate.feed("CALL_START]finish_call {\"outcome\": \"interested\", \"comment\": \"ок\"}")
+        self.assertEqual((spoken + gate.flush()).strip(), "Спасибо, до свидания!")
+        self.assertEqual(gate.call(), ("finish_call", {"outcome": "interested", "comment": "ок"}))
+
+        gate = ToolTextGate(["finish_call"])
+        spoken = gate.feed("Какой материал вас интересует?\n\n Пользователь: Плёнка\n Ассистент: Отлично")
+        self.assertEqual((spoken + gate.flush()).strip(), "Какой материал вас интересует?")
+        self.assertIsNone(gate.call())
+
+
 class CvcBackendTest(unittest.IsolatedAsyncioTestCase):
     def backend(self, handler):
         return CvcBackend("gpt-test", http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
@@ -799,6 +812,33 @@ class AutotestTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(run.problems, [])
         rows = autotest.rows([run], [], "14.10.2026 21:00", "abc1234")
         self.assertEqual(rows[0][:7], ["14.10.2026 21:00", "abc1234", "голос", "t", "not_relevant", "not_relevant", "да"])
+
+
+class ConcludeTest(unittest.IsolatedAsyncioTestCase):
+    async def test_hangup_before_finish_asks_model_for_result(self):
+        client = FakeClient([say("Хорошо, в какое время удобно?"),
+                             finish({"outcome": "callback", "comment": "Перезвонить после семи"})])
+        dialog = Dialog(load("kitchen"), AnthropicBackend(client=client))
+        dialog.greet()
+        await dialog.reply("Я за рулём, перезвоните после семи")
+        await dialog.conclude()
+        self.assertEqual(dialog.result.outcome, "callback")
+        self.assertTrue(dialog.result.comment.startswith("Клиент положил трубку."))
+        self.assertIn("finish_call", json.dumps(client.requests[-1], ensure_ascii=False))
+
+    async def test_no_conclude_without_client_answer(self):
+        client = FakeClient([])
+        dialog = Dialog(load("kitchen"), AnthropicBackend(client=client))
+        dialog.greet()
+        await dialog.conclude()
+        self.assertIsNone(dialog.result)
+        self.assertEqual(client.requests, [])
+
+    def test_clean_client_line(self):
+        from voice.simulate import clean_client_line
+        self.assertEqual(clean_client_line("В этом месяце планирую.\n\nПользователь: Какой бюджет?\n\nАссистент: 300"),
+                         "В этом месяце планирую.")
+        self.assertLessEqual(len(clean_client_line("Очень длинно. " * 40)), 220)
 
 
 class ResultsTest(unittest.IsolatedAsyncioTestCase):

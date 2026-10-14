@@ -104,7 +104,18 @@ async def client_line(client, persona: Persona, dialog: Dialog, turn: int) -> st
         pass
 
     reply = await client.complete(CLIENT_PROMPT.format(hangup=HANGUP, story=persona.story), messages, [], ignore)
-    return reply.text.strip()
+    return clean_client_line(reply.text)
+
+
+def clean_client_line(text: str) -> str:
+    """Слабые модели дописывают за собеседника («Пользователь: …») и уходят в простыни: берём первую реплику."""
+    import re
+    text = re.split(r"\n\s*\n|(?:Пользователь|Ассистент|Мария|Робот|User|Assistant)\s*:", text.strip(), maxsplit=1)[0]
+    text = " ".join(text.replace("Клиент:", " ").split())
+    if len(text) > 220:
+        cut = max(text.rfind(". ", 0, 220), text.rfind("? ", 0, 220), text.rfind("! ", 0, 220))
+        text = text[:cut + 1] if cut > 40 else text[:220]
+    return text.strip()
 
 
 async def run_one(robot_backend, client_backend, persona: Persona, operator_id: str) -> Run:

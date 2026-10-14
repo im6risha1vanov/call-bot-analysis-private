@@ -208,6 +208,31 @@ class Dialog:
             return turn
         raise AssertionError("unreachable")
 
+    async def conclude(self, reason: str = "клиент положил трубку") -> None:
+        """Звонок оборвался до finish_call: просим модель записать итог по тому, что успели узнать."""
+        if self.finished or not any(who == "client" for who, _ in self.transcript[2:]):
+            return
+        note = (f"(служебно: {reason}, разговор окончен. Клиенту ничего не говори, "
+                "только вызови finish_call с итогом по тому, что успели узнать.)")
+        last = self.messages[-1]
+        if last["role"] == "assistant":
+            messages = self.messages + [{"role": "user", "content": note}]
+        else:  # клиент сказал что-то и положил трубку, ответа робота не было
+            messages = self.messages[:-1] + [{"role": "user", "content": last["content"] + " " + note}]
+
+        async def ignore(_):
+            pass
+
+        try:
+            reply = await self.backend.complete(self.system, messages, self.tools, ignore)
+            self.cost += reply.cost
+            if reply.tool_name:
+                result = parse_result(reply.tool_name, reply.tool_input, self.op)
+                result.comment = f"{reason.capitalize()}. {result.comment}".strip()
+                self.result = result
+        except Exception as e:
+            log.warning("итог после обрыва не записан: %s", e)
+
     def duration_s(self) -> int:
         return int(time.monotonic() - self.started)
 

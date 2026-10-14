@@ -334,9 +334,8 @@ async def main(argv: list[str] | None = None) -> int:
     os.environ["VOICE_VOICE"] = os.getenv("VOICE_AUTOTEST_ROBOT_VOICE", "")
     audio_personas = pick(args.audio, DEFAULT_AUDIO)
     text_personas = pick(args.text, [])
-    # клиента играет дешёвая модель: его ум не проверяем
-    client_model = simulate.SIM_MODEL or (os.getenv("VOICE_AUTOTEST_CLIENT_MODEL", "yandexgpt-lite/latest")
-                                          if os.getenv("VOICE_LLM") == "yandex" else None)
+    # клиента играет та же модель, что и робота: yandexgpt-lite дописывала реплики за обоих и сыпала простынями
+    client_model = simulate.SIM_MODEL or os.getenv("VOICE_AUTOTEST_CLIENT_MODEL") or None
     sha = commit()
     spreadsheet = (os.getenv("VOICE_AUTOTEST_SHEET_ID") or os.getenv("GOOGLE_SHEET_ID") or "").strip() if args.sheet else ""
     try:

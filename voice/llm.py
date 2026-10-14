@@ -144,16 +144,21 @@ class ToolTextGate:
     YandexGPT так делает. Такой текст не должен попасть в озвучку: пропускаем всё до имени
     инструмента, а хвост строки, похожий на начало имени, придерживаем до следующего куска."""
 
+    # После этих меток модель уже не говорит с клиентом: служебная разметка вызова инструмента
+    # или выдуманное продолжение диалога («Пользователь: …»). Дальше ничего не озвучиваем.
+    STOPS = ["[TOOL_CALL", "<tool_call", "Пользователь:", "Ассистент:", "Клиент:", "Мария:", "User:", "Assistant:"]
+
     def __init__(self, names: list[str]) -> None:
         self.names = names
+        self.markers = [n for n in names if n] + self.STOPS
         self.buf = ""
         self.tool: str | None = None
         self.args = ""
 
     def _hold(self, line: str) -> int:
         """Сколько последних символов строки могут оказаться началом имени инструмента."""
-        for k in range(min(len(line), max(map(len, self.names), default=0)), 0, -1):
-            if any(n.startswith(line[-k:]) for n in self.names):
+        for k in range(min(len(line), max(map(len, self.markers), default=0)), 0, -1):
+            if any(n.startswith(line[-k:]) for n in self.markers):
                 return k
         return 0
 
@@ -162,12 +167,14 @@ class ToolTextGate:
             self.args += chunk
             return ""
         self.buf += chunk
-        hits = [(self.buf.find(n), n) for n in self.names if n in self.buf]
+        hits = [(self.buf.find(n), n) for n in self.markers if n in self.buf]
         if hits:
             pos, name = min(hits)
-            out, self.tool, self.args = self.buf[:pos], name, self.buf[pos + len(name):]
+            is_tool = name in self.names
+            out, self.tool = self.buf[:pos], name if is_tool else ""
+            self.args = self.buf[pos + len(name):] if is_tool else self.buf[pos:]
             self.buf = ""
-            return out
+            return out.rstrip() if not is_tool else out
         line_start = self.buf.rfind("\n") + 1
         keep = self._hold(self.buf[line_start:])
         out, self.buf = self.buf[:len(self.buf) - keep], self.buf[len(self.buf) - keep:]
@@ -181,6 +188,12 @@ class ToolTextGate:
         if self.tool is None:
             return None
         raw = self.args
+        if self.tool == "":  # после служебной метки: ищем имя инструмента в отрезанном хвосте
+            found = [(raw.find(n), n) for n in self.names if n in raw]
+            if not found:
+                return None
+            pos, self.tool = min(found)
+            raw = raw[pos + len(self.tool):]
         start, end = raw.find("{"), raw.rfind("}")
         if start < 0 or end < start:
             raise BadToolJSON(f"{self.tool}: нет JSON в «{raw[:100]}»")

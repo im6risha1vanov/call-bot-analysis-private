@@ -78,6 +78,11 @@ class CallSession:
         for task in (self.reply_task, self.silence_task):
             if task and not task.done():
                 task.cancel()
+        if hasattr(self.dialog, "conclude"):
+            try:
+                await asyncio.wait_for(self.dialog.conclude(reason), 10)
+            except asyncio.TimeoutError:
+                log.warning("итог после обрыва не успел записаться")
         await self._finish(reason)
 
     async def _finish(self, reason: str = "") -> None:
