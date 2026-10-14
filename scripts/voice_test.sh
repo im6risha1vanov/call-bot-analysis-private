@@ -8,7 +8,10 @@
 # Действия: start (обновить код и поднять страницу теста на 127.0.0.1:8090),
 #           sim (прогнать робота текстом против симулированных клиентов),
 #           sip (обновить код и поднять телефонного робота, нужен scripts/voice_sip_setup.sh),
-#           dial НОМЕР (робот звонит на номер), stop, status.
+#           dial НОМЕР (робот звонит на номер), stop, status,
+#           autotest [АРГУМЕНТЫ] (виртуальный абонент говорит с роботом, итог на лист «Робот · Автотест»),
+#           watch-install / watch-remove (таймер: автотест после каждого нового коммита ветки),
+#           tick (то, что запускает таймер).
 # Страница открывается через туннель: ssh -L 8090:127.0.0.1:8090 root@SERVER, потом http://localhost:8090
 set -euo pipefail
 ACTION=${1:-start}
@@ -18,6 +21,8 @@ DATA=/opt/callbot-voice-data
 REMOTE=${VOICE_REMOTE:-private-backup}
 BRANCH=claude/voice-operator
 UNIT=callbot-voice-test
+WATCH=callbot-voice-autotest
+MAX_PER_DAY=${VOICE_AUTOTEST_MAX_PER_DAY:-12}
 SIP_UNIT=callbot-voice-sip
 PY=$BOT/.venv/bin/python
 
@@ -82,6 +87,65 @@ case "$ACTION" in
     sleep 60
     journalctl -u "$SIP_UNIT" --since "-70s" --no-pager | grep -v aiohttp.access | tail -40
     ;;
+  autotest)
+    update
+    if systemctl is-active -q "$SIP_UNIT"; then systemctl restart "$SIP_UNIT"; fi  # телефонный робот на новом коде
+    run -E VOICE_TTS_RATE=8000 -E VOICE_ELEVEN_PCM_RATE=8000 -E VOICE_AUTOTEST_SHA="$SHA" \
+      -m voice.autotest --sheet --out "$DATA/autotest.md" "${@:2}" || true
+    echo "отчёт: $DATA/autotest.md"
+    ;;
+  tick)  # таймер: новый коммит с правками робота -> автотест (не чаще MAX_PER_DAY в сутки)
+    mkdir -p "$DATA"
+    exec 9>"$DATA/autotest.lock"
+    flock -n 9 || exit 0
+    cd "$BOT"
+    git fetch -q "$REMOTE" "$BRANCH"
+    SHA=$(git rev-parse FETCH_HEAD)
+    LAST=$(cat "$DATA/autotest.sha" 2>/dev/null || true)
+    [ "$SHA" = "$LAST" ] && exit 0
+    echo "$SHA" > "$DATA/autotest.sha"
+    CHANGED=$( { [ -n "$LAST" ] && git diff --name-only "$LAST" "$SHA" 2>/dev/null; } || echo voice/)
+    if ! grep -qE '^(voice/|scripts/voice_|tests/test_voice)' <<<"$CHANGED"; then
+      exit 0  # правки не про робота
+    fi
+    TODAY=$(date +%F)
+    if [ "$(grep -c "^$TODAY" "$DATA/autotest.runs" 2>/dev/null || true)" -ge "$MAX_PER_DAY" ]; then
+      echo "лимит $MAX_PER_DAY автотестов в сутки, $SHA пропущен"; exit 0
+    fi
+    echo "$TODAY $(date +%T) $SHA" >> "$DATA/autotest.runs"
+    ARGS=$(git show "$SHA:voice/autotest.args" 2>/dev/null | grep -v '^#' | tr -cd 'a-z0-9_,= \n-' | head -1 || true)
+    # shellcheck disable=SC2086
+    git show "$SHA:scripts/voice_test.sh" | bash -s autotest $ARGS
+    ;;
+  watch-install)
+    mkdir -p "$DATA"
+    cat > /etc/systemd/system/$WATCH.service <<UNIT
+[Unit]
+Description=Voice robot autotest on new commits of $BRANCH
+[Service]
+Type=oneshot
+TimeoutStartSec=1800
+ExecStart=/bin/bash -c 'cd $BOT && git fetch -q $REMOTE $BRANCH && git show FETCH_HEAD:scripts/voice_test.sh | bash -s tick'
+UNIT
+    cat > /etc/systemd/system/$WATCH.timer <<UNIT
+[Unit]
+Description=Check $BRANCH for new commits every 3 minutes
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=3min
+[Install]
+WantedBy=timers.target
+UNIT
+    systemctl daemon-reload
+    systemctl enable --now "$WATCH.timer"
+    systemctl list-timers "$WATCH.timer" --no-pager | head -2
+    ;;
+  watch-remove)
+    systemctl disable --now "$WATCH.timer" 2>/dev/null || true
+    rm -f /etc/systemd/system/$WATCH.service /etc/systemd/system/$WATCH.timer
+    systemctl daemon-reload
+    echo "автотест по коммитам выключен"
+    ;;
   stop)
     systemctl stop "$UNIT" "$SIP_UNIT" 2>/dev/null || true
     ;;
@@ -90,5 +154,5 @@ case "$ACTION" in
     journalctl -u "$UNIT" -u "$SIP_UNIT" -n 40 --no-pager
     ;;
   *)
-    echo "действие: start | sim | bench МОДЕЛИ | sip | dial НОМЕР | stop | status"; exit 2 ;;
+    echo "действие: start | sim | bench МОДЕЛИ | sip | dial НОМЕР | autotest | watch-install | watch-remove | stop | status"; exit 2 ;;
 esac

@@ -749,6 +749,51 @@ class PhoneTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(array.array("h", sip.downsample(pcm, 48000, 8000)).tolist(), [600] * 8)
 
 
+class AutotestTest(unittest.IsolatedAsyncioTestCase):
+    async def test_virtual_client_talks_to_phone_robot(self):
+        import array
+        from voice import autotest, simulate
+
+        async def synth(text, voice):  # «речь»: тон по 10 мс на букву
+            wave = [3000] * 20 + [-3000] * 20  # 400 Гц на 16 кГц: переживает понижение до 8 кГц
+            return array.array("h", wave * (speech.TTS_RATE // 100 // 40) * len(text)).tobytes()
+
+        clients = []
+
+        class EnergyASR:
+            """Распознаёт по громкости: после 300 мс тишины отдаёт последнюю реплику абонента."""
+            def __init__(self, call):
+                self.call, self.voiced, self.quiet = call, False, 0
+
+            async def run(self):
+                await asyncio.Event().wait()
+
+            async def send(self, pcm):
+                if autotest.rms(pcm) > 500:
+                    self.voiced, self.quiet = True, 0
+                elif self.voiced:
+                    self.quiet += 1
+                    if self.quiet >= 15:
+                        self.voiced = False
+                        await self.call.heard(clients[0].run.said[-1], True)
+
+            async def close(self):
+                pass
+
+        robot = AnthropicBackend(client=FakeClient([finish({"outcome": "not_relevant", "comment": "неактуально"}, "Поняла, всего доброго!")]))
+        persona = simulate.Persona("t", "not_relevant", "", scripted=["Алло", "Нет, не актуально."])
+        client = autotest.VirtualClient(persona, robot, None, make_asr=EnergyASR, synthesize=synth)
+        clients.append(client)
+        run = await asyncio.wait_for(client.talk(), 30)
+        self.assertEqual(run.outcome, "not_relevant")
+        self.assertEqual(run.said, ["Алло", "Нет, не актуально."])
+        self.assertEqual(len(run.reactions), 2)  # приветствие и ответ
+        self.assertTrue(all(ms < 1500 for ms in run.reactions), run.reactions)
+        self.assertEqual(run.problems, [])
+        rows = autotest.rows([run], [], "14.10.2026 21:00", "abc1234")
+        self.assertEqual(rows[0][:7], ["14.10.2026 21:00", "abc1234", "голос", "t", "not_relevant", "not_relevant", "да"])
+
+
 class ResultsTest(unittest.IsolatedAsyncioTestCase):
     async def test_jsonl_and_sheet_append(self):
         client = FakeClient([finish({"outcome": "interested", "comment": "Казань", "facts": {"city": "Казань"}}, "Спасибо!")])

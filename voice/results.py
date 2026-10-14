@@ -91,22 +91,27 @@ def _token() -> str:
 
 async def append_sheet(row: list, header: list[str], *, http: httpx.AsyncClient | None = None,
                        access_token: str | None = None) -> None:
-    spreadsheet = os.environ["VOICE_SHEET_ID"]
+    await append_rows(os.environ["VOICE_SHEET_ID"], SHEET_TITLE, header, [row], http=http, access_token=access_token)
+
+
+async def append_rows(spreadsheet: str, title: str, header: list[str], rows: list[list], *,
+                      http: httpx.AsyncClient | None = None, access_token: str | None = None) -> None:
+    """Строки в конец листа title; листа нет — создаётся с заголовком. Чужие листы не трогаются."""
     access_token = access_token or await asyncio.to_thread(_token)
     headers = {"Authorization": "Bearer " + access_token}
     async with (http or httpx.AsyncClient(timeout=30)) as client:
         meta = await client.get(API + spreadsheet, headers=headers, params={"fields": "sheets(properties(title))"})
         meta.raise_for_status()
         titles = {s["properties"]["title"] for s in meta.json().get("sheets", [])}
-        if SHEET_TITLE not in titles:
+        if title not in titles:
             r = await client.post(API + spreadsheet + ":batchUpdate", headers=headers, json={"requests": [
-                {"addSheet": {"properties": {"title": SHEET_TITLE, "gridProperties": {"frozenRowCount": 1}}}}]})
+                {"addSheet": {"properties": {"title": title, "gridProperties": {"frozenRowCount": 1}}}}]})
             r.raise_for_status()
-            r = await client.put(API + spreadsheet + f"/values/'{SHEET_TITLE}'!A1", headers=headers,
+            r = await client.put(API + spreadsheet + f"/values/'{title}'!A1", headers=headers,
                                  params={"valueInputOption": "RAW"}, json={"values": [header]})
             r.raise_for_status()
-        r = await client.post(API + spreadsheet + f"/values/'{SHEET_TITLE}'!A1:append", headers=headers,
-                              params={"valueInputOption": "RAW", "insertDataOption": "INSERT_ROWS"}, json={"values": [row]})
+        r = await client.post(API + spreadsheet + f"/values/'{title}'!A1:append", headers=headers,
+                              params={"valueInputOption": "RAW", "insertDataOption": "INSERT_ROWS"}, json={"values": rows})
         r.raise_for_status()
 
 
