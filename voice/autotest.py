@@ -63,6 +63,7 @@ class AudioRun:
     record: dict | None = None
     said: list[str] = field(default_factory=list)       # что абонент сказал на самом деле
     reactions: list[int] = field(default_factory=list)  # мс от конца реплики абонента до голоса робота
+    model_ms: list[int | None] = field(default_factory=list)  # мс до первых слов модели по репликам
     problems: list[str] = field(default_factory=list)
 
     @property
@@ -105,8 +106,17 @@ class VirtualClient:
 
     async def _on_socket(self, reader, writer) -> None:
         try:
-            await sip.PhoneCall(reader, writer, make_dialog=self._make_dialog, make_asr=self.make_asr,
-                                synthesize=self.synthesize, save=self._save).run()
+            call = sip.PhoneCall(reader, writer, make_dialog=self._make_dialog, make_asr=self.make_asr,
+                                 synthesize=self.synthesize, save=self._save)
+            original = call.send_event
+
+            async def send_event(event: dict) -> None:  # сколько думала модель на каждой реплике
+                if event.get("type") == "transcript" and event.get("role") == "robot" and "first_text_ms" in event:
+                    self.run.model_ms.append(event["first_text_ms"])
+                await original(event)
+
+            call.send_event = send_event
+            await call.run()
         except Exception as e:
             log.exception("сбой робота")
             self.run.problems.append(f"сбой робота: {e}")
@@ -269,6 +279,8 @@ def commit() -> str:
 
 def audio_text(run: AudioRun) -> str:
     lines = [f"Абонент говорил: {' | '.join(run.said)}"]
+    if run.reactions:
+        lines.append(f"Реакция по репликам, мс: {run.reactions}; из них модель до первых слов: {run.model_ms}")
     if run.dialog is not None:
         lines.append(run.dialog.transcript_text())
     if run.record:

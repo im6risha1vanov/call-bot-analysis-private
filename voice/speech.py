@@ -359,7 +359,7 @@ class Heard:
     final: bool  # True: реплика клиента закончена, пора отвечать
 
 
-TURN_GAP_S = int(os.getenv("VOICE_TURN_GAP_MS", "500")) / 1000
+TURN_GAP_S = int(os.getenv("VOICE_TURN_GAP_MS", "700")) / 1000  # 500 мс резали клиента между предложениями
 # фраза без точки в конце («Город…») обычно не закончена: ждём дольше, чтобы не перебить клиента
 OPEN_GAP_S = int(os.getenv("VOICE_TURN_GAP_OPEN_MS", "1000")) / 1000
 
