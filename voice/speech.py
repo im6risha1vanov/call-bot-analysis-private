@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass
 from typing import AsyncIterator
 from urllib.parse import urlencode
@@ -329,11 +330,28 @@ class Heard:
     final: bool  # True: реплика клиента закончена, пора отвечать
 
 
-class UtteranceCollector:
-    """Склеивает сообщения Deepgram в реплики: is_final копим, speech_final или UtteranceEnd закрывают реплику."""
+TURN_GAP_S = int(os.getenv("VOICE_TURN_GAP_MS", "500")) / 1000
 
-    def __init__(self) -> None:
+
+class UtteranceCollector:
+    """Склеивает сообщения Deepgram в реплики: is_final копим, speech_final или UtteranceEnd закрывают реплику.
+    По телефону speech_final часто не приходит (шум линии), а UtteranceEnd ждёт секунду и больше, поэтому
+    реплику закрывает и пауза TURN_GAP_S после окончательного текста, если новых слов не слышно."""
+
+    def __init__(self, gap: float = TURN_GAP_S) -> None:
         self.parts: list[str] = []
+        self.gap = gap
+        self.tail = ""          # промежуточный текст после последнего окончательного: клиент ещё говорит
+        self.final_at = 0.0
+
+    def gap_left(self, now: float) -> float | None:
+        """Сколько ещё ждать до закрытия реплики по паузе; None, если закрывать нечего."""
+        if not self.parts or self.tail or self.gap <= 0:
+            return None
+        return max(self.final_at + self.gap - now, 0.0)
+
+    def close_on_gap(self) -> Heard | None:
+        return self._close()
 
     def handle(self, message: dict) -> Heard | None:
         kind = message.get("type")
@@ -344,16 +362,20 @@ class UtteranceCollector:
         alternatives = message.get("channel", {}).get("alternatives") or [{}]
         text = (alternatives[0].get("transcript") or "").strip()
         if message.get("is_final"):
+            self.tail = ""
             if text:
                 self.parts.append(text)
+                self.final_at = time.monotonic()
             if message.get("speech_final"):
                 return self._close()
             return Heard(" ".join(self.parts), False) if text else None
+        self.tail = text
         if text:
             return Heard(" ".join(self.parts + [text]), False)
         return None
 
     def _close(self) -> Heard | None:
+        self.tail = ""
         if not self.parts:
             return None
         text, self.parts = " ".join(self.parts), []
@@ -387,12 +409,22 @@ class DeepgramStream:
 
     async def __aiter__(self) -> AsyncIterator[Heard]:
         import aiohttp
-        async for msg in self.ws:
+        while True:
+            wait = self.collector.gap_left(time.monotonic())
+            try:
+                msg = await self.ws.receive(timeout=wait)
+            except asyncio.TimeoutError:
+                heard = self.collector.close_on_gap()
+                if heard:
+                    log.info("реплика закрыта по паузе %d мс", self.collector.gap * 1000)
+                    yield heard
+                continue
             if msg.type == aiohttp.WSMsgType.TEXT:
                 heard = self.collector.handle(json.loads(msg.data))
                 if heard:
                     yield heard
-            elif msg.type in (aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSED):
+            elif msg.type in (aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING,
+                              aiohttp.WSMsgType.CLOSED):
                 break
 
 

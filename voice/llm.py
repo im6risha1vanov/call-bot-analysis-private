@@ -190,6 +190,27 @@ class ToolTextGate:
             raise BadToolJSON(str(e)) from None
 
 
+_shared_http: httpx.AsyncClient | None = None
+
+
+def shared_http() -> httpx.AsyncClient:
+    """Одно соединение на процесс: звонки не платят TLS-рукопожатием за первую реплику."""
+    global _shared_http
+    if _shared_http is None:
+        _shared_http = httpx.AsyncClient(timeout=httpx.Timeout(60, connect=10))
+    return _shared_http
+
+
+async def warm_up(backend) -> None:
+    """Открыть соединение с моделью заранее, пока звучит приветствие."""
+    url = getattr(backend, "URL", "")
+    if url:
+        try:
+            await (backend.http or shared_http()).head(url.rsplit("/", 2)[0], timeout=5)
+        except Exception:
+            pass
+
+
 class ChatBackend:
     """Ответ потоком через OpenAI-совместимый Chat Completions. Настройки берут подклассы."""
     unit = "$"
@@ -225,8 +246,8 @@ class ChatBackend:
         return body
 
     async def complete(self, system: str, messages: list[dict], tools: list[dict], on_text: TextSink) -> ModelReply:
-        if self.http is None:  # одно соединение на весь процесс: без TLS-рукопожатия на каждой реплике
-            self.http = httpx.AsyncClient(timeout=httpx.Timeout(60, connect=10))
+        if self.http is None:
+            self.http = shared_http()
         name = type(self).__name__.removesuffix("Backend")
         text, calls, finish, usage = [], {}, None, {}
         gate = ToolTextGate([t["name"] for t in tools])

@@ -12,7 +12,7 @@ import os
 import time
 from typing import Awaitable, Callable
 
-from voice import results, speech
+from voice import llm, results, speech
 from voice.dialog import SILENCE, Dialog
 
 log = logging.getLogger("voice.call")
@@ -39,8 +39,9 @@ class CallSession:
         self.synthesize = synthesize
         op = dialog.op
         # VOICE_VOICE на сервере перекрывает голос из анкеты: так голос меняется без правки кода
-        own = speech.Voice(op.voice, op.voice_role, float(op.voice_speed))
-        self.voice = voice or (speech.Voice(os.environ["VOICE_VOICE"], "", float(op.voice_speed))
+        speed = float(os.getenv("VOICE_SPEED") or op.voice_speed)  # темп речи: 1.1 быстрее, 0.9 медленнее
+        own = speech.Voice(op.voice, op.voice_role, speed)
+        self.voice = voice or (speech.Voice(os.environ["VOICE_VOICE"], "", speed)
                                if os.getenv("VOICE_VOICE") else own)
         self.fallback_voice = own if self.voice.name != own.name else None  # если выбранный голос не работает
         self.save = save
@@ -56,6 +57,7 @@ class CallSession:
         self.ended = asyncio.Event()   # итог больше не меняется
         self.done = asyncio.Event()    # итог сохранён и отправлен
         self.saved: dict | None = None
+        self.heard_at = 0.0      # когда клиент закончил реплику: для замера, как быстро робот ответил
 
     # ------------------------------------------------------------------ жизненный цикл
 
@@ -66,6 +68,9 @@ class CallSession:
         await self.send_event({"type": "transcript", "role": "robot", "text": greeting})
         await self._say(greeting)
         self._arm_silence()
+        backend = getattr(self.dialog, "backend", None)
+        if backend is not None:
+            asyncio.create_task(llm.warm_up(backend))
 
     async def hangup(self, reason: str = "клиент положил трубку") -> None:
         if self.ended.is_set():
@@ -110,6 +115,7 @@ class CallSession:
         if self.audio_sent and self.is_speaking():  # приветствие, которое ещё не прозвучало, не сбрасываем
             await self._barge_in()
         self.client_spoke = True
+        self.heard_at = time.monotonic()
         await self.send_event({"type": "transcript", "role": "client", "text": text})
         self.reply_task = asyncio.create_task(self._respond(text))
 
@@ -202,6 +208,9 @@ class CallSession:
         self.speaking_until = max(now, self.speaking_until) + len(pcm) / speech.TTS_BYTES_PER_SECOND
         self.audio_sent = True
         await self.send_audio(pcm)
+        if self.heard_at:
+            log.info("ответ клиенту зазвучал через %d мс после его реплики", (now - self.heard_at) * 1000)
+            self.heard_at = 0.0
 
     # ------------------------------------------------------------------ молчание
 
