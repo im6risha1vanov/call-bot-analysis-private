@@ -12,6 +12,7 @@ ENV=/opt/callbot-astra/.env
 # пустая строка, если ключа нет (иначе grep без совпадений молча роняет скрипт из-за set -e)
 getenv() { { grep -m1 "^$1=" "$ENV" || true; } | cut -d= -f2- | sed "s/^[\"']//; s/[\"']\$//"; }
 LOGIN=$(getenv MANGO_SIP_LOGIN); DOMAIN=$(getenv MANGO_SIP_DOMAIN); PASS=$(getenv MANGO_SIP_PASSWORD)
+LOGIN=${LOGIN#sip:}; LOGIN=${LOGIN%%@*}   # логин могли вписать целым адресом robot@vpbx....mangosip.ru
 [ -n "$LOGIN" ] && [ -n "$DOMAIN" ] && [ -n "$PASS" ] || { echo "нет MANGO_SIP_LOGIN / MANGO_SIP_DOMAIN / MANGO_SIP_PASSWORD в $ENV"; exit 1; }
 
 if ! command -v asterisk >/dev/null; then
