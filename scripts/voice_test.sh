@@ -64,7 +64,12 @@ case "$ACTION" in
       -p Restart=on-failure "$PY" -m voice.sip serve
     sleep 3
     systemctl is-active "$SIP_UNIT"
-    asterisk -rx "pjsip show registrations" 2>/dev/null | grep -i mango || echo "asterisk не настроен: bash $DIR/scripts/voice_sip_setup.sh"
+    if systemctl is-active -q callbot-voice-relay; then  # Asterisk на российском VPS (voice_relay_setup.sh)
+      VPS=$(grep -o 'root@[0-9.]*' /etc/systemd/system/callbot-voice-relay.service | cut -d@ -f2)
+      ssh -i /root/.ssh/voice_relay -o BatchMode=yes "root@$VPS" 'asterisk -rx "pjsip show registrations"' | grep -i mango
+    else
+      asterisk -rx "pjsip show registrations" 2>/dev/null | grep -i mango || echo "asterisk не настроен: bash $DIR/scripts/voice_sip_setup.sh"
+    fi
     ;;
   dial)
     PHONE=${2:?номер}
