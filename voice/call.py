@@ -51,6 +51,7 @@ class CallSession:
         self.speaking_until = 0.0
         self.pending = 0         # фраз в очереди или в синтезе: робот уже «говорит», хотя звука ещё нет
         self.audio_sent = False
+        self.client_spoke = False  # клиент уже сказал что-то по делу (не «алло» поверх приветствия)
         self.generation = 0      # растёт при перебивании, старые фразы не озвучиваются
         self.ended = asyncio.Event()   # итог больше не меняется
         self.done = asyncio.Event()    # итог сохранён и отправлен
@@ -96,8 +97,9 @@ class CallSession:
         """Распознанная речь клиента: промежуточная (final=False) или законченная реплика."""
         if self.ended.is_set() or not text.strip():
             return
-        if final and not self.audio_sent and self.pending and text.strip(" .,!?…").lower() in HELLO_WORDS:
-            log.info("клиент сказал «%s» до приветствия, ждём синтез", text)
+        # «алло» клиента, пока приветствие ещё не прозвучало или звучит, это не ответ: не перебиваем
+        if final and not self.client_spoke and self.is_speaking() and text.strip(" .,!?…").lower() in HELLO_WORDS:
+            log.info("клиент сказал «%s» поверх приветствия, продолжаем", text)
             return
         self._cancel_silence()
         if not final:
@@ -107,6 +109,7 @@ class CallSession:
             return
         if self.audio_sent and self.is_speaking():  # приветствие, которое ещё не прозвучало, не сбрасываем
             await self._barge_in()
+        self.client_spoke = True
         await self.send_event({"type": "transcript", "role": "client", "text": text})
         self.reply_task = asyncio.create_task(self._respond(text))
 

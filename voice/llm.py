@@ -139,6 +139,57 @@ class CvcBackend:
 # ------------------------------------------------------------------ Chat Completions: OpenRouter, YandexGPT
 
 
+class ToolTextGate:
+    """Ловит вызов инструмента, который модель написала текстом («finish_call {...}») вместо tool_calls.
+    YandexGPT так делает. Такой текст не должен попасть в озвучку: пропускаем всё до имени
+    инструмента, а хвост строки, похожий на начало имени, придерживаем до следующего куска."""
+
+    def __init__(self, names: list[str]) -> None:
+        self.names = names
+        self.buf = ""
+        self.tool: str | None = None
+        self.args = ""
+
+    def _hold(self, line: str) -> int:
+        """Сколько последних символов строки могут оказаться началом имени инструмента."""
+        for k in range(min(len(line), max(map(len, self.names), default=0)), 0, -1):
+            if any(n.startswith(line[-k:]) for n in self.names):
+                return k
+        return 0
+
+    def feed(self, chunk: str) -> str:
+        if self.tool is not None:
+            self.args += chunk
+            return ""
+        self.buf += chunk
+        hits = [(self.buf.find(n), n) for n in self.names if n in self.buf]
+        if hits:
+            pos, name = min(hits)
+            out, self.tool, self.args = self.buf[:pos], name, self.buf[pos + len(name):]
+            self.buf = ""
+            return out
+        line_start = self.buf.rfind("\n") + 1
+        keep = self._hold(self.buf[line_start:])
+        out, self.buf = self.buf[:len(self.buf) - keep], self.buf[len(self.buf) - keep:]
+        return out
+
+    def flush(self) -> str:
+        out, self.buf = self.buf, ""
+        return out
+
+    def call(self) -> tuple[str, object] | None:
+        if self.tool is None:
+            return None
+        raw = self.args
+        start, end = raw.find("{"), raw.rfind("}")
+        if start < 0 or end < start:
+            raise BadToolJSON(f"{self.tool}: нет JSON в «{raw[:100]}»")
+        try:
+            return self.tool, json.loads(raw[start:end + 1])
+        except json.JSONDecodeError as e:
+            raise BadToolJSON(str(e)) from None
+
+
 class ChatBackend:
     """Ответ потоком через OpenAI-совместимый Chat Completions. Настройки берут подклассы."""
     unit = "$"
@@ -178,6 +229,7 @@ class ChatBackend:
             self.http = httpx.AsyncClient(timeout=httpx.Timeout(60, connect=10))
         name = type(self).__name__.removesuffix("Backend")
         text, calls, finish, usage = [], {}, None, {}
+        gate = ToolTextGate([t["name"] for t in tools])
         async with self.http.stream("POST", self.URL, json=self.body(system, messages, tools), headers=self.headers()) as r:
             if r.status_code >= 300:
                 raise RuntimeError(f"{name} {r.status_code}: {(await r.aread()).decode(errors='replace')[:500]}")
@@ -194,17 +246,28 @@ class ChatBackend:
                 for choice in event.get("choices") or []:
                     delta = choice.get("delta") or {}
                     if delta.get("content"):
-                        text.append(delta["content"])
-                        await on_text(delta["content"])
+                        said = gate.feed(delta["content"])
+                        if said:
+                            text.append(said)
+                            await on_text(said)
                     for call in delta.get("tool_calls") or []:
                         slot = calls.setdefault(call.get("index", 0), {"name": "", "arguments": ""})
                         fn = call.get("function") or {}
                         slot["name"] += fn.get("name") or ""
                         slot["arguments"] += fn.get("arguments") or ""
                     finish = choice.get("finish_reason") or finish
+        rest = gate.flush()
+        if rest:
+            text.append(rest)
+            await on_text(rest)
         reply = ModelReply("".join(text), cost=self.cost(usage))
         if finish == "length":
             reply.stop = "max_tokens"
+        written = None if calls else gate.call()
+        if written is not None:
+            reply.tool_name, reply.tool_input = written
+            if reply.stop != "max_tokens":
+                reply.stop = "tool"
         if calls:
             call = calls[min(calls)]
             reply.tool_name = call["name"]

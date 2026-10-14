@@ -251,6 +251,40 @@ class YandexBackendTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((sent[0].headers["authorization"], sent[0].headers["openai-project"]), ("Bearer ak", "b1gtest"))
 
 
+class ToolTextGateTest(unittest.IsolatedAsyncioTestCase):
+    async def test_tool_call_written_as_text_is_not_spoken(self):
+        pieces = ["Поняла, спасибо", ", всего доброго!\nfin", "ish_call\n{\"comment\": \"Не планирует\", ",
+                  "\"outcome\": \"not_relevant\"}"]
+
+        def handler(request):
+            events = [{"choices": [{"index": 0, "delta": {"content": p}, "finish_reason": None}]} for p in pieces]
+            events.append({"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]})
+            text = "".join(f"data: {json.dumps(e, ensure_ascii=False)}\n\n" for e in events) + "data: [DONE]\n\n"
+            return httpx.Response(200, headers={"content-type": "text/event-stream"}, text=text)
+
+        backend = YandexBackend("yandexgpt", http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+                                api_key="ak", folder="b1g")
+        dialog = Dialog(load("kitchen"), backend)
+        dialog.greet()
+        heard = []
+
+        async def sink(c):
+            heard.append(c)
+
+        turn = await dialog.reply("Нет, не планирую", sink)
+        self.assertNotIn("finish", "".join(heard))
+        self.assertEqual("".join(heard).strip(), "Поняла, спасибо, всего доброго!")
+        self.assertEqual((turn.result.outcome, turn.result.comment), ("not_relevant", "Не планирует"))
+
+    def test_plain_text_passes_and_latin_tail_is_held(self):
+        from voice.llm import ToolTextGate
+        gate = ToolTextGate(["finish_call", "transfer_to_specialist"])
+        self.assertEqual(gate.feed("Хорошо, записала. "), "Хорошо, записала. ")
+        self.assertEqual(gate.feed("tra"), "")          # может оказаться началом transfer_to_specialist
+        self.assertEqual(gate.feed("ктор"), "traктор")  # не оказалось
+        self.assertIsNone(gate.call())
+
+
 class CvcBackendTest(unittest.IsolatedAsyncioTestCase):
     def backend(self, handler):
         return CvcBackend("gpt-test", http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
@@ -574,6 +608,33 @@ class CallSessionTest(unittest.IsolatedAsyncioTestCase):
         finally:
             call_mod.SILENCE_AFTER_S = old
             await session.hangup()
+
+    async def test_hello_over_playing_greeting_is_ignored(self):
+        audio, events = [], []
+
+        async def send_audio(pcm):
+            audio.append(pcm)
+
+        async def send_event(e):
+            events.append(e)
+
+        async def synth(text, voice):
+            return b"\x00\x00" * speech.TTS_RATE * 2  # 2 секунды звука
+
+        async def save(dialog, **kw):
+            return results.record(dialog, **kw)
+
+        session = CallSession(Dialog(load("kitchen"), AnthropicBackend(client=FakeClient([]))), send_audio, send_event,
+                              synthesize=synth, save=save)
+        await session.start()
+        for _ in range(50):
+            if audio:
+                break
+            await asyncio.sleep(0.01)
+        await session.heard("Алло.", True)  # приветствие ещё звучит
+        self.assertIsNone(session.reply_task)
+        self.assertNotIn({"type": "clear"}, events)
+        await session.hangup()
 
     async def test_hangup_without_result_records_callback(self):
         events = []
