@@ -15,6 +15,48 @@ LOGIN=$(getenv MANGO_SIP_LOGIN); DOMAIN=$(getenv MANGO_SIP_DOMAIN); PASS=$(geten
 LOGIN=${LOGIN#sip:}; LOGIN=${LOGIN%%@*}   # логин могли вписать целым адресом robot@vpbx....mangosip.ru
 [ -n "$LOGIN" ] && [ -n "$DOMAIN" ] && [ -n "$PASS" ] || { echo "нет MANGO_SIP_LOGIN / MANGO_SIP_DOMAIN / MANGO_SIP_PASSWORD в $ENV"; exit 1; }
 
+export DEBIAN_FRONTEND=noninteractive
+
+build_from_source() {  # в Ubuntu 24.04 и Debian 12 пакета asterisk нет, собираем LTS-версию сами (~30 мин на 1 ядре)
+  echo "пакета asterisk нет, собираю из исходников, это займёт около получаса..."
+  apt-get install -y -qq build-essential curl pkg-config libedit-dev libjansson-dev libxml2-dev uuid-dev \
+    libsqlite3-dev libssl-dev >/dev/null
+  rm -rf /usr/src/asterisk-build && mkdir -p /usr/src/asterisk-build && cd /usr/src/asterisk-build
+  curl -fsSL -o src.tar.gz https://downloads.asterisk.org/pub/telephony/asterisk/asterisk-22-current.tar.gz \
+    || curl -fsSL -o src.tar.gz https://github.com/asterisk/asterisk/archive/refs/tags/22.11.0.tar.gz
+  tar xzf src.tar.gz --strip-components=1
+  ./configure --quiet >/dev/null
+  make -s menuselect.makeopts >/dev/null
+  menuselect/menuselect --disable BUILD_NATIVE --disable-category MENUSELECT_CORE_SOUNDS \
+    --disable-category MENUSELECT_MOH --disable-category MENUSELECT_EXTRA_SOUNDS menuselect.makeopts >/dev/null  # звуки роботу не нужны
+  make -s -j"$(nproc)" >/dev/null 2>&1
+  make -s install >/dev/null 2>&1
+  [ -d /etc/asterisk ] && [ -n "$(ls -A /etc/asterisk)" ] || make -s samples >/dev/null 2>&1
+  ldconfig
+  id asterisk >/dev/null 2>&1 || useradd -r -d /var/lib/asterisk -s /usr/sbin/nologin asterisk
+  chown -R asterisk: /var/lib/asterisk /var/log/asterisk /var/spool/asterisk /var/run/asterisk 2>/dev/null || true
+  cat > /etc/systemd/system/asterisk.service <<'UNIT'
+[Unit]
+Description=Asterisk PBX
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=asterisk
+Group=asterisk
+RuntimeDirectory=asterisk
+ExecStart=/usr/sbin/asterisk -f -C /etc/asterisk/asterisk.conf
+ExecReload=/usr/sbin/asterisk -rx "core reload"
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  systemctl daemon-reload
+  cd /
+}
+
 if ! command -v asterisk >/dev/null; then
   apt-get update -qq
   # в Ubuntu asterisk лежит в universe, на минимальных образах VPS он бывает выключен
@@ -23,10 +65,11 @@ if ! command -v asterisk >/dev/null; then
     add-apt-repository -y universe >/dev/null
     apt-get update -qq
   fi
-  if ! apt-cache policy asterisk | grep -q 'Candidate: [0-9]'; then
-    echo "в репозитории этой системы нет пакета asterisk, пришли вывод: cat /etc/os-release"; exit 1
+  if apt-cache policy asterisk | grep -q 'Candidate: [0-9]'; then
+    apt-get install -y -qq asterisk >/dev/null
+  else
+    build_from_source
   fi
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq asterisk >/dev/null
 fi
 
 BACKUP=/root/asterisk-backup-$(date +%Y%m%d-%H%M%S)

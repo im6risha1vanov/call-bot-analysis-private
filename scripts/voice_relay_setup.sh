@@ -15,7 +15,7 @@ VPS=${1:?"укажи IP VPS: bash voice_relay_setup.sh 1.2.3.4"}
 ENV=/opt/callbot-astra/.env
 HERE=$(cd "$(dirname "$0")" && pwd)
 KEY=/root/.ssh/voice_relay
-SSH=(ssh -i "$KEY" -o StrictHostKeyChecking=accept-new -o BatchMode=yes "root@$VPS")
+SSH=(ssh -i "$KEY" -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ServerAliveInterval=30 "root@$VPS")
 
 [ -f "$KEY" ] || ssh-keygen -q -t ed25519 -N "" -C voice-relay -f "$KEY"
 if ! "${SSH[@]}" true 2>/dev/null; then
