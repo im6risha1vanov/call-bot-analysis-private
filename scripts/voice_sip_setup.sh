@@ -17,6 +17,12 @@ LOGIN=${LOGIN#sip:}; LOGIN=${LOGIN%%@*}   # логин могли вписать
 
 if ! command -v asterisk >/dev/null; then
   apt-get update -qq
+  # в Ubuntu asterisk лежит в universe, на минимальных образах VPS он бывает выключен
+  if ! apt-cache policy asterisk | grep -q 'Candidate: [0-9]' && grep -q '^ID=ubuntu' /etc/os-release; then
+    apt-get install -y -qq software-properties-common >/dev/null
+    add-apt-repository -y universe >/dev/null
+    apt-get update -qq
+  fi
   if ! apt-cache policy asterisk | grep -q 'Candidate: [0-9]'; then
     echo "в репозитории этой системы нет пакета asterisk, пришли вывод: cat /etc/os-release"; exit 1
   fi
