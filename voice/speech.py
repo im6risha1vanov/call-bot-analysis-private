@@ -331,6 +331,8 @@ class Heard:
 
 
 TURN_GAP_S = int(os.getenv("VOICE_TURN_GAP_MS", "500")) / 1000
+# фраза без точки в конце («Город…») обычно не закончена: ждём дольше, чтобы не перебить клиента
+OPEN_GAP_S = int(os.getenv("VOICE_TURN_GAP_OPEN_MS", "1000")) / 1000
 
 
 class UtteranceCollector:
@@ -338,9 +340,10 @@ class UtteranceCollector:
     По телефону speech_final часто не приходит (шум линии), а UtteranceEnd ждёт секунду и больше, поэтому
     реплику закрывает и пауза TURN_GAP_S после окончательного текста, если новых слов не слышно."""
 
-    def __init__(self, gap: float = TURN_GAP_S) -> None:
+    def __init__(self, gap: float = TURN_GAP_S, open_gap: float = OPEN_GAP_S) -> None:
         self.parts: list[str] = []
         self.gap = gap
+        self.open_gap = max(open_gap, gap)
         self.tail = ""          # промежуточный текст после последнего окончательного: клиент ещё говорит
         self.final_at = 0.0
 
@@ -348,7 +351,8 @@ class UtteranceCollector:
         """Сколько ещё ждать до закрытия реплики по паузе; None, если закрывать нечего."""
         if not self.parts or self.tail or self.gap <= 0:
             return None
-        return max(self.final_at + self.gap - now, 0.0)
+        finished = self.parts[-1].rstrip().endswith((".", "!", "?", "…"))
+        return max(self.final_at + (self.gap if finished else self.open_gap) - now, 0.0)
 
     def close_on_gap(self) -> Heard | None:
         return self._close()
@@ -416,7 +420,7 @@ class DeepgramStream:
             except asyncio.TimeoutError:
                 heard = self.collector.close_on_gap()
                 if heard:
-                    log.info("реплика закрыта по паузе %d мс", self.collector.gap * 1000)
+                    log.info("реплика закрыта по паузе")
                     yield heard
                 continue
             if msg.type == aiohttp.WSMsgType.TEXT:

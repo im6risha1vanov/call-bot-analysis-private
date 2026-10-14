@@ -371,16 +371,18 @@ class SpeechTest(unittest.TestCase):
         self.assertIn("encoding=linear16", speech.deepgram_url())
 
     def test_collector_closes_on_pause(self):
-        c = speech.UtteranceCollector(gap=0.5)
+        c = speech.UtteranceCollector(gap=0.5, open_gap=1.0)
         res = lambda t, final=False: {"type": "Results", "is_final": final, "speech_final": False, "channel": {"alternatives": [{"transcript": t}]}}
         self.assertIsNone(c.gap_left(0))  # ещё нечего закрывать
-        c.handle(res("Краснодар", final=True))
+        c.handle(res("Город", final=True))  # без точки: клиент, скорее всего, ещё договаривает
+        self.assertAlmostEqual(c.gap_left(c.final_at + 0.2), 0.8)
+        c.handle(res("Краснодар.", final=True))
         self.assertAlmostEqual(c.gap_left(c.final_at + 0.2), 0.3)
         c.handle(res("и ещё"))  # клиент продолжает говорить: по паузе не закрываем
         self.assertIsNone(c.gap_left(c.final_at + 1))
         c.handle(res("и ещё Сочи", final=True))
         self.assertEqual(c.gap_left(c.final_at + 1), 0.0)
-        self.assertEqual(c.close_on_gap(), speech.Heard("Краснодар и ещё Сочи", True))
+        self.assertEqual(c.close_on_gap(), speech.Heard("Город Краснодар. и ещё Сочи", True))
         self.assertIsNone(c.gap_left(10))
 
 
