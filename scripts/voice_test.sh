@@ -38,10 +38,12 @@ update() {
   echo "код: $(git -C "$DIR" log -1 --format='%h %s')"
 }
 
-run() {  # одноразовый запуск с ключами бота от пользователя бота
+run() {  # одноразовый запуск с ключами бота от пользователя бота; доп. переменные: RUN_ENV=(-E K=V ...)
   systemd-run --quiet --wait --pipe --collect --uid=callbot-astra --working-directory="$DIR" \
-    -p EnvironmentFile="$BOT/.env" -E VOICE_LOG="$DATA/calls.jsonl" -E VOICE_TTS_CACHE="$DATA/tts-cache" "$PY" "$@"
+    -p EnvironmentFile="$BOT/.env" -E VOICE_LOG="$DATA/calls.jsonl" -E VOICE_TTS_CACHE="$DATA/tts-cache" \
+    "${RUN_ENV[@]}" "$PY" "$@" </dev/null
 }
+RUN_ENV=()
 
 case "$ACTION" in
   start)
@@ -90,8 +92,8 @@ case "$ACTION" in
   autotest)
     update
     if systemctl is-active -q "$SIP_UNIT"; then systemctl restart "$SIP_UNIT"; fi  # телефонный робот на новом коде
-    run -E VOICE_TTS_RATE=8000 -E VOICE_ELEVEN_PCM_RATE=8000 -E VOICE_AUTOTEST_SHA="$SHA" \
-      -m voice.autotest --sheet --out "$DATA/autotest.md" "${@:2}" || true
+    RUN_ENV=(-E VOICE_TTS_RATE=8000 -E VOICE_ELEVEN_PCM_RATE=8000 -E VOICE_AUTOTEST_SHA="$SHA")
+    run -m voice.autotest --sheet --out "$DATA/autotest.md" "${@:2}" || true
     echo "отчёт: $DATA/autotest.md"
     ;;
   tick)  # таймер: новый коммит с правками робота -> автотест (не чаще MAX_PER_DAY в сутки)
@@ -109,7 +111,8 @@ case "$ACTION" in
       exit 0  # правки не про робота
     fi
     TODAY=$(date +%F)
-    if [ "$(grep -c "^$TODAY" "$DATA/autotest.runs" 2>/dev/null || true)" -ge "$MAX_PER_DAY" ]; then
+    RUNS=$(grep -c "^$TODAY" "$DATA/autotest.runs" 2>/dev/null || true)
+    if [ "${RUNS:-0}" -ge "$MAX_PER_DAY" ]; then
       echo "лимит $MAX_PER_DAY автотестов в сутки, $SHA пропущен"; exit 0
     fi
     echo "$TODAY $(date +%T) $SHA" >> "$DATA/autotest.runs"
