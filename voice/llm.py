@@ -5,9 +5,10 @@
   бот делает разборы. Responses API, ответ потоком (SSE).
 - openrouter: OpenRouter, ключ OPENROUTER_API_KEY (тот же, что для голосов el:).
   Chat Completions, ответ потоком; стоимость в долларах приходит в самом ответе.
+- yandex: YandexGPT в Яндекс Облаке, российская оплата и серверы, ответ ~1 с.
 - anthropic: Claude напрямую, ключ ANTHROPIC_API_KEY.
 
-Выбор: VOICE_LLM=cvc|openrouter|anthropic. Модель: VOICE_MODEL (для cvc по умолчанию
+Выбор: VOICE_LLM=cvc|yandex|openrouter|anthropic. Модель: VOICE_MODEL (для cvc по умолчанию
 CVC_MODEL бота, для openrouter anthropic/claude-haiku-5.5, для anthropic claude-haiku-5-5).
 
 История разговора хранится в нейтральном виде: [{"role": "user"|"assistant", "content": str}].
@@ -135,31 +136,36 @@ class CvcBackend:
         return reply
 
 
-# ------------------------------------------------------------------ OpenRouter
+# ------------------------------------------------------------------ Chat Completions: OpenRouter, YandexGPT
 
 
-class OpenRouterBackend:
+class ChatBackend:
+    """Ответ потоком через OpenAI-совместимый Chat Completions. Настройки берут подклассы."""
     unit = "$"
-    URL = "https://openrouter.ai/api/v1/chat/completions"
+    URL = ""
 
-    def __init__(self, model: str | None = None, *, http: httpx.AsyncClient | None = None,
-                 api_key: str | None = None) -> None:
-        self.model = model or os.getenv("VOICE_MODEL", "anthropic/claude-haiku-5.5")
-        self.api_key = api_key or os.environ["OPENROUTER_API_KEY"]
+    def __init__(self, model: str, api_key: str, *, http: httpx.AsyncClient | None = None) -> None:
+        self.model = model
+        self.api_key = api_key
         self.max_output = int(os.getenv("VOICE_MAX_OUTPUT", "600"))
         self.http = http
+
+    def headers(self) -> dict:
+        return {"Authorization": "Bearer " + self.api_key}
+
+    def system_message(self, system: str) -> dict:
+        return {"role": "system", "content": system}
+
+    def extra(self) -> dict:
+        return {}
 
     def body(self, system: str, messages: list[dict], tools: list[dict]) -> dict:
         body = {
             "model": self.model,
-            # cache_control: у моделей Claude длинная инструкция кешируется и стоит в 10 раз дешевле
-            "messages": [{"role": "system", "content": [{"type": "text", "text": system,
-                                                          "cache_control": {"type": "ephemeral"}}]}]
-                        + [{"role": m["role"], "content": m["content"]} for m in messages],
+            "messages": [self.system_message(system)] + [{"role": m["role"], "content": m["content"]} for m in messages],
             "max_tokens": self.max_output,
             "stream": True,
-            "usage": {"include": True},
-            "reasoning": {"enabled": False},
+            **self.extra(),
         }
         if tools:
             body["tools"] = [{"type": "function", "function": {"name": t["name"], "description": t["description"],
@@ -168,13 +174,13 @@ class OpenRouterBackend:
         return body
 
     async def complete(self, system: str, messages: list[dict], tools: list[dict], on_text: TextSink) -> ModelReply:
-        if self.http is None:
+        if self.http is None:  # одно соединение на весь процесс: без TLS-рукопожатия на каждой реплике
             self.http = httpx.AsyncClient(timeout=httpx.Timeout(60, connect=10))
+        name = type(self).__name__.removesuffix("Backend")
         text, calls, finish, usage = [], {}, None, {}
-        async with self.http.stream("POST", self.URL, json=self.body(system, messages, tools),
-                                     headers={"Authorization": "Bearer " + self.api_key, "X-Title": "callbot-voice"}) as r:
+        async with self.http.stream("POST", self.URL, json=self.body(system, messages, tools), headers=self.headers()) as r:
             if r.status_code >= 300:
-                raise RuntimeError(f"OpenRouter {r.status_code}: {(await r.aread()).decode(errors='replace')[:500]}")
+                raise RuntimeError(f"{name} {r.status_code}: {(await r.aread()).decode(errors='replace')[:500]}")
             async for line in r.aiter_lines():
                 if not line.startswith("data:"):
                     continue  # ": OPENROUTER PROCESSING" и пустые строки
@@ -183,7 +189,7 @@ class OpenRouterBackend:
                     continue
                 event = json.loads(payload)
                 if event.get("error"):
-                    raise RuntimeError(f"OpenRouter: {json.dumps(event['error'], ensure_ascii=False)[:500]}")
+                    raise RuntimeError(f"{name}: {json.dumps(event['error'], ensure_ascii=False)[:500]}")
                 usage = event.get("usage") or usage
                 for choice in event.get("choices") or []:
                     delta = choice.get("delta") or {}
@@ -196,7 +202,7 @@ class OpenRouterBackend:
                         slot["name"] += fn.get("name") or ""
                         slot["arguments"] += fn.get("arguments") or ""
                     finish = choice.get("finish_reason") or finish
-        reply = ModelReply("".join(text), cost=float(usage.get("cost") or 0))
+        reply = ModelReply("".join(text), cost=self.cost(usage))
         if finish == "length":
             reply.stop = "max_tokens"
         if calls:
@@ -209,6 +215,53 @@ class OpenRouterBackend:
             if reply.stop != "max_tokens":
                 reply.stop = "tool"
         return reply
+
+    def cost(self, usage: dict) -> float:
+        return float(usage.get("cost") or 0)
+
+
+class OpenRouterBackend(ChatBackend):
+    URL = "https://openrouter.ai/api/v1/chat/completions"
+
+    def __init__(self, model: str | None = None, *, http: httpx.AsyncClient | None = None,
+                 api_key: str | None = None) -> None:
+        super().__init__(model or os.getenv("VOICE_MODEL", "anthropic/claude-haiku-5.5"),
+                         api_key or os.environ["OPENROUTER_API_KEY"], http=http)
+
+    def headers(self) -> dict:
+        return {**super().headers(), "X-Title": "callbot-voice"}
+
+    def system_message(self, system: str) -> dict:
+        # cache_control: у моделей Claude длинная инструкция кешируется и стоит в 10 раз дешевле
+        return {"role": "system", "content": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]}
+
+    def extra(self) -> dict:
+        return {"usage": {"include": True}, "reasoning": {"enabled": False}}
+
+
+class YandexBackend(ChatBackend):
+    """YandexGPT в Яндекс Облаке (AI Studio): российская оплата, серверы в России.
+    Ключ YANDEX_GPT_API_KEY (или ключ озвучки YANDEX_TTS_API_KEY, если у сервисного аккаунта
+    есть роль ai.languageModels.user), каталог YANDEX_FOLDER_ID (или YANDEX_TTS_FOLDER_ID)."""
+    URL = "https://llm.api.cloud.yandex.net/v1/chat/completions"
+    unit = "ток."
+
+    def __init__(self, model: str | None = None, *, http: httpx.AsyncClient | None = None,
+                 api_key: str | None = None, folder: str | None = None) -> None:
+        self.folder = (folder or os.getenv("YANDEX_FOLDER_ID") or os.getenv("YANDEX_TTS_FOLDER_ID") or "").strip()
+        if not self.folder:
+            raise RuntimeError("нет YANDEX_FOLDER_ID: ID каталога из консоли Яндекс Облака (b1g…)")
+        name = model or os.getenv("VOICE_MODEL", "yandexgpt-lite/latest")
+        if not name.startswith("gpt://"):
+            name = f"gpt://{self.folder}/{name if '/' in name else name + '/latest'}"
+        super().__init__(name, (api_key or os.getenv("YANDEX_GPT_API_KEY") or os.environ["YANDEX_TTS_API_KEY"]).strip(),
+                         http=http)
+
+    def headers(self) -> dict:
+        return {**super().headers(), "OpenAI-Project": self.folder}
+
+    def cost(self, usage: dict) -> float:
+        return float(usage.get("total_tokens") or 0)  # биллинг Яндекса в токенах, рубли считаются по тарифу модели
 
 
 # ------------------------------------------------------------------ Anthropic
@@ -266,14 +319,16 @@ def make_backend(kind: str | None = None, model: str | None = None):
         return CvcBackend(model)
     if kind == "openrouter":
         return OpenRouterBackend(model)
+    if kind == "yandex":
+        return YandexBackend(model)
     if kind == "anthropic":
         return AnthropicBackend(model)
-    raise ValueError(f"VOICE_LLM={kind!r}: можно cvc, openrouter или anthropic")
+    raise ValueError(f"VOICE_LLM={kind!r}: можно cvc, yandex, openrouter или anthropic")
 
 
 def describe() -> str:
     """Какая модель отвечает, для страницы теста."""
     kind = os.getenv("VOICE_LLM", "cvc").strip().lower()
     default = {"cvc": os.getenv("CVC_MODEL", "gpt-6-astra"), "openrouter": "anthropic/claude-haiku-5.5",
-               "anthropic": "claude-haiku-5-5"}.get(kind, "?")
+               "anthropic": "claude-haiku-5-5", "yandex": "yandexgpt-lite/latest"}.get(kind, "?")
     return f"{kind}: {os.getenv('VOICE_MODEL') or default}"

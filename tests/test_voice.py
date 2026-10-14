@@ -13,7 +13,7 @@ import httpx
 from voice import results, speech
 from voice.call import CallSession
 from voice.dialog import Dialog, build_tools, parse_result
-from voice.llm import AnthropicBackend, CvcBackend, OpenRouterBackend
+from voice.llm import AnthropicBackend, CvcBackend, OpenRouterBackend, YandexBackend
 from voice.operator import MAX_ITEMS, OperatorError, load
 
 
@@ -225,6 +225,30 @@ class OpenRouterBackendTest(unittest.IsolatedAsyncioTestCase):
             lambda r: httpx.Response(402, json={"error": {"message": "Insufficient credits"}}))), api_key="k")
         with self.assertRaisesRegex(RuntimeError, "402"):
             await backend.complete("s", [{"role": "user", "content": "Алло"}], [], lambda c: None)
+
+
+class YandexBackendTest(unittest.IsolatedAsyncioTestCase):
+    async def test_model_uri_folder_header_and_text(self):
+        sent = []
+
+        def handler(request):
+            sent.append(request)
+            events = [{"choices": [{"index": 0, "delta": {"content": "В каком городе?"}, "finish_reason": None}]},
+                      {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}], "usage": {"total_tokens": 1200}}]
+            text = "".join(f"data: {json.dumps(e, ensure_ascii=False)}\n\n" for e in events) + "data: [DONE]\n\n"
+            return httpx.Response(200, headers={"content-type": "text/event-stream"}, text=text)
+
+        backend = YandexBackend("yandexgpt-lite", http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+                                api_key="ak", folder="b1gtest")
+        dialog = Dialog(load("kitchen"), backend)
+        dialog.greet()
+        turn = await dialog.reply("Да")
+        self.assertEqual((turn.text, dialog.cost, dialog.cost_unit), ("В каком городе?", 1200.0, "ток."))
+        body = json.loads(sent[0].content)
+        self.assertEqual(body["model"], "gpt://b1gtest/yandexgpt-lite/latest")
+        self.assertIsInstance(body["messages"][0]["content"], str)
+        self.assertNotIn("reasoning", body)
+        self.assertEqual((sent[0].headers["authorization"], sent[0].headers["openai-project"]), ("Bearer ak", "b1gtest"))
 
 
 class CvcBackendTest(unittest.IsolatedAsyncioTestCase):
