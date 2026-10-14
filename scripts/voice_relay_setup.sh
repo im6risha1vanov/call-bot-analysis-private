@@ -20,7 +20,7 @@ SSH=(ssh -i "$KEY" -o StrictHostKeyChecking=accept-new -o BatchMode=yes "root@$V
 [ -f "$KEY" ] || ssh-keygen -q -t ed25519 -N "" -C voice-relay -f "$KEY"
 if ! "${SSH[@]}" true 2>/dev/null; then
   echo "сейчас спросит пароль root от VPS (один раз):"
-  ssh-copy-id -i "$KEY.pub" -o StrictHostKeyChecking=accept-new "root@$VPS" >/dev/null
+  ssh-copy-id -i "$KEY.pub" -o StrictHostKeyChecking=accept-new "root@$VPS"
 fi
 "${SSH[@]}" true
 
