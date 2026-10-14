@@ -19,6 +19,8 @@ log = logging.getLogger("voice.call")
 
 SILENCE_AFTER_S = 7.0      # сколько ждать ответа клиента после реплики робота
 BARGE_IN_WORDS = 2         # столько слов клиента поверх робота останавливают робота
+# пока робот не сказал ни звука, «алло» клиента означает «я тут», а не ответ: ждём приветствия
+HELLO_WORDS = {"алло", "ало", "алё", "але", "да", "слушаю", "здравствуйте", "добрый день"}
 
 SendAudio = Callable[[bytes], Awaitable[None]]
 SendEvent = Callable[[dict], Awaitable[None]]
@@ -47,6 +49,8 @@ class CallSession:
         self.tts_task: asyncio.Task | None = None
         self.silence_task: asyncio.Task | None = None
         self.speaking_until = 0.0
+        self.pending = 0         # фраз в очереди или в синтезе: робот уже «говорит», хотя звука ещё нет
+        self.audio_sent = False
         self.generation = 0      # растёт при перебивании, старые фразы не озвучиваются
         self.ended = asyncio.Event()   # итог больше не меняется
         self.done = asyncio.Event()    # итог сохранён и отправлен
@@ -92,20 +96,23 @@ class CallSession:
         """Распознанная речь клиента: промежуточная (final=False) или законченная реплика."""
         if self.ended.is_set() or not text.strip():
             return
+        if final and not self.audio_sent and self.pending and text.strip(" .,!?…").lower() in HELLO_WORDS:
+            log.info("клиент сказал «%s» до приветствия, ждём синтез", text)
+            return
         self._cancel_silence()
         if not final:
             await self.send_event({"type": "interim", "text": text})
-            if self.is_speaking() and len(text.split()) >= BARGE_IN_WORDS:
+            if self.audio_sent and self.is_speaking() and len(text.split()) >= BARGE_IN_WORDS:
                 await self._barge_in()
             return
-        if self.is_speaking():
+        if self.audio_sent and self.is_speaking():  # приветствие, которое ещё не прозвучало, не сбрасываем
             await self._barge_in()
         await self.send_event({"type": "transcript", "role": "client", "text": text})
         self.reply_task = asyncio.create_task(self._respond(text))
 
     def is_speaking(self) -> bool:
         busy = self.reply_task is not None and not self.reply_task.done()
-        return busy or time.monotonic() < self.speaking_until
+        return busy or self.pending > 0 or time.monotonic() < self.speaking_until
 
     async def _barge_in(self) -> None:
         self.generation += 1
@@ -116,7 +123,8 @@ class CallSession:
             except (asyncio.CancelledError, Exception):
                 pass
         while not self.phrases.empty():
-            self.phrases.get_nowait()
+            if self.phrases.get_nowait() is not None:
+                self.pending -= 1
         self.speaking_until = 0.0
         await self.send_event({"type": "clear"})
 
@@ -152,6 +160,7 @@ class CallSession:
 
     async def _say(self, phrase: str, generation: int | None = None) -> None:
         if phrase.strip():
+            self.pending += 1
             await self.phrases.put(f"{self.generation if generation is None else generation}\x00{phrase}")
 
     async def _tts_worker(self) -> None:
@@ -159,28 +168,37 @@ class CallSession:
             item = await self.phrases.get()
             if item is None:
                 return
-            generation, phrase = item.split("\x00", 1)
-            if int(generation) != self.generation or not self.voice_enabled:
-                continue
+            try:
+                await self._speak(item)
+            finally:
+                self.pending = max(self.pending - 1, 0)
+
+    async def _speak(self, item: str) -> None:
+        generation, phrase = item.split("\x00", 1)
+        if int(generation) != self.generation or not self.voice_enabled:
+            return
+        started = time.monotonic()
+        try:
+            pcm = await self.synthesize(phrase, self.voice)
+        except Exception as e:
+            log.warning("синтез не удался: %s", e)
+            await self.send_event({"type": "error", "text": f"синтез: {e}"})
+            if self.fallback_voice is None:
+                return
+            # до конца звонка говорим голосом из анкеты, чтобы клиент не слушал тишину
+            self.voice, self.fallback_voice = self.fallback_voice, None
             try:
                 pcm = await self.synthesize(phrase, self.voice)
-            except Exception as e:
-                log.warning("синтез не удался: %s", e)
-                await self.send_event({"type": "error", "text": f"синтез: {e}"})
-                if self.fallback_voice is None:
-                    continue
-                # до конца звонка говорим голосом из анкеты, чтобы клиент не слушал тишину
-                self.voice, self.fallback_voice = self.fallback_voice, None
-                try:
-                    pcm = await self.synthesize(phrase, self.voice)
-                except Exception as e2:
-                    log.warning("запасной голос тоже не сработал: %s", e2)
-                    continue
-            if int(generation) != self.generation:
-                continue
-            now = time.monotonic()
-            self.speaking_until = max(now, self.speaking_until) + len(pcm) / speech.TTS_BYTES_PER_SECOND
-            await self.send_audio(pcm)
+            except Exception as e2:
+                log.warning("запасной голос тоже не сработал: %s", e2)
+                return
+        log.info("синтез %d мс, %d симв.: %s", (time.monotonic() - started) * 1000, len(phrase), self.voice.name)
+        if int(generation) != self.generation:
+            return
+        now = time.monotonic()
+        self.speaking_until = max(now, self.speaking_until) + len(pcm) / speech.TTS_BYTES_PER_SECOND
+        self.audio_sent = True
+        await self.send_audio(pcm)
 
     # ------------------------------------------------------------------ молчание
 
@@ -196,7 +214,7 @@ class CallSession:
         # ждём, пока робот договорит, потом SILENCE_AFTER_S тишины
         while True:
             wait = self.speaking_until - time.monotonic()
-            if wait <= 0 and not (self.reply_task and not self.reply_task.done()):
+            if wait <= 0 and not self.pending and not (self.reply_task and not self.reply_task.done()):
                 break
             await asyncio.sleep(max(wait, 0.2))
         await asyncio.sleep(SILENCE_AFTER_S)

@@ -519,6 +519,38 @@ class CallSessionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(used[:2], ["11:Eva", load("kitchen").voice])
         self.assertEqual(len(audio), 1)
 
+    async def test_slow_greeting_is_not_dropped_by_hello_or_silence(self):
+        import voice.call as call_mod
+        audio, events = [], []
+
+        async def send_audio(pcm):
+            audio.append(pcm)
+
+        async def send_event(e):
+            events.append(e)
+
+        async def synth(text, voice):
+            await asyncio.sleep(0.3)  # медленный синтез, как первый запрос к ElevenLabs
+            return b"\x00\x00" * 16
+
+        async def save(dialog, **kw):
+            return results.record(dialog, **kw)
+
+        old = call_mod.SILENCE_AFTER_S
+        call_mod.SILENCE_AFTER_S = 0.1
+        try:
+            session = CallSession(Dialog(load("kitchen"), AnthropicBackend(client=FakeClient([]))), send_audio, send_event,
+                                  synthesize=synth, save=save)
+            await session.start()
+            await asyncio.sleep(0.15)
+            await session.heard("Алло,", True)   # клиент не слышит робота и повторяет «алло»
+            await asyncio.sleep(0.25)
+            self.assertEqual(len(audio), 1)        # приветствие прозвучало
+            self.assertIsNone(session.reply_task)  # ни молчания, ни ответа на «алло»
+        finally:
+            call_mod.SILENCE_AFTER_S = old
+            await session.hangup()
+
     async def test_hangup_without_result_records_callback(self):
         events = []
 
