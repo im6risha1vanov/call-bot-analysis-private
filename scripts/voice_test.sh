@@ -125,6 +125,7 @@ Description=Voice robot autotest on new commits of $BRANCH
 [Service]
 Type=oneshot
 TimeoutStartSec=1800
+Environment=HOME=/root
 ExecStart=/bin/bash -c 'cd $BOT && git fetch -q $REMOTE $BRANCH && git show FETCH_HEAD:scripts/voice_test.sh | bash -s tick'
 UNIT
     cat > /etc/systemd/system/$WATCH.timer <<UNIT
