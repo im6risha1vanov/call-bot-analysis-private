@@ -414,6 +414,10 @@ class SpeechTest(unittest.TestCase):
         self.assertEqual(c.gap_left(c.tail_at + 1.5), 0.0)
         self.assertEqual(c.close_on_gap(), speech.Heard("Около 300 тысяч", True))
         self.assertIsNone(c.handle(res("Около 300 тысяч.", final=True)))  # запоздалый is_final не повторяем
+        c.handle(res("Сколько стоит"))
+        c.close_on_gap()
+        c.handle(res("Сколько стоит кухня и сколько делаете?", final=True))  # продолжение не теряем
+        self.assertEqual(c.close_on_gap(), speech.Heard("кухня и сколько делаете?", True))
         self.assertIsNone(c.gap_left(10))
         c.handle(res("Краснодар", final=True))
         self.assertEqual(c.parts, ["Краснодар"])

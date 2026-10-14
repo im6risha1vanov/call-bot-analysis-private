@@ -344,7 +344,9 @@ def deepgram_url(rate: int = SAMPLE_RATE) -> str:
         "sample_rate": rate,
         "channels": 1,
         "interim_results": "true",
-        "smart_format": "true",
+        # smart_format переводит числа в цифры и ради этого держит окончательный текст секундами
+        # («около трёхсот тысяч» → «около 300 1000» через 6 с). Модели слова понятнее цифр.
+        "smart_format": os.getenv("VOICE_DG_SMART_FORMAT", "false"),
         "punctuate": "true",
         "endpointing": os.getenv("VOICE_ENDPOINTING_MS", "300"),
         "utterance_end_ms": "1000",
@@ -364,7 +366,7 @@ TURN_GAP_S = int(os.getenv("VOICE_TURN_GAP_MS", "700")) / 1000  # 500 мс ре�
 OPEN_GAP_S = int(os.getenv("VOICE_TURN_GAP_OPEN_MS", "1000")) / 1000
 
 
-STALE_TAIL_S = int(os.getenv("VOICE_STALE_TAIL_MS", "1500")) / 1000  # промежуточные Deepgram шлёт примерно раз в секунду
+STALE_TAIL_S = int(os.getenv("VOICE_STALE_TAIL_MS", "3000")) / 1000  # страховка: 1,5 с резали клиента на полуслове
 
 
 class UtteranceCollector:
@@ -408,10 +410,11 @@ class UtteranceCollector:
         text = (alternatives[0].get("transcript") or "").strip()
         if message.get("is_final"):
             self.tail = ""
-            if text and self.closed_tail and _same_words(text, self.closed_tail):
+            if text and self.closed_tail:
+                text = _without_prefix(text, self.closed_tail)  # уже отвеченное начало не повторяем
                 self.closed_tail = ""
-                return None  # это уже сказано и отвечено
-            self.closed_tail = ""
+                if not text:
+                    return None
             if text:
                 self.parts.append(text)
                 self.final_at = time.monotonic()
@@ -433,10 +436,17 @@ class UtteranceCollector:
         return Heard(" ".join(words), True)
 
 
-def _same_words(a: str, b: str) -> bool:
-    norm = lambda t: re.sub(r"[^\w ]", "", t.lower()).split()
-    wa, wb = norm(a), norm(b)
-    return bool(wa) and (wa == wb or " ".join(wa) in " ".join(wb) or " ".join(wb) in " ".join(wa))
+def _words(text: str) -> list[str]:
+    return re.sub(r"[^\w ]", " ", text.lower().replace("ё", "е")).split()
+
+
+def _without_prefix(text: str, prefix: str) -> str:
+    """Окончательный текст минус начало, на которое робот уже ответил. Не совпало начало — текст целиком."""
+    words, head = text.split(), _words(prefix)
+    norm = _words(text)
+    if len(norm) == len(words) and norm[:len(head)] == head:
+        return " ".join(words[len(head):])
+    return text
 
 
 class DeepgramStream:
