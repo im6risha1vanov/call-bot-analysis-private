@@ -36,7 +36,7 @@
 Берутся из `.env` бота: `CVC_API_KEY` (или `ANTHROPIC_API_KEY`), `DEEPGRAM_API_KEY`, `YANDEX_TTS_API_KEY`,
 `GOOGLE_SERVICE_ACCOUNT_FILE`. Свои, все необязательные:
 
-- `VOICE_LLM`: `cvc` (по умолчанию, прокси ai.starimg.ru, как у разборов) или `anthropic` (Claude напрямую).
+- `VOICE_LLM`: `cvc` (по умолчанию, прокси ai.starimg.ru, как у разборов), `openrouter` (ключ `OPENROUTER_API_KEY`, модель по умолчанию `anthropic/claude-haiku-5.5`) или `anthropic` (Claude напрямую).
 - `VOICE_MODEL`: для cvc по умолчанию `CVC_MODEL` бота, для anthropic `claude-haiku-5-5`. `VOICE_CVC_EFFORT` (`low`), `VOICE_EFFORT` (`low`, для anthropic).
 - `VOICE_SIM_MODEL` модель клиента в симуляторе (по умолчанию та же, что у робота).
 - `OPENROUTER_API_KEY`: включает голоса ElevenLabs (в списке с префиксом `el:`), `VOICE_ELEVEN_MODEL` (`elevenlabs/eleven-flash-v2.5`), `VOICE_ELEVEN_PCM_RATE` (24000, если провайдер не пишет частоту).

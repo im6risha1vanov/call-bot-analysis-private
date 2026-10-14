@@ -23,7 +23,7 @@ from pathlib import Path
 
 from aiohttp import WSMsgType, web, ClientSession
 
-from voice import speech
+from voice import llm, speech
 from voice.call import CallSession
 from voice.dialog import Dialog
 from voice.operator import OPERATORS_DIR, OperatorError, load
@@ -53,7 +53,7 @@ async def operators(request: web.Request) -> web.Response:
         "tts": speech.tts_configured(),
         "tts_rate": speech.TTS_RATE,
         "voices": speech.voices(),
-        "llm": f"{os.getenv('VOICE_LLM', 'cvc')}: {os.getenv('VOICE_MODEL') or os.getenv('CVC_MODEL', 'gpt-6-astra')}",
+        "llm": llm.describe(),
     })
 
 

@@ -13,7 +13,7 @@ import httpx
 from voice import results, speech
 from voice.call import CallSession
 from voice.dialog import Dialog, build_tools, parse_result
-from voice.llm import AnthropicBackend, CvcBackend
+from voice.llm import AnthropicBackend, CvcBackend, OpenRouterBackend
 from voice.operator import MAX_ITEMS, OperatorError, load
 
 
@@ -182,6 +182,49 @@ class DialogTest(unittest.IsolatedAsyncioTestCase):
 
 def sse(*events):
     return "".join(f"event: {e['type']}\ndata: {json.dumps(e, ensure_ascii=False)}\n\n" for e in events)
+
+
+class OpenRouterBackendTest(unittest.IsolatedAsyncioTestCase):
+    async def test_streams_text_then_tool_call_in_pieces(self):
+        sent = []
+
+        def chunk(**delta):
+            return {"choices": [{"index": 0, "delta": delta, "finish_reason": None}]}
+
+        def handler(request):
+            sent.append(json.loads(request.content))
+            events = [chunk(content="Записала, "), chunk(content="до свидания!"),
+                      chunk(tool_calls=[{"index": 0, "id": "c1", "type": "function",
+                                         "function": {"name": "finish_call", "arguments": '{"outcome": "inter'}}]),
+                      chunk(tool_calls=[{"index": 0, "function": {"arguments": 'ested", "comment": "Сочи", "facts": {"city": "Сочи"}}'}}]),
+                      {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+                      {"choices": [], "usage": {"prompt_tokens": 900, "completion_tokens": 30, "cost": 0.00012}}]
+            text = ": OPENROUTER PROCESSING\n\n" + "".join(f"data: {json.dumps(e, ensure_ascii=False)}\n\n" for e in events) + "data: [DONE]\n\n"
+            return httpx.Response(200, headers={"content-type": "text/event-stream"}, text=text)
+
+        backend = OpenRouterBackend("anthropic/test", http=httpx.AsyncClient(transport=httpx.MockTransport(handler)), api_key="k")
+        dialog = Dialog(load("kitchen"), backend)
+        dialog.greet()
+        chunks = []
+
+        async def sink(c):
+            chunks.append(c)
+
+        turn = await dialog.reply("Да, Сочи", sink)
+        self.assertEqual(chunks, ["Записала, ", "до свидания!"])
+        self.assertEqual((turn.result.outcome, turn.result.facts), ("interested", {"city": "Сочи"}))
+        body = sent[0]
+        self.assertEqual(body["model"], "anthropic/test")
+        self.assertEqual(body["messages"][0]["role"], "system")
+        self.assertIn("Мария", body["messages"][0]["content"][0]["text"])
+        self.assertEqual(body["tools"][0]["function"]["name"], "finish_call")
+        self.assertEqual((dialog.cost, dialog.cost_unit), (0.00012, "$"))
+
+    async def test_error_status(self):
+        backend = OpenRouterBackend("m", http=httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda r: httpx.Response(402, json={"error": {"message": "Insufficient credits"}}))), api_key="k")
+        with self.assertRaisesRegex(RuntimeError, "402"):
+            await backend.complete("s", [{"role": "user", "content": "Алло"}], [], lambda c: None)
 
 
 class CvcBackendTest(unittest.IsolatedAsyncioTestCase):
