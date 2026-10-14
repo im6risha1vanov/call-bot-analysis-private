@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from typing import Awaitable, Callable
 
@@ -35,7 +36,9 @@ class CallSession:
         self.phone = phone
         self.synthesize = synthesize
         op = dialog.op
-        self.voice = voice or speech.Voice(op.voice, op.voice_role, float(op.voice_speed))
+        # VOICE_VOICE на сервере перекрывает голос из анкеты: так голос меняется без правки кода
+        self.voice = voice or speech.Voice(os.getenv("VOICE_VOICE") or op.voice,
+                                           "" if os.getenv("VOICE_VOICE") else op.voice_role, float(op.voice_speed))
         self.save = save
         self.phrases: asyncio.Queue[str | None] = asyncio.Queue()
         self.reply_task: asyncio.Task | None = None

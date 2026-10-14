@@ -236,6 +236,8 @@ def _cache_path(text: str, voice: Voice):
 
 async def _eleven_direct_tts(text: str, voice: Voice) -> bytes:
     name = voice.name.removeprefix("11:")
+    if name not in _eleven_direct:  # телефонный процесс список голосов заранее не грузит
+        await load_eleven_voices()
     voice_id = _eleven_direct.get(name, name)  # можно указать сразу voice_id
     rate = int(os.getenv("VOICE_ELEVEN_PCM_RATE", "24000"))
     body = {"text": text, "model_id": ELEVEN_DIRECT_MODEL, "language_code": "ru",

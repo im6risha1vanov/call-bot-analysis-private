@@ -61,6 +61,7 @@ case "$ACTION" in
     systemctl reset-failed "$SIP_UNIT" 2>/dev/null || true
     systemd-run --quiet --unit="$SIP_UNIT" --uid=callbot-astra --working-directory="$DIR" \
       -p EnvironmentFile="$BOT/.env" -E VOICE_LOG="$DATA/calls.jsonl" -E VOICE_TTS_CACHE="$DATA/tts-cache" \
+      -E VOICE_TTS_RATE=8000 -E VOICE_ELEVEN_PCM_RATE=8000 \
       -p Restart=on-failure "$PY" -m voice.sip serve
     sleep 3
     systemctl is-active "$SIP_UNIT"
