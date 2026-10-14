@@ -288,7 +288,36 @@ async def synthesize_pcm(text: str, voice: Voice) -> bytes:
     return pcm
 
 
+YANDEX_MAX_CHARS = 200  # SpeechKit v3 отвечает «Too long text» на длинные фразы
+
+
+def split_long(text: str, limit: int = YANDEX_MAX_CHARS) -> list[str]:
+    """Режет текст на куски не длиннее limit: по концу предложения, иначе по запятой, иначе по пробелу."""
+    text = " ".join(text.split())
+    parts = []
+    while len(text) > limit:
+        window = text[:limit + 1]
+        cut = max(window.rfind(". "), window.rfind("! "), window.rfind("? "), window.rfind("… "))
+        if cut < limit // 3:
+            cut = window.rfind(", ")
+        if cut < limit // 3:
+            cut = window.rfind(" ")
+        if cut <= 0:
+            cut = limit - 1
+        parts.append(text[:cut + 1].strip())
+        text = text[cut + 1:].strip()
+    if text:
+        parts.append(text)
+    return parts
+
+
 async def _synthesize(text: str, voice: Voice) -> bytes:
+    if not voice.name.startswith(("el:", "11:")) and len(text) > YANDEX_MAX_CHARS:
+        return b"".join([await _synthesize_one(part, voice) for part in split_long(text)])
+    return await _synthesize_one(text, voice)
+
+
+async def _synthesize_one(text: str, voice: Voice) -> bytes:
     """Яндекс: сначала API v3 (там интонации), при отказе доступа v1. Голоса «el:» через OpenRouter."""
     if voice.name.startswith("el:"):
         return await _eleven(text, voice)

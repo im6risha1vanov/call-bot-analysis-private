@@ -370,6 +370,13 @@ class SpeechTest(unittest.TestCase):
         self.assertEqual(c.handle({"type": "UtteranceEnd"}), speech.Heard("Казань", True))
         self.assertIn("encoding=linear16", speech.deepgram_url())
 
+    def test_split_long_text_for_yandex(self):
+        text = "Первое предложение про кухню. " * 12 + "Хвост без точки, но с запятой, и ещё слова"
+        parts = speech.split_long(text, 100)
+        self.assertTrue(all(len(p) <= 100 for p in parts), parts)
+        self.assertEqual(" ".join(parts), " ".join(text.split()))
+        self.assertEqual(speech.split_long("коротко"), ["коротко"])
+
     def test_collector_closes_on_pause(self):
         c = speech.UtteranceCollector(gap=0.5, open_gap=1.0)
         res = lambda t, final=False: {"type": "Results", "is_final": final, "speech_final": False, "channel": {"alternatives": [{"transcript": t}]}}

@@ -227,6 +227,9 @@ class VirtualClient:
             await asyncio.wait_for(self.server_done.wait(), 30)
         except asyncio.TimeoutError:
             self.run.problems.append("робот не закончил звонок после отбоя")
+        except Exception as e:  # сбой на стороне абонента (синтез, модель клиента): этот звонок, не весь прогон
+            log.exception("сбой виртуального абонента")
+            self.run.problems.append(f"сбой абонента: {e!r}"[:300])
         finally:
             self.robot_hung.set()
             for task in tasks:
