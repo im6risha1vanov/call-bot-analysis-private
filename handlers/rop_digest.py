@@ -25,6 +25,7 @@ from aiogram import Bot
 
 import rop_agent
 from queue_runner import register
+from review import prompts
 from tools import Actor, report_chat_ids
 
 log = logging.getLogger("callbot-astra-worker.rop_digest")
@@ -58,27 +59,50 @@ async def _client_tz(pool: asyncpg.Pool, client_id: int) -> str:
     return await pool.fetchval("SELECT timezone FROM clients WHERE id=$1", client_id)
 
 
-def _period_yesterday(tz_name: str) -> dict:
-    tz = ZoneInfo(tz_name)
-    today = datetime.now(tz).date()
-    yesterday = today - timedelta(days=1)
-    return {"start": yesterday.isoformat(), "end": today.isoformat()}
-
-
-def _period_week(tz_name: str, weeks_ago: int) -> dict:
-    tz = ZoneInfo(tz_name)
-    today = datetime.now(tz).date()
-    monday_this_week = today - timedelta(days=today.weekday())
-    start = monday_this_week - timedelta(weeks=weeks_ago)
-    return {"start": start.isoformat(), "end": (start + timedelta(days=7)).isoformat()}
-
-
-def _period_prev_month(tz_name: str) -> dict:
-    tz = ZoneInfo(tz_name)
-    today = datetime.now(tz).date()
-    first_of_this_month = today.replace(day=1)
-    last_of_prev = first_of_this_month - timedelta(days=1)
-    return {"start": last_of_prev.replace(day=1).isoformat(), "end": first_of_this_month.isoformat()}
+async def _digest(pool: asyncpg.Pool, client_id: int, kind: str, header: str, actors: list[Actor],
+                  answer=None, broadcast=None) -> dict:
+    """Один ответ агента на каждый различающийся текст промта (режим промта,
+    review/prompts.py): у кого личный промт, тот получает отчёт по нему, остальные
+    по общему. Сломался личный или общий — человеку уходит причина и стандартный
+    отчёт; если не сработал и стандартный, ошибка поднимается, как и раньше.
+    Тексты считаются до рассылки: повтор задачи после сбоя не шлёт дублей части людей."""
+    answer = answer or rop_agent.answer
+    broadcast = broadcast or _broadcast
+    values = prompts.digest_values(kind, await _client_tz(pool, client_id))
+    standard = prompts.default(kind)
+    groups: dict[str, list[tuple[Actor, str, int | None]]] = {}
+    for actor in actors:
+        body, source, version = await prompts.resolve(pool, kind, actor.telegram_user_id)
+        groups.setdefault(body, []).append((actor, source, version))
+    texts: dict[str, str] = {}
+    failed: dict[str, str] = {}
+    for body, members in sorted(groups.items(), key=lambda item: item[0] != standard):
+        try:
+            texts[body] = await answer(pool, members[0][0], prompts.render_digest(body, values))
+        except Exception as exc:
+            if body == standard:
+                raise
+            log.exception("промт отчёта %s не сработал", kind)
+            failed[body] = prompts.short_error(exc)
+    if failed and standard not in texts:
+        someone = groups[next(iter(failed))][0][0]
+        texts[standard] = await answer(pool, someone, prompts.render_digest(standard, values))
+    sent, chars = 0, 0
+    for body, members in groups.items():
+        if body in failed:
+            for actor, source, version in members:
+                whose = "Ваш личный промт" if source == "personal" else "Общий промт"
+                try:
+                    await _bot.send_message(
+                        actor.telegram_user_id,
+                        f"⚠️ {whose} «{prompts.TITLES[kind]}» (сохранение #{version}) не сработал: "
+                        f"{failed[body]}. Ниже стандартный отчёт.", parse_mode=None)
+                except Exception:
+                    log.exception("не удалось предупредить id=%s", actor.telegram_user_id)
+        text = texts[standard if body in failed else body]
+        sent += await broadcast([actor for actor, _, _ in members], header, text)
+        chars += len(text)
+    return {"client_id": client_id, "chars": chars, "sent_to": sent, "versions": len(groups)}
 
 
 @register("rop_digest_morning")
@@ -87,17 +111,7 @@ async def rop_digest_morning(pool: asyncpg.Pool, task: asyncpg.Record) -> dict:
     actors = await _head_actors(pool, client_id)
     if not actors:
         return {"skipped": "некому отправить: ни один получатель не привязан к боту"}
-    period = _period_yesterday(await _client_tz(pool, client_id))
-    question = (
-        f"Сформируй три темы для утренней планёрки на основе вчерашних звонков "
-        f"(период {period['start']}–{period['end']}). Используй get_stats и "
-        f"get_criteria_breakdown по всему отделу (manager_extension не указывай). "
-        f"Если хочешь сказать что-то персонально про менеджера — сначала как обычно "
-        f"проверь через verify_conclusion. Три коротких пункта, без вступлений, сразу по делу."
-    )
-    text = await rop_agent.answer(pool, actors[0], question)
-    sent = await _broadcast(actors, "☀️ На планёрку сегодня", text)
-    return {"client_id": client_id, "chars": len(text), "sent_to": sent}
+    return await _digest(pool, client_id, "morning", "☀️ На планёрку сегодня", actors)
 
 
 @register("rop_digest_weekly")
@@ -106,17 +120,7 @@ async def rop_digest_weekly(pool: asyncpg.Pool, task: asyncpg.Record) -> dict:
     actors = await _head_actors(pool, client_id)
     if not actors:
         return {"skipped": "некому отправить: ни один получатель не привязан к боту"}
-    tz = await _client_tz(pool, client_id)
-    last_week, week_before = _period_week(tz, 1), _period_week(tz, 2)
-    question = (
-        f"Сформируй сводку за прошедшую неделю ({last_week['start']}–{last_week['end']}) с "
-        f"динамикой относительно недели до этого ({week_before['start']}–{week_before['end']}). "
-        f"Используй compare_periods по всему отделу и get_criteria_breakdown за последнюю неделю. "
-        f"Персональные выводы о менеджере — только через verify_conclusion. Кратко, по-деловому."
-    )
-    text = await rop_agent.answer(pool, actors[0], question)
-    sent = await _broadcast(actors, "📅 Сводка за неделю", text)
-    return {"client_id": client_id, "chars": len(text), "sent_to": sent}
+    return await _digest(pool, client_id, "weekly", "📅 Сводка за неделю", actors)
 
 
 @register("rop_digest_monthly")
@@ -125,18 +129,7 @@ async def rop_digest_monthly(pool: asyncpg.Pool, task: asyncpg.Record) -> dict:
     actors = await _head_actors(pool, client_id)
     if not actors:
         return {"skipped": "некому отправить: ни один получатель не привязан к боту"}
-    period = _period_prev_month(await _client_tz(pool, client_id))
-    question = (
-        f"Составь отчёт о прошедшем месяце ({period['start']}–{period['end']}) языком выручки и "
-        f"встреч, а не критериев оценки звонков — не используй названия критериев вроде "
-        f"«извлекающие вопросы», это не для читателя-нетехнического. Используй get_stats по всему "
-        f"отделу. Если есть признак проблемы с качеством лидов — используй "
-        f"get_lead_diagnosis_signal, но обязательно назови reviewed_calls и предупреди о смещённой "
-        f"выборке, если она маленькая. 5-8 предложений, по-деловому."
-    )
-    text = await rop_agent.answer(pool, actors[0], question)
-    sent = await _broadcast(actors, "📈 Отчёт за месяц", text)
-    return {"client_id": client_id, "chars": len(text), "sent_to": sent}
+    return await _digest(pool, client_id, "monthly", "📈 Отчёт за месяц", actors)
 
 
 # ------------------------------------------------- вечерний дайджест РОПу

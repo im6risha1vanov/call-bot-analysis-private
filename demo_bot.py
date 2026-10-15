@@ -18,6 +18,7 @@ from analysis import CRITERIA, review_call
 from reports import detail_button, fmt_call_time, fmt_phone, render_head, render_manager
 import rop_agent
 from tools import is_privileged, resolve_actor
+from review.prompts import is_editor
 from methodology.tools import get_course_evaluation, get_course_stats
 from methodology.evaluation import render as render_course
 
@@ -55,6 +56,16 @@ async def _bind_by_username(message) -> str | None:
     return f'Узнал вас, {html.escape(row["full_name"] or username)} — вы подключены как {who}. Отчёты будут приходить сюда.'
 
 
+def head_menu(tg_id: int) -> ReplyKeyboardMarkup:
+    """«Сравнить методики» и «Объединённый разбор» убраны с клавиатуры (команды
+    /compare_analysis и /combined_analysis остаются). «Режим промта» — тем, кто в PROMPT_EDITORS."""
+    from review.prompt_ui import MENU as PROMPT_MENU
+    rows = [[KeyboardButton(text=PROMPT_MENU)]] if is_editor(tg_id) else []
+    rows += [[KeyboardButton(text='↩️ Старая методика'), KeyboardButton(text='🔄 Вернуть сохранённую версию')],
+             [KeyboardButton(text='ℹ️ Версия анализа')]]
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True)
+
+
 @router.message(CommandStart())
 async def start_command(message):
     bound = await _bind_by_username(message)
@@ -79,10 +90,7 @@ async def help_command(message):
                if actor is None else 'Выберите одну рекомендацию из разбора и отработайте её в тренажёре.'),
             parse_mode=None)
         return
-    menu = ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text='Сравнить методики'), KeyboardButton(text='Объединённый разбор')],
-        [KeyboardButton(text='↩️ Старая методика'), KeyboardButton(text='🔄 Вернуть сохранённую версию')],
-        [KeyboardButton(text='ℹ️ Версия анализа')]], resize_keyboard=True, is_persistent=True) if actor and actor.role in {'head', 'owner'} else None
+    menu = head_menu(message.from_user.id) if actor and actor.role in {'head', 'owner'} else None
     await message.answer(
         'Звонки разбираются автоматически из Mango — присылать записи не нужно.\n\n'
         'По одному звонку приходит один объединённый разбор: итог, качество, сильные действия и рекомендации. '
@@ -98,9 +106,11 @@ async def help_command(message):
         '/methodology &lt;номер звонка&gt; — отдельный разбор по курсу\n'
         '/methodology_training &lt;номер&gt; — разбор тренировки по курсу\n'
         '/methodology_stats &lt;начало&gt; &lt;конец&gt; [добавочный] — наблюдения по курсу\n'
-        '/approvals — задачи, ждущие подтверждения (руководителю)\n\n'
+        '/approvals — задачи, ждущие подтверждения (руководителю)\n'
+        + ('/prompt или «✏️ Режим промта» — править свои промты: разбор звонка и отчёты\n'
+           if is_editor(message.from_user.id) else '') + '\n'
         'Свободный текст — вопрос по отделу.\n'
-        'id этого чата: <code>{}</code>'.format(message.chat.id),
+        + 'id этого чата: <code>{}</code>'.format(message.chat.id),
         parse_mode='HTML', reply_markup=menu)
 
 # --------------------------------------------------------- тренажёр возражений
@@ -599,6 +609,9 @@ from unified.ui import install as install_unified
 install_unified(router, lambda: PG_POOL)
 from review.ui import install as install_review
 install_review(router, lambda: PG_POOL)
+# Режим промта: свободный текст ловится только при открытой правке, остальное идёт агенту РОПа ниже.
+from review.prompt_ui import install as install_prompt_mode
+install_prompt_mode(router, lambda: PG_POOL)
 
 
 @router.message(F.text)

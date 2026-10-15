@@ -132,9 +132,21 @@ async def deliver_now(pool, bot, call_id: int) -> dict:
         claimed = await pool.fetchval(
             'UPDATE call_reviews SET copy_sent_at=now() WHERE call_id=$1 AND copy_sent_at IS NULL RETURNING call_id', call_id)
         if claimed:
+            from . import prompts
             for chat in copies:
+                # Личный промт из режима промта: свой разбор этого звонка; если сломался —
+                # причина и стандартная копия.
                 try:
-                    await bot.send_message(chat, render.details_message(row['meta'], row['data']), parse_mode='HTML')
+                    text, problem, cost = await prompts.personal_review(pool, row, chat)
+                    await prompts.add_spend(pool, row['client_id'], cost)
+                except Exception:
+                    log.exception('личный разбор не собран, call id=%s chat=%s', call_id, chat)
+                    text, problem = None, None
+                try:
+                    if problem:
+                        await bot.send_message(chat, f'⚠️ Ваш личный промт разбора не сработал на этом звонке: {problem}. '
+                                                     'Ниже стандартный разбор.', parse_mode=None)
+                    await bot.send_message(chat, text or render.details_message(row['meta'], row['data']), parse_mode='HTML')
                     sent.setdefault('copy', []).append(chat)
                 except Exception:
                     log.exception('копия разбора не доставлена, call id=%s chat=%s', call_id, chat)

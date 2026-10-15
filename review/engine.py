@@ -141,9 +141,10 @@ def build_input(transcript: str, meta: dict) -> str:
     return '\n'.join(head) + '\n\nРАСШИФРОВКА:\n' + transcript
 
 
-async def run(transcript: str, meta: dict) -> tuple[dict, float]:
+async def run(transcript: str, meta: dict, prompt: str | None = None) -> tuple[dict, float]:
+    """prompt — полный текст из режима промта (review/prompts.py); по умолчанию PROMPT."""
     if not (transcript or '').strip():
         return validate({'kind': 'no_conversation'}, ''), 0.0
     from analysis import _call
-    data, cost = await _call(PROMPT, build_input(transcript, meta), MAX_TOKENS)
+    data, cost = await _call(prompt or PROMPT, build_input(transcript, meta), MAX_TOKENS)
     return validate(data, transcript), cost
