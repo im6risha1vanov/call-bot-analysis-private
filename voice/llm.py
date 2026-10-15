@@ -199,6 +199,10 @@ class ToolTextGate:
             raise BadToolJSON(f"{self.tool}: нет JSON в «{raw[:100]}»")
         try:
             return self.tool, json.loads(raw[start:end + 1])
+        except json.JSONDecodeError:
+            pass
+        try:  # после объекта модель дописала ещё что-то («}, {…}]»): берём первый объект
+            return self.tool, json.JSONDecoder().raw_decode(raw[start:])[0]
         except json.JSONDecodeError as e:
             raise BadToolJSON(str(e)) from None
 

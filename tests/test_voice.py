@@ -296,6 +296,9 @@ class ToolTextGateTest(unittest.IsolatedAsyncioTestCase):
         spoken = gate.feed("Спасибо за уточнение!\n\n") + gate.feed("[\n    \"finish_call\", {\"outcome\": \"callback\"}]")
         self.assertEqual((spoken + gate.flush()).strip(), "Спасибо за уточнение!")
         self.assertEqual(gate.call(), ("finish_call", {"outcome": "callback"}))
+        gate = ToolTextGate(["finish_call"])
+        gate.feed("Пока!\n[\"finish_call\", {\"outcome\": \"callback\"},\n    {\"x\": 1}]")
+        self.assertEqual(gate.call(), ("finish_call", {"outcome": "callback"}))
 
         gate = ToolTextGate(["finish_call"])
         spoken = gate.feed("Какой материал вас интересует?\n\n Пользователь: Плёнка\n Ассистент: Отлично")
