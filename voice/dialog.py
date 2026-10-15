@@ -162,6 +162,16 @@ class Dialog:
                 return item["reply"]
         return None
 
+    def undo_quick(self, reply: str) -> bool:
+        """Клиент продолжил говорить поверх быстрого ответа: убираем его из истории, продолжение клиента
+        приклеится к его прошлой реплике («да» + «актуален, но я за рулём»), и ответит уже модель."""
+        if self.messages and self.messages[-1] == {"role": "assistant", "content": reply}:
+            self.messages.pop()
+            if self.transcript and self.transcript[-1] == ("robot", reply):
+                self.transcript.pop()
+            return True
+        return False
+
     async def reply(self, client_text: str, on_text: TextSink | None = None) -> Turn:
         """Ответ робота на реплику клиента. on_text получает куски текста по мере генерации."""
         if self.finished:

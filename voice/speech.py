@@ -601,7 +601,7 @@ def _log_asr(data: dict) -> None:
         log.info("Deepgram %s: %s", kind, json.dumps(data, ensure_ascii=False)[:200])
 
 
-YANDEX_TAIL_S = int(os.getenv("VOICE_YANDEX_TAIL_MS", "650")) / 1000
+YANDEX_TAIL_S = int(os.getenv("VOICE_YANDEX_TAIL_MS", "800")) / 1000
 
 
 class YandexStream:

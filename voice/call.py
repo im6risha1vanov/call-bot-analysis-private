@@ -67,6 +67,7 @@ class CallSession:
         self.saved: dict | None = None
         self.heard_at = 0.0      # когда клиент закончил реплику: для замера, как быстро робот ответил
         self.last_filler = ""
+        self.quick_said = ""      # быстрый ответ, который ещё звучит: перебили — убрать из истории
         self.tts_chain: list[str] = []  # id синтезов ElevenLabs этого звонка: следующая фраза продолжает их
         self.said_before = ""     # прошлая фраза робота: по ней ElevenLabs держит ту же интонацию
         self.reply_spoke = False  # робот уже начал озвучивать текущий ответ (для поиска пауз посреди ответа)
@@ -143,6 +144,8 @@ class CallSession:
 
     def _real_interruption(self, text: str) -> bool:
         words = speech._words(text)
+        if self.quick_said:  # быстрый ответ на «да», а клиент договаривает: слушаем его
+            return True
         if len(words) >= BARGE_IN_WORDS or any(w in STOP_WORDS for w in words):
             return True
         # робот вот-вот договорит: короткий ответ («да», «нет») — это ответ, а не шум
@@ -155,6 +158,9 @@ class CallSession:
 
     async def _barge_in(self, text: str = "") -> None:
         log.info("BARGE_IN: клиент перебил робота: «%s»", text)
+        if self.quick_said and self.dialog.undo_quick(self.quick_said):
+            log.info("быстрый ответ отменён: клиент не договорил")
+        self.quick_said = ""
         self.generation += 1
         if self.reply_task and not self.reply_task.done():
             self.reply_task.cancel()
@@ -175,10 +181,12 @@ class CallSession:
         fast = quick(text) if quick and text != SILENCE else None
         if fast:  # ожидаемый ответ клиента: заготовка из анкеты, без ожидания модели
             log.info("быстрый ответ без модели: «%s»", fast)
+            self.quick_said = fast
             await self._say(fast)
             await self.send_event({"type": "transcript", "role": "robot", "text": fast, "first_text_ms": 0})
             self._arm_silence()
             return
+        self.quick_said = ""
         splitter = speech.PhraseSplitter()
         generation = self.generation
         self.reply_spoke = False

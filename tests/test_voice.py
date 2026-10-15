@@ -629,13 +629,53 @@ class CallSessionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.requests, [])  # модель не спрашивали
         quick = load("kitchen").quick[0]["reply"]
         self.assertIn({"type": "transcript", "role": "robot", "text": quick, "first_text_ms": 0}, events)
+        for _ in range(100):  # дожидаемся, пока быстрый ответ прозвучит
+            if not session.is_speaking():
+                break
+            await asyncio.sleep(0.01)
         await session.heard("Конечно", True)  # второй быстрый ответ: на вопрос о сроках
         await session.reply_task
         self.assertEqual(client.requests, [])
+        for _ in range(100):
+            if not session.is_speaking():
+                break
+            await asyncio.sleep(0.01)
         await session.heard("Москва", True)  # дальше — модель, и она видит весь обмен
         await session.reply_task
         self.assertEqual(len(client.requests), 1)
         self.assertIn(quick, json.dumps(client.requests[0], ensure_ascii=False))
+        await session.hangup()
+
+    async def test_client_continuing_over_quick_reply_undoes_it(self):
+        client = FakeClient([say("Поняла, перезвоню после семи.")])
+        events = []
+
+        async def nothing(_):
+            pass
+
+        async def send_event(e):
+            events.append(e)
+
+        async def synth(text, voice):
+            return b"\x00\x00" * speech.TTS_RATE * 2  # 2 секунды звука
+
+        async def save(dialog, **kw):
+            return results.record(dialog, **kw)
+
+        session = CallSession(Dialog(load("kitchen"), AnthropicBackend(client=client)), nothing, send_event,
+                              synthesize=synth, save=save)
+        await session.start()
+        session.speaking_until = 0.0
+        await session.heard("Да, актуально.", True)
+        await session.reply_task
+        for _ in range(100):
+            if session.audio_sent and session.is_speaking():
+                break
+            await asyncio.sleep(0.01)
+        await session.heard("но я за рулём", True)  # быстрый ответ ещё звучит
+        await session.reply_task
+        sent = client.requests[0]["messages"]
+        self.assertEqual(sent[-1], {"role": "user", "content": "Да, актуально. но я за рулём"})
         await session.hangup()
 
     async def test_broken_voice_falls_back_to_operator_voice(self):
