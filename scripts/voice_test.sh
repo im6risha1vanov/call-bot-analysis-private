@@ -144,9 +144,9 @@ REMOTE
   eleven)  # модели и голоса аккаунта ElevenLabs (id для set-voice)
     KEY=$(grep -m1 '^ELEVENLABS_API_KEY=' "$BOT/.env" | cut -d= -f2- | tr -d "\"' ")
     curl -s https://api.elevenlabs.io/v1/models -H "xi-api-key: $KEY" \
-      | python3 -c 'import json,sys; [print("model:", m["model_id"], "|", m.get("name", "")) for m in json.load(sys.stdin)]'
+      | python3 -c 'import json,sys; d=json.load(sys.stdin); [print("model:", m["model_id"], "|", m.get("name", "")) for m in d] if isinstance(d, list) else print("модели:", d)'
     curl -s https://api.elevenlabs.io/v1/voices -H "xi-api-key: $KEY" \
-      | python3 -c 'import json,sys; [print("voice:", v["voice_id"], "|", v["name"]) for v in json.load(sys.stdin)["voices"]]'
+      | python3 -c 'import json,sys; d=json.load(sys.stdin); [print("voice:", v["voice_id"], "|", v["name"]) for v in d.get("voices", [])] or print("голоса:", d)'
     ;;
   set-voice)  # set-voice VOICE_ID МОДЕЛЬ STABILITY SIMILARITY [STYLE] [SPEED], потом перезапуск робота
     set_env() { if grep -q "^$1=" "$BOT/.env"; then sed -i "s|^$1=.*|$1=$2|" "$BOT/.env"; else echo "$1=$2" >> "$BOT/.env"; fi; }
@@ -157,7 +157,10 @@ REMOTE
       MODEL=$(curl -s https://api.elevenlabs.io/v1/models -H "xi-api-key: $KEY" | python3 -c '
 import json, sys
 want = sys.argv[1].lower()
-ids = [m["model_id"] for m in json.load(sys.stdin)]
+data = json.load(sys.stdin)
+if not isinstance(data, list):
+    sys.exit(f"ElevenLabs не дал список моделей: {json.dumps(data, ensure_ascii=False)[:300]}")
+ids = [m["model_id"] for m in data]
 print(next((i for i in ids if want in i.lower() and "sts" not in i), ""))' "$MODEL")
       [ -n "$MODEL" ] || { echo "модель ${3} не найдена, список: bash -s eleven"; exit 1; }
     fi
