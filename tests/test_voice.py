@@ -410,7 +410,7 @@ class SpeechTest(unittest.TestCase):
         self.assertAlmostEqual(c.gap_left(c.tail_at + 1), 0.2)
         c.handle(res("и ещё Сочи", final=True))
         self.assertEqual(c.gap_left(c.final_at + 1), 0.0)
-        self.assertEqual(c.close_on_gap(), speech.Heard("Город Краснодар. и ещё Сочи", True))
+        self.assertEqual(c.close_on_gap(), speech.Heard("Да Краснодар. и ещё Сочи", True))
         self.assertIsNone(c.gap_left(10))
 
     def test_collector_closes_on_stale_interim(self):
