@@ -9,6 +9,7 @@
 #           sim (прогнать робота текстом против симулированных клиентов),
 #           sip (обновить код и поднять телефонного робота, нужен scripts/voice_sip_setup.sh),
 #           dial НОМЕР (робот звонит на номер), stop, status,
+#           pacer / pacer-remove (ровная подача звука в Asterisk на VPS, voice/pacer.py),
 #           autotest [АРГУМЕНТЫ] (виртуальный абонент говорит с роботом, итог на лист «Робот · Автотест»),
 #           watch-install / watch-remove (таймер: автотест после каждого нового коммита ветки),
 #           tick (то, что запускает таймер).
@@ -53,6 +54,12 @@ run() {  # одноразовый запуск с ключами бота от �
 }
 RUN_ENV=()
 
+RELAY_UNIT=/etc/systemd/system/callbot-voice-relay.service
+relay_vps() {  # VPS с Asterisk (voice_relay_setup.sh)
+  VPS=$(grep -o 'root@[0-9.]*' "$RELAY_UNIT" | cut -d@ -f2)
+  VPS_SSH=(ssh -i /root/.ssh/voice_relay -o BatchMode=yes "root@$VPS")
+}
+
 start_sip() {  # телефонный робот (AudioSocket 9092, звонки через 8092)
   systemctl stop "$SIP_UNIT" 2>/dev/null || true
   systemctl reset-failed "$SIP_UNIT" 2>/dev/null || true
@@ -94,6 +101,44 @@ case "$ACTION" in
     else
       asterisk -rx "pjsip show registrations" 2>/dev/null | grep -i mango || echo "asterisk не настроен: bash $DIR/scripts/voice_sip_setup.sh"
     fi
+    ;;
+  pacer)  # ровная подача звука робота в Asterisk на VPS (voice/pacer.py); откат: pacer-remove
+    update
+    relay_vps
+    scp -q -i /root/.ssh/voice_relay -o BatchMode=yes "$DIR/voice/pacer.py" "root@$VPS:/opt/voice-pacer.py"
+    sed -i 's/-R 127.0.0.1:9092:/-R 127.0.0.1:9094:/' "$RELAY_UNIT"  # туннель на VPS теперь 9094, 9092 у pacer
+    systemctl daemon-reload
+    systemctl restart callbot-voice-relay
+    "${VPS_SSH[@]}" 'bash -s' <<'REMOTE'
+cat > /etc/systemd/system/voice-pacer.service <<'UNIT'
+[Unit]
+Description=voicebot: even pacing of robot audio into Asterisk
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/voice-pacer.py
+DynamicUser=yes
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable -q voice-pacer
+systemctl restart voice-pacer
+sleep 2
+echo "pacer: $(systemctl is-active voice-pacer)"
+ss -ltn | grep -E ':909[24] ' || true
+REMOTE
+    ;;
+  pacer-remove)
+    relay_vps
+    "${VPS_SSH[@]}" 'systemctl disable --now voice-pacer 2>/dev/null; true'
+    sed -i 's/-R 127.0.0.1:9094:/-R 127.0.0.1:9092:/' "$RELAY_UNIT"
+    systemctl daemon-reload
+    systemctl restart callbot-voice-relay
+    echo "pacer убран, туннель снова на 9092"
     ;;
   dial)
     PHONE=${2:?номер}

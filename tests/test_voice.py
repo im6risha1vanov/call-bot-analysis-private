@@ -1023,3 +1023,39 @@ class YandexAsrTest(unittest.IsolatedAsyncioTestCase):
         except ImportError:
             expected = speech.DeepgramStream
         self.assertIsInstance(stream, expected)
+
+
+class PacerTest(unittest.IsolatedAsyncioTestCase):
+    async def test_burst_from_tunnel_is_played_every_20_ms(self):
+        import time as _t
+        from voice import pacer
+
+        async def robot(reader, writer):  # робот: читает UUID, шлёт пачкой 10 кадров и отбой
+            await pacer.read_frame(reader)
+            writer.write(b"".join(pacer.pack(pacer.KIND_AUDIO, bytes(320)) for _ in range(10)))
+            writer.write(pacer.pack(pacer.KIND_HANGUP, b""))
+            await writer.drain()
+            await asyncio.sleep(0.5)
+            writer.close()
+
+        bot = await asyncio.start_server(robot, "127.0.0.1", 0)
+        old = pacer.ROBOT
+        pacer.ROBOT = ("127.0.0.1", bot.sockets[0].getsockname()[1])
+        front = await asyncio.start_server(pacer.on_asterisk, "127.0.0.1", 0)
+        try:
+            reader, writer = await asyncio.open_connection("127.0.0.1", front.sockets[0].getsockname()[1])
+            writer.write(pacer.pack(0x01, bytes(16)))
+            await writer.drain()
+            times = []
+            while True:
+                kind, _ = await asyncio.wait_for(pacer.read_frame(reader), 3)
+                if kind == pacer.KIND_HANGUP:
+                    break
+                times.append(_t.monotonic())
+            writer.close()
+        finally:
+            pacer.ROBOT = old
+            front.close()
+            bot.close()
+        self.assertEqual(len(times), 10)
+        self.assertGreater(times[-1] - times[0], 0.15)  # пачка растянута во времени, а не вывалена разом
