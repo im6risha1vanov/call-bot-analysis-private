@@ -12,7 +12,7 @@ DB=$(grep -m1 '^DATABASE_URL=' .env | cut -d= -f2- | sed "s/^[\"']//; s/[\"']\$/
 q() { psql "$DB" -q -v ON_ERROR_STOP=1 -P pager=off "$@"; }
 
 echo "== добавочные, которые разбирает бот"
-q -c "SELECT id, name, sales_extensions FROM clients"
+q -c "SELECT id, sales_extensions FROM clients"
 echo "== сотрудник на добавочном $EXT"
 q -c "SELECT extension, full_name, role, synced_at FROM employees WHERE extension='$EXT'"
 echo "== звонки с добавочного $EXT за 3 дня"
@@ -26,5 +26,5 @@ if [ "$ACTION" = apply ]; then
   q -c "UPDATE clients SET sales_extensions = array_remove(sales_extensions, '$EXT')"
   q -c "UPDATE calls SET status='skipped' WHERE extension='$EXT' AND status IN ('new','awaiting_record')"
   echo "== после"
-  q -c "SELECT id, name, sales_extensions FROM clients"
+  q -c "SELECT id, sales_extensions FROM clients"
 fi
