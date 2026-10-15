@@ -151,7 +151,18 @@ REMOTE
   set-voice)  # set-voice VOICE_ID МОДЕЛЬ STABILITY SIMILARITY [STYLE] [SPEED], потом перезапуск робота
     set_env() { if grep -q "^$1=" "$BOT/.env"; then sed -i "s|^$1=.*|$1=$2|" "$BOT/.env"; else echo "$1=$2" >> "$BOT/.env"; fi; }
     set_env VOICE_VOICE "11:${2:?voice_id}"
-    set_env VOICE_ELEVEN_DIRECT_MODEL "${3:?model_id}"
+    MODEL=${3:?model_id}
+    if ! [[ "$MODEL" == eleven_* ]]; then  # короткое имя (v4, flash, multilingual): ищем id у ElevenLabs
+      KEY=$(grep -m1 '^ELEVENLABS_API_KEY=' "$BOT/.env" | cut -d= -f2- | tr -d "\"' ")
+      MODEL=$(curl -s https://api.elevenlabs.io/v1/models -H "xi-api-key: $KEY" | python3 -c '
+import json, sys
+want = sys.argv[1].lower()
+ids = [m["model_id"] for m in json.load(sys.stdin)]
+print(next((i for i in ids if want in i.lower() and "sts" not in i), ""))' "$MODEL")
+      [ -n "$MODEL" ] || { echo "модель ${3} не найдена, список: bash -s eleven"; exit 1; }
+    fi
+    echo "модель: $MODEL"
+    set_env VOICE_ELEVEN_DIRECT_MODEL "$MODEL"
     set_env VOICE_ELEVEN_STABILITY "${4:-0.65}"
     set_env VOICE_ELEVEN_SIMILARITY "${5:-0.8}"
     set_env VOICE_ELEVEN_STYLE "${6:-0}"
