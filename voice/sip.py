@@ -148,6 +148,7 @@ class PhoneCall:
         self.make_asr = make_asr
         self.synthesize, self.save = synthesize, save
         self.out = bytearray()            # звук робота, ещё не отправленный в Asterisk
+        self.late = 0                     # сколько раз кадр звука ушёл с опозданием
         self.lock = asyncio.Lock()
         self.first_words: asyncio.Future | None = None
         self.session: CallSession | None = None
@@ -181,6 +182,10 @@ class PhoneCall:
                 await self.write(frame(KIND_AUDIO, chunk))
             n += 1
             delay = start + n * 0.02 - time.monotonic()
+            if delay < -0.06 and self.out:  # кадр ушёл позже срока: клиент слышит запинку
+                self.late += 1
+                if self.late <= 20:
+                    log.warning("звук робота отстал на %d мс (сеть до Asterisk или занятый цикл)", -delay * 1000)
             if delay < -0.2:  # отстали (пауза в цикле): не догоняем рывком
                 start, n = time.monotonic(), 0
                 delay = 0.02
