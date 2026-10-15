@@ -72,7 +72,7 @@ case "$ACTION" in
     systemctl reset-failed "$SIP_UNIT" 2>/dev/null || true
     systemd-run --quiet --unit="$SIP_UNIT" --uid=callbot-astra --working-directory="$DIR" \
       -p EnvironmentFile="$BOT/.env" -E VOICE_LOG="$DATA/calls.jsonl" -E VOICE_TTS_CACHE="$DATA/tts-cache" \
-      -E VOICE_TTS_RATE=8000 -E VOICE_ELEVEN_PCM_RATE=8000 \
+      -E VOICE_TTS_RATE=8000 -E VOICE_ELEVEN_PCM_RATE=8000 -E VOICE_ASR_DEBUG=1 \
       -p Restart=on-failure "$PY" -m voice.sip serve
     sleep 3
     systemctl is-active "$SIP_UNIT"
@@ -87,7 +87,7 @@ case "$ACTION" in
     PHONE=${2:?номер}
     curl -s -X POST http://127.0.0.1:8092/dial -H 'Content-Type: application/json' -d "{\"phone\": \"$PHONE\"}"; echo
     sleep 60
-    journalctl -u "$SIP_UNIT" --since "-70s" --no-pager | grep -v aiohttp.access | tail -40
+    journalctl -u "$SIP_UNIT" --since "-70s" --no-pager | grep -v -e aiohttp.access -e "httpx INFO" | tail -80
     ;;
   autotest)
     update

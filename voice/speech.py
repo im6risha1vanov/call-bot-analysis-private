@@ -478,6 +478,8 @@ class DeepgramStream:
         import aiohttp
         while True:
             wait = self.collector.gap_left(time.monotonic())
+            if wait is not None:
+                wait = max(wait, 0.001)  # aiohttp считает timeout=0 «без таймаута» и ждёт следующего сообщения
             try:
                 msg = await self.ws.receive(timeout=wait)
             except asyncio.TimeoutError:
@@ -487,12 +489,26 @@ class DeepgramStream:
                     yield heard
                 continue
             if msg.type == aiohttp.WSMsgType.TEXT:
-                heard = self.collector.handle(json.loads(msg.data))
+                data = json.loads(msg.data)
+                _log_asr(data)
+                heard = self.collector.handle(data)
                 if heard:
                     yield heard
             elif msg.type in (aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING,
                               aiohttp.WSMsgType.CLOSED):
                 break
+
+
+def _log_asr(data: dict) -> None:
+    """Что прислал Deepgram: окончательный текст, конец фразы, ошибки. Промежуточные только с VOICE_ASR_DEBUG=1."""
+    kind = data.get("type")
+    if kind == "Results":
+        text = ((data.get("channel", {}).get("alternatives") or [{}])[0].get("transcript") or "").strip()
+        final = data.get("is_final")
+        if final or os.getenv("VOICE_ASR_DEBUG"):
+            log.info("распознано%s%s: «%s»", " окончательно" if final else "", ", конец фразы" if data.get("speech_final") else "", text)
+    elif kind in ("UtteranceEnd", "Error", "Warning"):
+        log.info("Deepgram %s: %s", kind, json.dumps(data, ensure_ascii=False)[:200])
 
 
 async def keepalive(stream: DeepgramStream, every: float = 5.0) -> None:
