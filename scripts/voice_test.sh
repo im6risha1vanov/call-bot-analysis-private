@@ -9,6 +9,7 @@
 #           sim (прогнать робота текстом против симулированных клиентов),
 #           sip (обновить код и поднять телефонного робота, нужен scripts/voice_sip_setup.sh),
 #           dial НОМЕР (робот звонит на номер), stop, status,
+#           eleven (модели и голоса ElevenLabs), set-voice VOICE_ID МОДЕЛЬ STABILITY SIMILARITY [STYLE] [SPEED],
 #           pacer / pacer-remove (ровная подача звука в Asterisk на VPS, voice/pacer.py),
 #           autotest [АРГУМЕНТЫ] (виртуальный абонент говорит с роботом, итог на лист «Робот · Автотест»),
 #           watch-install / watch-remove (таймер: автотест после каждого нового коммита ветки),
@@ -139,6 +140,27 @@ REMOTE
     systemctl daemon-reload
     systemctl restart callbot-voice-relay
     echo "pacer убран, туннель снова на 9092"
+    ;;
+  eleven)  # модели и голоса аккаунта ElevenLabs (id для set-voice)
+    KEY=$(grep -m1 '^ELEVENLABS_API_KEY=' "$BOT/.env" | cut -d= -f2- | tr -d "\"' ")
+    curl -s https://api.elevenlabs.io/v1/models -H "xi-api-key: $KEY" \
+      | python3 -c 'import json,sys; [print("model:", m["model_id"], "|", m.get("name", "")) for m in json.load(sys.stdin)]'
+    curl -s https://api.elevenlabs.io/v1/voices -H "xi-api-key: $KEY" \
+      | python3 -c 'import json,sys; [print("voice:", v["voice_id"], "|", v["name"]) for v in json.load(sys.stdin)["voices"]]'
+    ;;
+  set-voice)  # set-voice VOICE_ID МОДЕЛЬ STABILITY SIMILARITY [STYLE] [SPEED], потом перезапуск робота
+    set_env() { if grep -q "^$1=" "$BOT/.env"; then sed -i "s|^$1=.*|$1=$2|" "$BOT/.env"; else echo "$1=$2" >> "$BOT/.env"; fi; }
+    set_env VOICE_VOICE "11:${2:?voice_id}"
+    set_env VOICE_ELEVEN_DIRECT_MODEL "${3:?model_id}"
+    set_env VOICE_ELEVEN_STABILITY "${4:-0.65}"
+    set_env VOICE_ELEVEN_SIMILARITY "${5:-0.8}"
+    set_env VOICE_ELEVEN_STYLE "${6:-0}"
+    [ -n "${7:-}" ] && set_env VOICE_SPEED "$7"
+    grep -E '^VOICE_(VOICE|ELEVEN_|SPEED)' "$BOT/.env"
+    update
+    start_sip
+    sleep 3
+    systemctl is-active "$SIP_UNIT"
     ;;
   dial)
     PHONE=${2:?номер}
