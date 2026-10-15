@@ -279,6 +279,9 @@ ELEVEN_SETTINGS = {
 }
 # Что робот сказал перед этой фразой: ElevenLabs продолжает ту же интонацию, а не начинает заново
 previous_phrase: contextvars.ContextVar[str] = contextvars.ContextVar("previous_phrase", default="")
+# id прошлых синтезов этого звонка (request stitching ElevenLabs): список на звонок, None вне звонка
+tts_chain: contextvars.ContextVar[list | None] = contextvars.ContextVar("tts_chain", default=None)
+ELEVEN_SEED = int(os.getenv("VOICE_ELEVEN_SEED", "4242"))
 
 
 async def _eleven_direct_tts(text: str, voice: Voice) -> bytes:
@@ -286,12 +289,24 @@ async def _eleven_direct_tts(text: str, voice: Voice) -> bytes:
     rate = int(os.getenv("VOICE_ELEVEN_PCM_RATE", "24000"))
     body = {"text": text, "model_id": ELEVEN_DIRECT_MODEL, "language_code": "ru",
             "voice_settings": {**ELEVEN_SETTINGS, "speed": voice.speed}}
-    if previous_phrase.get():
-        body["previous_text"] = previous_phrase.get()[-300:]
-    r = await _client().post(f"{ELEVEN_API}/text-to-speech/{voice_id}", params={"output_format": f"pcm_{rate}"},
-                             headers={"xi-api-key": os.environ["ELEVENLABS_API_KEY"]}, json=body)
+    continuity = {}
+    if ELEVEN_SEED:
+        continuity["seed"] = ELEVEN_SEED  # одно «зерно» на все фразы: голос не гуляет от фразы к фразе
+    chain = tts_chain.get()
+    if chain:  # продолжение прошлых фраз этого звонка: та же интонация весь разговор
+        continuity["previous_request_ids"] = chain[-3:]
+    elif previous_phrase.get():
+        continuity["previous_text"] = previous_phrase.get()[-300:]
+    url, params = f"{ELEVEN_API}/text-to-speech/{voice_id}", {"output_format": f"pcm_{rate}"}
+    headers = {"xi-api-key": os.environ["ELEVENLABS_API_KEY"]}
+    r = await _client().post(url, params=params, headers=headers, json={**body, **continuity})
+    if r.status_code == 400 and continuity:  # модель не умеет связку: озвучиваем фразу отдельно
+        log.warning("ElevenLabs не принял связку фраз (%s): %s", ", ".join(continuity), r.text[:200])
+        r = await _client().post(url, params=params, headers=headers, json=body)
     if r.status_code != 200:
         raise TTSRequestError(r.status_code, r.text, "ElevenLabs")
+    if chain is not None and r.headers.get("request-id"):
+        chain.append(r.headers["request-id"])
     return resample(r.content, rate, TTS_RATE)
 
 
@@ -562,7 +577,7 @@ def _log_asr(data: dict) -> None:
         log.info("Deepgram %s: %s", kind, json.dumps(data, ensure_ascii=False)[:200])
 
 
-YANDEX_TAIL_S = int(os.getenv("VOICE_YANDEX_TAIL_MS", "900")) / 1000
+YANDEX_TAIL_S = int(os.getenv("VOICE_YANDEX_TAIL_MS", "650")) / 1000
 
 
 class YandexStream:

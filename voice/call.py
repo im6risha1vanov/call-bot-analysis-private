@@ -67,6 +67,7 @@ class CallSession:
         self.saved: dict | None = None
         self.heard_at = 0.0      # когда клиент закончил реплику: для замера, как быстро робот ответил
         self.last_filler = ""
+        self.tts_chain: list[str] = []  # id синтезов ElevenLabs этого звонка: следующая фраза продолжает их
         self.said_before = ""     # прошлая фраза робота: по ней ElevenLabs держит ту же интонацию
         self.reply_spoke = False  # робот уже начал озвучивать текущий ответ (для поиска пауз посреди ответа)
 
@@ -249,6 +250,7 @@ class CallSession:
             return
         started = time.monotonic()
         speech.previous_phrase.set(self.said_before)
+        speech.tts_chain.set(self.tts_chain)
         self.said_before = "" if phrase in FILLERS else phrase
         try:
             pcm = await self.synthesize(phrase, self.voice)
