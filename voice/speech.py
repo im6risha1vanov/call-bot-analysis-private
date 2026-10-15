@@ -414,6 +414,13 @@ HANGING_WORDS = {"город", "городе", "район", "районе", "у
                  "около", "примерно", "где", "гдето", "где-то", "наверное", "так", "мм", "эм", "э", "у", "с", "к",
                  "по", "до", "от", "за", "для", "что", "чтобы", "когда", "если", "потому", "зовут", "меня"}
 HANGING_GAP_S = int(os.getenv("VOICE_HANGING_GAP_MS", "1800")) / 1000
+# Короткие законченные ответы на вопросы да/нет: реплику закрываем почти сразу, без обычного ожидания
+SHORT_ANSWERS = {"да", "нет", "ага", "угу", "конечно", "да конечно", "актуально", "актуален", "да актуально",
+                 "да актуален", "не актуально", "неактуально", "уже не актуально", "нет не актуально",
+                 "интересовался", "интересовалась", "да интересовался", "да интересовалась", "не интересовался",
+                 "не интересовалась", "планирую", "планируем", "да планирую", "да планируем", "не планирую",
+                 "не планируем", "подходит", "да подходит", "устраивает", "да устраивает", "да верно", "верно"}
+SHORT_ANSWER_GAP_S = int(os.getenv("VOICE_SHORT_ANSWER_GAP_MS", "350")) / 1000
 
 
 def _hanging(text: str) -> bool:
@@ -447,6 +454,8 @@ class UtteranceCollector:
             if self.stale_tail <= 0:
                 return None
             wait = self.stale_tail
+            if " ".join(_words(self.tail)) in SHORT_ANSWERS:
+                wait = min(wait, SHORT_ANSWER_GAP_S)  # «да», «актуально»: ответ целиком, отвечаем сразу
             if _hanging(self.tail):
                 wait = max(wait, HANGING_GAP_S)  # «город…», «где-то…»: клиент вспоминает продолжение
             return max(self.tail_at + wait - now, 0.0)
@@ -454,6 +463,8 @@ class UtteranceCollector:
             return None
         if _hanging(self.parts[-1]):
             return max(self.final_at + HANGING_GAP_S - now, 0.0)
+        if " ".join(_words(" ".join(self.parts))) in SHORT_ANSWERS:
+            return max(self.final_at + SHORT_ANSWER_GAP_S - now, 0.0)
         finished = self.parts[-1].rstrip().endswith((".", "!", "?", "…"))
         return max(self.final_at + (self.gap if finished else self.open_gap) - now, 0.0)
 

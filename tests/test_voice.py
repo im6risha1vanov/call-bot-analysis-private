@@ -402,7 +402,7 @@ class SpeechTest(unittest.TestCase):
         c = speech.UtteranceCollector(gap=0.5, open_gap=1.0, stale_tail=1.2)
         res = lambda t, final=False: {"type": "Results", "is_final": final, "speech_final": False, "channel": {"alternatives": [{"transcript": t}]}}
         self.assertIsNone(c.gap_left(0))  # ещё нечего закрывать
-        c.handle(res("Да", final=True))  # без точки: клиент, скорее всего, ещё договаривает
+        c.handle(res("Москва", final=True))  # без точки: клиент, скорее всего, ещё договаривает
         self.assertAlmostEqual(c.gap_left(c.final_at + 0.2), 0.8)
         c.handle(res("Краснодар.", final=True))
         self.assertAlmostEqual(c.gap_left(c.final_at + 0.2), 0.3)
@@ -410,7 +410,7 @@ class SpeechTest(unittest.TestCase):
         self.assertAlmostEqual(c.gap_left(c.tail_at + 1), 0.2)
         c.handle(res("и ещё Сочи", final=True))
         self.assertEqual(c.gap_left(c.final_at + 1), 0.0)
-        self.assertEqual(c.close_on_gap(), speech.Heard("Да Краснодар. и ещё Сочи", True))
+        self.assertEqual(c.close_on_gap(), speech.Heard("Москва Краснодар. и ещё Сочи", True))
         self.assertIsNone(c.gap_left(10))
 
     def test_collector_closes_on_stale_interim(self):
@@ -593,7 +593,7 @@ class CallSessionTest(unittest.IsolatedAsyncioTestCase):
         session = CallSession(Dialog(load("kitchen"), AnthropicBackend(client=client)), send_audio, send_event, synthesize=synth, save=save)
         await session.start()
         await session.heard("да", False)
-        await session.heard("Да, актуально", True)
+        await session.heard("Да, актуально, присматриваюсь", True)
         await session.reply_task
         await session.heard("Бюджет тысяч сто", True)
         await session.reply_task
@@ -603,6 +603,40 @@ class CallSessionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(audio), 4)  # приветствие + 2 фразы + прощание
         self.assertEqual(saved, [{"phone": "", "mode": "браузер"}])
         self.assertIn({"type": "interim", "text": "да"}, events)
+
+    async def test_expected_answer_gets_quick_reply_without_model(self):
+        client = FakeClient([say("В каком городе будет кухня?")])
+        events, said = [], []
+
+        async def nothing(_):
+            pass
+
+        async def send_event(e):
+            events.append(e)
+
+        async def synth(text, voice):
+            said.append(text)
+            return b"\x00\x00" * 160
+
+        async def save(dialog, **kw):
+            return results.record(dialog, **kw)
+
+        session = CallSession(Dialog(load("kitchen"), AnthropicBackend(client=client)), nothing, send_event,
+                              synthesize=synth, save=save)
+        await session.start()
+        await session.heard("Да, актуально.", True)
+        await session.reply_task
+        self.assertEqual(client.requests, [])  # модель не спрашивали
+        quick = load("kitchen").quick[0]["reply"]
+        self.assertIn({"type": "transcript", "role": "robot", "text": quick, "first_text_ms": 0}, events)
+        await session.heard("Конечно", True)  # второй быстрый ответ: на вопрос о сроках
+        await session.reply_task
+        self.assertEqual(client.requests, [])
+        await session.heard("Москва", True)  # дальше — модель, и она видит весь обмен
+        await session.reply_task
+        self.assertEqual(len(client.requests), 1)
+        self.assertIn(quick, json.dumps(client.requests[0], ensure_ascii=False))
+        await session.hangup()
 
     async def test_broken_voice_falls_back_to_operator_voice(self):
         audio, used = [], []

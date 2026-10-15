@@ -171,6 +171,14 @@ class CallSession:
     # ------------------------------------------------------------------ робот
 
     async def _respond(self, text: str) -> None:
+        quick = getattr(self.dialog, "quick_reply", None)
+        fast = quick(text) if quick and text != SILENCE else None
+        if fast:  # ожидаемый ответ клиента: заготовка из анкеты, без ожидания модели
+            log.info("быстрый ответ без модели: «%s»", fast)
+            await self._say(fast)
+            await self.send_event({"type": "transcript", "role": "robot", "text": fast, "first_text_ms": 0})
+            self._arm_silence()
+            return
         splitter = speech.PhraseSplitter()
         generation = self.generation
         self.reply_spoke = False
@@ -222,7 +230,7 @@ class CallSession:
     async def _warm_up_voice(self) -> None:
         """Соединение с синтезом и «так…», «угу…» в кэше заранее: в разговоре они звучат без задержки."""
         await speech.warm_up_tts(self.voice)
-        for word in FILLERS:
+        for word in FILLERS + [item["reply"] for item in self.dialog.op.quick]:
             try:
                 await self.synthesize(word, self.voice)
             except Exception as e:

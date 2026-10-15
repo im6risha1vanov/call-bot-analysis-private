@@ -46,6 +46,8 @@ class Operator:
     voice_role: str = ""
     voice_speed: float = 1.0
     transfer_to: str = ""
+    # быстрые ответы без модели: после вопроса робота (after) на ожидаемый короткий ответ (answers) — reply
+    quick: list[dict] = field(default_factory=list)
 
     def validate(self) -> None:
         for key in ("name", "company", "greeting", "farewell", "goal"):
@@ -63,6 +65,9 @@ class Operator:
             raise OperatorError(f"{self.id}: voice_speed от 0.5 до 2.0")
         if self.gender not in ("female", "male"):
             raise OperatorError(f"{self.id}: gender должен быть female или male")
+        for item in self.quick:
+            if not (str(item.get("after", "")).strip() and item.get("answers") and str(item.get("reply", "")).strip()):
+                raise OperatorError(f"{self.id}: в быстром ответе нужны after, answers и reply")
         for key in self.fields:
             if not key.isidentifier():
                 raise OperatorError(f"{self.id}: ключ поля {key!r} должен быть латиницей без пробелов")
