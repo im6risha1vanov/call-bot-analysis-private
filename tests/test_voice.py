@@ -898,3 +898,108 @@ class ResultsTest(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NoiseAndFillerTest(unittest.IsolatedAsyncioTestCase):
+    def session(self, client, audio, events, said=None):
+        async def send_audio(pcm):
+            audio.append(pcm)
+
+        async def send_event(e):
+            events.append(e)
+
+        async def synth(text, voice):
+            if said is not None:
+                said.append(text)
+            return b"\x00\x00" * speech.TTS_RATE * 2  # 2 секунды звука
+
+        async def save(dialog, **kw):
+            return results.record(dialog, **kw)
+
+        return CallSession(Dialog(load("kitchen"), AnthropicBackend(client=client)), send_audio, send_event,
+                           synthesize=synth, save=save)
+
+    async def wait_audio(self, audio):
+        for _ in range(50):
+            if audio:
+                return
+            await asyncio.sleep(0.01)
+
+    async def test_single_noise_word_does_not_stop_robot_but_stop_word_does(self):
+        audio, events = [], []
+        session = self.session(FakeClient([say("Поняла.")]), audio, events)
+        await session.start()
+        await self.wait_audio(audio)
+        session.client_spoke = True
+        await session.heard("Тонь,", True)  # музыка на фоне распозналась как слово
+        self.assertIsNone(session.reply_task)
+        self.assertNotIn({"type": "clear"}, events)
+        await session.heard("Нет.", True)
+        self.assertIn({"type": "clear"}, events)
+        await session.hangup()
+
+    async def test_filler_while_model_thinks(self):
+        from voice import call
+        audio, events, said = [], [], []
+        session = self.session(FakeClient([say("Хорошо, записала.")], delay=0.6), audio, events, said)
+        old = call.FILLER_CHANCE, call.FILLER_AFTER_S
+        call.FILLER_CHANCE, call.FILLER_AFTER_S = 1.0, 0.1
+        try:
+            await session.start()
+            await self.wait_audio(audio)
+            session.speaking_until = 0.0
+            await session.heard("Город Москва.", True)
+            await session.reply_task
+            for _ in range(50):
+                if said[-1] == "Хорошо, записала.":
+                    break
+                await asyncio.sleep(0.01)
+        finally:
+            call.FILLER_CHANCE, call.FILLER_AFTER_S = old
+        self.assertIn(said[1], call.FILLERS)
+        self.assertEqual(said[-1], "Хорошо, записала.")
+        robot = [e["text"] for e in events if e.get("role") == "robot"]
+        self.assertNotIn(said[1], robot)  # «так…» не попадает в разговор
+        await session.hangup()
+
+
+class YandexAsrTest(unittest.IsolatedAsyncioTestCase):
+    def test_low_confidence_is_noise(self):
+        c = speech.UtteranceCollector(gap=0.7)
+        noise = {"type": "Results", "is_final": True, "channel": {"alternatives": [{"transcript": "Тонь", "confidence": 0.2}]}}
+        self.assertIsNone(c.handle(noise))
+        self.assertIsNone(c.handle({"type": "UtteranceEnd"}))
+
+    async def test_events_become_deepgram_messages(self):
+        def resp(kind, text=""):
+            alt = NS(text=text, confidence=0.0)
+            return NS(WhichOneof=lambda _: kind, **{kind: NS(alternatives=[alt])})
+
+        async def responses():
+            for r in (resp("partial", "город"), resp("final", "Город Москва."), resp("eou_update")):
+                yield r
+
+        stream = speech.YandexStream()
+        await stream._read(responses())
+        heard = []
+
+        async def collect():
+            async for h in stream:
+                heard.append(h)
+        await asyncio.wait_for(collect(), 2)
+        self.assertEqual([(h.text, h.final) for h in heard],
+                         [("город", False), ("Город Москва.", False), ("Город Москва.", True)])
+
+    def test_factory_falls_back_to_deepgram_without_libraries(self):
+        os.environ["VOICE_ASR"] = "yandex"
+        try:
+            stream = speech.asr_stream(None)
+        finally:
+            del os.environ["VOICE_ASR"]
+        try:
+            import grpc  # noqa: F401
+            from yandex.cloud.ai.stt.v3 import stt_pb2  # noqa: F401
+            expected = speech.YandexStream
+        except ImportError:
+            expected = speech.DeepgramStream
+        self.assertIsInstance(stream, expected)

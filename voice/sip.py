@@ -254,7 +254,7 @@ class PhoneASR:
         import aiohttp
         self.call = call
         self.http = aiohttp.ClientSession()
-        self.stream = speech.DeepgramStream(self.http, rate=RATE)
+        self.stream = speech.asr_stream(self.http, rate=RATE)
         self.opened = asyncio.Event()
 
     async def run(self) -> None:

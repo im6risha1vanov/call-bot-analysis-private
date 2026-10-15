@@ -116,11 +116,11 @@ async def call_ws(request: web.Request) -> web.WebSocketResponse:
                           voice_enabled=speech.tts_configured(), mode="браузер", voice=voice_from(hello))
     use_mic = bool(hello.get("mic")) and bool(os.getenv("DEEPGRAM_API_KEY"))
     http = ClientSession()
-    asr: speech.DeepgramStream | None = None
+    asr = None
     tasks: list[asyncio.Task] = []
     try:
         if use_mic:
-            asr = speech.DeepgramStream(http)
+            asr = speech.asr_stream(http)
             await asr.open()
 
             async def listen() -> None:

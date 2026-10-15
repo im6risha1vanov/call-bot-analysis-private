@@ -25,6 +25,8 @@ WATCH=callbot-voice-autotest
 MAX_PER_DAY=${VOICE_AUTOTEST_MAX_PER_DAY:-12}
 SIP_UNIT=callbot-voice-sip
 PY=$BOT/.venv/bin/python
+PYLIB=$DATA/pylib  # библиотеки только для робота (распознавание Яндекса), .venv бота не трогаем
+ASR_ENV=(-E PYTHONPATH="$PYLIB" -E VOICE_ASR=${VOICE_ASR:-yandex})
 
 update() {
   cd "$BOT"
@@ -32,6 +34,12 @@ update() {
   SHA=$(git rev-parse FETCH_HEAD)
   if [ -d "$DIR" ]; then git -C "$DIR" checkout -q --detach "$SHA"; else git worktree add -q --detach "$DIR" "$SHA"; fi
   mkdir -p "$DATA"
+  if ! PYTHONPATH="$PYLIB" "$PY" -c "import grpc; from yandex.cloud.ai.stt.v3 import stt_pb2" 2>/dev/null; then
+    echo "ставлю библиотеки распознавания Яндекса в $PYLIB"
+    "$PY" -m pip install -q --upgrade --target "$PYLIB" grpcio protobuf googleapis-common-protos \
+      && "$PY" -m pip install -q --upgrade --target "$PYLIB" --no-deps yandexcloud \
+      || echo "библиотеки не встали: робот распознаёт через Deepgram"
+  fi
   chown -R callbot-astra: "$DATA"
   chmod -R a+rX "$DIR"
   "$PY" -c "import aiohttp, anthropic, httpx" || { echo "в .venv нет aiohttp/anthropic/httpx"; exit 1; }
@@ -44,6 +52,15 @@ run() {  # одноразовый запуск с ключами бота от �
     "${RUN_ENV[@]}" "$PY" "$@" </dev/null
 }
 RUN_ENV=()
+
+start_sip() {  # телефонный робот (AudioSocket 9092, звонки через 8092)
+  systemctl stop "$SIP_UNIT" 2>/dev/null || true
+  systemctl reset-failed "$SIP_UNIT" 2>/dev/null || true
+  systemd-run --quiet --unit="$SIP_UNIT" --uid=callbot-astra --working-directory="$DIR" \
+    -p EnvironmentFile="$BOT/.env" -E VOICE_LOG="$DATA/calls.jsonl" -E VOICE_TTS_CACHE="$DATA/tts-cache" \
+    -E VOICE_TTS_RATE=8000 -E VOICE_ELEVEN_PCM_RATE=8000 -E VOICE_ASR_DEBUG=1 "${ASR_ENV[@]}" \
+    -p Restart=on-failure "$PY" -m voice.sip serve
+}
 
 case "$ACTION" in
   start)
@@ -68,12 +85,7 @@ case "$ACTION" in
     ;;
   sip)
     update
-    systemctl stop "$SIP_UNIT" 2>/dev/null || true
-    systemctl reset-failed "$SIP_UNIT" 2>/dev/null || true
-    systemd-run --quiet --unit="$SIP_UNIT" --uid=callbot-astra --working-directory="$DIR" \
-      -p EnvironmentFile="$BOT/.env" -E VOICE_LOG="$DATA/calls.jsonl" -E VOICE_TTS_CACHE="$DATA/tts-cache" \
-      -E VOICE_TTS_RATE=8000 -E VOICE_ELEVEN_PCM_RATE=8000 -E VOICE_ASR_DEBUG=1 \
-      -p Restart=on-failure "$PY" -m voice.sip serve
+    start_sip
     sleep 3
     systemctl is-active "$SIP_UNIT"
     if systemctl is-active -q callbot-voice-relay; then  # Asterisk на российском VPS (voice_relay_setup.sh)
@@ -91,8 +103,8 @@ case "$ACTION" in
     ;;
   autotest)
     update
-    if systemctl is-active -q "$SIP_UNIT"; then systemctl restart "$SIP_UNIT"; fi  # телефонный робот на новом коде
-    RUN_ENV=(-E VOICE_TTS_RATE=8000 -E VOICE_ELEVEN_PCM_RATE=8000 -E VOICE_AUTOTEST_SHA="$SHA")
+    if systemctl is-active -q "$SIP_UNIT"; then start_sip; fi  # телефонный робот на новом коде и настройках
+    RUN_ENV=(-E VOICE_TTS_RATE=8000 -E VOICE_ELEVEN_PCM_RATE=8000 -E VOICE_AUTOTEST_SHA="$SHA" "${ASR_ENV[@]}")
     run -m voice.autotest --sheet --out "$DATA/autotest.md" "${@:2}" || true
     echo "отчёт: $DATA/autotest.md"
     ;;

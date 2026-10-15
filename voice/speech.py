@@ -72,6 +72,15 @@ def _client() -> httpx.AsyncClient:
     return _http
 
 
+async def warm_up_tts(voice: "Voice") -> None:
+    """Открыть соединение с синтезом заранее: первая фраза без прогрева ждала TLS-рукопожатие, до 1,5 с."""
+    url = f"{ELEVEN_API}/models" if voice.name.startswith("11:") else "https://tts.api.cloud.yandex.net/"
+    try:
+        await _client().head(url, timeout=5.0)
+    except Exception as e:  # прогрев не обязателен
+        log.info("прогрев синтеза не удался: %s", e)
+
+
 def tts_configured() -> bool:
     return any(os.getenv(k, "").strip() for k in ("YANDEX_TTS_API_KEY", "OPENROUTER_API_KEY", "ELEVENLABS_API_KEY"))
 
@@ -366,6 +375,7 @@ TURN_GAP_S = int(os.getenv("VOICE_TURN_GAP_MS", "700")) / 1000  # 500 мс ре�
 OPEN_GAP_S = int(os.getenv("VOICE_TURN_GAP_OPEN_MS", "1000")) / 1000
 
 
+MIN_CONFIDENCE = float(os.getenv("VOICE_MIN_CONFIDENCE", "0.5"))  # ниже — музыка, шум, чужие голоса
 STALE_TAIL_S = int(os.getenv("VOICE_STALE_TAIL_MS", "3000")) / 1000  # страховка: 1,5 с резали клиента на полуслове
 
 
@@ -408,6 +418,10 @@ class UtteranceCollector:
             return None
         alternatives = message.get("channel", {}).get("alternatives") or [{}]
         text = (alternatives[0].get("transcript") or "").strip()
+        confidence = alternatives[0].get("confidence")
+        if text and confidence is not None and 0 < confidence < MIN_CONFIDENCE:
+            log.info("не верю распознаванию (%.2f), это шум: «%s»", confidence, text)
+            text = ""
         if message.get("is_final"):
             self.tail = ""
             if text and self.closed_tail:
@@ -511,7 +525,119 @@ def _log_asr(data: dict) -> None:
         log.info("Deepgram %s: %s", kind, json.dumps(data, ensure_ascii=False)[:200])
 
 
-async def keepalive(stream: DeepgramStream, every: float = 5.0) -> None:
+class YandexStream:
+    """Потоковое распознавание Yandex SpeechKit v3 (gRPC): русская речь по телефону понимается лучше Deepgram,
+    конец фразы определяет сама модель (eou). Ответы переводятся в формат Deepgram, дальше тот же UtteranceCollector.
+    Ключ YANDEX_STT_API_KEY или YANDEX_TTS_API_KEY (сервисному аккаунту нужна роль ai.speechkit-stt.user)."""
+
+    HOST = "stt.api.cloud.yandex.net:443"
+
+    def __init__(self, session=None, rate: int = SAMPLE_RATE) -> None:
+        self.rate = rate
+        self.ws = None  # keepalive() не нужен: звук идёт непрерывно
+        self.collector = UtteranceCollector()
+        self.audio: asyncio.Queue[bytes | None] = asyncio.Queue()
+        self.events: asyncio.Queue[dict | None] = asyncio.Queue()
+        self.channel = None
+        self.reader: asyncio.Task | None = None
+
+    async def open(self) -> None:
+        import grpc
+        from yandex.cloud.ai.stt.v3 import stt_pb2 as stt, stt_service_pb2_grpc as service
+        key = (os.getenv("YANDEX_STT_API_KEY") or os.environ["YANDEX_TTS_API_KEY"]).strip()
+        options = stt.StreamingOptions(
+            recognition_model=stt.RecognitionModelOptions(
+                model=os.getenv("VOICE_YANDEX_STT_MODEL", "general"),
+                audio_format=stt.AudioFormatOptions(raw_audio=stt.RawAudio(
+                    audio_encoding=stt.RawAudio.LINEAR16_PCM, sample_rate_hertz=self.rate, audio_channel_count=1)),
+                text_normalization=stt.TextNormalizationOptions(
+                    text_normalization=stt.TextNormalizationOptions.TEXT_NORMALIZATION_ENABLED,
+                    profanity_filter=False, literature_text=False),
+                language_restriction=stt.LanguageRestrictionOptions(
+                    restriction_type=stt.LanguageRestrictionOptions.WHITELIST, language_code=["ru-RU"]),
+                audio_processing_type=stt.RecognitionModelOptions.REAL_TIME),
+            eou_classifier=stt.EouClassifierOptions(default_classifier=stt.DefaultEouClassifier(
+                type=stt.DefaultEouClassifier.HIGH,
+                max_pause_between_words_hint_ms=int(os.getenv("VOICE_YANDEX_EOU_PAUSE_MS", "600")))))
+
+        async def requests():
+            yield stt.StreamingRequest(session_options=options)
+            while True:
+                pcm = await self.audio.get()
+                if pcm is None:
+                    return
+                yield stt.StreamingRequest(chunk=stt.AudioChunk(data=pcm))
+
+        self.channel = grpc.aio.secure_channel(self.HOST, grpc.ssl_channel_credentials())
+        metadata = [("authorization", f"Api-Key {key}")]
+        folder = (os.getenv("YANDEX_FOLDER_ID") or os.getenv("YANDEX_TTS_FOLDER_ID") or "").strip()
+        if folder:
+            metadata.append(("x-folder-id", folder))
+        call = service.RecognizerStub(self.channel).RecognizeStreaming(requests(), metadata=metadata)
+        self.reader = asyncio.create_task(self._read(call))
+
+    async def _read(self, call) -> None:
+        try:
+            async for r in call:
+                kind = r.WhichOneof("Event")
+                if kind in ("partial", "final"):
+                    alts = getattr(r, kind).alternatives
+                    text = alts[0].text if alts else ""
+                    conf = alts[0].confidence if alts else 0.0
+                    await self.events.put({"type": "Results", "is_final": kind == "final", "speech_final": False,
+                                           "channel": {"alternatives": [{"transcript": text, "confidence": conf}]}})
+                elif kind == "eou_update":
+                    await self.events.put({"type": "UtteranceEnd"})
+        except Exception as e:
+            log.warning("Yandex SpeechKit: распознавание оборвалось: %s", e)
+        finally:
+            await self.events.put(None)
+
+    async def send(self, pcm: bytes) -> None:
+        await self.audio.put(pcm)
+
+    async def close(self) -> None:
+        await self.audio.put(None)
+        if self.reader is not None:
+            try:
+                await asyncio.wait_for(self.reader, 3)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                self.reader.cancel()
+        if self.channel is not None:
+            await self.channel.close()
+
+    async def __aiter__(self) -> AsyncIterator[Heard]:
+        while True:
+            wait = self.collector.gap_left(time.monotonic())
+            try:
+                data = await (asyncio.wait_for(self.events.get(), max(wait, 0.001)) if wait is not None
+                              else self.events.get())
+            except asyncio.TimeoutError:
+                heard = self.collector.close_on_gap()
+                if heard:
+                    yield heard
+                continue
+            if data is None:
+                return
+            _log_asr(data)
+            heard = self.collector.handle(data)
+            if heard:
+                yield heard
+
+
+def asr_stream(session, rate: int = SAMPLE_RATE):
+    """Распознавание по VOICE_ASR: yandex (SpeechKit) или deepgram. Нет библиотек для Яндекса — Deepgram."""
+    if os.getenv("VOICE_ASR", "deepgram").strip().lower() == "yandex":
+        try:
+            import grpc  # noqa: F401
+            from yandex.cloud.ai.stt.v3 import stt_pb2  # noqa: F401
+            return YandexStream(session, rate)
+        except ImportError as e:
+            log.warning("VOICE_ASR=yandex, но нет библиотек (%s): распознаю через Deepgram", e)
+    return DeepgramStream(session, rate)
+
+
+async def keepalive(stream, every: float = 5.0) -> None:
     while stream.ws is not None and not stream.ws.closed:
         await asyncio.sleep(every)
         try:

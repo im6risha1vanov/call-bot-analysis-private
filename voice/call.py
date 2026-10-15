@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import random
 import time
 from typing import Awaitable, Callable
 
@@ -21,6 +22,13 @@ SILENCE_AFTER_S = 7.0      # сколько ждать ответа клиент
 BARGE_IN_WORDS = 2         # столько слов клиента поверх робота останавливают робота
 # пока робот не сказал ни звука, «алло» клиента означает «я тут», а не ответ: ждём приветствия
 HELLO_WORDS = {"алло", "ало", "алё", "але", "да", "слушаю", "здравствуйте", "добрый день"}
+# одно слово поверх речи робота — обычно шум, музыка или «угу» клиента: робота не останавливаем.
+# Исключения: слова, которыми клиент правда просит замолчать.
+STOP_WORDS = {"стоп", "нет", "подождите", "погодите", "стойте", "извините", "простите", "минуту", "секунду"}
+# «эффект думания»: если модель не начала отвечать за FILLER_AFTER_S, робот говорит «так…», «угу…»
+FILLERS = [w.strip() for w in os.getenv("VOICE_FILLERS", "Так…|Угу…|Ага…|Так-так…").split("|") if w.strip()]
+FILLER_AFTER_S = int(os.getenv("VOICE_FILLER_AFTER_MS", "400")) / 1000
+FILLER_CHANCE = float(os.getenv("VOICE_FILLER_CHANCE", "0.8"))  # не на каждой реплике, чтобы не звучало заученно
 
 SendAudio = Callable[[bytes], Awaitable[None]]
 SendEvent = Callable[[dict], Awaitable[None]]
@@ -58,11 +66,14 @@ class CallSession:
         self.done = asyncio.Event()    # итог сохранён и отправлен
         self.saved: dict | None = None
         self.heard_at = 0.0      # когда клиент закончил реплику: для замера, как быстро робот ответил
+        self.last_filler = ""
 
     # ------------------------------------------------------------------ жизненный цикл
 
     async def start(self, first_words: str = "Алло") -> None:
         self.tts_task = asyncio.create_task(self._tts_worker())
+        if self.voice_enabled and self.synthesize is speech.synthesize_pcm:
+            asyncio.create_task(self._warm_up_voice())
         greeting = self.dialog.greet(first_words)
         await self.send_event({"type": "transcript", "role": "client", "text": first_words})
         await self.send_event({"type": "transcript", "role": "robot", "text": greeting})
@@ -111,6 +122,9 @@ class CallSession:
         if final and not self.client_spoke and self.is_speaking() and text.strip(" .,!?…").lower() in HELLO_WORDS:
             log.info("клиент сказал «%s» поверх приветствия, продолжаем", text)
             return
+        if self.audio_sent and self.is_speaking() and not self._real_interruption(text):
+            log.info("поверх речи робота: «%s», не перебивание (шум или поддакивание)", text)
+            return
         self._cancel_silence()
         if not final:
             await self.send_event({"type": "interim", "text": text})
@@ -123,6 +137,14 @@ class CallSession:
         self.heard_at = time.monotonic()
         await self.send_event({"type": "transcript", "role": "client", "text": text})
         self.reply_task = asyncio.create_task(self._respond(text))
+
+    def _real_interruption(self, text: str) -> bool:
+        words = speech._words(text)
+        if len(words) >= BARGE_IN_WORDS or any(w in STOP_WORDS for w in words):
+            return True
+        # робот вот-вот договорит: короткий ответ («да», «нет») — это ответ, а не шум
+        thinking = self.reply_task is not None and not self.reply_task.done()
+        return not thinking and self.speaking_until - time.monotonic() < 1.0
 
     def is_speaking(self) -> bool:
         busy = self.reply_task is not None and not self.reply_task.done()
@@ -147,9 +169,12 @@ class CallSession:
     async def _respond(self, text: str) -> None:
         splitter = speech.PhraseSplitter()
         generation = self.generation
+        started = asyncio.Event()  # модель уже дала первую фразу: «так…» не нужно
+        filler = asyncio.create_task(self._filler(generation, started)) if text != SILENCE else None
 
         async def on_text(chunk: str) -> None:
             for phrase in splitter.feed(chunk):
+                started.set()
                 await self._say(phrase, generation)
 
         try:
@@ -160,6 +185,10 @@ class CallSession:
             log.exception("ошибка ответа модели")
             await self.send_event({"type": "error", "text": f"модель: {e}"})
             return
+        finally:
+            started.set()
+            if filler is not None:
+                filler.cancel()
         for phrase in splitter.flush():
             await self._say(phrase, generation)
         if turn.fallback:
@@ -171,6 +200,29 @@ class CallSession:
             await self._finish("итог записан")
         else:
             self._arm_silence()
+
+    async def _filler(self, generation: int, started: asyncio.Event) -> None:
+        try:
+            await asyncio.wait_for(started.wait(), FILLER_AFTER_S)
+            return
+        except asyncio.TimeoutError:
+            pass
+        if not FILLERS or generation != self.generation or self.pending or random.random() > FILLER_CHANCE:
+            return
+        word = random.choice([w for w in FILLERS if w != self.last_filler] or FILLERS)
+        self.last_filler = word
+        log.info("модель думает дольше %d мс: «%s»", FILLER_AFTER_S * 1000, word)
+        await self._say(word, generation)
+
+    async def _warm_up_voice(self) -> None:
+        """Соединение с синтезом и «так…», «угу…» в кэше заранее: в разговоре они звучат без задержки."""
+        await speech.warm_up_tts(self.voice)
+        for word in FILLERS:
+            try:
+                await self.synthesize(word, self.voice)
+            except Exception as e:
+                log.info("заготовка «%s» не синтезирована: %s", word, e)
+                return
 
     async def _say(self, phrase: str, generation: int | None = None) -> None:
         if phrase.strip():
