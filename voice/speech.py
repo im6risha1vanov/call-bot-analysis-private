@@ -240,7 +240,7 @@ def _cache_path(text: str, voice: Voice):
         return None
     import hashlib
     from pathlib import Path
-    model = {"el:": ELEVEN_MODEL, "11:": f"{ELEVEN_DIRECT_MODEL} {sorted(ELEVEN_SETTINGS.items())}"}.get(
+    model = {"el:": ELEVEN_MODEL, "11:": str(eleven_params())}.get(
         voice.name[:3], os.getenv("VOICE_TTS_API", "v3"))
     key = json.dumps([model, voice.name, voice.role, round(voice.speed, 2), TTS_RATE, " ".join(text.split())], ensure_ascii=False)
     return Path(folder) / (hashlib.sha256(key.encode()).hexdigest() + ".pcm")
@@ -284,11 +284,96 @@ tts_chain: contextvars.ContextVar[list | None] = contextvars.ContextVar("tts_cha
 ELEVEN_SEED = int(os.getenv("VOICE_ELEVEN_SEED", "4242"))
 
 
+# Настройки голоса со страницы /voice: файл VOICE_SETTINGS_FILE перечитывается при изменении, звонки
+# подхватывают его без перезапуска. Пустые поля — значения из .env.
+SETTINGS_FILE = os.getenv("VOICE_SETTINGS_FILE", "")
+_live_cache: dict = {"mtime": None, "data": {}}
+# Несохранённые настройки для «Прослушать» на странице
+settings_override: contextvars.ContextVar[dict | None] = contextvars.ContextVar("settings_override", default=None)
+SETTING_KEYS = {"voice_id": str, "model": str, "stability": float, "similarity": float, "style": float,
+                "speed": float, "speaker_boost": bool, "calm": bool, "tail_ms": int, "filler_after_ms": int,
+                "fillers": bool}
+
+
+def clean_settings(data: dict) -> dict:
+    """Только известные поля нужного типа, в допустимых пределах."""
+    out = {}
+    for key, kind in SETTING_KEYS.items():
+        value = data.get(key)
+        if value is None or value == "":
+            continue
+        try:
+            value = kind(value) if kind is not bool else bool(value)
+        except (TypeError, ValueError):
+            continue
+        out[key] = value
+    for key, low, high in (("stability", 0, 1), ("similarity", 0, 1), ("style", 0, 1), ("speed", 0.7, 1.2),
+                           ("tail_ms", 300, 2000), ("filler_after_ms", 100, 3000)):
+        if key in out:
+            out[key] = min(max(out[key], low), high)
+    if "voice_id" in out and not re.fullmatch(r"[A-Za-z0-9]{10,40}", out["voice_id"]):
+        del out["voice_id"]
+    if "model" in out and not re.fullmatch(r"eleven_[a-z0-9_]{2,40}", out["model"]):
+        del out["model"]
+    return out
+
+
+def live_settings() -> dict:
+    if not SETTINGS_FILE:
+        return {}
+    try:
+        mtime = os.stat(SETTINGS_FILE).st_mtime
+    except OSError:
+        return {}
+    if mtime != _live_cache["mtime"]:
+        try:
+            with open(SETTINGS_FILE, encoding="utf-8") as f:
+                _live_cache["data"] = clean_settings(json.load(f))
+        except (OSError, ValueError) as e:
+            log.warning("настройки голоса %s не прочитаны: %s", SETTINGS_FILE, e)
+            _live_cache["data"] = {}
+        _live_cache["mtime"] = mtime
+    return _live_cache["data"]
+
+
+def setting(key: str, default):
+    override = settings_override.get()
+    return (override if override is not None else live_settings()).get(key, default)
+
+
+def save_settings(data: dict) -> dict:
+    data = clean_settings(data)
+    tmp = SETTINGS_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, SETTINGS_FILE)
+    return data
+
+
+def eleven_params() -> tuple[str, dict]:
+    """Модель и ползунки ElevenLabs с учётом страницы настроек."""
+    return setting("model", ELEVEN_DIRECT_MODEL), {
+        "stability": setting("stability", ELEVEN_SETTINGS["stability"]),
+        "similarity_boost": setting("similarity", ELEVEN_SETTINGS["similarity_boost"]),
+        "style": setting("style", ELEVEN_SETTINGS["style"]),
+        "use_speaker_boost": setting("speaker_boost", True),
+    }
+
+
+def effective_voice(voice: Voice) -> Voice:
+    """Голос ElevenLabs и темп со страницы настроек. Голоса Яндекса (автотест) не трогаем."""
+    if not voice.name.startswith("11:"):
+        return voice
+    voice_id = setting("voice_id", "")
+    return Voice(f"11:{voice_id}" if voice_id else voice.name, voice.role, setting("speed", voice.speed))
+
+
 async def _eleven_direct_tts(text: str, voice: Voice) -> bytes:
     voice_id = await _eleven_voice_id(voice.name.removeprefix("11:"))
     rate = int(os.getenv("VOICE_ELEVEN_PCM_RATE", "24000"))
-    body = {"text": text, "model_id": ELEVEN_DIRECT_MODEL, "language_code": "ru",
-            "voice_settings": {**ELEVEN_SETTINGS, "speed": voice.speed}}
+    model, sliders = eleven_params()
+    body = {"text": text, "model_id": model, "language_code": "ru",
+            "voice_settings": {**sliders, "speed": min(max(voice.speed, 0.7), 1.2)}}
     continuity = {}
     if ELEVEN_SEED:
         continuity["seed"] = ELEVEN_SEED  # одно «зерно» на все фразы: голос не гуляет от фразы к фразе
@@ -316,7 +401,7 @@ _CHEERFUL = re.compile(r"\b(Отлично|Замечательно|Прекра
 
 
 def calm_text(text: str) -> str:
-    if not CALM:
+    if not setting("calm", CALM):
         return text
     text = re.sub(r"!+", ".", text)
     text = _CHEERFUL.sub(lambda m: "Хорошо" if m.group(0)[0].isupper() else "хорошо", text)
@@ -326,6 +411,7 @@ def calm_text(text: str) -> str:
 async def synthesize_pcm(text: str, voice: Voice) -> bytes:
     """Фраза в PCM TTS_RATE Гц, 16 бит, моно, с кэшем на диске."""
     text = calm_text(text)
+    voice = effective_voice(voice)
     path = _cache_path(text, voice)
     if path is not None and path.exists():
         return path.read_bytes()
@@ -630,7 +716,7 @@ class YandexStream:
         self.ws = None  # keepalive() не нужен: звук идёт непрерывно
         # Конец реплики сообщает сам Яндекс (eou), но с запасом около секунды. Раньше закрываем сами, когда
         # промежуточный текст не меняется YANDEX_TAIL_S: 0,6 с резали клиента на полуслове (автотест 5ab28c4)
-        self.collector = UtteranceCollector(stale_tail=YANDEX_TAIL_S)
+        self.collector = UtteranceCollector(stale_tail=setting("tail_ms", YANDEX_TAIL_S * 1000) / 1000)
         self.audio: asyncio.Queue[bytes | None] = asyncio.Queue()
         self.events: asyncio.Queue[dict | None] = asyncio.Queue()
         self.channel = None

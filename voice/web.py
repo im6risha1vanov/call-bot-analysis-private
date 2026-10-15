@@ -24,7 +24,7 @@ from pathlib import Path
 from aiohttp import WSMsgType, web, ClientSession
 
 from voice import llm, speech
-from voice.call import CallSession
+from voice.call import FILLER_AFTER_S, CallSession
 from voice.dialog import Dialog
 from voice.operator import OPERATORS_DIR, OperatorError, load
 
@@ -69,9 +69,67 @@ def voice_from(data: dict) -> speech.Voice | None:
     return speech.Voice(name, str(data.get("role") or "").strip(), speed)
 
 
+async def voice_page(request: web.Request) -> web.FileResponse:
+    return web.FileResponse(STATIC / "voice.html")
+
+
+def _current_voice() -> dict:
+    """Что сейчас звучит в звонках: .env плюс сохранённое на странице."""
+    model, sliders = speech.eleven_params()
+    env_voice = os.getenv("VOICE_VOICE", "")
+    return {
+        "voice_id": speech.setting("voice_id", env_voice.removeprefix("11:") if env_voice.startswith("11:") else ""),
+        "model": model, "stability": sliders["stability"], "similarity": sliders["similarity_boost"],
+        "style": sliders["style"], "speaker_boost": sliders["use_speaker_boost"],
+        "speed": speech.setting("speed", float(os.getenv("VOICE_SPEED") or 1.0)),
+        "calm": speech.setting("calm", speech.CALM),
+        "tail_ms": speech.setting("tail_ms", int(speech.YANDEX_TAIL_S * 1000)),
+        "filler_after_ms": speech.setting("filler_after_ms", int(FILLER_AFTER_S * 1000)),
+        "fillers": speech.setting("fillers", True),
+    }
+
+
+async def get_settings(request: web.Request) -> web.Response:
+    if os.getenv("ELEVENLABS_API_KEY") and not speech._eleven_direct:
+        await speech.load_eleven_voices()
+    return web.json_response({"current": _current_voice(), "saved": speech.live_settings(),
+                              "file": speech.SETTINGS_FILE, "voices": speech._eleven_direct,
+                              "test_phones": TEST_PHONES})
+
+
+async def post_settings(request: web.Request) -> web.Response:
+    if not speech.SETTINGS_FILE:
+        return web.json_response({"error": "не задан VOICE_SETTINGS_FILE"}, status=400)
+    try:
+        saved = speech.save_settings(await request.json())
+    except OSError as e:
+        return web.json_response({"error": str(e)}, status=500)
+    log.info("настройки голоса сохранены: %s", saved)
+    return web.json_response({"saved": saved})
+
+
+# Звонок со страницы: только на тестовые номера (свои), не на базу
+TEST_PHONES = [p.strip() for p in os.getenv("VOICE_TEST_PHONES", "79042031766").split(",") if p.strip()]
+
+
+async def test_dial(request: web.Request) -> web.Response:
+    phone = str((await request.json()).get("phone", "")).strip()
+    if phone not in TEST_PHONES:
+        return web.json_response({"error": "звонок со страницы только на тестовый номер"}, status=400)
+    port = os.getenv("VOICE_SIP_API_PORT", "8092")
+    try:
+        async with ClientSession() as http:
+            async with http.post(f"http://127.0.0.1:{port}/dial", json={"phone": phone}) as r:
+                return web.json_response(await r.json(content_type=None), status=r.status)
+    except Exception as e:
+        return web.json_response({"error": f"телефонный робот не отвечает: {e}"}, status=502)
+
+
 async def preview(request: web.Request) -> web.Response:
-    """Прослушать голос: короткая фраза, ответ сырым PCM."""
+    """Прослушать голос: короткая фраза, ответ сырым PCM. settings — несохранённые ползунки страницы."""
     data = await request.json()
+    if isinstance(data.get("settings"), dict):
+        speech.settings_override.set(speech.clean_settings(data["settings"]))
     voice = voice_from(data)
     text = str(data.get("text") or "").strip()[:400]
     if voice is None or not text:
@@ -82,7 +140,7 @@ async def preview(request: web.Request) -> web.Response:
         pcm = await speech.synthesize_pcm(text, voice)
     except Exception as e:
         return web.json_response({"error": str(e)}, status=502)
-    return web.Response(body=pcm, content_type="application/octet-stream")
+    return web.Response(body=pcm, content_type="application/octet-stream", headers={"X-Rate": str(speech.TTS_RATE)})
 
 
 async def call_ws(request: web.Request) -> web.WebSocketResponse:
@@ -168,6 +226,10 @@ def app() -> web.Application:
     application.router.add_get("/operators", operators)
     application.router.add_get("/ws", call_ws)
     application.router.add_post("/preview", preview)
+    application.router.add_get("/voice", voice_page)
+    application.router.add_get("/settings", get_settings)
+    application.router.add_post("/settings", post_settings)
+    application.router.add_post("/dial", test_dial)
     return application
 
 

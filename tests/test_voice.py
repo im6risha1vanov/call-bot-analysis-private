@@ -569,6 +569,40 @@ class ElevenTest(unittest.IsolatedAsyncioTestCase):
             speech._eleven_direct.clear()
             del os.environ["ELEVENLABS_API_KEY"]
 
+    async def test_settings_page_file_changes_voice_and_sliders(self):
+        seen = []
+
+        def handler(request):
+            seen.append(json.loads(request.content))
+            return httpx.Response(200, content=b"\x00\x10" * 24)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            old = speech.SETTINGS_FILE
+            speech.SETTINGS_FILE = str(Path(tmp) / "voice.json")
+            os.environ["ELEVENLABS_API_KEY"] = "xi"
+            speech._http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+            try:
+                saved = speech.save_settings({"voice_id": "tj9wwIq7s2HekkDfg1KH", "model": "eleven_v4", "speed": 1.5,
+                                              "stability": 0.8, "tail_ms": 700, "junk": 1, "calm": False})
+                self.assertEqual((saved["speed"], saved["tail_ms"], "junk" in saved), (1.2, 700, False))
+                await speech.synthesize_pcm("Отлично!", speech.Voice("11:old", "", 1.0))
+                body = seen[-1]
+                self.assertEqual((body["model_id"], body["voice_settings"]["stability"], body["voice_settings"]["speed"],
+                                  body["text"]), ("eleven_v4", 0.8, 1.2, "Отлично!"))
+                self.assertEqual(speech.YandexStream().collector.stale_tail, 0.7)
+                # несохранённые ползунки страницы «Прослушать» не трогают звонки
+                token = speech.settings_override.set({"stability": 0.3})
+                await speech.synthesize_pcm("Да", speech.Voice("11:tj9wwIq7s2HekkDfg1KH"))
+                speech.settings_override.reset(token)
+                self.assertEqual(seen[-1]["voice_settings"]["stability"], 0.3)
+                # голос Яндекса (автотест) файл не меняет
+                self.assertEqual(speech.effective_voice(speech.Voice("dasha", "", 1.0)).name, "dasha")
+            finally:
+                speech._http = None
+                speech.SETTINGS_FILE = old
+                speech._live_cache.update(mtime=None, data={})
+                del os.environ["ELEVENLABS_API_KEY"]
+
     def test_resample_keeps_level(self):
         import array
         src = array.array("h", [1000] * 100).tobytes()

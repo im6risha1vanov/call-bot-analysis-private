@@ -223,16 +223,17 @@ class CallSession:
             self._arm_silence()
 
     async def _filler(self, generation: int, started: asyncio.Event) -> None:
+        after = speech.setting("filler_after_ms", FILLER_AFTER_S * 1000) / 1000
         try:
-            await asyncio.wait_for(started.wait(), FILLER_AFTER_S)
+            await asyncio.wait_for(started.wait(), after)
             return
         except asyncio.TimeoutError:
             pass
-        if not FILLERS or generation != self.generation or self.pending or random.random() > FILLER_CHANCE:
+        if not FILLERS or not speech.setting("fillers", True) or generation != self.generation or self.pending or random.random() > FILLER_CHANCE:
             return
         word = random.choice([w for w in FILLERS if w != self.last_filler] or FILLERS)
         self.last_filler = word
-        log.info("модель думает дольше %d мс: «%s»", FILLER_AFTER_S * 1000, word)
+        log.info("модель думает дольше %d мс: «%s»", after * 1000, word)
         await self._say(word, generation)
 
     async def _warm_up_voice(self) -> None:

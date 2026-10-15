@@ -14,7 +14,8 @@
 #           autotest [АРГУМЕНТЫ] (виртуальный абонент говорит с роботом, итог на лист «Робот · Автотест»),
 #           watch-install / watch-remove (таймер: автотест после каждого нового коммита ветки),
 #           tick (то, что запускает таймер).
-# Страница открывается через туннель: ssh -L 8090:127.0.0.1:8090 root@SERVER, потом http://localhost:8090
+# Страница открывается через туннель: ssh -L 8091:127.0.0.1:8090 root@SERVER, потом http://localhost:8091
+# (настройки голоса: http://localhost:8091/voice)
 set -euo pipefail
 ACTION=${1:-start}
 BOT=/opt/callbot-astra
@@ -29,6 +30,7 @@ SIP_UNIT=callbot-voice-sip
 PY=$BOT/.venv/bin/python
 PYLIB=$DATA/pylib  # библиотеки только для робота (распознавание Яндекса), .venv бота не трогаем
 ASR_ENV=(-E PYTHONPATH="$PYLIB" -E VOICE_ASR=${VOICE_ASR:-yandex})
+SETTINGS_ENV=(-E VOICE_SETTINGS_FILE="$DATA/voice-settings.json")  # ползунки со страницы /voice, общие для страницы и звонков
 
 update() {
   cd "$BOT"
@@ -66,7 +68,7 @@ start_sip() {  # телефонный робот (AudioSocket 9092, звонки
   systemctl reset-failed "$SIP_UNIT" 2>/dev/null || true
   systemd-run --quiet --unit="$SIP_UNIT" --uid=callbot-astra --working-directory="$DIR" \
     -p EnvironmentFile="$BOT/.env" -E VOICE_LOG="$DATA/calls.jsonl" -E VOICE_TTS_CACHE="$DATA/tts-cache" \
-    -E VOICE_TTS_RATE=8000 -E VOICE_ELEVEN_PCM_RATE=8000 -E VOICE_ASR_DEBUG=1 "${ASR_ENV[@]}" \
+    -E VOICE_TTS_RATE=8000 -E VOICE_ELEVEN_PCM_RATE=8000 -E VOICE_ASR_DEBUG=1 "${ASR_ENV[@]}" "${SETTINGS_ENV[@]}" \
     -p Restart=on-failure "$PY" -m voice.sip serve
 }
 
@@ -77,9 +79,10 @@ case "$ACTION" in
     systemctl reset-failed "$UNIT" 2>/dev/null || true
     systemd-run --quiet --unit="$UNIT" --uid=callbot-astra --working-directory="$DIR" \
       -p EnvironmentFile="$BOT/.env" -E VOICE_LOG="$DATA/calls.jsonl" -E VOICE_TTS_CACHE="$DATA/tts-cache" -p Restart=on-failure \
-      "$PY" -m voice.web
+      "${SETTINGS_ENV[@]}" "$PY" -m voice.web
+    start_sip  # телефонный робот читает тот же файл настроек
     sleep 3
-    systemctl is-active "$UNIT"
+    systemctl is-active "$UNIT" "$SIP_UNIT"
     curl -s http://127.0.0.1:8090/operators; echo
     ;;
   bench)  # скорость моделей: bench МОДЕЛЬ...
