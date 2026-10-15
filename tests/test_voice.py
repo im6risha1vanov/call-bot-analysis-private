@@ -984,6 +984,17 @@ class YandexAsrTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(c.handle({"type": "UtteranceEnd"}))
         self.assertEqual(c.handle(part("да")).text, "да")  # после окончательного текста — новая речь
 
+    def test_two_early_closes_then_whole_final(self):
+        c = speech.UtteranceCollector(gap=0.7, stale_tail=0.01)
+        part = lambda t: {"type": "Results", "is_final": False, "channel": {"alternatives": [{"transcript": t}]}}
+        fin = lambda t: {"type": "Results", "is_final": True, "channel": {"alternatives": [{"transcript": t}]}}
+        c.handle(part("ирина петровна"))
+        self.assertEqual(c.close_on_gap().text, "ирина петровна")
+        self.assertEqual(c.handle(part("ирина петровна завтра после шести")).text, "завтра после шести")
+        self.assertEqual(c.close_on_gap().text, "завтра после шести")
+        self.assertIsNone(c.handle(fin("ирина петровна завтра после шести")))  # не повторяем всю фразу
+        self.assertIsNone(c.handle({"type": "UtteranceEnd"}))
+
     def test_hanging_word_waits_longer(self):
         c = speech.UtteranceCollector(gap=0.7, stale_tail=0.9)
         c.handle({"type": "Results", "is_final": False, "channel": {"alternatives": [{"transcript": "город"}]}})

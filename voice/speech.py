@@ -416,6 +416,7 @@ class UtteranceCollector:
         self.tail = ""          # промежуточный текст после последнего окончательного: клиент ещё говорит
         self.tail_at = 0.0      # когда промежуточный текст последний раз менялся
         self.final_at = 0.0
+        self.raw_tail = ""      # промежуточный текст как пришёл, с уже отвеченным началом
         self.closed_tail = ""   # реплику закрыли по промежуточному тексту: его запоздалый is_final не повторяем
 
     def gap_left(self, now: float) -> float | None:
@@ -450,7 +451,7 @@ class UtteranceCollector:
             log.info("не верю распознаванию (%.2f), это шум: «%s»", confidence, text)
             text = ""
         if message.get("is_final"):
-            self.tail = ""
+            self.tail = self.raw_tail = ""
             if text and self.closed_tail:
                 text = _without_prefix(text, self.closed_tail)  # уже отвеченное начало не повторяем
                 self.closed_tail = ""
@@ -462,9 +463,10 @@ class UtteranceCollector:
             if message.get("speech_final"):
                 return self._close()
             return Heard(" ".join(self.parts), False) if text else None
+        self.raw_tail = text
         if text and self.closed_tail:
-            # после закрытия по промежуточному тексту распознавание ещё раз присылает его же:
-            # это не новая речь, иначе робот принял бы её за перебивание и замолчал (автотест 03e93cc)
+            # Промежуточный текст копится с начала фразы. После раннего закрытия распознавание присылает
+            # уже отвеченное начало ещё раз: это не новая речь (автотест 03e93cc), берём только продолжение
             text = _without_prefix(text, self.closed_tail)
         if text != self.tail:
             self.tail, self.tail_at = text, time.monotonic()
@@ -474,8 +476,10 @@ class UtteranceCollector:
 
     def _close(self) -> Heard | None:
         words = self.parts + ([self.tail] if self.tail else [])
-        self.closed_tail = self.tail
-        self.tail, self.parts = "", []
+        # отвеченным считаем весь накопленный текст фразы, а не только последний кусок: окончательный текст
+        # Яндекса придёт целиком («ирина петровна завтра после шести»), повторять его нельзя (автотест 172f77a)
+        self.closed_tail = self.raw_tail if self.tail else ""
+        self.tail, self.parts, self.raw_tail = "", [], ""
         if not words:
             return None
         return Heard(" ".join(words), True)
