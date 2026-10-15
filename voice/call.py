@@ -129,10 +129,10 @@ class CallSession:
         if not final:
             await self.send_event({"type": "interim", "text": text})
             if self.audio_sent and self.is_speaking() and len(text.split()) >= BARGE_IN_WORDS:
-                await self._barge_in()
+                await self._barge_in(text)
             return
         if self.audio_sent and self.is_speaking():  # приветствие, которое ещё не прозвучало, не сбрасываем
-            await self._barge_in()
+            await self._barge_in(text)
         self.client_spoke = True
         self.heard_at = time.monotonic()
         await self.send_event({"type": "transcript", "role": "client", "text": text})
@@ -150,7 +150,8 @@ class CallSession:
         busy = self.reply_task is not None and not self.reply_task.done()
         return busy or self.pending > 0 or time.monotonic() < self.speaking_until
 
-    async def _barge_in(self) -> None:
+    async def _barge_in(self, text: str = "") -> None:
+        log.info("BARGE_IN: клиент перебил робота: «%s»", text)
         self.generation += 1
         if self.reply_task and not self.reply_task.done():
             self.reply_task.cancel()

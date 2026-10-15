@@ -149,6 +149,7 @@ class PhoneCall:
         self.synthesize, self.save = synthesize, save
         self.out = bytearray()            # звук робота, ещё не отправленный в Asterisk
         self.late = 0                     # сколько раз кадр звука ушёл с опозданием
+        self.ran_dry = 0.0                # когда кончился звук робота
         self.lock = asyncio.Lock()
         self.first_words: asyncio.Future | None = None
         self.session: CallSession | None = None
@@ -180,6 +181,13 @@ class PhoneCall:
                 chunk = bytes(self.out[:FRAME_BYTES]).ljust(FRAME_BYTES, b"\0")
                 del self.out[:FRAME_BYTES]
                 await self.write(frame(KIND_AUDIO, chunk))
+                if not self.out:
+                    self.ran_dry = time.monotonic()
+            elif self.ran_dry and self.session is not None and (
+                    self.session.pending or self.session.reply_task and not self.session.reply_task.done()):
+                # звук кончился, а следующая фраза ещё не готова (модель пишет или синтез): пауза посреди ответа
+                log.warning("AUDIO_GAP: пауза посреди ответа робота, следующая фраза не готова")
+                self.ran_dry = 0.0
             n += 1
             delay = start + n * 0.02 - time.monotonic()
             if delay < -0.06 and self.out:  # кадр ушёл позже срока: клиент слышит запинку
