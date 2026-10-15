@@ -431,6 +431,13 @@ class SpeechTest(unittest.TestCase):
         self.assertEqual(c.parts, ["Краснодар"])
 
 
+class CalmTextTest(unittest.TestCase):
+    def test_no_cheerful_tone(self):
+        self.assertEqual(speech.calm_text("Здравствуйте! Отлично, подскажите?"), "Здравствуйте. Хорошо, подскажите?")
+        self.assertEqual(speech.calm_text("Хорошо, отлично. Город?"), "Хорошо. Город?")
+        self.assertEqual(speech.calm_text("Плёнка — отличный выбор!"), "Плёнка — отличный выбор.")
+
+
 class SynthesisTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         os.environ["VOICE_TTS_CACHE"] = "off"

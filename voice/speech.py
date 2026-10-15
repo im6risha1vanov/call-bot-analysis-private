@@ -273,7 +273,7 @@ async def _eleven_voice_id(name: str) -> str:
 # Настройки голоса ElevenLabs (как ползунки в их редакторе). Стабильность выше — интонация ровнее от фразы
 # к фразе, но суше; ниже — живее, но фразы звучат по-разному.
 ELEVEN_SETTINGS = {
-    "stability": float(os.getenv("VOICE_ELEVEN_STABILITY", "0.65")),
+    "stability": float(os.getenv("VOICE_ELEVEN_STABILITY", "0.8")),
     "similarity_boost": float(os.getenv("VOICE_ELEVEN_SIMILARITY", "0.8")),
     "style": float(os.getenv("VOICE_ELEVEN_STYLE", "0")),
 }
@@ -310,8 +310,22 @@ async def _eleven_direct_tts(text: str, voice: Voice) -> bytes:
     return resample(r.content, rate, TTS_RATE)
 
 
+# Восклицательный знак синтезатор читает радостно-приподнято, и это выдаёт робота: говорим ровно
+CALM = os.getenv("VOICE_CALM", "1") != "0"
+_CHEERFUL = re.compile(r"\b(Отлично|Замечательно|Прекрасно|Супер)\b", re.IGNORECASE)
+
+
+def calm_text(text: str) -> str:
+    if not CALM:
+        return text
+    text = re.sub(r"!+", ".", text)
+    text = _CHEERFUL.sub(lambda m: "Хорошо" if m.group(0)[0].isupper() else "хорошо", text)
+    return re.sub(r"\b(Хорошо|хорошо)([,.]\s*хорошо)+\b", r"\1", text, flags=re.IGNORECASE)
+
+
 async def synthesize_pcm(text: str, voice: Voice) -> bytes:
     """Фраза в PCM TTS_RATE Гц, 16 бит, моно, с кэшем на диске."""
+    text = calm_text(text)
     path = _cache_path(text, voice)
     if path is not None and path.exists():
         return path.read_bytes()
