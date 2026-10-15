@@ -146,7 +146,7 @@ class ToolTextGate:
 
     # После этих меток модель уже не говорит с клиентом: служебная разметка вызова инструмента
     # или выдуманное продолжение диалога («Пользователь: …»). Дальше ничего не озвучиваем.
-    STOPS = ["[TOOL_CALL", "<tool_call", "Пользователь:", "Ассистент:", "Клиент:", "Мария:", "User:", "Assistant:"]
+    STOPS = ["[TOOL_CALL", "<tool_call", "Пользователь:", "Ассистент:", "Клиент:", "Мария:", "User:", "Assistant:", "\n[", "\n{"]
 
     def __init__(self, names: list[str]) -> None:
         self.names = names
@@ -176,7 +176,7 @@ class ToolTextGate:
             self.buf = ""
             return out.rstrip() if not is_tool else out
         line_start = self.buf.rfind("\n") + 1
-        keep = self._hold(self.buf[line_start:])
+        keep = self._hold(self.buf[line_start:]) or len(self.buf) - len(self.buf.rstrip("\n"))  # «\n[» придёт кусками
         out, self.buf = self.buf[:len(self.buf) - keep], self.buf[len(self.buf) - keep:]
         return out
 

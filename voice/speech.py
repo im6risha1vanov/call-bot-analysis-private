@@ -525,6 +525,9 @@ def _log_asr(data: dict) -> None:
         log.info("Deepgram %s: %s", kind, json.dumps(data, ensure_ascii=False)[:200])
 
 
+YANDEX_TAIL_S = int(os.getenv("VOICE_YANDEX_TAIL_MS", "600")) / 1000
+
+
 class YandexStream:
     """Потоковое распознавание Yandex SpeechKit v3 (gRPC): русская речь по телефону понимается лучше Deepgram,
     конец фразы определяет сама модель (eou). Ответы переводятся в формат Deepgram, дальше тот же UtteranceCollector.
@@ -535,7 +538,9 @@ class YandexStream:
     def __init__(self, session=None, rate: int = SAMPLE_RATE) -> None:
         self.rate = rate
         self.ws = None  # keepalive() не нужен: звук идёт непрерывно
-        self.collector = UtteranceCollector()
+        # Яндекс пишет без знаков препинания и сообщает конец фразы с запасом: реплику закрываем сами,
+        # когда промежуточный текст не меняется YANDEX_TAIL_S (автотест: +0,8 с к реакции без этого)
+        self.collector = UtteranceCollector(stale_tail=YANDEX_TAIL_S)
         self.audio: asyncio.Queue[bytes | None] = asyncio.Queue()
         self.events: asyncio.Queue[dict | None] = asyncio.Queue()
         self.channel = None
@@ -558,7 +563,7 @@ class YandexStream:
                 audio_processing_type=stt.RecognitionModelOptions.REAL_TIME),
             eou_classifier=stt.EouClassifierOptions(default_classifier=stt.DefaultEouClassifier(
                 type=stt.DefaultEouClassifier.HIGH,
-                max_pause_between_words_hint_ms=int(os.getenv("VOICE_YANDEX_EOU_PAUSE_MS", "600")))))
+                max_pause_between_words_hint_ms=int(os.getenv("VOICE_YANDEX_EOU_PAUSE_MS", "400")))))
 
         async def requests():
             yield stt.StreamingRequest(session_options=options)
