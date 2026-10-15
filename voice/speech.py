@@ -416,6 +416,11 @@ HANGING_WORDS = {"город", "городе", "район", "районе", "у
 HANGING_GAP_S = int(os.getenv("VOICE_HANGING_GAP_MS", "1800")) / 1000
 
 
+def _hanging(text: str) -> bool:
+    words = re.sub(r"[^\w ]", " ", text.lower().replace("ё", "е")).split()
+    return bool(words) and words[-1] in HANGING_WORDS
+
+
 class UtteranceCollector:
     """Склеивает сообщения Deepgram в реплики: is_final копим, speech_final или UtteranceEnd закрывают реплику.
     По телефону speech_final часто не приходит (шум линии), а UtteranceEnd ждёт секунду и больше, поэтому
@@ -442,11 +447,13 @@ class UtteranceCollector:
             if self.stale_tail <= 0:
                 return None
             wait = self.stale_tail
-            if _words(self.tail)[-1:] and _words(self.tail)[-1] in HANGING_WORDS:
+            if _hanging(self.tail):
                 wait = max(wait, HANGING_GAP_S)  # «город…», «где-то…»: клиент вспоминает продолжение
             return max(self.tail_at + wait - now, 0.0)
         if not self.parts:
             return None
+        if _hanging(self.parts[-1]):
+            return max(self.final_at + HANGING_GAP_S - now, 0.0)
         finished = self.parts[-1].rstrip().endswith((".", "!", "?", "…"))
         return max(self.final_at + (self.gap if finished else self.open_gap) - now, 0.0)
 
@@ -456,6 +463,10 @@ class UtteranceCollector:
     def handle(self, message: dict) -> Heard | None:
         kind = message.get("type")
         if kind == "UtteranceEnd":
+            if self.parts and not self.tail and _hanging(self.parts[-1]):
+                # распознавание считает фразу законченной на «город»: ждём название ещё HANGING_GAP_S
+                self.final_at = time.monotonic()
+                return None
             return self._close()
         if kind != "Results":
             return None

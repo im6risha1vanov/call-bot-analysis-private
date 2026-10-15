@@ -402,7 +402,7 @@ class SpeechTest(unittest.TestCase):
         c = speech.UtteranceCollector(gap=0.5, open_gap=1.0, stale_tail=1.2)
         res = lambda t, final=False: {"type": "Results", "is_final": final, "speech_final": False, "channel": {"alternatives": [{"transcript": t}]}}
         self.assertIsNone(c.gap_left(0))  # ещё нечего закрывать
-        c.handle(res("Город", final=True))  # без точки: клиент, скорее всего, ещё договаривает
+        c.handle(res("Да", final=True))  # без точки: клиент, скорее всего, ещё договаривает
         self.assertAlmostEqual(c.gap_left(c.final_at + 0.2), 0.8)
         c.handle(res("Краснодар.", final=True))
         self.assertAlmostEqual(c.gap_left(c.final_at + 0.2), 0.3)
@@ -994,6 +994,15 @@ class YandexAsrTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(c.close_on_gap().text, "завтра после шести")
         self.assertIsNone(c.handle(fin("ирина петровна завтра после шести")))  # не повторяем всю фразу
         self.assertIsNone(c.handle({"type": "UtteranceEnd"}))
+
+    def test_utterance_end_on_hanging_word_waits(self):
+        c = speech.UtteranceCollector(gap=0.7, stale_tail=0.65)
+        fin = lambda t: {"type": "Results", "is_final": True, "channel": {"alternatives": [{"transcript": t}]}}
+        c.handle(fin("город"))
+        self.assertIsNone(c.handle({"type": "UtteranceEnd"}))  # не закрываем на «город»
+        self.assertGreater(c.gap_left(c.final_at), 1.5)
+        c.handle(fin("сыктывкар"))
+        self.assertEqual(c.handle({"type": "UtteranceEnd"}).text, "город сыктывкар")
 
     def test_hanging_word_waits_longer(self):
         c = speech.UtteranceCollector(gap=0.7, stale_tail=0.9)
