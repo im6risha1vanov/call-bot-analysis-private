@@ -256,8 +256,19 @@ class PhoneASR:
         self.http = aiohttp.ClientSession()
         self.stream = speech.asr_stream(self.http, rate=RATE)
         self.opened = asyncio.Event()
+        self.closing = False
 
     async def run(self) -> None:
+        await self._listen()
+        if isinstance(self.stream, speech.YandexStream) and not self.closing:
+            # Яндекс оборвал поток посреди звонка: дослушиваем через Deepgram, иначе робот оглохнет
+            log.warning("распознавание Яндекса оборвалось, переключаюсь на Deepgram")
+            self.opened.clear()
+            old, self.stream = self.stream, speech.DeepgramStream(self.http, rate=RATE)
+            await old.close()
+            await self._listen()
+
+    async def _listen(self) -> None:
         try:
             await self.stream.open()
             self.opened.set()
@@ -273,6 +284,7 @@ class PhoneASR:
             await self.stream.send(pcm)
 
     async def close(self) -> None:
+        self.closing = True
         await self.stream.close()
         await self.http.close()
 

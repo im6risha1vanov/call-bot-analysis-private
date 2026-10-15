@@ -563,7 +563,7 @@ class YandexStream:
                 audio_processing_type=stt.RecognitionModelOptions.REAL_TIME),
             eou_classifier=stt.EouClassifierOptions(default_classifier=stt.DefaultEouClassifier(
                 type=stt.DefaultEouClassifier.HIGH,
-                max_pause_between_words_hint_ms=int(os.getenv("VOICE_YANDEX_EOU_PAUSE_MS", "400")))))
+                max_pause_between_words_hint_ms=int(os.getenv("VOICE_YANDEX_EOU_PAUSE_MS", "600")))))
 
         async def requests():
             yield stt.StreamingRequest(session_options=options)
