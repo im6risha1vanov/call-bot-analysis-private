@@ -67,6 +67,7 @@ class CallSession:
         self.saved: dict | None = None
         self.heard_at = 0.0      # когда клиент закончил реплику: для замера, как быстро робот ответил
         self.last_filler = ""
+        self.said_before = ""     # прошлая фраза робота: по ней ElevenLabs держит ту же интонацию
         self.reply_spoke = False  # робот уже начал озвучивать текущий ответ (для поиска пауз посреди ответа)
 
     # ------------------------------------------------------------------ жизненный цикл
@@ -247,6 +248,8 @@ class CallSession:
         if int(generation) != self.generation or not self.voice_enabled:
             return
         started = time.monotonic()
+        speech.previous_phrase.set(self.said_before)
+        self.said_before = "" if phrase in FILLERS else phrase
         try:
             pcm = await self.synthesize(phrase, self.voice)
         except Exception as e:

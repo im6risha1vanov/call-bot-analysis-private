@@ -9,6 +9,7 @@ Yandex SpeechKit в сырой PCM (16 кГц, 16 бит, моно), плюс н
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import base64
 import json
 import logging
@@ -239,7 +240,8 @@ def _cache_path(text: str, voice: Voice):
         return None
     import hashlib
     from pathlib import Path
-    model = {"el:": ELEVEN_MODEL, "11:": ELEVEN_DIRECT_MODEL}.get(voice.name[:3], os.getenv("VOICE_TTS_API", "v3"))
+    model = {"el:": ELEVEN_MODEL, "11:": f"{ELEVEN_DIRECT_MODEL} {sorted(ELEVEN_SETTINGS.items())}"}.get(
+        voice.name[:3], os.getenv("VOICE_TTS_API", "v3"))
     key = json.dumps([model, voice.name, voice.role, round(voice.speed, 2), TTS_RATE, " ".join(text.split())], ensure_ascii=False)
     return Path(folder) / (hashlib.sha256(key.encode()).hexdigest() + ".pcm")
 
@@ -268,11 +270,24 @@ async def _eleven_voice_id(name: str) -> str:
     return found or name  # можно указать сразу voice_id
 
 
+# Настройки голоса ElevenLabs (как ползунки в их редакторе). Стабильность выше — интонация ровнее от фразы
+# к фразе, но суше; ниже — живее, но фразы звучат по-разному.
+ELEVEN_SETTINGS = {
+    "stability": float(os.getenv("VOICE_ELEVEN_STABILITY", "0.65")),
+    "similarity_boost": float(os.getenv("VOICE_ELEVEN_SIMILARITY", "0.8")),
+    "style": float(os.getenv("VOICE_ELEVEN_STYLE", "0")),
+}
+# Что робот сказал перед этой фразой: ElevenLabs продолжает ту же интонацию, а не начинает заново
+previous_phrase: contextvars.ContextVar[str] = contextvars.ContextVar("previous_phrase", default="")
+
+
 async def _eleven_direct_tts(text: str, voice: Voice) -> bytes:
     voice_id = await _eleven_voice_id(voice.name.removeprefix("11:"))
     rate = int(os.getenv("VOICE_ELEVEN_PCM_RATE", "24000"))
     body = {"text": text, "model_id": ELEVEN_DIRECT_MODEL, "language_code": "ru",
-            "voice_settings": {"stability": 0.5, "similarity_boost": 0.8, "speed": voice.speed}}
+            "voice_settings": {**ELEVEN_SETTINGS, "speed": voice.speed}}
+    if previous_phrase.get():
+        body["previous_text"] = previous_phrase.get()[-300:]
     r = await _client().post(f"{ELEVEN_API}/text-to-speech/{voice_id}", params={"output_format": f"pcm_{rate}"},
                              headers={"xi-api-key": os.environ["ELEVENLABS_API_KEY"]}, json=body)
     if r.status_code != 200:
