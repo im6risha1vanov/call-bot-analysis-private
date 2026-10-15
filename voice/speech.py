@@ -525,7 +525,7 @@ def _log_asr(data: dict) -> None:
         log.info("Deepgram %s: %s", kind, json.dumps(data, ensure_ascii=False)[:200])
 
 
-YANDEX_TAIL_S = int(os.getenv("VOICE_YANDEX_TAIL_MS", "600")) / 1000
+YANDEX_TAIL_S = int(os.getenv("VOICE_YANDEX_TAIL_MS", "3000")) / 1000
 
 
 class YandexStream:
@@ -538,8 +538,8 @@ class YandexStream:
     def __init__(self, session=None, rate: int = SAMPLE_RATE) -> None:
         self.rate = rate
         self.ws = None  # keepalive() не нужен: звук идёт непрерывно
-        # Яндекс пишет без знаков препинания и сообщает конец фразы с запасом: реплику закрываем сами,
-        # когда промежуточный текст не меняется YANDEX_TAIL_S (автотест: +0,8 с к реакции без этого)
+        # Конец реплики сообщает сам Яндекс (eou). Промежуточный текст у него приходит редко, раз в 0,5–1 с:
+        # закрытие по «тексту не меняется 0,6 с» резало клиента на полуслове (автотест 5ab28c4)
         self.collector = UtteranceCollector(stale_tail=YANDEX_TAIL_S)
         self.audio: asyncio.Queue[bytes | None] = asyncio.Queue()
         self.events: asyncio.Queue[dict | None] = asyncio.Queue()
