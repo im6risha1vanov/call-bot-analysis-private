@@ -394,6 +394,13 @@ MIN_CONFIDENCE = float(os.getenv("VOICE_MIN_CONFIDENCE", "0.5"))  # ниже —
 STALE_TAIL_S = int(os.getenv("VOICE_STALE_TAIL_MS", "3000")) / 1000  # страховка: 1,5 с резали клиента на полуслове
 
 
+# После этих слов фраза почти наверняка не закончена: ждём продолжения дольше
+HANGING_WORDS = {"город", "городе", "район", "районе", "улица", "в", "во", "на", "и", "а", "но", "или", "ну", "это",
+                 "около", "примерно", "где", "гдето", "где-то", "наверное", "так", "мм", "эм", "э", "у", "с", "к",
+                 "по", "до", "от", "за", "для", "что", "чтобы", "когда", "если", "потому", "зовут", "меня"}
+HANGING_GAP_S = int(os.getenv("VOICE_HANGING_GAP_MS", "1800")) / 1000
+
+
 class UtteranceCollector:
     """Склеивает сообщения Deepgram в реплики: is_final копим, speech_final или UtteranceEnd закрывают реплику.
     По телефону speech_final часто не приходит (шум линии), а UtteranceEnd ждёт секунду и больше, поэтому
@@ -416,7 +423,12 @@ class UtteranceCollector:
         if self.gap <= 0:
             return None
         if self.tail:
-            return max(self.tail_at + self.stale_tail - now, 0.0) if self.stale_tail > 0 else None
+            if self.stale_tail <= 0:
+                return None
+            wait = self.stale_tail
+            if _words(self.tail)[-1:] and _words(self.tail)[-1] in HANGING_WORDS:
+                wait = max(wait, HANGING_GAP_S)  # «город…», «где-то…»: клиент вспоминает продолжение
+            return max(self.tail_at + wait - now, 0.0)
         if not self.parts:
             return None
         finished = self.parts[-1].rstrip().endswith((".", "!", "?", "…"))
