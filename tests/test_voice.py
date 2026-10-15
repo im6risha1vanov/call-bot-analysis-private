@@ -972,6 +972,18 @@ class NoiseAndFillerTest(unittest.IsolatedAsyncioTestCase):
 
 
 class YandexAsrTest(unittest.IsolatedAsyncioTestCase):
+    def test_repeated_partial_after_early_close_is_not_new_speech(self):
+        c = speech.UtteranceCollector(gap=0.7, stale_tail=0.01)
+        part = lambda t: {"type": "Results", "is_final": False, "channel": {"alternatives": [{"transcript": t}]}}
+        fin = lambda t: {"type": "Results", "is_final": True, "channel": {"alternatives": [{"transcript": t}]}}
+        c.handle(part("в этом месяце хочу сделать"))
+        self.assertEqual(c.close_on_gap().text, "в этом месяце хочу сделать")
+        self.assertIsNone(c.handle(part("в этом месяце хочу")))
+        self.assertIsNone(c.handle(part("в этом месяце хочу сделать")))
+        self.assertIsNone(c.handle(fin("в этом месяце хочу сделать")))
+        self.assertIsNone(c.handle({"type": "UtteranceEnd"}))
+        self.assertEqual(c.handle(part("да")).text, "да")  # после окончательного текста — новая речь
+
     def test_low_confidence_is_noise(self):
         c = speech.UtteranceCollector(gap=0.7)
         noise = {"type": "Results", "is_final": True, "channel": {"alternatives": [{"transcript": "Тонь", "confidence": 0.2}]}}

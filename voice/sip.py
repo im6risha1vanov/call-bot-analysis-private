@@ -183,7 +183,7 @@ class PhoneCall:
                 await self.write(frame(KIND_AUDIO, chunk))
                 if not self.out:
                     self.ran_dry = time.monotonic()
-            elif self.ran_dry and self.session is not None and (
+            elif self.ran_dry and self.session is not None and self.session.reply_spoke and (
                     self.session.pending or self.session.reply_task and not self.session.reply_task.done()):
                 # звук кончился, а следующая фраза ещё не готова (модель пишет или синтез): пауза посреди ответа
                 log.warning("AUDIO_GAP: пауза посреди ответа робота, следующая фраза не готова")

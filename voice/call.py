@@ -67,6 +67,7 @@ class CallSession:
         self.saved: dict | None = None
         self.heard_at = 0.0      # когда клиент закончил реплику: для замера, как быстро робот ответил
         self.last_filler = ""
+        self.reply_spoke = False  # робот уже начал озвучивать текущий ответ (для поиска пауз посреди ответа)
 
     # ------------------------------------------------------------------ жизненный цикл
 
@@ -170,6 +171,7 @@ class CallSession:
     async def _respond(self, text: str) -> None:
         splitter = speech.PhraseSplitter()
         generation = self.generation
+        self.reply_spoke = False
         started = asyncio.Event()  # модель уже дала первую фразу: «так…» не нужно
         filler = asyncio.create_task(self._filler(generation, started)) if text != SILENCE else None
 
@@ -265,6 +267,7 @@ class CallSession:
         now = time.monotonic()
         self.speaking_until = max(now, self.speaking_until) + len(pcm) / speech.TTS_BYTES_PER_SECOND
         self.audio_sent = True
+        self.reply_spoke = phrase not in FILLERS
         await self.send_audio(pcm)
         if self.heard_at:
             log.info("ответ клиенту зазвучал через %d мс после его реплики", (now - self.heard_at) * 1000)

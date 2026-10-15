@@ -435,6 +435,10 @@ class UtteranceCollector:
             if message.get("speech_final"):
                 return self._close()
             return Heard(" ".join(self.parts), False) if text else None
+        if text and self.closed_tail:
+            # после закрытия по промежуточному тексту распознавание ещё раз присылает его же:
+            # это не новая речь, иначе робот принял бы её за перебивание и замолчал (автотест 03e93cc)
+            text = _without_prefix(text, self.closed_tail)
         if text != self.tail:
             self.tail, self.tail_at = text, time.monotonic()
         if text:
@@ -460,6 +464,8 @@ def _without_prefix(text: str, prefix: str) -> str:
     norm = _words(text)
     if len(norm) == len(words) and norm[:len(head)] == head:
         return " ".join(words[len(head):])
+    if norm and head[:len(norm)] == norm:  # повтор начала уже отвеченного текста
+        return ""
     return text
 
 
