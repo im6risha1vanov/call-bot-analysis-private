@@ -68,6 +68,20 @@ def head_menu(tg_id: int) -> ReplyKeyboardMarkup:
 
 @router.message(CommandStart())
 async def start_command(message):
+    import invites
+    code = invites.code_from(message.text)
+    if code and PG_POOL is not None and message.chat.type == 'private':
+        name = ' '.join(filter(None, [message.from_user.first_name, message.from_user.last_name]))
+        row, problem = await invites.accept(PG_POOL, code, message.from_user.id, name)
+        if problem:
+            await message.answer(problem, parse_mode=None)
+            return
+        log.info('подключён по приглашению: %s (%s, %s)', row['full_name'], row['role'], row['extension'])
+        who = {'head': 'руководитель', 'owner': 'владелец', 'manager': 'менеджер'}.get(row['role'], row['role'])
+        await message.answer(f'Готово, {html.escape(row["full_name"] or "")}: вы подключены как {who}. '
+                             'Разборы и отчёты будут приходить сюда.')
+        await help_command(message)
+        return
     bound = await _bind_by_username(message)
     if bound:
         await message.answer(bound)
