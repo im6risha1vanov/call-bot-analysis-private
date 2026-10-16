@@ -381,7 +381,8 @@ def effective_voice(voice: Voice) -> Voice:
     return Voice(f"11:{voice_id}" if voice_id else voice.name, voice.role, setting("speed", voice.speed))
 
 
-async def _eleven_direct_tts(text: str, voice: Voice) -> bytes:
+async def _eleven_direct_tts(text: str, voice: Voice, on_pcm=None) -> bytes:
+    """Фраза голосом ElevenLabs. С on_pcm звук идёт потоком: on_pcm получает куски по мере синтеза."""
     voice_id = await _eleven_voice_id(voice.name.removeprefix("11:"))
     rate = int(os.getenv("VOICE_ELEVEN_PCM_RATE", "24000"))
     model, sliders = eleven_params()
@@ -396,16 +397,30 @@ async def _eleven_direct_tts(text: str, voice: Voice) -> bytes:
     elif previous_phrase.get():
         continuity["previous_text"] = previous_phrase.get()[-300:]
     url, params = f"{ELEVEN_API}/text-to-speech/{voice_id}", {"output_format": f"pcm_{rate}"}
+    if on_pcm is not None:
+        url += "/stream"
     headers = {"xi-api-key": os.environ["ELEVENLABS_API_KEY"]}
-    r = await _client().post(url, params=params, headers=headers, json={**body, **continuity})
-    if r.status_code == 400 and continuity:  # модель не умеет связку: озвучиваем фразу отдельно
-        log.warning("ElevenLabs не принял связку фраз (%s): %s", ", ".join(continuity), r.text[:200])
-        r = await _client().post(url, params=params, headers=headers, json=body)
-    if r.status_code != 200:
-        raise TTSRequestError(r.status_code, r.text, "ElevenLabs")
-    if chain is not None and r.headers.get("request-id"):
-        chain.append(r.headers["request-id"])
-    return resample(r.content, rate, TTS_RATE)
+    out = bytearray()
+    for attempt in ({**body, **continuity}, body) if continuity else (body,):
+        async with _client().stream("POST", url, params=params, headers=headers, json=attempt) as r:
+            if r.status_code == 400 and attempt is not body:  # модель не умеет связку: озвучиваем фразу отдельно
+                log.warning("ElevenLabs не принял связку фраз (%s): %s", ", ".join(continuity), (await r.aread())[:200])
+                continue
+            if r.status_code != 200:
+                raise TTSRequestError(r.status_code, (await r.aread()).decode(errors="replace"), "ElevenLabs")
+            if chain is not None and r.headers.get("request-id"):
+                chain.append(r.headers["request-id"])
+            odd = b""
+            async for chunk in r.aiter_bytes():
+                chunk = odd + chunk
+                cut = len(chunk) - len(chunk) % 2
+                chunk, odd = chunk[:cut], chunk[cut:]
+                pcm = resample(chunk, rate, TTS_RATE)
+                out.extend(pcm)
+                if on_pcm is not None and pcm:
+                    await on_pcm(pcm)
+            break
+    return bytes(out)
 
 
 # Восклицательный знак синтезатор читает радостно-приподнято, и это выдаёт робота: говорим ровно
@@ -473,18 +488,62 @@ LEAD_MS = 30
 _SILENT = 400  # амплитуда из 32768: тише считаем тишиной (на телефоне шум линии выше)
 
 
-def trim_silence(pcm: bytes, rate: int, pause_ms: int, lead_ms: int = LEAD_MS) -> bytes:
-    import array
+class PauseShaper:
+    """Укорачивает тишину в звуке по мере поступления (подходит и для потокового синтеза): в начале оставляет
+    lead_ms, внутри не больше inner_ms (половина до, половина после), в конце не больше tail_ms."""
+
+    def __init__(self, rate: int, inner_ms: int, tail_ms: int, lead_ms: int = LEAD_MS) -> None:
+        self.window = max(rate // 100, 1) * 2  # 10 мс в байтах
+        self.ms = lambda n: n * rate // 1000 * 2
+        self.inner, self.tail, self.lead = self.ms(inner_ms), self.ms(tail_ms), self.ms(lead_ms)
+        self.rest = b""  # неполное окно
+        self.quiet = bytearray()  # текущая тишина, ещё не отданная
+        self.started = False
+        self.raw = False  # не PCM (нечётная длина): отдаём как есть
+
+    def _loud(self, chunk: bytes) -> bool:
+        import array
+        return max(map(abs, array.array("h", chunk)), default=0) > _SILENT
+
+    def feed(self, data: bytes) -> bytes:
+        data = self.rest + data
+        cut = len(data) - len(data) % self.window
+        self.rest = data[cut:]
+        out = bytearray()
+        for i in range(0, cut, self.window):
+            chunk = data[i:i + self.window]
+            if not self._loud(chunk):
+                self.quiet += chunk
+                continue
+            if not self.started:
+                out += self.quiet[len(self.quiet) - min(len(self.quiet), self.lead):]
+            elif len(self.quiet) > self.inner:
+                head = self.inner // 2 // 2 * 2
+                out += self.quiet[:head] + self.quiet[len(self.quiet) - (self.inner - head):]
+            else:
+                out += self.quiet
+            self.quiet.clear()
+            self.started = True
+            out += chunk
+        return bytes(out)
+
+    def end(self) -> bytes:
+        tail = bytes(self.quiet + self.rest)
+        if not self.started:
+            return b""
+        return tail[: self.tail // 2 * 2]
+
+
+def shape_pauses(pcm: bytes, rate: int, inner_ms: int, tail_ms: int) -> bytes:
     if len(pcm) % 2 or len(pcm) < rate // 5:  # меньше 0,1 с или не PCM: не трогаем
         return pcm
-    samples = array.array("h", pcm)
-    window = max(rate // 100, 1)  # 10 мс
-    loud = [i for i in range(0, len(samples), window) if max(map(abs, samples[i:i + window]), default=0) > _SILENT]
-    if not loud:
-        return pcm
-    start = max(loud[0] - rate * lead_ms // 1000, 0)
-    end = min(loud[-1] + window + rate * pause_ms // 1000, len(samples))
-    return samples[start:end].tobytes()
+    shaper = PauseShaper(rate, inner_ms, tail_ms)
+    out = shaper.feed(pcm) + shaper.end()
+    return out or pcm
+
+
+def trim_silence(pcm: bytes, rate: int, pause_ms: int, lead_ms: int = LEAD_MS) -> bytes:
+    return shape_pauses(pcm, rate, 10**6, pause_ms)
 
 
 # Паузы внутри фразы: на точках, запятых и «?» синтезатор молчит 200–500 мс. Любую тишину внутри куска
@@ -493,33 +552,10 @@ INNER_PAUSE_MS = int(os.getenv("VOICE_INNER_PAUSE_MS", "130"))
 
 
 def shorten_pauses(pcm: bytes, rate: int, max_ms: int) -> bytes:
-    import array
     if len(pcm) % 2 or len(pcm) < rate // 5:
         return pcm
-    samples = array.array("h", pcm)
-    window = max(rate // 100, 1)
-    keep = max(rate * max_ms // 1000 // window, 1)  # в окнах по 10 мс
-    out = array.array("h")
-    quiet_from = None
-    for i in range(0, len(samples), window):
-        chunk = samples[i:i + window]
-        if max(map(abs, chunk), default=0) <= _SILENT:
-            if quiet_from is None:
-                quiet_from = i
-            continue
-        if quiet_from is not None:
-            run = (i - quiet_from) // window
-            if run > keep:
-                head = keep // 2
-                out.extend(samples[quiet_from:quiet_from + head * window])
-                out.extend(samples[i - (keep - head) * window:i])
-            else:
-                out.extend(samples[quiet_from:i])
-            quiet_from = None
-        out.extend(chunk)
-    if quiet_from is not None:
-        out.extend(samples[quiet_from:])
-    return out.tobytes()
+    shaper = PauseShaper(rate, max_ms, 10**6, lead_ms=10**6)
+    return (shaper.feed(pcm) + shaper.end()) or pcm
 
 
 # Запятые после вводных слов синтезатор читает с заметной паузой: «Хорошо, подскажите, …»
@@ -536,9 +572,53 @@ def fewer_pauses(text: str) -> str:
 
 async def synthesize_pcm(text: str, voice: Voice) -> bytes:
     """Фраза в PCM TTS_RATE Гц, 16 бит, моно, с кэшем на диске, без лишней тишины по краям."""
-    pcm = await _synthesize_cached(fewer_pauses(casual_text(calm_text(text))), voice)
-    pcm = shorten_pauses(pcm, TTS_RATE, setting("inner_pause_ms", INNER_PAUSE_MS))
-    return trim_silence(pcm, TTS_RATE, setting("pause_ms", PAUSE_MS))
+    pcm = await _synthesize_cached(spoken_text(text), voice)
+    return shape_pauses(pcm, TTS_RATE, setting("inner_pause_ms", INNER_PAUSE_MS), setting("pause_ms", PAUSE_MS))
+
+
+def spoken_text(text: str) -> str:
+    return fewer_pauses(casual_text(calm_text(text)))
+
+
+# Потоковый синтез ElevenLabs: первые звуки фразы приходят через 0,3–0,6 с вместо 1,3–2,2 с за всю фразу
+ELEVEN_STREAM = os.getenv("VOICE_ELEVEN_STREAM", "1") != "0"
+
+
+async def stream_pcm(text: str, voice: Voice, on_audio) -> bytes:
+    """Как synthesize_pcm, но отдаёт звук в on_audio кусками по мере синтеза. Возвращает весь звук."""
+    text = spoken_text(text)
+    voice = effective_voice(voice)
+    shaper = PauseShaper(TTS_RATE, setting("inner_pause_ms", INNER_PAUSE_MS), setting("pause_ms", PAUSE_MS))
+    path = _cache_path(text, voice)
+    if path is not None and path.exists() or not (ELEVEN_STREAM and voice.name.startswith("11:")):
+        pcm = await _synthesize_cached(text, voice)
+        out = shape_pauses(pcm, TTS_RATE, setting("inner_pause_ms", INNER_PAUSE_MS), setting("pause_ms", PAUSE_MS))
+        await on_audio(out)
+        return out
+    raw = bytearray()
+    sent = bytearray()
+
+    async def piece(pcm: bytes) -> None:
+        raw.extend(pcm)
+        shaped = shaper.feed(pcm)
+        if shaped:
+            sent.extend(shaped)
+            await on_audio(shaped)
+
+    await _eleven_direct_tts(text, voice, on_pcm=piece)
+    tail = shaper.end()
+    if tail:
+        sent.extend(tail)
+        await on_audio(tail)
+    if path is not None and raw:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_bytes(bytes(raw))
+            tmp.replace(path)
+        except OSError as e:
+            log.warning("кэш синтеза не записан: %s", e)
+    return bytes(sent)
 
 
 async def _synthesize_cached(text: str, voice: Voice) -> bytes:

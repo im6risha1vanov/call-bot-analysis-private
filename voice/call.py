@@ -289,31 +289,43 @@ class CallSession:
         speech.previous_phrase.set(self.said_before)
         speech.tts_chain.set(self.tts_chain)
         self.said_before = "" if phrase in FILLERS else phrase
+        first = True
+
+        async def play(pcm: bytes) -> None:
+            nonlocal first
+            if int(generation) != self.generation or not pcm:
+                return
+            now = time.monotonic()
+            if first:
+                first = False
+                log.info("синтез %d мс до первого звука, %d симв.: %s", (now - started) * 1000, len(phrase), self.voice.name)
+                self.audio_sent = True
+                self.reply_spoke = phrase not in FILLERS
+                if self.heard_at:
+                    log.info("ответ клиенту зазвучал через %d мс после его реплики", (now - self.heard_at) * 1000)
+                    self.heard_at = 0.0
+            self.speaking_until = max(now, self.speaking_until) + len(pcm) / speech.TTS_BYTES_PER_SECOND
+            await self.send_audio(pcm)
+
+        async def synth(voice: speech.Voice) -> None:
+            if self.synthesize is speech.synthesize_pcm:  # настоящий синтез: потоком, первые звуки раньше
+                await speech.stream_pcm(phrase, voice, play)
+            else:
+                await play(await self.synthesize(phrase, voice))
+
         try:
-            pcm = await self.synthesize(phrase, self.voice)
+            await synth(self.voice)
         except Exception as e:
             log.warning("синтез не удался: %s", e)
             await self.send_event({"type": "error", "text": f"синтез: {e}"})
-            if self.fallback_voice is None:
+            if self.fallback_voice is None or not first:
                 return
             # до конца звонка говорим голосом из анкеты, чтобы клиент не слушал тишину
             self.voice, self.fallback_voice = self.fallback_voice, None
             try:
-                pcm = await self.synthesize(phrase, self.voice)
+                await synth(self.voice)
             except Exception as e2:
                 log.warning("запасной голос тоже не сработал: %s", e2)
-                return
-        log.info("синтез %d мс, %d симв.: %s", (time.monotonic() - started) * 1000, len(phrase), self.voice.name)
-        if int(generation) != self.generation:
-            return
-        now = time.monotonic()
-        self.speaking_until = max(now, self.speaking_until) + len(pcm) / speech.TTS_BYTES_PER_SECOND
-        self.audio_sent = True
-        self.reply_spoke = phrase not in FILLERS
-        await self.send_audio(pcm)
-        if self.heard_at:
-            log.info("ответ клиенту зазвучал через %d мс после его реплики", (now - self.heard_at) * 1000)
-            self.heard_at = 0.0
 
     # ------------------------------------------------------------------ молчание
 

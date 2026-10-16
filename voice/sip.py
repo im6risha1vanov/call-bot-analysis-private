@@ -110,13 +110,27 @@ async def dial(phone: str, operator: str = "kitchen", *, originate=ari_originate
     phone = "".join(ch for ch in phone if ch.isdigit())
     if len(phone) < 10:
         raise ValueError("номер слишком короткий")
-    load(operator)  # анкета должна читаться до звонка
+    op = load(operator)  # анкета должна читаться до звонка
+    asyncio.create_task(_warm_up_greeting(op))
     call_id = str(uuidlib.uuid4())
     pending = PENDING[call_id] = Pending(phone, operator)
     await originate(call_id, phone)
     asyncio.create_task(_no_answer_watch(call_id, pending))
     log.info("звоню %s, id %s", phone, call_id)
     return call_id
+
+
+async def _warm_up_greeting(op) -> None:
+    """Пока идут гудки, синтезируем приветствие и заготовки: после «алло» они звучат сразу, без 2 с синтеза."""
+    speed = float(os.getenv("VOICE_SPEED") or op.voice_speed)
+    voice = speech.Voice(os.getenv("VOICE_VOICE") or op.voice, "" if os.getenv("VOICE_VOICE") else op.voice_role, speed)
+    from voice.call import FILLERS
+    for text in [op.greeting] + FILLERS + [item["reply"] for item in op.quick]:
+        try:
+            await speech.synthesize_pcm(text, voice)
+        except Exception as e:
+            log.info("заготовка «%s» не синтезирована заранее: %s", text[:30], e)
+            return
 
 
 async def _no_answer_watch(call_id: str, pending: Pending) -> None:

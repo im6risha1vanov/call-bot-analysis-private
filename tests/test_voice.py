@@ -648,6 +648,40 @@ class ElevenTest(unittest.IsolatedAsyncioTestCase):
                 speech._live_cache.update(mtime=None, data={})
                 del os.environ["ELEVENLABS_API_KEY"]
 
+    async def test_stream_plays_pieces_and_fills_cache(self):
+        import array, math
+        tone = array.array("h", [int(5000 * math.sin(i / 3)) for i in range(4800)]).tobytes()
+        seen = []
+
+        def handler(request):
+            seen.append(request.url.path)
+            return httpx.Response(200, content=bytes(2400) + tone + bytes(9600), headers={"request-id": "r1"})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["VOICE_TTS_CACHE"] = tmp
+            os.environ["ELEVENLABS_API_KEY"] = "xi"
+            speech._http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+            heard = []
+
+            async def on_audio(pcm):
+                heard.append(pcm)
+            try:
+                chain = []
+                speech.tts_chain.set(chain)
+                out = await speech.stream_pcm("Хорошо", speech.Voice("11:tj9wwIq7s2HekkDfg1KH"), on_audio)
+                again = await speech.stream_pcm("Хорошо", speech.Voice("11:tj9wwIq7s2HekkDfg1KH"), on_audio)
+            finally:
+                speech._http = None
+                speech.tts_chain.set(None)
+                del os.environ["ELEVENLABS_API_KEY"]
+                os.environ["VOICE_TTS_CACHE"] = "off"
+        self.assertEqual(seen, ["/v1/text-to-speech/tj9wwIq7s2HekkDfg1KH/stream"])  # второй раз из кэша
+        self.assertEqual(chain, ["r1"])
+        self.assertEqual(b"".join(heard[:-1]), out)
+        self.assertEqual(out, again)
+        rate = speech.TTS_RATE
+        self.assertLess(len(out), len(tone) * rate // 24000 + rate // 2)  # тишина по краям обрезана
+
     def test_resample_keeps_level(self):
         import array
         src = array.array("h", [1000] * 100).tobytes()
