@@ -34,6 +34,9 @@ _SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
 _LONG = 140
 
 
+_FILLER_WORDS = {"Так…", "Угу…", "Ага…", "Так-так…"}
+
+
 class PhraseSplitter:
     """Копит куски текста от модели и отдаёт готовые к озвучке фразы."""
 
@@ -45,6 +48,15 @@ class PhraseSplitter:
         out = []
         while True:
             parts = _SENTENCE_END.split(self.buffer, maxsplit=1)
+            if len(parts) == 2 and len(parts[0].split()) == 1 and parts[0].strip() not in _FILLER_WORDS:
+                # «Хорошо.» отдельным куском звучит с паузой после себя: озвучиваем вместе со следующим предложением
+                rest = _SENTENCE_END.split(parts[1], maxsplit=1)
+                if len(rest) == 2 and rest[0].strip():
+                    joined = self.buffer[: len(self.buffer) - len(rest[1])]
+                    out.append(" ".join(joined.split()))
+                    self.buffer = rest[1]
+                    continue
+                return out
             if len(parts) == 2 and parts[0].strip():
                 out.append(parts[0].strip())
                 self.buffer = parts[1]
@@ -292,7 +304,7 @@ _live_cache: dict = {"mtime": None, "data": {}}
 settings_override: contextvars.ContextVar[dict | None] = contextvars.ContextVar("settings_override", default=None)
 SETTING_KEYS = {"voice_id": str, "model": str, "stability": float, "similarity": float, "style": float,
                 "speed": float, "speaker_boost": bool, "calm": bool, "tail_ms": int, "filler_after_ms": int,
-                "fillers": bool, "casual": float}
+                "fillers": bool, "casual": float, "pause_ms": int, "fewer_commas": bool}
 
 
 def clean_settings(data: dict) -> dict:
@@ -308,7 +320,7 @@ def clean_settings(data: dict) -> dict:
             continue
         out[key] = value
     for key, low, high in (("casual", 0, 1), ("stability", 0, 1), ("similarity", 0, 1), ("style", 0, 1), ("speed", 0.7, 1.2),
-                           ("tail_ms", 300, 2000), ("filler_after_ms", 100, 3000)):
+                           ("tail_ms", 300, 2000), ("filler_after_ms", 100, 3000), ("pause_ms", 0, 600)):
         if key in out:
             out[key] = min(max(out[key], low), high)
     if "voice_id" in out and not re.fullmatch(r"[A-Za-z0-9]{10,40}", out["voice_id"]):
@@ -452,9 +464,46 @@ def casual_text(text: str) -> str:
     return text
 
 
+# Паузы. Ответ озвучивается по предложениям, и у каждого куска синтезатор оставляет тишину в начале и в конце:
+# между предложениями набегало полсекунды и больше. Обрезаем тишину по краям до PAUSE_MS в конце куска.
+PAUSE_MS = int(os.getenv("VOICE_PAUSE_MS", "120"))
+LEAD_MS = 30
+_SILENT = 400  # амплитуда из 32768: тише считаем тишиной (на телефоне шум линии выше)
+
+
+def trim_silence(pcm: bytes, rate: int, pause_ms: int, lead_ms: int = LEAD_MS) -> bytes:
+    import array
+    if len(pcm) % 2 or len(pcm) < rate // 5:  # меньше 0,1 с или не PCM: не трогаем
+        return pcm
+    samples = array.array("h", pcm)
+    window = max(rate // 100, 1)  # 10 мс
+    loud = [i for i in range(0, len(samples), window) if max(map(abs, samples[i:i + window]), default=0) > _SILENT]
+    if not loud:
+        return pcm
+    start = max(loud[0] - rate * lead_ms // 1000, 0)
+    end = min(loud[-1] + window + rate * pause_ms // 1000, len(samples))
+    return samples[start:end].tobytes()
+
+
+# Запятые после вводных слов синтезатор читает с заметной паузой: «Хорошо, подскажите, …»
+_INTRO_COMMA = re.compile(r"\b(Хорошо|Понятно|Поняла|Понял|Ага|Угу|Ну|Так|Подскажите|Скажите|Отлично|Да|Вот)(,)\s", re.IGNORECASE)
+
+
+def fewer_pauses(text: str) -> str:
+    if not setting("fewer_commas", True):
+        return text
+    text = _INTRO_COMMA.sub(lambda m: m.group(1) + " ", text)
+    # короткое «Хорошо.» перед вопросом читается с длинной паузой: сливаем в одну фразу
+    return re.sub(r"^(Хорошо|Понятно|Поняла|Ага|Угу|Так)\.\s+(\w)", lambda m: f"{m.group(1)}, {m.group(2).lower()}", text)
+
+
 async def synthesize_pcm(text: str, voice: Voice) -> bytes:
-    """Фраза в PCM TTS_RATE Гц, 16 бит, моно, с кэшем на диске."""
-    text = casual_text(calm_text(text))
+    """Фраза в PCM TTS_RATE Гц, 16 бит, моно, с кэшем на диске, без лишней тишины по краям."""
+    pcm = await _synthesize_cached(fewer_pauses(casual_text(calm_text(text))), voice)
+    return trim_silence(pcm, TTS_RATE, setting("pause_ms", PAUSE_MS))
+
+
+async def _synthesize_cached(text: str, voice: Voice) -> bytes:
     voice = effective_voice(voice)
     path = _cache_path(text, voice)
     if path is not None and path.exists():

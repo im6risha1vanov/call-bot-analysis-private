@@ -60,6 +60,9 @@
     <label class="check"><input type="checkbox" id="calm"> Спокойный тон: «!» читать как точку, «отлично» как «хорошо»</label>
     <div class="row"><label for="casual">Разговорность</label><input type="range" id="casual" min="0" max="1" step="0.05"><output id="casual_v"></output>
       <div class="hint">0 как диктор; выше: «пожалста», «щас», «тыщ», «здрасьте», иногда «ну», «э-э», повтор слова. Проверь на «Прослушать» с длинной фразой</div></div>
+    <div class="row"><label for="pause_ms">Пауза между фразами, мс</label><input type="range" id="pause_ms" min="0" max="600" step="10"><output id="pause_ms_v"></output>
+      <div class="hint">тишина после каждого предложения; раньше синтезатор оставлял 300–600 мс</div></div>
+    <label class="check"><input type="checkbox" id="fewer_commas"> Меньше пауз на запятых: «Хорошо, подскажите, …» читать слитно</label>
     <div class="row"><label for="tail_ms">Конец реплики клиента, мс</label><input type="range" id="tail_ms" min="300" max="2000" step="50"><output id="tail_ms_v"></output>
       <div class="hint">сколько тишины ждать, прежде чем ответить; меньше: отвечает быстрее, но может перебить клиента</div></div>
     <label class="check"><input type="checkbox" id="fillers"> «Так…», «Угу…», пока модель думает</label>
@@ -82,8 +85,8 @@
 </main>
 <script>
 const $ = id => document.getElementById(id);
-const SLIDERS = ['speed', 'stability', 'similarity', 'style', 'casual', 'tail_ms', 'filler_after_ms'];
-const CHECKS = ['speaker_boost', 'calm', 'fillers'];
+const SLIDERS = ['speed', 'stability', 'similarity', 'style', 'casual', 'pause_ms', 'tail_ms', 'filler_after_ms'];
+const CHECKS = ['speaker_boost', 'calm', 'fewer_commas', 'fillers'];
 let state = {}, ctx = null, source = null;
 
 function msg(text, cls) { $('msg').textContent = text; $('msg').className = cls || ''; }

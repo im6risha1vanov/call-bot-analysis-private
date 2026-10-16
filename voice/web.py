@@ -87,6 +87,8 @@ def _current_voice() -> dict:
         "filler_after_ms": speech.setting("filler_after_ms", int(FILLER_AFTER_S * 1000)),
         "fillers": speech.setting("fillers", True),
         "casual": speech.setting("casual", speech.CASUAL),
+        "pause_ms": speech.setting("pause_ms", speech.PAUSE_MS),
+        "fewer_commas": speech.setting("fewer_commas", True),
     }
 
 

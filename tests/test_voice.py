@@ -375,7 +375,8 @@ class SpeechTest(unittest.TestCase):
         out = []
         for chunk in ["Отлично", "! А в каком", " городе", " будет кухня? Спа", "сибо."]:
             out += s.feed(chunk)
-        self.assertEqual(out, ["Отлично!", "А в каком городе будет кухня?"])
+        # одно слово отдельным куском звучит с паузой: склеивается со следующим предложением
+        self.assertEqual(out, ["Отлично! А в каком городе будет кухня?"])
         self.assertEqual(s.flush(), ["Спасибо."])
         long = "Слово " * 30 + "запятая, и ещё немного текста"
         self.assertTrue(speech.PhraseSplitter().feed(long)[0].endswith(","))
@@ -436,6 +437,18 @@ class CalmTextTest(unittest.TestCase):
         self.assertEqual(speech.calm_text("Здравствуйте! Отлично, подскажите?"), "Здравствуйте. Хорошо, подскажите?")
         self.assertEqual(speech.calm_text("Хорошо, отлично. Город?"), "Хорошо. Город?")
         self.assertEqual(speech.calm_text("Плёнка — отличный выбор!"), "Плёнка — отличный выбор.")
+
+
+class PauseTest(unittest.TestCase):
+    def test_trim_silence_keeps_pause(self):
+        import array, math
+        rate = 8000
+        tone = array.array("h", [int(5000 * math.sin(i / 3)) for i in range(rate)]).tobytes()
+        out = speech.trim_silence(bytes(rate) + tone + bytes(rate * 2), rate, 100)
+        self.assertAlmostEqual(len(out) / 2 / rate, 1.14, delta=0.03)  # 30 мс в начале, звук, 100 мс в конце
+
+    def test_fewer_commas(self):
+        self.assertEqual(speech.fewer_pauses("Хорошо. Подскажите, когда удобно?"), "Хорошо, подскажите когда удобно?")
 
 
 class CasualTextTest(unittest.TestCase):
@@ -658,7 +671,7 @@ class CallSessionTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(session.done.wait(), 2)
         result = [e for e in events if e["type"] == "result"][0]
         self.assertEqual(result["outcome"], "not_relevant")
-        self.assertEqual(len(audio), 4)  # приветствие + 2 фразы + прощание
+        self.assertEqual(len(audio), 3)  # приветствие + «Отлично! В каком городе…» одним куском + прощание
         self.assertEqual(saved, [{"phone": "", "mode": "браузер"}])
         self.assertIn({"type": "interim", "text": "да"}, events)
 
