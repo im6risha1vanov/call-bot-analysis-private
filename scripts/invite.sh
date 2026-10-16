@@ -5,6 +5,7 @@
 #   bash scripts/invite.sh head Ivan --replace head:marozeto  — вместо прежнего: тот отвязывается, его место
 #                                                               в REVIEW_COPY_TO занимает новый
 #   bash scripts/invite.sh manager 15 Petr                    — менеджер с добавочным 15 в Mango
+#   ... --username nick                                       — если известен ник Telegram: хватит простого /start
 # Ссылка одноразовая, действует 7 дней. Повторный запуск для того же человека выдаёт новую ссылку.
 set -euo pipefail
 cd "${APP_DIR:-/opt/callbot-astra}"
@@ -19,7 +20,14 @@ case "$ROLE" in
   *) echo "role must be head or manager"; exit 1 ;;
 esac
 REPLACE=""
-if [ "${1:-}" = "--replace" ]; then REPLACE="${2:?old extension}"; fi
+USERNAME=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --replace) REPLACE="${2:?old extension}"; shift 2 ;;
+    --username) USERNAME=$(echo "${2:?telegram username}" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9_'); shift 2 ;;
+    *) echo "unknown option $1"; exit 1 ;;
+  esac
+done
 
 q() { psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atq "$@"; }
 CLIENT=$(q -c "SELECT id FROM clients ORDER BY id LIMIT 1")
@@ -37,6 +45,13 @@ CODE=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' | cut -c1-20)
 q -v code="$CODE" -v ext="$EXT" -v client="$CLIENT" <<'SQL'
 INSERT INTO employee_invites(code, client_id, extension) VALUES (:'code', :client, :'ext');
 SQL
+if [ -n "$USERNAME" ]; then
+  # Ник Telegram: тогда хватит и простого /start (demo_bot._bind_by_username), ссылка — запасной путь.
+  q -v ext="$EXT" -v client="$CLIENT" -v uname="$USERNAME" <<'SQL'
+UPDATE employees SET telegram_username=:'uname' WHERE client_id=:client AND extension=:'ext';
+SQL
+  echo "username: @$USERNAME (plain /start is enough)"
+fi
 
 if [ -n "$REPLACE" ]; then
   mkdir -p /root/backups
