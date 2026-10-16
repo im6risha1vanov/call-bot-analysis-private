@@ -1,4 +1,4 @@
-"""Зеркало в Google-таблицу: «Сводка», «По дням», «Звонки», «Перезвоны».
+"""Зеркало в Google-таблицу: «Сводка», «По дням», «Звонки», «Перезвоны», «Все звонки».
 
 Оформление в стиле таблицы владельца «Прозвон лидов»: Arial 10, тёмно-синяя
 шапка с белым жирным текстом, строки-разделители по датам, итоговая строка
@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 
 API = 'https://sheets.googleapis.com/v4/spreadsheets/'
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
-SUMMARY_SHEET, DAYS_SHEET, CALLS_SHEET, TASKS_SHEET = 'Сводка', 'По дням', 'Звонки', 'Перезвоны'
+SUMMARY_SHEET, DAYS_SHEET, CALLS_SHEET, TASKS_SHEET, ALL_SHEET = 'Сводка', 'По дням', 'Звонки', 'Перезвоны', 'Все звонки'
 STALE_SHEETS = ('Клиенты',)  # лист неудачной версии от 07.10, бот убирает его сам
 HISTORY_DAYS = int(os.getenv('SHEETS_HISTORY_DAYS', '60'))
 SUMMARY_DAYS = 30
@@ -46,6 +46,8 @@ TASKS_WIDTHS = [95, 70, 140, 180, 120, 90, 320, 150, 80]
 DAYS_HEADER = ['Дата', 'Разговоров', 'С результатом', 'Встреч', 'Перезвонов на дату', 'КП', 'Потеряно с шансом']
 DAYS_WIDTHS = [110, 105, 115, 80, 140, 70, 140]
 SUMMARY_WIDTHS = [260, 110, 115, 100, 80, 140, 70, 110, 140, 120]
+ALL_WIDTHS = [95, 170, 95, 95, 105, 120, 85, 105, 120, 120]
+INCOMING, OUTGOING = 1, 2  # context_type в Mango; 3 — внутренний, в статистику не идёт
 
 # Цвета как в образце: шапка #1F4E78, разделитель #D1D8E0, итог #CCCCCC.
 HEADER_FILL, SECTION_FILL, TOTAL_FILL = '#1F4E78', '#D1D8E0', '#CCCCCC'
@@ -224,6 +226,43 @@ def summary_table(calls, tasks, tz, today: date) -> Table:
     return table
 
 
+def all_calls_header(min_seconds: int) -> list[str]:
+    return ['Дата', 'Сотрудник', 'Добавочный', 'Исходящих', 'Дозвонились', f'Разговоров от {min_seconds} с',
+            'Входящих', 'Пропущено входящих', 'Минут разговора', 'Разобрано ботом']
+
+
+def all_calls_table(rows, tz, min_seconds: int) -> Table:
+    """Все звонки из Mango по дням и сотрудникам, а не только разобранные."""
+    table = Table(ALL_SHEET, ALL_WIDTHS, frozen=1, filter_from=0, bold_column=1)
+    table.add(all_calls_header(min_seconds), 'header')
+    stats = collections.defaultdict(lambda: [0] * 7)
+    names = {}
+    for record in rows:
+        day = local_day(record, tz)
+        if not day or record['direction'] not in (INCOMING, OUTGOING):
+            continue
+        extension = record['extension'] or ''
+        names.setdefault(extension, record['employee'] or ('Без сотрудника' if not extension else f'Добавочный {extension}'))
+        line = stats[(day, extension)]
+        talk = record['duration_seconds'] or 0
+        if record['direction'] == OUTGOING:
+            line[0] += 1
+            line[1] += talk > 0
+            line[2] += talk >= min_seconds
+        else:
+            line[3] += 1
+            line[4] += talk == 0
+        line[5] += talk
+        line[6] += bool(record['reviewed'])
+    ordered = sorted(stats.items(), key=lambda kv: (-kv[0][0].toordinal(), -kv[1][0], kv[0][1]))
+    for (day, extension), (out, answered, talks, incoming, missed, seconds, reviewed) in ordered:
+        table.add([day.strftime('%d.%m.%Y'), names[extension], extension, out, answered, talks, incoming, missed,
+                   round(seconds / 60), reviewed])
+    if not ordered:
+        table.add(['Звонков пока нет'])
+    return table
+
+
 async def collect(pool, now: datetime | None = None) -> list[Table]:
     now = now or datetime.now(timezone.utc)
     since = now - timedelta(days=HISTORY_DAYS)
@@ -240,7 +279,17 @@ async def collect(pool, now: datetime | None = None) -> list[Table]:
     zone = await pool.fetchval('SELECT timezone FROM clients WHERE processing_enabled ORDER BY id LIMIT 1')
     tz = ZoneInfo(calls[0]['timezone'] if calls else zone or 'Europe/Moscow')
     today = now.astimezone(tz).date()
-    return [summary_table(calls, tasks, tz, today), days_table(calls, tz), calls_table(calls, tz), tasks_table(tasks, today)]
+    client = await pool.fetchrow('SELECT * FROM clients WHERE processing_enabled ORDER BY id LIMIT 1')
+    min_seconds = (client.get('min_call_seconds') if client else None) or 30
+    everything = await pool.fetch(
+        """SELECT c.extension, c.direction, c.duration_seconds, c.call_started_at,
+                  EXISTS(SELECT 1 FROM call_reviews r WHERE r.call_id=c.id AND (r.data->>'reviewed')::boolean IS TRUE) AS reviewed,
+                  (SELECT full_name FROM employees e WHERE e.client_id=c.client_id AND e.extension=c.extension
+                   ORDER BY (e.role='manager') DESC LIMIT 1) AS employee
+           FROM calls c WHERE c.call_started_at >= $1 AND ($2::int IS NULL OR c.client_id=$2)""",
+        since, client['id'] if client else None)
+    return [summary_table(calls, tasks, tz, today), days_table(calls, tz), calls_table(calls, tz), tasks_table(tasks, today),
+            all_calls_table(everything, tz, min_seconds)]
 
 
 def token() -> str:
@@ -363,6 +412,11 @@ async def write(tables: list[Table], *, http=None, access_token=None) -> None:
             grid[table.title] = (props['sheetId'], have_rows, have_cols,
                                  len(existing[table.title].get('conditionalFormats', [])))
         await batch([{'deleteSheet': {'sheetId': existing[t]['properties']['sheetId']}} for t in STALE_SHEETS if t in existing])
+        # Старые строки-разделители объединены на всю ширину. Если оставить их до записи,
+        # значения новой строки на том же месте сохраняются только в первой ячейке.
+        await batch([{'unmergeCells': {'range': {'sheetId': sheet_id, 'startRowIndex': 0, 'endRowIndex': rows,
+                                                 'startColumnIndex': 0, 'endColumnIndex': cols}}}
+                     for sheet_id, rows, cols, _ in grid.values()])
         for table in tables:
             response = await client.post(API + spreadsheet + f"/values/'{table.title}':clear", headers=headers, json={})
             response.raise_for_status()
