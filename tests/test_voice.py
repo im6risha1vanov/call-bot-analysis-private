@@ -690,6 +690,38 @@ class ElevenTest(unittest.IsolatedAsyncioTestCase):
 
 
 class CallSessionTest(unittest.IsolatedAsyncioTestCase):
+    async def test_whole_reply_is_one_synthesis(self):
+        client = FakeClient([say("Поняла, Краснодар. ", "Какой материал фасадов ", "вас интересует?")])
+        spoken = []
+
+        async def fake_stream(text, voice, on_audio):
+            spoken.append(text)
+            await on_audio(b"\x00\x00" * 160)
+            return b""
+
+        async def noop(*a):
+            pass
+
+        async def noop2(dialog, **kw):
+            return results.record(dialog, **kw)
+
+        original = speech.stream_pcm
+        speech.stream_pcm = fake_stream
+        try:
+            session = CallSession(Dialog(load("kitchen"), AnthropicBackend(client=client)), noop, noop, save=noop2)
+            session._warm_up_voice = lambda: asyncio.sleep(0)
+            await session.start()
+            await session.heard("Краснодар", True)
+            await session.reply_task
+            for _ in range(50):
+                if len(spoken) >= 2 and not session.pending:
+                    break
+                await asyncio.sleep(0.01)
+        finally:
+            speech.stream_pcm = original
+            await session.hangup()
+        self.assertEqual(spoken[1:], ["Поняла, Краснодар. Какой материал фасадов вас интересует?"])
+
     async def test_call_flow_sends_audio_and_result(self):
         client = FakeClient([
             say("Отлично! ", "В каком городе будет кухня?"),
