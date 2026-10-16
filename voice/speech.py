@@ -450,9 +450,10 @@ def casual_text(text: str) -> str:
         if rng.random() < level:
             text = re.sub(pattern, repl, text, count=1)
     words = text.split()
-    if len(words) < 6 or "Меня зовут" in text or rng.random() > level * 0.5:  # запинка не в каждой фразе и не в коротких
+    if len(words) < 6 or "голосовой помощник" in text or rng.random() > level * 0.5:  # запинка не в каждой фразе и не в коротких
         return text
-    kind = rng.choice(["prefix", "uh", "repeat"])
+    # повтор слова («подскажите, подскажите…») на звонке звучал как сбой: оставляем только «ну» и «э-э»
+    kind = rng.choice(["prefix", "prefix", "uh"])
     if kind == "prefix" and not re.match(r"(Ну|Так|Угу|Ага)\b", text):
         return rng.choice(_HESITATIONS) + text[0].lower() + text[1:]
     if kind == "uh" and ", " in text:

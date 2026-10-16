@@ -10,6 +10,7 @@ import asyncio
 import logging
 import os
 import random
+import re
 import time
 from typing import Awaitable, Callable
 
@@ -28,6 +29,15 @@ STOP_WORDS = {"стоп", "нет", "подождите", "погодите", "�
 # «эффект думания»: если модель не начала отвечать за FILLER_AFTER_S, робот говорит «так…», «угу…»
 FILLERS = [w.strip() for w in os.getenv("VOICE_FILLERS", "Так…|Угу…|Ага…|Так-так…").split("|") if w.strip()]
 FILLER_AFTER_S = int(os.getenv("VOICE_FILLER_AFTER_MS", "400")) / 1000
+FILLER_COOLDOWN_S = 6.0
+_REACTION = re.compile(r"^(Угу|Ага|Так|Поняла|Понял|Понятно|Хорошо)[.,!…]*\s+(?=\S)", re.IGNORECASE)
+
+
+def _strip_reaction(phrase: str) -> str:
+    rest = _REACTION.sub("", phrase, count=1)
+    return rest[:1].upper() + rest[1:] if rest else phrase
+
+
 FILLER_CHANCE = float(os.getenv("VOICE_FILLER_CHANCE", "0.8"))  # не на каждой реплике, чтобы не звучало заученно
 
 SendAudio = Callable[[bytes], Awaitable[None]]
@@ -67,6 +77,8 @@ class CallSession:
         self.saved: dict | None = None
         self.heard_at = 0.0      # когда клиент закончил реплику: для замера, как быстро робот ответил
         self.last_filler = ""
+        self.filler_said_at = 0.0
+        self.filler_last_any = 0.0
         self.quick_said = ""      # быстрый ответ, который ещё звучит: перебили — убрать из истории
         self.tts_chain: list[str] = []  # id синтезов ElevenLabs этого звонка: следующая фраза продолжает их
         self.said_before = ""     # прошлая фраза робота: по ней ElevenLabs держит ту же интонацию
@@ -194,8 +206,13 @@ class CallSession:
         filler = asyncio.create_task(self._filler(generation, started)) if text != SILENCE else None
 
         async def on_text(chunk: str) -> None:
+            if chunk.strip():
+                started.set()  # модель уже отвечает, даже если первое слово ещё ждёт склейки: «так…» не нужно
             for phrase in splitter.feed(chunk):
-                started.set()
+                if self.filler_said_at > time.monotonic() - 3:
+                    # после «Угу…» не говорим ещё и «Поняла.»: три реакции подряд звучат как робот
+                    phrase = _strip_reaction(phrase)
+                    self.filler_said_at = 0.0
                 await self._say(phrase, generation)
 
         try:
@@ -231,8 +248,11 @@ class CallSession:
             pass
         if not FILLERS or not speech.setting("fillers", True) or generation != self.generation or self.pending or random.random() > FILLER_CHANCE:
             return
+        if time.monotonic() - self.filler_last_any < FILLER_COOLDOWN_S:
+            return  # не чаще раза в несколько секунд, даже если реплика клиента пришла кусками
         word = random.choice([w for w in FILLERS if w != self.last_filler] or FILLERS)
         self.last_filler = word
+        self.filler_said_at = self.filler_last_any = time.monotonic()
         log.info("модель думает дольше %d мс: «%s»", after * 1000, word)
         await self._say(word, generation)
 

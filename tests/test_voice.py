@@ -439,6 +439,13 @@ class CalmTextTest(unittest.TestCase):
         self.assertEqual(speech.calm_text("Плёнка — отличный выбор!"), "Плёнка — отличный выбор.")
 
 
+class FillerTest(unittest.TestCase):
+    def test_no_second_reaction_after_filler(self):
+        from voice.call import _strip_reaction
+        self.assertEqual(_strip_reaction("Поняла. Когда удобно, чтобы позвонил специалист?"), "Когда удобно, чтобы позвонил специалист?")
+        self.assertEqual(_strip_reaction("Поняла."), "Поняла.")
+
+
 class PauseTest(unittest.TestCase):
     def test_trim_silence_keeps_pause(self):
         import array, math
