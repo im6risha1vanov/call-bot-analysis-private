@@ -438,6 +438,23 @@ class CalmTextTest(unittest.TestCase):
         self.assertEqual(speech.calm_text("Плёнка — отличный выбор!"), "Плёнка — отличный выбор.")
 
 
+class CasualTextTest(unittest.TestCase):
+    def test_levels(self):
+        phrase = "Подскажите, пожалуйста, на какую сумму вы ориентируетесь? Нужно от двухсот пятидесяти тысяч рублей."
+        token = speech.settings_override.set({"casual": 0})
+        self.assertEqual(speech.casual_text(phrase), phrase)
+        speech.settings_override.reset(token)
+        token = speech.settings_override.set({"casual": 1})
+        casual = speech.casual_text(phrase)
+        speech.settings_override.reset(token)
+        self.assertIn("тыщ", casual)
+        self.assertNotIn("пожалуйста", casual)
+        token = speech.settings_override.set({"casual": 1})
+        self.assertEqual(speech.casual_text(phrase), casual)  # одна фраза звучит одинаково: работает кэш
+        speech.settings_override.reset(token)
+        self.assertEqual(speech.casual_text("Так…"), "Так…")
+
+
 class SynthesisTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         os.environ["VOICE_TTS_CACHE"] = "off"

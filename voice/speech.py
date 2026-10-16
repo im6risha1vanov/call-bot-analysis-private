@@ -292,7 +292,7 @@ _live_cache: dict = {"mtime": None, "data": {}}
 settings_override: contextvars.ContextVar[dict | None] = contextvars.ContextVar("settings_override", default=None)
 SETTING_KEYS = {"voice_id": str, "model": str, "stability": float, "similarity": float, "style": float,
                 "speed": float, "speaker_boost": bool, "calm": bool, "tail_ms": int, "filler_after_ms": int,
-                "fillers": bool}
+                "fillers": bool, "casual": float}
 
 
 def clean_settings(data: dict) -> dict:
@@ -307,7 +307,7 @@ def clean_settings(data: dict) -> dict:
         except (TypeError, ValueError):
             continue
         out[key] = value
-    for key, low, high in (("stability", 0, 1), ("similarity", 0, 1), ("style", 0, 1), ("speed", 0.7, 1.2),
+    for key, low, high in (("casual", 0, 1), ("stability", 0, 1), ("similarity", 0, 1), ("style", 0, 1), ("speed", 0.7, 1.2),
                            ("tail_ms", 300, 2000), ("filler_after_ms", 100, 3000)):
         if key in out:
             out[key] = min(max(out[key], low), high)
@@ -408,9 +408,53 @@ def calm_text(text: str) -> str:
     return re.sub(r"\b(Хорошо|хорошо)([,.]\s*хорошо)+\b", r"\1", text, flags=re.IGNORECASE)
 
 
+# Разговорность: живой человек не говорит как диктор. Сокращает слова («пожалста», «щас», «тыщ») и иногда
+# запинается («ну», «э-э», повтор слова). 0 — диктор, 1 — очень разговорно. Выбор зависит от текста фразы,
+# а не от случая: одна и та же фраза звучит одинаково и берётся из кэша.
+CASUAL = float(os.getenv("VOICE_CASUAL", "0.5"))
+_REDUCTIONS = [
+    (r"\b[Пп]одскажите, пожалуйста,", lambda m: m.group(0)[0] + "одскажите,"),
+    (r"\b([Пп])ожалуйста\b", r"\1ожалста"),
+    (r"\b([Сс])ейчас\b", lambda m: "Щас" if m.group(1) == "С" else "щас"),
+    (r"\bтысяч\b", "тыщ"),
+    (r"\b([Зз])дравствуйте\b", r"\1драсьте"),
+    (r"\b([Сс])пасибо большое\b", r"\1пасибо"),
+    (r"^Понятно\b", "Ага, понятно"),
+    (r"\b([Нн])ичего страшного\b", r"\1ичё страшного"),
+    (r"\bсейчас\b", "щас"),
+]
+_HESITATIONS = ["Ну, ", "Так, ", "Так, вот, ", "Ну вот, "]
+
+
+def casual_text(text: str) -> str:
+    level = setting("casual", CASUAL)
+    if level <= 0 or not text.strip():
+        return text
+    import hashlib
+    import random as _random
+    rng = _random.Random(hashlib.sha256(text.encode()).digest())
+    for pattern, repl in _REDUCTIONS:
+        if rng.random() < level:
+            text = re.sub(pattern, repl, text, count=1)
+    words = text.split()
+    if len(words) < 6 or "Меня зовут" in text or rng.random() > level * 0.5:  # запинка не в каждой фразе и не в коротких
+        return text
+    kind = rng.choice(["prefix", "uh", "repeat"])
+    if kind == "prefix" and not re.match(r"(Ну|Так|Угу|Ага)\b", text):
+        return rng.choice(_HESITATIONS) + text[0].lower() + text[1:]
+    if kind == "uh" and ", " in text:
+        head, tail = text.split(", ", 1)
+        return f"{head}, э-э, {tail}"
+    # повтор слова, как будто подбирает слово: «в каком… в каком городе»
+    for i in range(1, len(words) - 2):
+        if len(words[i]) >= 4 and words[i].isalpha():
+            return " ".join(words[:i] + [words[i - 1] + " " + words[i] + "…"] + words[i - 1:])
+    return text
+
+
 async def synthesize_pcm(text: str, voice: Voice) -> bytes:
     """Фраза в PCM TTS_RATE Гц, 16 бит, моно, с кэшем на диске."""
-    text = calm_text(text)
+    text = casual_text(calm_text(text))
     voice = effective_voice(voice)
     path = _cache_path(text, voice)
     if path is not None and path.exists():

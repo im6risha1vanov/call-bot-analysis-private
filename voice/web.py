@@ -86,6 +86,7 @@ def _current_voice() -> dict:
         "tail_ms": speech.setting("tail_ms", int(speech.YANDEX_TAIL_S * 1000)),
         "filler_after_ms": speech.setting("filler_after_ms", int(FILLER_AFTER_S * 1000)),
         "fillers": speech.setting("fillers", True),
+        "casual": speech.setting("casual", speech.CASUAL),
     }
 
 
