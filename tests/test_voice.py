@@ -447,6 +447,14 @@ class PauseTest(unittest.TestCase):
         out = speech.trim_silence(bytes(rate) + tone + bytes(rate * 2), rate, 100)
         self.assertAlmostEqual(len(out) / 2 / rate, 1.14, delta=0.03)  # 30 мс в начале, звук, 100 мс в конце
 
+    def test_long_inner_pause_is_shortened(self):
+        import array, math
+        rate = 8000
+        tone = array.array("h", [int(5000 * math.sin(i / 3)) for i in range(rate // 2)]).tobytes()
+        out = speech.shorten_pauses(tone + bytes(rate) + tone, rate, 100)  # 0,5 с тишины между словами
+        self.assertAlmostEqual(len(out) / 2 / rate, 1.1, delta=0.02)
+        self.assertEqual(speech.shorten_pauses(tone + bytes(rate // 10) + tone, rate, 150), tone + bytes(rate // 10) + tone)
+
     def test_fewer_commas(self):
         self.assertEqual(speech.fewer_pauses("Хорошо. Подскажите, когда удобно?"), "Хорошо, подскажите когда удобно?")
 

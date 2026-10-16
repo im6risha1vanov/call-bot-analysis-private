@@ -304,7 +304,8 @@ _live_cache: dict = {"mtime": None, "data": {}}
 settings_override: contextvars.ContextVar[dict | None] = contextvars.ContextVar("settings_override", default=None)
 SETTING_KEYS = {"voice_id": str, "model": str, "stability": float, "similarity": float, "style": float,
                 "speed": float, "speaker_boost": bool, "calm": bool, "tail_ms": int, "filler_after_ms": int,
-                "fillers": bool, "casual": float, "pause_ms": int, "fewer_commas": bool}
+                "fillers": bool, "casual": float, "pause_ms": int, "fewer_commas": bool,
+                "inner_pause_ms": int}
 
 
 def clean_settings(data: dict) -> dict:
@@ -320,7 +321,7 @@ def clean_settings(data: dict) -> dict:
             continue
         out[key] = value
     for key, low, high in (("casual", 0, 1), ("stability", 0, 1), ("similarity", 0, 1), ("style", 0, 1), ("speed", 0.7, 1.2),
-                           ("tail_ms", 300, 2000), ("filler_after_ms", 100, 3000), ("pause_ms", 0, 600)):
+                           ("tail_ms", 300, 2000), ("filler_after_ms", 100, 3000), ("pause_ms", 0, 600), ("inner_pause_ms", 40, 600)):
         if key in out:
             out[key] = min(max(out[key], low), high)
     if "voice_id" in out and not re.fullmatch(r"[A-Za-z0-9]{10,40}", out["voice_id"]):
@@ -485,6 +486,41 @@ def trim_silence(pcm: bytes, rate: int, pause_ms: int, lead_ms: int = LEAD_MS) -
     return samples[start:end].tobytes()
 
 
+# Паузы внутри фразы: на точках, запятых и «?» синтезатор молчит 200–500 мс. Любую тишину внутри куска
+# длиннее INNER_PAUSE_MS укорачиваем до неё (половина до, половина после, чтобы не было щелчка).
+INNER_PAUSE_MS = int(os.getenv("VOICE_INNER_PAUSE_MS", "130"))
+
+
+def shorten_pauses(pcm: bytes, rate: int, max_ms: int) -> bytes:
+    import array
+    if len(pcm) % 2 or len(pcm) < rate // 5:
+        return pcm
+    samples = array.array("h", pcm)
+    window = max(rate // 100, 1)
+    keep = max(rate * max_ms // 1000 // window, 1)  # в окнах по 10 мс
+    out = array.array("h")
+    quiet_from = None
+    for i in range(0, len(samples), window):
+        chunk = samples[i:i + window]
+        if max(map(abs, chunk), default=0) <= _SILENT:
+            if quiet_from is None:
+                quiet_from = i
+            continue
+        if quiet_from is not None:
+            run = (i - quiet_from) // window
+            if run > keep:
+                head = keep // 2
+                out.extend(samples[quiet_from:quiet_from + head * window])
+                out.extend(samples[i - (keep - head) * window:i])
+            else:
+                out.extend(samples[quiet_from:i])
+            quiet_from = None
+        out.extend(chunk)
+    if quiet_from is not None:
+        out.extend(samples[quiet_from:])
+    return out.tobytes()
+
+
 # Запятые после вводных слов синтезатор читает с заметной паузой: «Хорошо, подскажите, …»
 _INTRO_COMMA = re.compile(r"\b(Хорошо|Понятно|Поняла|Понял|Ага|Угу|Ну|Так|Подскажите|Скажите|Отлично|Да|Вот)(,)\s", re.IGNORECASE)
 
@@ -500,6 +536,7 @@ def fewer_pauses(text: str) -> str:
 async def synthesize_pcm(text: str, voice: Voice) -> bytes:
     """Фраза в PCM TTS_RATE Гц, 16 бит, моно, с кэшем на диске, без лишней тишины по краям."""
     pcm = await _synthesize_cached(fewer_pauses(casual_text(calm_text(text))), voice)
+    pcm = shorten_pauses(pcm, TTS_RATE, setting("inner_pause_ms", INNER_PAUSE_MS))
     return trim_silence(pcm, TTS_RATE, setting("pause_ms", PAUSE_MS))
 
 

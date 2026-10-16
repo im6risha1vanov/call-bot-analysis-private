@@ -89,6 +89,7 @@ def _current_voice() -> dict:
         "casual": speech.setting("casual", speech.CASUAL),
         "pause_ms": speech.setting("pause_ms", speech.PAUSE_MS),
         "fewer_commas": speech.setting("fewer_commas", True),
+        "inner_pause_ms": speech.setting("inner_pause_ms", speech.INNER_PAUSE_MS),
     }
 
 
