@@ -24,7 +24,7 @@ from pathlib import Path
 from aiohttp import WSMsgType, web, ClientSession
 
 from voice import llm, speech
-from voice.call import FILLER_AFTER_S, CallSession
+from voice.call import FILLER_AFTER_S, WHOLE_REPLY, CallSession
 from voice.dialog import Dialog
 from voice.operator import OPERATORS_DIR, OperatorError, load
 
@@ -90,6 +90,7 @@ def _current_voice() -> dict:
         "pause_ms": speech.setting("pause_ms", speech.PAUSE_MS),
         "fewer_commas": speech.setting("fewer_commas", True),
         "inner_pause_ms": speech.setting("inner_pause_ms", speech.INNER_PAUSE_MS),
+        "whole_reply": speech.setting("whole_reply", WHOLE_REPLY),
     }
 
 

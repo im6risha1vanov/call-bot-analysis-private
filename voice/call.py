@@ -30,6 +30,9 @@ STOP_WORDS = {"стоп", "нет", "подождите", "погодите", "�
 FILLERS = [w.strip() for w in os.getenv("VOICE_FILLERS", "Так…|Угу…|Ага…|Так-так…").split("|") if w.strip()]
 FILLER_AFTER_S = int(os.getenv("VOICE_FILLER_AFTER_MS", "400")) / 1000
 FILLER_COOLDOWN_S = 6.0
+# Реплика озвучивается целиком, когда модель её дописала: ElevenLabs ведёт одну интонацию через всю реплику.
+# По предложениям быстрее на 0,3–0,6 с, но интонация начинается заново после каждой точки.
+WHOLE_REPLY = os.getenv("VOICE_WHOLE_REPLY", "1") != "0"
 _REACTION = re.compile(r"^(Угу|Ага|Так|Поняла|Понял|Понятно|Хорошо)[.,!…]*\s+(?=\S)", re.IGNORECASE)
 
 
@@ -201,14 +204,19 @@ class CallSession:
         self.quick_said = ""
         splitter = speech.PhraseSplitter()
         generation = self.generation
+        whole = speech.setting("whole_reply", WHOLE_REPLY) and self.synthesize is speech.synthesize_pcm
+        held: list[str] = []
         self.reply_spoke = False
         started = asyncio.Event()  # модель уже дала первую фразу: «так…» не нужно
         filler = asyncio.create_task(self._filler(generation, started)) if text != SILENCE else None
 
         async def on_text(chunk: str) -> None:
-            if chunk.strip():
+            if chunk.strip() and not whole:  # целиком: звук начнётся только после всей реплики, «угу…» уместно
                 started.set()  # модель уже отвечает, даже если первое слово ещё ждёт склейки: «так…» не нужно
             for phrase in splitter.feed(chunk):
+                if whole:  # вся реплика одним куском: интонация не сбрасывается на каждом предложении
+                    held.append(phrase)
+                    continue
                 if self.filler_said_at > time.monotonic() - 3:
                     # после «Угу…» не говорим ещё и «Поняла.»: три реакции подряд звучат как робот
                     phrase = _strip_reaction(phrase)
@@ -227,7 +235,14 @@ class CallSession:
             started.set()
             if filler is not None:
                 filler.cancel()
-        for phrase in splitter.flush():
+        rest = splitter.flush()
+        if whole:
+            text_all = " ".join(held + rest)
+            if self.filler_said_at > time.monotonic() - 3:
+                text_all = _strip_reaction(text_all)
+                self.filler_said_at = 0.0
+            rest = [text_all] if text_all.strip() else []
+        for phrase in rest:
             await self._say(phrase, generation)
         if turn.fallback:
             await self._say(turn.text, generation)  # прощание из анкеты: модель сама ничего не сказала

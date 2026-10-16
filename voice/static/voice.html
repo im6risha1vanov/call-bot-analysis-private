@@ -64,6 +64,7 @@
       <div class="hint">тишина после каждого предложения; раньше синтезатор оставлял 300–600 мс</div></div>
     <div class="row"><label for="inner_pause_ms">Паузы на знаках, мс</label><input type="range" id="inner_pause_ms" min="40" max="600" step="10"><output id="inner_pause_ms_v"></output>
       <div class="hint">самая длинная пауза внутри фразы: на точке, запятой, «?»; всё длиннее укорачивается. Слышно в «Прослушать»</div></div>
+    <label class="check"><input type="checkbox" id="whole_reply"> Реплика на одном дыхании: озвучивать ответ целиком, а не по предложениям (ровнее интонация, ответ на 0,3–0,6 с позже)</label>
     <label class="check"><input type="checkbox" id="fewer_commas"> Меньше пауз на запятых: «Хорошо, подскажите, …» читать слитно</label>
     <div class="row"><label for="tail_ms">Конец реплики клиента, мс</label><input type="range" id="tail_ms" min="300" max="2000" step="50"><output id="tail_ms_v"></output>
       <div class="hint">сколько тишины ждать, прежде чем ответить; меньше: отвечает быстрее, но может перебить клиента</div></div>
@@ -88,7 +89,7 @@
 <script>
 const $ = id => document.getElementById(id);
 const SLIDERS = ['speed', 'stability', 'similarity', 'style', 'casual', 'pause_ms', 'inner_pause_ms', 'tail_ms', 'filler_after_ms'];
-const CHECKS = ['speaker_boost', 'calm', 'fewer_commas', 'fillers'];
+const CHECKS = ['speaker_boost', 'calm', 'whole_reply', 'fewer_commas', 'fillers'];
 let state = {}, ctx = null, source = null;
 
 function msg(text, cls) { $('msg').textContent = text; $('msg').className = cls || ''; }

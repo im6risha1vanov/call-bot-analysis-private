@@ -305,7 +305,7 @@ settings_override: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
 SETTING_KEYS = {"voice_id": str, "model": str, "stability": float, "similarity": float, "style": float,
                 "speed": float, "speaker_boost": bool, "calm": bool, "tail_ms": int, "filler_after_ms": int,
                 "fillers": bool, "casual": float, "pause_ms": int, "fewer_commas": bool,
-                "inner_pause_ms": int}
+                "inner_pause_ms": int, "whole_reply": bool}
 
 
 def clean_settings(data: dict) -> dict:
