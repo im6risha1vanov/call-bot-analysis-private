@@ -481,26 +481,9 @@ table.ctable th,table.ctable td{padding:9px 8px}
 .mlist .nr2,.mlist .nr3{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);min-width:0}
 .mlist .nr2 .what{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
-/* CRM на сервере: меню спокойнее, переход к работе отдела и выход внизу меню */
+/* CRM на сервере: вместо меню страницы — общее меню директора (static/dirmenu.js) */
 .side{gap:14px}
-.side .navlabel{display:none}
-.side .nav{padding:7px 10px;font-size:14px;border-radius:7px;gap:10px}
-.side .nav svg{width:16px;height:16px;opacity:.7}
-.side .nav[aria-current="page"] svg{opacity:1}
-.side .side-foot{display:none}
-.crm-side{display:flex;flex-direction:column;gap:1px}
-.crm-side a{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:7px;color:var(--fg);font-size:14px;text-decoration:none}
-.crm-side a:hover{background:var(--surface-2)}
-.crm-side svg{width:16px;height:16px;opacity:.7;flex:none}
-.crm-foot{margin-top:auto;padding:0 10px;font-size:12px;color:var(--muted);display:flex;justify-content:space-between;gap:8px}
-.crm-foot a{color:inherit;text-underline-offset:2px}
-.crm-foot a:hover{color:var(--fg)}
-.crm-switch{display:none}
-@media (max-width:760px){
-  .crm-switch{display:flex;gap:16px;align-items:center;flex-wrap:wrap;padding:7px 16px;font-size:13px;background:var(--surface);color:var(--muted);border-bottom:1px solid var(--line)}
-  .crm-switch a{color:var(--fg)}
-  .crm-switch span{margin-left:auto}
-}
+.side #nav-main,.side #nav-acc,.side .side-foot{display:none}
 
 </style>
 </head>
@@ -528,7 +511,9 @@ table.ctable th,table.ctable td{padding:9px 8px}
 <div class="toast" id="toast" role="status"></div>
 
 <link rel="stylesheet" href="/static/review.css">
+<link rel="stylesheet" href="/static/dirmenu.css">
 <script src="/static/review.js"></script>
+<script src="/static/dirmenu.js"></script>
 <script src="/director/shim.js"></script>
 <script src="/director/data.js"></script>
 <script>

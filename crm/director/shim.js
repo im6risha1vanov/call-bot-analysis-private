@@ -99,26 +99,20 @@
     const m = document.createElement('div'); m.className = 'mut'; m.textContent = text; a.replaceWith(m);
   }, true);
 
-  // ---- переход к работе отдела и выход: в меню слева, на телефоне полоской сверху ----
+  // ---- одно меню директора (static/dirmenu.js) вместо меню страницы ----
+  // /director#раздел — ссылка из меню на страницах работы отдела: страница откроет этот раздел.
+  const asked = decodeURIComponent(location.hash.slice(1));
+  if (asked) {
+    try { localStorage.setItem('avr-page', asked); } catch (e) { /* без хранилища */ }
+    history.replaceState(null, '', location.pathname);
+  }
   meReady.then(m => {
-    if (!m) return;
-    const out = m.test ? '<a href="/test-exit">Сменить вход</a>' : '<a href="/logout">Выйти</a>';
-    const bar = document.createElement('div');
-    bar.className = 'crm-switch';
-    bar.innerHTML = `<a href="/?work">Работа отдела</a>${out}${m.test ? '<span>Тестовый вход</span>' : ''}`;
-    document.body.prepend(bar);
-    const side = document.querySelector('.side');
-    if (!side) return;
-    const icon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h7"/><path d="m16 15 3 3-3 3"/></svg>';
-    const links = document.createElement('div');
-    links.className = 'crm-side';
-    links.innerHTML = `<a href="/?work">${icon}<span>Работа отдела</span></a>`;
-    const foot = document.createElement('div');
-    foot.className = 'crm-foot';
-    const name = document.createElement('span');
-    name.textContent = (m.name || 'Директор') + (m.test ? ' · тест' : '');
-    foot.append(name);
-    foot.insertAdjacentHTML('beforeend', out);
-    side.append(links, foot);
+    if (!m || !window.DirMenu || !document.querySelector('.side')) return;
+    DirMenu.mount({side: '.side', here: 'a', name: m.name, test: m.test, onOpen: id => window.go(id)});
+    // Страница сама отмечает открытый раздел в своём (скрытом) меню: берём отметку оттуда.
+    const own = document.getElementById('nav-main');
+    const sync = () => { const b = own.querySelector('[aria-current="page"]'); if (b) DirMenu.setActive('a:' + b.dataset.go); };
+    new MutationObserver(sync).observe(own, {childList: true, subtree: true});
+    sync();
   });
 })();

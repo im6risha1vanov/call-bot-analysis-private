@@ -89,7 +89,6 @@ const ICON = {
   people: '<circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/><path d="M19 4v4M17 6h4"/>',
   robot: '<rect x="5" y="8" width="14" height="11" rx="3"/><path d="M12 4v4M9 13h.01M15 13h.01M9.5 16.5h5"/>',
   pen: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>',
-  more: '<circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/>',
   star: '<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/>',
 };
 const svg = k => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[k]}</svg>`;
@@ -116,10 +115,6 @@ const PAGES = [
   {id: 'cabdays', name: 'По дням', icon: 'calls', roles: ['client']},
 ];
 const HOME = {manager: 'queue', director: 'team', client: 'cab'};
-// У директора в меню на виду только ежедневное, остальное под «Ещё».
-const MAIN = {director: new Set(['team', 'queue', 'tasks', 'calls', 'reports'])};
-const SETTINGS = new Set(['staff', 'robot', 'prompts', 'access']);
-const mobile = () => matchMedia('(max-width: 860px)').matches;
 const ROLE_NAME = {manager: 'Менеджер', director: 'Директор', client: 'Клиент'};
 const allowed = p => p.roles.includes(S.me.role);
 const OUT_CLASS = {meeting: 'o-good', proposal: 'o-good', callback: 'o-mid', interested: 'o-mid',
@@ -135,50 +130,27 @@ function showLogin(reason) {
     <p class="muted">${esc(reason || 'Откройте CRM по своей ссылке.')}</p></div>`;
 }
 
-function navItem(p) {
-  return `<button data-page="${p.id}">${svg(p.icon)}<span>${p.name}</span><span class="count" id="count-${p.id}"></span></button>`;
-}
-
-function navHtml(pages) {
-  const main = MAIN[S.me.role];
-  if (!main) return pages.map(navItem).join('');
-  const rest = pages.filter(p => !main.has(p.id));
-  const dept = rest.filter(p => !SETTINGS.has(p.id)), settings = rest.filter(p => SETTINGS.has(p.id));
-  return `${pages.filter(p => main.has(p.id)).map(navItem).join('')}
-    <button data-page="more" class="more-btn" aria-expanded="false">${svg('more')}<span>Ещё</span></button>
-    <div class="nav-more" id="nav-more" hidden>${dept.map(navItem).join('')}${settings.length ? '<div class="nav-label">Настройки</div>' : ''}${settings.map(navItem).join('')}</div>`;
-}
-
-function setMore(open) {
-  const box = $('#nav-more'), btn = $('.more-btn');
-  if (!box || !btn) return;
-  box.hidden = !open;
-  btn.setAttribute('aria-expanded', String(open));
-}
-
 function shell() {
   const pages = PAGES.filter(allowed);
+  // У директора одно меню на обеих его страницах (static/dirmenu.js).
+  const director = S.me.role === 'director' && !!window.DirMenu;
   const people = S.me.privileged ? `<label class="field"><select id="pick-ext" aria-label="Менеджер">${
     S.me.team.map(p => `<option value="${esc(p.ext)}"${p.ext === S.ext ? ' selected' : ''}>${esc(p.name)} · ${esc(p.ext)}</option>`).join('')
   }</select></label>` : '';
   root.innerHTML = `<div class="app">
     <aside class="side">
       <div class="logo"><i></i>Averon <b>CRM</b></div>
-      ${S.me.role === 'director' ? `<a class="nav-link" href="/director">${svg('stats')}<span>Аналитика</span></a>` : ''}
-      <nav class="nav">${navHtml(pages)}</nav>
+      ${director ? '' : `<nav class="nav">${pages.map(p => `<button data-page="${p.id}">${svg(p.icon)}<span>${p.name}</span><span class="count" id="count-${p.id}"></span></button>`).join('')}</nav>
       <div class="side-foot"><span>${esc(S.me.name)}${S.me.ext ? ' · доб. ' + esc(S.me.ext) : ''}</span>
-        ${S.me.test ? '<a href="/test-exit">Сменить вход</a>' : '<button id="logout">Выйти</button>'}</div>
+        ${S.me.test ? '<a class="btn small" href="/test-exit">Сменить вход</a>' : '<button id="logout">Выйти</button>'}</div>`}
     </aside>
     <div class="main">
-      ${S.me.test ? `<div class="banner"><b>Тестовый вход · ${esc(ROLE_NAME[S.me.role] || '')}</b><span>${S.me.role === 'manager' ? 'Только просмотр: звонки и отметки работают во входе самого менеджера.' : S.me.role === 'director' ? 'Очереди менеджеров здесь только для просмотра.' : 'Так кабинет увидит клиент.'}</span>${S.me.role === 'director' ? '<a href="/director">Аналитика директора</a>' : ''}<a href="/test-exit">Сменить вход</a></div>` : ''}
+      ${S.me.test ? `<div class="banner"><b>Тестовый вход · ${esc(ROLE_NAME[S.me.role] || '')}</b><span>${S.me.role === 'manager' ? 'Только просмотр: звонки и отметки работают во входе самого менеджера.' : S.me.role === 'director' ? 'Очереди менеджеров здесь только для просмотра.' : 'Так кабинет увидит клиент.'}</span><a href="/test-exit">Сменить вход</a></div>` : ''}
       <header class="top"><h1 id="title"></h1><span class="sp"></span>${people}</header>
       <main class="content" id="view"></main>
     </div></div>`;
-  $$('.nav button').forEach(b => b.addEventListener('click', () => {
-    if (b.dataset.page !== 'more') return go(b.dataset.page);
-    if (mobile()) return go('more');  // на телефоне «Ещё» — отдельный список разделов
-    setMore($('#nav-more').hidden);
-  }));
+  $$('.nav button').forEach(b => b.addEventListener('click', () => go(b.dataset.page)));
+  if (director) DirMenu.mount({side: '.side', here: 'w', name: S.me.name, test: S.me.test, onOpen: go});
   if ($('#logout')) $('#logout').addEventListener('click', async () => { await api('/api/logout', {method: 'POST', body: {}}).catch(() => {}); showLogin(); });
   const pick = $('#pick-ext');
   if (pick) pick.addEventListener('change', () => { S.ext = pick.value; S.queue = null; S.pos = 0; S.dial = null; save(); go(S.page); });
@@ -188,13 +160,11 @@ function save() { try { localStorage.setItem('crm', JSON.stringify({page: S.page
 function load() { try { return JSON.parse(localStorage.getItem('crm') || '{}'); } catch (e) { return {}; } }
 
 async function go(page) {
-  const isMore = page === 'more' && !!MAIN[S.me.role];
-  if (!isMore && !PAGES.some(p => p.id === page && allowed(p))) page = HOME[S.me.role] || 'queue';
+  if (!PAGES.some(p => p.id === page && allowed(p))) page = HOME[S.me.role] || 'queue';
   S.page = page; save();
-  const hidden = MAIN[S.me.role] && !MAIN[S.me.role].has(page);
-  $$('.nav button').forEach(b => b.setAttribute('aria-current', b.dataset.page === page || (b.dataset.page === 'more' && hidden && mobile()) ? 'page' : 'false'));
-  if (hidden && page !== 'more' && !mobile()) setMore(true);  // открытый раздел из «Ещё» виден в меню
-  $('#title').textContent = isMore ? 'Ещё' : PAGES.find(p => p.id === page).name;
+  $$('.nav button').forEach(b => b.setAttribute('aria-current', b.dataset.page === page ? 'page' : 'false'));
+  if (window.DirMenu) DirMenu.setActive('w:' + page);
+  $('#title').textContent = PAGES.find(p => p.id === page).name;
   const view = $('#view');
   view.innerHTML = '<div class="empty">Загружаю…</div>';
   try {
@@ -354,16 +324,6 @@ function drawer(item, onDone) {
 
 // ---------- views ----------
 const VIEWS = {};
-
-VIEWS.more = async view => {
-  const main = MAIN[S.me.role] || new Set();
-  const rest = PAGES.filter(p => allowed(p) && !main.has(p.id));
-  view.innerHTML = `<div class="more-list">${rest.map(p => `<button data-go="${p.id}">${svg(p.icon)}<span>${p.name}</span></button>`).join('')}
-    <a href="/director">${svg('stats')}<span>Аналитика</span></a>
-    ${S.me.test ? '<a href="/test-exit">Сменить вход</a>' : '<button data-out="1">Выйти</button>'}</div>`;
-  $$('[data-go]', view).forEach(b => b.addEventListener('click', () => go(b.dataset.go)));
-  $('[data-out]', view)?.addEventListener('click', () => $('#logout')?.click());
-};
 
 VIEWS.queue = async view => {
   const q = await api('/api/queue');
@@ -1122,7 +1082,10 @@ VIEWS.robot = async view => {
     S.ext = S.me.team.some(p => p.ext === saved.ext) ? saved.ext : S.me.team[0]?.ext || null;
   }
   shell();
-  go(saved.page || HOME[S.me.role]);
+  // Ссылка из меню директора на странице аналитики: /?work#раздел.
+  const asked = decodeURIComponent(location.hash.slice(1));
+  if (asked) history.replaceState(null, '', location.pathname + location.search);
+  go(asked || saved.page || HOME[S.me.role]);
   // Очередь и счётчики обновляются раз в минуту, если менеджер не заполняет итог.
   setInterval(async () => {
     if (document.hidden || S.busy || S.dial || $('.drawer') || $('#outform:not(.hidden)')) return;
