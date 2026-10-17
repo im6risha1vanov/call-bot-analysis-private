@@ -82,6 +82,7 @@ const ICON = {
   stats: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
   team: '<circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0"/><circle cx="17" cy="9" r="2.5"/><path d="M15 14.5a5 5 0 0 1 6 5.5"/>',
   client: '<path d="M4 21V8l8-5 8 5v13"/><path d="M9 21v-6h6v6"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3M15 8l2 2"/>',
   star: '<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/>',
 };
 const svg = k => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[k]}</svg>`;
@@ -95,6 +96,7 @@ const PAGES = [
   {id: 'calls', name: 'Звонки', icon: 'calls', roles: STAFF},
   {id: 'stats', name: 'Итоги', icon: 'stats', roles: STAFF},
   {id: 'clients', name: 'Клиенты', icon: 'client', roles: ['director']},
+  {id: 'access', name: 'Доступы', icon: 'key', roles: ['director']},
   {id: 'cab', name: 'Сводка', icon: 'stats', roles: ['client']},
   {id: 'cabint', name: 'Заинтересованные', icon: 'star', roles: ['client']},
   {id: 'cabcb', name: 'Перезвоны', icon: 'tasks', roles: ['client']},
@@ -614,6 +616,54 @@ VIEWS.clients = async view => {
     ${data.clients.map(c => `<tr class="click" data-name="${esc(c.name)}"><td>${esc(c.name)}</td><td class="n">${c.first}</td><td class="n">${c.repeat}</td><td class="n">${c.interested}</td><td class="n">${rub(c.sum)}</td></tr>`).join('')}
     </tbody></table><p class="muted">Нажмите на клиента, чтобы открыть его кабинет так, как его видит клиент.</p></div>`;
   $$('tr[data-name]', view).forEach(tr => tr.addEventListener('click', () => { S.cabName = tr.dataset.name; S.cabTab = 'cab'; go('clients'); }));
+};
+
+const fmtWhen = v => v ? new Date(v).toLocaleString('ru-RU', {day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'}) : '—';
+
+VIEWS.access = async view => {
+  const d = await api('/api/access', {scoped: false});
+  const roleName = {director: 'Директор', manager: 'Менеджер', client: 'Клиент'};
+  const who = i => i.role === 'manager' ? `${esc(i.name)} · доб. ${esc(i.ext)}` : esc(i.name || roleName[i.role]);
+  view.innerHTML = `<div class="grid2"><div class="panel"><h2>Выдать личную ссылку</h2>
+      <p class="muted">По ссылке человек входит в CRM без пароля, на любом устройстве. Ссылку видно только сейчас: скопируйте и отправьте лично.</p>
+      <div class="outform">
+        <label class="field">Кому<select id="a-role"><option value="manager">Менеджеру</option><option value="client">Клиенту колл-центра</option><option value="director">Руководителю</option></select></label>
+        <label class="field" id="a-ext-f">Менеджер<select id="a-ext">${d.managers.map(m => `<option value="${esc(m.ext)}">${esc(m.name)} · доб. ${esc(m.ext)}</option>`).join('')}</select></label>
+        <label class="field" id="a-cl-f" hidden>Клиент<select id="a-client">${d.clients.map(c => `<option>${esc(c)}</option>`).join('')}</select></label>
+        <label class="field" id="a-name-f" hidden>Имя<input id="a-name" maxlength="80" placeholder="Например, Евгений"></label>
+        <button class="btn primary" id="a-go">Создать ссылку</button></div>
+      <div id="a-out"></div></div>
+    <div class="panel"><h2>Действующие ссылки <span class="muted">· ${d.invites.length}</span></h2>
+      ${d.invites.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Кто</th><th>Вход</th><th>Создана</th><th>Последний вход</th><th></th></tr></thead><tbody>
+        ${d.invites.map(i => `<tr><td>${who(i)}</td><td>${roleName[i.role]}</td><td>${fmtWhen(i.created)}</td><td>${fmtWhen(i.used)}</td>
+          <td><button class="btn small" data-revoke="${i.id}">Отозвать</button></td></tr>`).join('')}</tbody></table></div>`
+        : '<div class="empty">Ссылок ещё нет.</div>'}
+      <p class="muted">Отозванная ссылка сразу перестаёт работать на всех устройствах. Если менеджера убрать из отдела в боте, его ссылка тоже перестанет работать.</p></div></div>`;
+  const role = $('#a-role', view);
+  const sync = () => {
+    $('#a-ext-f', view).hidden = role.value !== 'manager';
+    $('#a-cl-f', view).hidden = role.value !== 'client';
+    $('#a-name-f', view).hidden = role.value !== 'director';
+  };
+  role.addEventListener('change', sync);
+  $('#a-go', view).addEventListener('click', async () => {
+    const out = $('#a-out', view);
+    try {
+      const r = await api('/api/access', {method: 'POST', scoped: false, body: {role: role.value, person_ext: $('#a-ext', view).value,
+        client: $('#a-client', view).value, name: $('#a-name', view).value}});
+      out.innerHTML = `<div class="linkbox"><input readonly value="${esc(r.link)}" aria-label="Ссылка"><button class="btn small" id="a-copy">Скопировать</button></div>
+        <p class="muted">Ссылка появится в списке после обновления страницы.</p>`;
+      $('#a-copy', out).addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(r.link); $('#a-copy', out).textContent = 'Скопировано'; }
+        catch (e) { $('input', out).select(); }
+      });
+    } catch (e) { out.innerHTML = `<p class="muted">${esc(e.message)}</p>`; }
+  });
+  $$('[data-revoke]', view).forEach(b => b.addEventListener('click', async () => {
+    if (!confirm('Отозвать ссылку? Человек сразу выйдет из CRM.')) return;
+    try { await api(`/api/access/${b.dataset.revoke}/revoke`, {method: 'POST', scoped: false, body: {}}); go('access'); }
+    catch (e) { alert(e.message); }
+  }));
 };
 
 // ---------- start ----------

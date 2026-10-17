@@ -156,8 +156,23 @@ async def test_page(request):
         raise web.HTTPNotFound()
     response = web.FileResponse(STATIC / 'test.html')
     response.set_cookie(TEST_COOKIE, request.match_info['key'], max_age=int(auth.TEST_TTL.total_seconds()),
-                        httponly=True, secure=SECURE_COOKIE, samesite='Strict', path='/')
+                        httponly=True, secure=SECURE_COOKIE, samesite='Lax', path='/')
     return response
+
+
+async def personal_page(request):
+    got = await auth.invite_login(request.app[POOL], request.match_info['token'])
+    if got is None:
+        return web.Response(status=404, content_type='text/html', text=(
+            '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+            '<title>Averon CRM</title><body style="font:16px system-ui;margin:40px auto;max-width:420px;padding:0 16px">'
+            '<h1>Ссылка не действует</h1><p>Её отозвали или в ней ошибка. Попросите у руководителя новую.</p></body>'))
+    session, role = got
+    await auth.logout(request.app[POOL], request.cookies.get(COOKIE))
+    response = web.HTTPFound('/director' if role == 'director' else '/')
+    response.set_cookie(COOKIE, session, max_age=int(auth.PERSONAL_TTL.total_seconds()), httponly=True,
+                        secure=SECURE_COOKIE, samesite='Lax', path='/')
+    raise response
 
 
 async def test_exit(request):
@@ -252,7 +267,7 @@ async def api_test_login(request):
     session = await auth.test_login(request.app[POOL], role, data.get('ext'), client_key)
     response = web.json_response({'ok': True, 'go': '/director' if role == 'director' else '/'})
     response.set_cookie(COOKIE, session, max_age=int(auth.TEST_TTL.total_seconds()), httponly=True,
-                        secure=SECURE_COOKIE, samesite='Strict', path='/')
+                        secure=SECURE_COOKIE, samesite='Lax', path='/')
     return response
 
 
@@ -351,6 +366,40 @@ async def api_review(request):
     return web.json_response(await reviews.review(request.app[POOL], await actor(request), int_id(request.match_info['id'])))
 
 
+def base_url(request) -> str:
+    url = (os.getenv('CRM_URL') or '').strip().rstrip('/')
+    return url if url.startswith('https://') else f'{request.scheme}://{request.host}'
+
+
+async def api_access(request):
+    who = await director(request)
+    pool = request.app[POOL]
+    try:
+        clients = [c['name'] for c in (await cabinet.summary())['clients']]
+    except Exception:
+        log.exception('список клиентов колл-центра не загрузился')
+        clients = []
+    return web.json_response({'invites': await auth.invites(pool, who.actor.client_id),
+                              'managers': await store.team(pool, who.actor.client_id), 'clients': clients})
+
+
+async def api_access_create(request):
+    who = await director(request)
+    data = await body(request)
+    role = str(data.get('role') or '')
+    if role == 'client' and str(data.get('client') or '') not in [c['name'] for c in (await cabinet.summary())['clients']]:
+        raise ValueError('Такого клиента нет.')
+    token = await auth.invite_create(request.app[POOL], who.actor.client_id, role, data.get('person_ext'), data.get('client'),
+                                     data.get('name'))
+    return web.json_response({'link': f'{base_url(request)}/p/{token}'})
+
+
+async def api_access_revoke(request):
+    who = await director(request)
+    await auth.invite_revoke(request.app[POOL], who.actor.client_id, int_id(request.match_info['id']))
+    return web.json_response({'ok': True})
+
+
 async def api_queue(request):
     who = await actor(request)
     return web.json_response(await store.queue(request.app[POOL], who.client_id, await ext_of(request, who)))
@@ -435,6 +484,7 @@ def build(pool) -> web.Application:
     app[POOL] = pool
     app.router.add_get('/', index)
     app.router.add_get('/t/{key}', test_page)
+    app.router.add_get('/p/{token}', personal_page)
     app.router.add_get('/test-exit', test_exit)
     app.router.add_get('/logout', logout_page)
     app.router.add_get('/director', director_page)
@@ -450,6 +500,9 @@ def build(pool) -> web.Application:
     app.router.add_get('/api/cabinet', api_cabinet)
     app.router.add_get('/api/recording/{id}', api_recording)
     app.router.add_get('/api/review/{id}', api_review)
+    app.router.add_get('/api/access', api_access)
+    app.router.add_post('/api/access', api_access_create)
+    app.router.add_post('/api/access/{id}/revoke', api_access_revoke)
     app.router.add_get('/api/queue', api_queue)
     app.router.add_get('/api/tasks', api_tasks)
     app.router.add_post('/api/tasks/{id}', api_task_change)

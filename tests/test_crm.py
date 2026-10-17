@@ -110,9 +110,9 @@ class DBCase(unittest.IsolatedAsyncioTestCase):
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS topic TEXT;
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS mode TEXT;
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS assigned_by_telegram_user_id BIGINT;""")
-        for name in ('008_call_reviews.sql', '009_callback_tasks.sql', '014_crm.sql', '015_crm_roles.sql'):
+        for name in ('008_call_reviews.sql', '009_callback_tasks.sql', '014_crm.sql', '015_crm_roles.sql', '016_crm_access.sql'):
             await self.pool.execute((root / 'migrations' / name).read_text())
-        await self.pool.execute('TRUNCATE clients, crm_login_tokens, crm_sessions, crm_docs CASCADE')
+        await self.pool.execute('TRUNCATE clients, crm_login_tokens, crm_sessions, crm_docs, crm_invites CASCADE')
         from crypto_util import encrypt
         await self.pool.execute("INSERT INTO clients(id,timezone,processing_enabled,vpbx_api_key_enc,vpbx_api_salt_enc) "
                                 "VALUES(1,'Europe/Moscow',true,$1,$2)", encrypt('key'), encrypt('salt'))
@@ -465,6 +465,58 @@ class WebTests(DBCase):
         await self.http.post('/api/logout', json={}, headers={'X-CRM': '1'})
         await self.login(901)
         self.assertEqual((await self.http.get(f'/api/review/{call_id}')).status, 200)
+
+    async def test_personal_links(self):
+        h = {'X-CRM': '1'}
+        with patch.dict(os.environ, {'CRM_TEST_KEY': TEST_KEY, 'KITCHEN_SHEET_ID': 'leads', 'CRM_URL': 'https://crm.example'}), \
+                patch('crm.gsheets.values', fake_values):
+            await self.enter('director')
+            r = await self.http.post('/api/access', json={'role': 'manager', 'person_ext': '101', 'ext': '102'}, headers=h)
+            link = (await r.json())['link']
+            self.assertTrue(link.startswith('https://crm.example/p/'))
+            r = await self.http.post('/api/access', json={'role': 'client', 'client': 'Кухни'}, headers=h)
+            client_link = (await r.json())['link']
+            r = await self.http.post('/api/access', json={'role': 'client', 'client': 'Чужой'}, headers=h)
+            self.assertEqual(r.status, 400)
+            r = await self.http.post('/api/access', json={'role': 'manager', 'person_ext': '999'}, headers=h)
+            self.assertEqual(r.status, 400)
+            listed = (await (await self.http.get('/api/access')).json())['invites']
+            self.assertEqual([(i['role'], i['name']) for i in listed], [('client', 'Кухни'), ('manager', 'Первый')])
+            await self.http.get('/test-exit')
+
+            # менеджер по личной ссылке: свой добавочный, звонить можно
+            token = link.rsplit('/', 1)[1]
+            r = await self.http.get('/p/' + token, allow_redirects=False)
+            self.assertEqual((r.status, r.headers['Location']), (302, '/'))
+            self.assertIn('SameSite=Lax', r.headers['Set-Cookie'])
+            me = await (await self.http.get('/api/me')).json()
+            self.assertEqual((me['role'], me['name'], me['ext'], me['test'], me['can_dial'], me['readonly']),
+                             ('manager', 'Первый', '101', False, True, False))
+            r = await self.http.post('/api/leads', json={'text': '89991112233'}, headers=h)
+            self.assertEqual((await r.json())['added'], 1)
+            self.assertEqual((await self.http.get('/api/access')).status, 403)
+            self.assertEqual((await self.http.get('/p/wrong')).status, 404)
+
+            # отзыв ссылки выкидывает сразу
+            invite_id = next(i['id'] for i in listed if i['role'] == 'manager')
+            await self.pool.execute('UPDATE crm_invites SET revoked_at=now() WHERE id=$1', invite_id)
+            self.assertEqual((await self.http.get('/api/me')).status, 401)
+            self.assertEqual((await self.http.get('/p/' + token)).status, 404)
+
+            # клиент по своей ссылке видит только свой кабинет
+            r = await self.http.get('/p/' + client_link.rsplit('/', 1)[1], allow_redirects=False)
+            self.assertEqual(r.status, 302)
+            cab = await (await self.http.get('/api/cabinet')).json()
+            self.assertEqual(cab['name'], 'Кухни')
+            self.assertEqual((await self.http.get('/api/queue')).status, 403)
+
+    async def test_personal_link_dies_with_employee(self):
+        token = await auth.invite_create(self.pool, 1, 'manager', '102')
+        r = await self.http.get('/p/' + token, allow_redirects=False)
+        self.assertEqual(r.status, 302)
+        self.assertEqual((await self.http.get('/api/queue')).status, 200)
+        await self.pool.execute("DELETE FROM employees WHERE extension='102'")
+        self.assertEqual((await self.http.get('/api/queue')).status, 401)
 
     async def test_personal_session_and_logout(self):
         await self.login(123)

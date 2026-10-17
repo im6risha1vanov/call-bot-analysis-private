@@ -178,3 +178,6 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 .btn.listen{margin-top:6px}
 audio.rec{display:block;width:100%;max-width:360px;height:36px;margin-top:6px}
 .rec-cell{min-width:240px}
+.linkbox{display:flex;gap:8px;margin-top:12px}
+.linkbox input{flex:1;min-width:0;font:13px var(--mono,monospace);padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2);color:var(--fg)}
+[hidden]{display:none!important}
