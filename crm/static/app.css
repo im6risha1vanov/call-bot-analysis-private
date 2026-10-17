@@ -173,3 +173,8 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 .banner a{color:inherit;font-weight:600}
 .panel h2.gap{margin-top:18px}
 .row.gapb{margin-bottom:12px}
+
+/* запись звонка */
+.btn.listen{margin-top:6px}
+audio.rec{display:block;width:100%;max-width:360px;height:36px;margin-top:6px}
+.rec-cell{min-width:240px}

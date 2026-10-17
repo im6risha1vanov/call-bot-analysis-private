@@ -21,7 +21,7 @@ from aiohttp import web  # noqa: E402
 
 import mango_client  # noqa: E402
 from tools import Forbidden, is_privileged  # noqa: E402
-from . import auth, cabinet, gsheets, store  # noqa: E402
+from . import auth, cabinet, gsheets, recording, store  # noqa: E402
 from .dial import dial  # noqa: E402
 
 log = logging.getLogger('crm')
@@ -332,6 +332,21 @@ async def api_cabinet(request):
         raise ValueError(str(exc))
 
 
+async def api_recording(request):
+    who = await actor(request)
+    try:
+        data, mime = await recording.get(request.app[POOL], who, int_id(request.match_info['id']))
+    except recording.NoRecording as exc:
+        return fail(404, str(exc))
+    headers = {'Accept-Ranges': 'bytes', 'Content-Type': mime}
+    part = recording.byte_range(request.headers.get('Range'), len(data))
+    if part is None:
+        return web.Response(body=data, headers=headers)
+    start, end = part
+    headers['Content-Range'] = f'bytes {start}-{end}/{len(data)}'
+    return web.Response(status=206, body=data[start:end + 1], headers=headers)
+
+
 async def api_queue(request):
     who = await actor(request)
     return web.json_response(await store.queue(request.app[POOL], who.client_id, await ext_of(request, who)))
@@ -429,6 +444,7 @@ def build(pool) -> web.Application:
     app.router.add_get('/api/docs', api_docs)
     app.router.add_post('/api/docs', api_docs_write)
     app.router.add_get('/api/cabinet', api_cabinet)
+    app.router.add_get('/api/recording/{id}', api_recording)
     app.router.add_get('/api/queue', api_queue)
     app.router.add_get('/api/tasks', api_tasks)
     app.router.add_post('/api/tasks/{id}', api_task_change)

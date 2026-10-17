@@ -252,6 +252,25 @@ function workCard(el, item, onDone, extra = '') {
   loadHistory(item.number, $("#hist", el));
 }
 
+// Запись звонка из Mango: кнопка превращается в плеер, файл отдаёт наш сервер.
+const listenBtn = c => c.rec ? `<button class="btn small listen" data-rec="${c.id}">▶ Прослушать</button>` : '';
+document.addEventListener('click', e => {
+  const b = e.target.closest('button[data-rec]');
+  if (!b) return;
+  e.stopPropagation();
+  const a = document.createElement('audio');
+  a.controls = true; a.preload = 'auto'; a.className = 'rec';
+  a.src = '/api/recording/' + encodeURIComponent(b.dataset.rec);
+  a.addEventListener('click', ev => ev.stopPropagation());
+  a.addEventListener('error', async () => {
+    let text = 'Запись не загрузилась.';
+    try { const r = await fetch(a.src, {credentials: 'same-origin'}); text = (await r.json()).error || text; } catch (err) { /* остаётся общий текст */ }
+    const m = document.createElement('div'); m.className = 'muted'; m.textContent = text; a.replaceWith(m);
+  });
+  b.replaceWith(a);
+  a.play().catch(() => { /* браузер мог запретить автозапуск: плеер остаётся с кнопкой */ });
+}, true);
+
 async function loadHistory(number, box) {
   let card;
   try { card = await api('/api/card?number=' + encodeURIComponent(number)); } catch (e) { box.innerHTML = `<div class="muted">${esc(e.message)}</div>`; return; }
@@ -261,7 +280,7 @@ async function loadHistory(number, box) {
     const cls = !c.seconds ? 'miss' : rv?.success ? 'ok' : rv?.chance === 'hot' ? 'hot' : '';
     const head = `${when(c.at)} · ${c.incoming ? 'входящий' : 'исходящий'} · ${c.seconds ? dur(c.seconds) : 'не дозвонились'} · ${esc(c.who)}`;
     const text = rv ? (rv.manager_text || rv.rop_line || '') : '';
-    events.push({at: c.at || '', html: `<div class="h ${cls}"><div class="hd">${head}</div>${text ? `<div class="bd">${esc(text)}</div>` : ''}</div>`});
+    events.push({at: c.at || '', html: `<div class="h ${cls}"><div class="hd">${head}</div>${text ? `<div class="bd">${esc(text)}</div>` : ''}${listenBtn(c)}</div>`});
   }
   for (const o of card.outcomes) {
     const due = o.due_date ? ` · на ${ddmm(o.due_date)}${o.due_time ? ' ' + o.due_time : ''}` : '';
@@ -418,13 +437,13 @@ VIEWS.calls = async view => {
   const data = await api('/api/calls?days=7');
   if (!data.items.length) { view.innerHTML = '<div class="panel empty">За 7 дней звонков нет.</div>'; return; }
   view.innerHTML = `<div class="panel"><h2>Мои звонки за 7 дней <span class="muted">· ${data.items.length}</span></h2><div class="scroll"><table class="tbl">
-    <thead><tr><th>Когда</th><th>Номер</th><th class="n">Длит.</th><th>Разбор</th></tr></thead><tbody>
+    <thead><tr><th>Когда</th><th>Номер</th><th class="n">Длит.</th><th>Разбор</th><th>Запись</th></tr></thead><tbody>
     ${data.items.map(c => {
       const rv = c.review;
       const mark = !c.seconds ? '<span class="chip bad">не дозвонились</span>' : rv ? `<span class="chip ${rv.success ? 'good' : rv.chance === 'hot' ? 'warn' : ''}">${rv.success ? 'результат' : rv.chance === 'hot' ? 'был шанс' : 'без результата'}</span>` : '';
       return `<tr class="click" data-n="${esc(c.number || '')}"><td>${esc(when(c.at))}<div class="muted">${c.incoming ? 'входящий' : 'исходящий'}</div></td>
         <td class="num">${esc(phone(c.number))}</td><td class="n">${c.seconds ? dur(c.seconds) : '—'}</td>
-        <td>${mark}${rv?.rop_line ? `<div>${esc(rv.rop_line)}</div>` : ''}</td></tr>`;
+        <td>${mark}${rv?.rop_line ? `<div>${esc(rv.rop_line)}</div>` : ''}</td><td class="rec-cell">${listenBtn(c)}</td></tr>`;
     }).join('')}</tbody></table></div></div>`;
   $$('tr[data-n]', view).forEach(tr => tr.addEventListener('click', () => {
     if (tr.dataset.n) drawer({kind: 'call', number: tr.dataset.n, title: '', note: ''});

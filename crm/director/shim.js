@@ -90,6 +90,15 @@
   const caps = {mcp, db, user, downloads};
   window.claude = {use: async name => caps[name] || null};
 
+  // ---- запись звонка: если Mango её не отдал, вместо плеера пишем почему ----
+  document.addEventListener('error', async e => {
+    const a = e.target;
+    if (!(a instanceof HTMLAudioElement) || !a.src.includes('/api/recording/')) return;
+    let text = 'Запись не загрузилась.';
+    try { const r = await fetch(a.src, {credentials: 'same-origin'}); text = (await r.json()).error || text; } catch (err) { /* общий текст */ }
+    const m = document.createElement('div'); m.className = 'mut'; m.textContent = text; a.replaceWith(m);
+  }, true);
+
   // ---- полоска входов сверху ----
   meReady.then(m => {
     if (!m) return;

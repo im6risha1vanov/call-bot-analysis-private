@@ -1089,6 +1089,7 @@ function renderCallDrawer(){
     ${c.ob?`<div class="dblock"><small>Возражение клиента</small><div>${esc(c.ob)}</div></div>`:''}
     ${c.nx?`<div class="dblock"><small>Следующий шаг</small><div>${esc(c.nx)}</div></div>`:''}
     ${c.det?`<div class="dblock"><small>Подробно</small><div class="pre">${esc(c.det)}</div></div>`:''}
+    ${c.s==='b'&&/^\d+$/.test(String(c.id))?`<div class="dblock"><small>Запись звонка</small><audio class="rec" controls preload="none" src="/api/recording/${c.id}" style="width:100%;margin-top:6px"></audio></div>`:''}
     ${c.s==='b'?'<p class="sub">Полный разбор этого звонка лежит в Telegram-боте и в таблице «Статистика звонков».</p>':''}
   </div>`}
 

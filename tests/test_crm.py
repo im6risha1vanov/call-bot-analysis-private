@@ -15,7 +15,7 @@ os.environ.setdefault('CVC_API_KEY', 'test')
 os.environ.setdefault('ANTHROPIC_API_KEY', 'test')
 os.environ.setdefault('ENCRYPTION_KEY', 'q7m8b4gN0bO2PZqvG6b0yC3rA1D5pYc8tW2XkL9uQeE=')
 
-from crm import auth, cabinet, dial, gsheets, store
+from crm import auth, cabinet, dial, gsheets, recording, store
 from review import callbacks, engine
 from review import store as review_store
 from tests.test_review import CALLBACK, WON
@@ -101,6 +101,7 @@ class DBCase(unittest.IsolatedAsyncioTestCase):
         await self.pool.execute("""
             ALTER TABLE calls ADD COLUMN IF NOT EXISTS duration_seconds INTEGER DEFAULT 90;
             ALTER TABLE calls ADD COLUMN IF NOT EXISTS client_number TEXT;
+            ALTER TABLE calls ADD COLUMN IF NOT EXISTS recording_id TEXT;
             ALTER TABLE calls ADD COLUMN IF NOT EXISTS direction INTEGER DEFAULT 2;
             ALTER TABLE clients ADD COLUMN IF NOT EXISTS min_call_seconds INTEGER DEFAULT 30;
             ALTER TABLE clients ADD COLUMN IF NOT EXISTS vpbx_api_key_enc TEXT;
@@ -118,6 +119,7 @@ class DBCase(unittest.IsolatedAsyncioTestCase):
         await self.pool.execute("INSERT INTO employees VALUES(1,'101',123,'manager','Первый'),(1,'102',124,'manager','Второй'),"
                                 "(1,'head',901,'head','Руководитель')")
         dial._last_dial.clear()
+        recording._cache.clear()
 
     async def asyncTearDown(self):
         await self.pool.close()
@@ -395,6 +397,46 @@ class WebTests(DBCase):
         for bad in ('../x', 'a//b', 'a/b c', ''):
             r = await self.http.post('/api/docs', json={'path': bad, 'op': 'set', 'data': {}}, headers=h)
             self.assertEqual(r.status, 400, bad)
+
+    async def test_recording(self):
+        def call(ext, rec):
+            return self.pool.fetchval(
+                "INSERT INTO calls(client_id,extension,call_started_at,client_number,duration_seconds,recording_id) "
+                "VALUES(1,$1,now(),'79990001122',80,$2) RETURNING id", ext, rec)
+        mine, other, silent = await call('101', 'rec-1'), await call('102', 'rec-2'), await call('101', None)
+        audio = b'ID3' + bytes(range(97))
+        await self.login(123)
+        with patch('crm.recording.mango_client.fetch_recording', AsyncMock(return_value=audio)) as fetch:
+            r = await self.http.get(f'/api/recording/{mine}')
+            self.assertEqual((r.status, r.headers['Content-Type'], r.headers['Accept-Ranges']), (200, 'audio/mpeg', 'bytes'))
+            self.assertEqual(await r.read(), audio)
+            r = await self.http.get(f'/api/recording/{mine}', headers={'Range': 'bytes=2-5'})
+            self.assertEqual((r.status, r.headers['Content-Range'], await r.read()), (206, 'bytes 2-5/100', audio[2:6]))
+            r = await self.http.get(f'/api/recording/{mine}', headers={'Range': 'bytes=-10'})
+            self.assertEqual(await r.read(), audio[-10:])
+            self.assertEqual(fetch.await_count, 1)  # перемотка не качает файл заново
+            self.assertEqual(fetch.await_args.args[1:], ('salt', 'rec-1'))
+            self.assertEqual((await self.http.get(f'/api/recording/{other}')).status, 403)
+            r = await self.http.get(f'/api/recording/{silent}')
+            self.assertEqual(r.status, 404)
+            self.assertIn('нет записи', (await r.json())['error'])
+            self.assertEqual((await self.http.get('/api/recording/999999')).status, 404)
+        card = await (await self.http.get('/api/card?number=89990001122')).json()
+        self.assertEqual({c['id']: c['rec'] for c in card['calls']}, {mine: True, other: False, silent: False})
+        calls = await (await self.http.get('/api/calls')).json()
+        self.assertEqual({c['id']: c['rec'] for c in calls['items']}, {mine: True, silent: False})
+        with patch('crm.recording.mango_client.fetch_recording', AsyncMock(side_effect=RuntimeError('Mango 404'))):
+            r = await self.http.get(f'/api/recording/{other}')
+            self.assertEqual(r.status, 403)
+            await self.http.post('/api/logout', json={}, headers={'X-CRM': '1'})
+            await self.login(901)  # руководитель слушает любой звонок
+            r = await self.http.get(f'/api/recording/{other}')
+            self.assertEqual(r.status, 404)
+            self.assertIn('Mango не отдал', (await r.json())['error'])
+        with patch.dict(os.environ, {'CRM_TEST_KEY': TEST_KEY, 'KITCHEN_SHEET_ID': 'leads'}), \
+                patch('crm.gsheets.values', fake_values):
+            await self.enter('client', client='Кухни')
+            self.assertEqual((await self.http.get(f'/api/recording/{mine}')).status, 403)
 
     async def test_personal_session_and_logout(self):
         await self.login(123)

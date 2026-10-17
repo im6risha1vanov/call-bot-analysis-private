@@ -227,7 +227,8 @@ async def card(pool, actor, client_id: int, ext: str, number) -> dict:
         'SELECT extension, full_name FROM employees WHERE client_id=$1', client_id)}
     privileged = is_privileged(actor)
     calls = await pool.fetch(
-        """SELECT c.id, c.extension, c.direction, c.duration_seconds, c.call_started_at, r.data
+        """SELECT c.id, c.extension, c.direction, c.duration_seconds, c.call_started_at, r.data,
+                  c.recording_id IS NOT NULL AS rec
            FROM calls c LEFT JOIN call_reviews r ON r.call_id=c.id
            WHERE c.client_id=$1 AND c.client_number = ANY($2::text[])
            ORDER BY c.call_started_at DESC NULLS LAST LIMIT 40""", client_id, variants(target))
@@ -249,6 +250,8 @@ async def card(pool, actor, client_id: int, ext: str, number) -> dict:
         'calls': [{'id': c['id'], 'at': fmt_dt(c['call_started_at'], tz), 'ext': c['extension'],
                    'who': names.get(c['extension']) or (f"Доб. {c['extension']}" if c['extension'] else 'Без сотрудника'),
                    'incoming': c['direction'] == INCOMING, 'seconds': c['duration_seconds'] or 0,
+                   # Запись чужого звонка менеджер не слушает.
+                   'rec': c['rec'] and (privileged or c['extension'] == ext),
                    # Менеджеру разбор чужого звонка не показываем, только кто и когда звонил.
                    'review': review_view(c['data'], c['extension'] == ext) if privileged or c['extension'] == ext else None}
                   for c in calls],
@@ -321,13 +324,14 @@ async def my_calls(pool, actor, client_id: int, ext: str, days: int = 7) -> dict
     tz = await zone(pool, client_id)
     since = datetime.now(timezone.utc) - timedelta(days=days)
     rows = await pool.fetch(
-        """SELECT c.id, c.direction, c.duration_seconds, c.call_started_at, c.client_number, r.data
+        """SELECT c.id, c.direction, c.duration_seconds, c.call_started_at, c.client_number, r.data,
+                  c.recording_id IS NOT NULL AS rec
            FROM calls c LEFT JOIN call_reviews r ON r.call_id=c.id
            WHERE c.client_id=$1 AND c.extension=$2 AND c.call_started_at >= $3
            ORDER BY c.call_started_at DESC LIMIT 400""", client_id, ext, since)
     return {'items': [{'id': c['id'], 'at': fmt_dt(c['call_started_at'], tz), 'number': c['client_number'],
                        'incoming': c['direction'] == INCOMING, 'seconds': c['duration_seconds'] or 0,
-                       'review': review_view(c['data'], True)} for c in rows]}
+                       'rec': c['rec'], 'review': review_view(c['data'], True)} for c in rows]}
 
 
 async def stats(pool, client_id: int, ext: str | None, days: int = 7) -> dict:
