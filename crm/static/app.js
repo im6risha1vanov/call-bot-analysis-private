@@ -145,7 +145,7 @@ function shell() {
         ${S.me.test ? '<a class="btn small" href="/test-exit">Сменить вход</a>' : '<button id="logout">Выйти</button>'}</div>`}
     </aside>
     <div class="main">
-      ${S.me.test ? `<div class="banner"><b>Тестовый вход · ${esc(ROLE_NAME[S.me.role] || '')}</b><span>${S.me.role === 'manager' ? 'Только просмотр: звонки и отметки работают во входе самого менеджера.' : S.me.role === 'director' ? 'Очереди менеджеров здесь только для просмотра.' : 'Так кабинет увидит клиент.'}</span><a href="/test-exit">Сменить вход</a></div>` : ''}
+      ${S.me.test ? `<div class="banner"><b>Просмотр · ${esc(ROLE_NAME[S.me.role] || '')}</b><span>Только смотреть: звонки и изменения работают по личной ссылке.</span><a href="/test-exit">Сменить вход</a></div>` : ''}
       <header class="top"><h1 id="title"></h1><span class="sp"></span>${people}</header>
       <main class="content" id="view"></main>
     </div></div>`;

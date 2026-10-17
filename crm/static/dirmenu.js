@@ -68,7 +68,7 @@
       ${ITEMS.filter(p => !p.more).map(p => item(p)).join('')}
       <button class="dm-item dm-more" aria-expanded="${open}">${svg('more')}<span>Ещё</span></button>
       <div class="dm-box"${open ? '' : ' hidden'}>${moreList()}</div></nav>
-      <div class="dm-foot"><span>${esc(o.name || 'Директор')}${o.test ? ' · тест' : ''}</span>${out()}</div>`);
+      <div class="dm-foot"><span>${esc(o.name || 'Директор')}${o.test ? ' · просмотр' : ''}</span>${out()}</div>`);
     document.body.insertAdjacentHTML('beforeend', `<nav class="dm-bar" aria-label="Разделы">
       ${ITEMS.filter(p => p.bar).map(p => item(p)).join('')}
       <button class="dm-item dm-sheet-open">${svg('more')}<span>Ещё</span></button></nav>

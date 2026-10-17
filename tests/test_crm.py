@@ -304,6 +304,13 @@ class WebTests(DBCase):
                                 auth.digest(token), tg)
         self.http.session.cookie_jar.update_cookies({'crm_session': token})
 
+    async def director(self):
+        """Вход директора по личной ссылке (не тестовый): только в нём можно что-то менять."""
+        token = auth.digest('director-link')
+        await self.pool.execute("INSERT INTO crm_sessions(token_hash,expires_at,role,client_id,is_test) VALUES($1,now()+'1 day','director',1,false)",
+                                token)
+        self.http.session.cookie_jar.update_cookies({'crm_session': 'director-link'})
+
     async def enter(self, role, **extra):
         r = await self.http.post('/api/test/login', json={'key': TEST_KEY, 'role': role, **extra})
         self.assertEqual(r.status, 403)  # без заголовка X-CRM
@@ -387,9 +394,37 @@ class WebTests(DBCase):
         with patch.dict(os.environ, {'CRM_TEST_KEY': 'short'}):
             self.assertEqual((await self.http.get('/t/short')).status, 404)
 
+    async def test_public_site_is_view_only(self):
+        h = {'X-CRM': '1'}
+        r = await self.http.get('/', allow_redirects=False)
+        self.assertEqual(r.status, 200)  # сайт закрыт: без ссылки только страница входа
+        self.assertEqual((await self.http.get('/t/open')).status, 404)
+        with patch.dict(os.environ, {'CRM_PUBLIC': '1', 'CRM_TEST_KEY': ''}), patch('crm.gsheets.values', fake_values), \
+                patch.dict(os.environ, {'KITCHEN_SHEET_ID': 'leads'}):
+            r = await self.http.get('/', allow_redirects=False)
+            self.assertEqual((r.status, r.headers['Location']), (302, '/t/open'))
+            self.assertEqual((await self.http.get('/t/open')).status, 200)
+            r = await self.http.post('/api/test/login', json={'key': 'open', 'role': 'director'}, headers=h)
+            self.assertEqual(r.status, 200)
+            self.assertTrue((await (await self.http.get('/api/me')).json())['test'])
+            self.assertEqual((await self.http.get('/api/staff')).status, 200)  # смотреть можно всё
+            r = await self.http.post('/api/gs', json={'spreadsheetId': 'leads', 'range': 'Сводка!A1:F80'}, headers=h)
+            self.assertEqual(r.status, 200)
+            # менять нельзя ничего: ни ссылки, ни сотрудников, ни данные страницы, ни звонки, ни вопросы
+            for path, data in [('/api/access', {'role': 'director'}), ('/api/staff', {'role': 'head', 'name': 'X'}),
+                               ('/api/staff/unlink', {'person_ext': 'head'}), ('/api/docs', {'path': 'a/b', 'op': 'set', 'data': {}}),
+                               ('/api/ask', {'question': 'x'}), ('/api/robot/call', {'phone': '89991112233'}),
+                               ('/api/robot/cab/stop', {'phone': '89991112233'}), ('/api/trainings', {'person_ext': '101'})]:
+                r = await self.http.post(path, json=data, headers=h)
+                self.assertEqual(r.status, 403, path)
+                self.assertIn('только для просмотра', (await r.json())['error'])
+            self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM crm_invites'), 0)
+        # сайт закрыли: /t/open больше не открывается
+        self.assertEqual((await self.http.get('/t/open')).status, 404)
+
     async def test_director_docs(self):
         with patch.dict(os.environ, {'CRM_TEST_KEY': TEST_KEY}):
-            await self.enter('director')
+            await self.director()
         h = {'X-CRM': '1'}
         await self.http.post('/api/docs', json={'path': 'pipe/deals/a1', 'op': 'set', 'data': {'stage': 'new', 'x': {'a': 1}}}, headers=h)
         await self.http.post('/api/docs', json={'path': 'pipe/deals/a1', 'op': 'update', 'data': {'x': {'b': 2}}}, headers=h)
@@ -477,7 +512,7 @@ class WebTests(DBCase):
         h = {'X-CRM': '1'}
         with patch.dict(os.environ, {'CRM_TEST_KEY': TEST_KEY, 'KITCHEN_SHEET_ID': 'leads', 'CRM_URL': 'https://crm.example'}), \
                 patch('crm.gsheets.values', fake_values):
-            await self.enter('director')
+            await self.director()
             r = await self.http.post('/api/access', json={'role': 'manager', 'person_ext': '101', 'ext': '102'}, headers=h)
             link = (await r.json())['link']
             self.assertTrue(link.startswith('https://crm.example/p/'))
@@ -525,7 +560,7 @@ class WebTests(DBCase):
             await self.enter('manager', ext='101')
             self.assertEqual((await self.http.get('/api/staff')).status, 403)
             await self.http.get('/test-exit')
-            await self.enter('director')
+            await self.director()
             d = await (await self.http.get('/api/staff')).json()
             self.assertEqual([p['ext'] for p in d['items']], ['own', 'head', '101', '102'])
             self.assertEqual((d['copies_source'], d['copies_other']), ('env', 1))
@@ -575,7 +610,7 @@ class WebTests(DBCase):
         from review import prompts
         h = {'X-CRM': '1'}
         with patch.dict(os.environ, {'CRM_TEST_KEY': TEST_KEY, 'PROMPT_EDITORS': '901, 905'}):
-            await self.enter('director')
+            await self.director()
             r = await self.http.get('/api/prompts')
             self.assertEqual(r.status, 403)  # тестовый вход без Telegram
             self.assertIn('Доступах', (await r.json())['error'])

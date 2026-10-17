@@ -48,6 +48,9 @@ DIRECTOR_CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-sr
                 "https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; "
                 "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 TEST_READONLY = 'Тестовый вход только для просмотра: звонки и отметки работают во входе самого менеджера.'
+VIEW_ONLY = 'Это вход только для просмотра. Менять, звонить и спрашивать можно по личной ссылке.'
+# Запросы, которые ничего не меняют и разрешены входу для просмотра; остальные POST ему закрыты.
+VIEW_ONLY_POSTS = {'/api/logout', '/api/test/login', '/api/gs'}
 
 
 def fail(status: int, text: str) -> web.Response:
@@ -59,6 +62,13 @@ async def guard(request: web.Request, handler):
     # Запросы с другого сайта не могут поставить свой заголовок без CORS, а CORS мы не разрешаем.
     if request.method not in ('GET', 'HEAD') and request.headers.get('X-CRM') != '1':
         return fail(403, 'Запрос отклонён.')
+    if request.method not in ('GET', 'HEAD') and request.path not in VIEW_ONLY_POSTS:
+        # Тестовая ссылка и открытый сайт: смотреть можно всё, менять ничего (а не по списку разделов).
+        who = await auth.viewer_for(request.app[POOL], request.cookies.get(COOKIE))
+        if who is not None and who.test:
+            response = fail(403, VIEW_ONLY)
+            response.headers.update(HEADERS)
+            return response
     try:
         response = await handler(request)
     except web.HTTPException as exc:
@@ -149,6 +159,8 @@ async def ext_of(request: web.Request, who, value=None) -> str:
 
 async def index(request):
     who = await auth.viewer_for(request.app[POOL], request.cookies.get(COOKIE))
+    if who is None and auth.public_on():
+        raise web.HTTPFound('/t/' + auth.PUBLIC_KEY)  # открытый сайт: сразу выбор входа
     if who is not None and who.role == 'director' and 'work' not in request.query:
         raise web.HTTPFound('/director')
     return web.FileResponse(STATIC / 'index.html')

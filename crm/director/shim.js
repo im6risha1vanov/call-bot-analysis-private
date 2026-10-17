@@ -73,7 +73,7 @@
   const meReady = call('/api/me').then(m => { me = m; return m; }).catch(() => null);
   const user = {
     id: async () => { await meReady; return me ? 'crm:' + me.role + ':' + (me.ext || '') : 'crm'; },
-    can: async () => { await meReady; return !!me; },
+    can: async () => { await meReady; return !!me && !me.test; },  // вход для просмотра: страница не пробует сохранять
     isOwner: () => false, canEdit: () => false,
     me: async () => { await meReady; return {id: 'crm', name: me ? me.name : ''}; },
     profiles: async ids => Object.fromEntries((ids || []).map(id => [id, {name: id.startsWith('crm:') ? 'Сотрудник' : ''}])),

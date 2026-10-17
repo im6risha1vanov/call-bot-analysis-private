@@ -9,6 +9,8 @@
 #   bash scripts/crm_setup.sh update           — после git pull: миграции CRM, перезапуск сайта и бота
 #   bash scripts/crm_setup.sh new-test-link    — новая тестовая ссылка (старая перестаёт работать)
 #   bash scripts/crm_setup.sh test-link-off    — выключить тестовую ссылку (личные ссылки работают)
+#   bash scripts/crm_setup.sh public-on        — открыть сайт всем только на просмотр: без ссылки сразу выбор входа
+#   bash scripts/crm_setup.sh public-off       — закрыть: снова только личные и тестовая ссылки, входы для просмотра гаснут
 #   bash scripts/crm_setup.sh rollback         — выключить сайт и убрать CRM_URL (таблицы CRM остаются, они ничему не мешают)
 set -euo pipefail
 APP=/opt/callbot-astra
@@ -141,8 +143,22 @@ new-test-link)
   systemctl restart callbot-crm
   test_link
   ;;
+public-on)
+  grep -q '^CRM_PUBLIC=1' .env || { sed -i '/^CRM_PUBLIC=/d' .env; echo 'CRM_PUBLIC=1' >> .env; }
+  systemctl restart callbot-crm
+  sleep 3
+  echo "public view-only: $(grep -m1 '^CRM_URL=' .env | cut -d= -f2-)/"
+  ;;
+public-off)
+  sed -i '/^CRM_PUBLIC=/d' .env
+  # входы для просмотра (тестовая ссылка и открытый сайт) гаснут сразу, личные остаются
+  psql "$DATABASE_URL" -q -c "DELETE FROM crm_sessions WHERE is_test"
+  systemctl restart callbot-crm
+  echo 'public access is off; personal links keep working'
+  ;;
 status)
   git log -1 --oneline
+  grep -q '^CRM_PUBLIC=1' .env && echo 'public view-only: ON' || echo 'public view-only: off'
   grep '^CRM_URL=' .env || echo 'CRM_URL not set'
   systemctl is-active callbot-crm caddy || true
   URL=$(grep -m1 '^CRM_URL=' .env | cut -d= -f2- || true)
@@ -159,7 +175,7 @@ rollback)
   echo "CRM is off. Caddy keeps running but has nothing behind it; stop it with: systemctl disable --now caddy"
   ;;
 *)
-  sed -n '2,12p' "$0"
+  sed -n '2,14p' "$0"
   exit 1
   ;;
 esac

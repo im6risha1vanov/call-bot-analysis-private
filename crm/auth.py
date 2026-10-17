@@ -35,7 +35,17 @@ def digest(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+PUBLIC_KEY = 'open'  # /t/open — выбор входа для всех, когда сайт открыт (CRM_PUBLIC=1 в .env)
+
+
+def public_on() -> bool:
+    return os.getenv('CRM_PUBLIC') == '1'
+
+
 def test_key_ok(key: str | None) -> bool:
+    """Тестовая ссылка или открытый сайт. Входы по ним только для просмотра (is_test)."""
+    if key == PUBLIC_KEY:
+        return public_on()
     expected = os.getenv('CRM_TEST_KEY') or ''
     return len(expected) >= 16 and bool(key) and hmac.compare_digest(str(key), expected)
 
