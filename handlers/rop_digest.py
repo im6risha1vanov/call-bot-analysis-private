@@ -24,6 +24,7 @@ import asyncpg
 from aiogram import Bot
 
 import rop_agent
+from crm import journal
 from queue_runner import register
 from review import prompts
 from tools import Actor, report_chat_ids
@@ -87,6 +88,10 @@ async def _digest(pool: asyncpg.Pool, client_id: int, kind: str, header: str, ac
     if failed and standard not in texts:
         someone = groups[next(iter(failed))][0][0]
         texts[standard] = await answer(pool, someone, prompts.render_digest(standard, values))
+    for body, members in groups.items():
+        if body in texts and (body == standard or body not in failed):
+            personal = any(source == "personal" for _, source, _ in members)
+            await journal.save(pool, client_id, kind, texts[body], note="по личному промту" if personal else None)
     sent, chars = 0, 0
     for body, members in groups.items():
         if body in failed:
@@ -236,5 +241,6 @@ async def rop_digest_evening(pool: asyncpg.Pool, task: asyncpg.Record) -> dict:
     )
     text = await rop_agent.answer(pool, actors[0], question)
     body = f"{_render_stats(stats)}\n\n{text}"
+    await journal.save(pool, client_id, "evening", body)
     sent = await _broadcast(actors, "📊 Вечерний отчёт по отделу", body)
     return {"client_id": client_id, "managers": len(stats), "chars": len(body), "sent_to": sent}

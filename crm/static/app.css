@@ -181,3 +181,7 @@ audio.rec{display:block;width:100%;max-width:360px;height:36px;margin-top:6px}
 .linkbox{display:flex;gap:8px;margin-top:12px}
 .linkbox input{flex:1;min-width:0;font:13px var(--mono,monospace);padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2);color:var(--fg)}
 [hidden]{display:none!important}
+.report{margin-bottom:14px}
+.rep-head{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:baseline;margin-bottom:10px}
+.rep-body{white-space:pre-wrap;line-height:1.5}
+.rep-calls{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}

@@ -15,7 +15,7 @@ os.environ.setdefault('CVC_API_KEY', 'test')
 os.environ.setdefault('ANTHROPIC_API_KEY', 'test')
 os.environ.setdefault('ENCRYPTION_KEY', 'q7m8b4gN0bO2PZqvG6b0yC3rA1D5pYc8tW2XkL9uQeE=')
 
-from crm import auth, cabinet, dial, gsheets, recording, store
+from crm import auth, cabinet, dial, gsheets, journal, recording, store
 from review import callbacks, engine
 from review import store as review_store
 from tests.test_review import CALLBACK, LOST, TRANSCRIPT, WON
@@ -73,6 +73,10 @@ class PureTests(unittest.TestCase):
         self.assertIsNone(found[2]['name'])
         self.assertEqual(bad, ['просто текст'])
 
+    def test_report_html_keeps_only_simple_tags(self):
+        out = journal.html('<b>Итог</b> &lt;script&gt;x&lt;/script&gt; <a href="tg://x">ссылка</a> <i>ок</i> 5 &amp; 6')
+        self.assertEqual(out, '<b>Итог</b> &lt;script&gt;x&lt;/script&gt; ссылка <i>ок</i> 5 &amp; 6')
+
     def test_parse_summary_and_client(self):
         info = cabinet.parse_summary(SUMMARY)
         self.assertEqual([t['price'] for t in info['tariffs']], [10, 5, 150])
@@ -110,9 +114,9 @@ class DBCase(unittest.IsolatedAsyncioTestCase):
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS topic TEXT;
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS mode TEXT;
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS assigned_by_telegram_user_id BIGINT;""")
-        for name in ('008_call_reviews.sql', '009_callback_tasks.sql', '014_crm.sql', '015_crm_roles.sql', '016_crm_access.sql'):
+        for name in ('008_call_reviews.sql', '009_callback_tasks.sql', '014_crm.sql', '015_crm_roles.sql', '016_crm_access.sql', '017_crm_reports.sql'):
             await self.pool.execute((root / 'migrations' / name).read_text())
-        await self.pool.execute('TRUNCATE clients, crm_login_tokens, crm_sessions, crm_docs, crm_invites CASCADE')
+        await self.pool.execute('TRUNCATE clients, crm_login_tokens, crm_sessions, crm_docs, crm_invites, crm_reports CASCADE')
         from crypto_util import encrypt
         await self.pool.execute("INSERT INTO clients(id,timezone,processing_enabled,vpbx_api_key_enc,vpbx_api_salt_enc) "
                                 "VALUES(1,'Europe/Moscow',true,$1,$2)", encrypt('key'), encrypt('salt'))
@@ -517,6 +521,22 @@ class WebTests(DBCase):
         self.assertEqual((await self.http.get('/api/queue')).status, 200)
         await self.pool.execute("DELETE FROM employees WHERE extension='102'")
         self.assertEqual((await self.http.get('/api/queue')).status, 401)
+
+    async def test_reports(self):
+        await journal.save(self.pool, 1, 'day_rop', '<b>Итог дня</b>', calls=[(5, 'Первый · 10:00')])
+        await journal.save(self.pool, 1, 'day_manager', 'Твой день: 3 звонка', extension='101')
+        await journal.save(self.pool, 1, 'day_manager', 'День второго', extension='102')
+        await journal.save(self.pool, 99, 'day_rop', 'чужой отдел')  # клиента 99 нет: запись не ломает рассылку
+        await self.login(123)
+        items = (await (await self.http.get('/api/reports')).json())['items']
+        self.assertEqual([(i['kind'], i['html']) for i in items], [('day_manager', 'Твой день: 3 звонка')])
+        await self.http.post('/api/logout', json={}, headers={'X-CRM': '1'})
+        await self.login(901)
+        items = (await (await self.http.get('/api/reports')).json())['items']
+        self.assertEqual(len(items), 3)
+        rop = next(i for i in items if i['kind'] == 'day_rop')
+        self.assertEqual((rop['title'], rop['calls']), ('Итог дня по отделу', [{'id': 5, 'label': 'Первый · 10:00'}]))
+        self.assertEqual({i['who'] for i in items if i['kind'] == 'day_manager'}, {'Первый', 'Второй'})
 
     async def test_personal_session_and_logout(self):
         await self.login(123)

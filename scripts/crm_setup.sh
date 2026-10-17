@@ -6,8 +6,9 @@
 #   bash scripts/crm_setup.sh install [DOMAIN] — миграции CRM, сервис callbot-crm, Caddy, CRM_URL, тестовая ссылка
 #                                                DOMAIN по умолчанию <ip>.sslip.io (бесплатный адрес под IP сервера)
 #   bash scripts/crm_setup.sh status           — сервис, адрес, проверка HTTPS и тестовая ссылка
-#   bash scripts/crm_setup.sh update           — после git pull: миграции CRM и перезапуск сайта
+#   bash scripts/crm_setup.sh update           — после git pull: миграции CRM, перезапуск сайта и воркера бота
 #   bash scripts/crm_setup.sh new-test-link    — новая тестовая ссылка (старая перестаёт работать)
+#   bash scripts/crm_setup.sh test-link-off    — выключить тестовую ссылку (личные ссылки работают)
 #   bash scripts/crm_setup.sh rollback         — выключить сайт и убрать CRM_URL (таблицы CRM остаются, они ничему не мешают)
 set -euo pipefail
 APP=/opt/callbot-astra
@@ -33,7 +34,7 @@ test_link() {
 }
 
 # Все миграции CRM; каждая только добавляет и повторный запуск ничего не ломает.
-migrate() { for f in migrations/014_crm.sql migrations/015_crm_roles.sql migrations/016_crm_access.sql; do
+migrate() { for f in migrations/014_crm.sql migrations/015_crm_roles.sql migrations/016_crm_access.sql migrations/017_crm_reports.sql; do
   psql "$DATABASE_URL" -q -v ON_ERROR_STOP=1 -f "$f"; done; }
 
 listeners() { ss -ltnpH "( sport = :80 or sport = :443 )" || true; }
@@ -122,11 +123,17 @@ $DOMAIN {
   ;;
 update)
   migrate
-  systemctl restart callbot-crm
-  sleep 3
+  # Воркер бота кладёт отчёты в CRM, поэтому перезапускаем и его.
+  systemctl restart callbot-crm callbot-astra-worker
+  sleep 5
   git log -1 --oneline
-  systemctl is-active callbot-crm
+  systemctl is-active callbot-crm callbot-astra-worker
   echo "local: $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$PORT/api/me)  (401 is correct)"
+  ;;
+test-link-off)
+  sed -i '/^CRM_TEST_KEY=/d' .env
+  systemctl restart callbot-crm
+  echo 'test link is off; personal links keep working'
   ;;
 new-test-link)
   sed -i '/^CRM_TEST_KEY=/d' .env
@@ -152,7 +159,7 @@ rollback)
   echo "CRM is off. Caddy keeps running but has nothing behind it; stop it with: systemctl disable --now caddy"
   ;;
 *)
-  sed -n '2,11p' "$0"
+  sed -n '2,12p' "$0"
   exit 1
   ;;
 esac

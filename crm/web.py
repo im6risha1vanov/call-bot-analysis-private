@@ -21,7 +21,7 @@ from aiohttp import web  # noqa: E402
 
 import mango_client  # noqa: E402
 from tools import Forbidden, is_privileged  # noqa: E402
-from . import auth, cabinet, gsheets, recording, reviews, store  # noqa: E402
+from . import auth, cabinet, gsheets, journal, recording, reviews, store  # noqa: E402
 from .dial import dial  # noqa: E402
 
 log = logging.getLogger('crm')
@@ -400,6 +400,10 @@ async def api_access_revoke(request):
     return web.json_response({'ok': True})
 
 
+async def api_reports(request):
+    return web.json_response({'items': await journal.listing(request.app[POOL], await actor(request))})
+
+
 async def api_queue(request):
     who = await actor(request)
     return web.json_response(await store.queue(request.app[POOL], who.client_id, await ext_of(request, who)))
@@ -500,6 +504,7 @@ def build(pool) -> web.Application:
     app.router.add_get('/api/cabinet', api_cabinet)
     app.router.add_get('/api/recording/{id}', api_recording)
     app.router.add_get('/api/review/{id}', api_review)
+    app.router.add_get('/api/reports', api_reports)
     app.router.add_get('/api/access', api_access)
     app.router.add_post('/api/access', api_access_create)
     app.router.add_post('/api/access/{id}/revoke', api_access_revoke)

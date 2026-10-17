@@ -33,6 +33,7 @@ import mango_client
 from crypto_util import decrypt
 from reports import esc, send_long
 from tools import owner_chat_ids, report_chat_ids
+from crm import journal as crm_journal
 from review import callbacks as review_callbacks, engine as review_engine, kitchen as review_kitchen, render as review_render, sheets as review_sheets, store as review_store
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
@@ -523,10 +524,13 @@ async def send_review_digests(pool, client, by_ext, heads, start, end, today) ->
     tomorrow = (today + timedelta(days=1)).isoformat()
     for ext in sorted({r["extension"] for r in rows if r["extension"]}):
         emp = by_ext.get(ext)
-        if not emp or not emp["telegram_user_id"]:
+        if not emp:
             continue
         text = review_render.manager_summary(emp["full_name"] or ext, [r for r in rows if r["extension"] == ext], tomorrow)
         if text:
+            # Копия в CRM: там итог дня видит и менеджер без Telegram.
+            await crm_journal.save(pool, client["id"], "day_manager", text, extension=ext)
+        if text and emp["telegram_user_id"]:
             try:
                 await send_long(bot, emp["telegram_user_id"], text)
             except Exception:
@@ -535,6 +539,7 @@ async def send_review_digests(pool, client, by_ext, heads, start, end, today) ->
     if not summary:
         return
     text, buttons = summary
+    await crm_journal.save(pool, client["id"], "day_rop", text, calls=buttons)
     for chat_id in heads:
         try:
             await send_long(bot, chat_id, text)

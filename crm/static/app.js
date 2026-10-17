@@ -82,6 +82,7 @@ const ICON = {
   stats: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
   team: '<circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0"/><circle cx="17" cy="9" r="2.5"/><path d="M15 14.5a5 5 0 0 1 6 5.5"/>',
   client: '<path d="M4 21V8l8-5 8 5v13"/><path d="M9 21v-6h6v6"/>',
+  report: '<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h7M9 17h5"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3M15 8l2 2"/>',
   star: '<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/>',
 };
@@ -95,6 +96,7 @@ const PAGES = [
   {id: 'leads', name: 'База', icon: 'leads', roles: STAFF},
   {id: 'calls', name: 'Звонки', icon: 'calls', roles: STAFF},
   {id: 'stats', name: 'Итоги', icon: 'stats', roles: STAFF},
+  {id: 'reports', name: 'Отчёты', icon: 'report', roles: STAFF},
   {id: 'clients', name: 'Клиенты', icon: 'client', roles: ['director']},
   {id: 'access', name: 'Доступы', icon: 'key', roles: ['director']},
   {id: 'cab', name: 'Сводка', icon: 'stats', roles: ['client']},
@@ -616,6 +618,22 @@ VIEWS.clients = async view => {
     ${data.clients.map(c => `<tr class="click" data-name="${esc(c.name)}"><td>${esc(c.name)}</td><td class="n">${c.first}</td><td class="n">${c.repeat}</td><td class="n">${c.interested}</td><td class="n">${rub(c.sum)}</td></tr>`).join('')}
     </tbody></table><p class="muted">Нажмите на клиента, чтобы открыть его кабинет так, как его видит клиент.</p></div>`;
   $$('tr[data-name]', view).forEach(tr => tr.addEventListener('click', () => { S.cabName = tr.dataset.name; S.cabTab = 'cab'; go('clients'); }));
+};
+
+VIEWS.reports = async view => {
+  const data = await api('/api/reports', {scoped: false});
+  const groups = S.me.role === 'director'
+    ? [['all', 'Все'], ['rop', 'Отделу'], ['day_manager', 'Итоги менеджеров']]
+    : [['all', 'Все']];
+  const f = S.repFilter || 'all';
+  const shown = data.items.filter(r => f === 'all' || (f === 'rop' ? r.kind !== 'day_manager' : r.kind === f));
+  view.innerHTML = `${groups.length > 1 ? `<div class="filters">${groups.map(([k, t]) => `<button data-rf="${k}" aria-pressed="${f === k}">${t}</button>`).join('')}</div>` : ''}
+    ${shown.length ? shown.map(r => `<article class="panel report">
+      <div class="rep-head"><b>${esc(r.title)}</b>${r.who ? `<span>${esc(r.who)}</span>` : ''}<span class="muted">${fmtWhen(r.at)}</span>${r.note ? `<span class="chip">${esc(r.note)}</span>` : ''}</div>
+      <div class="rep-body">${r.html}</div>
+      ${r.calls.length ? `<div class="rep-calls">${r.calls.map(c => `<button class="btn small" data-review="${c.id}">${esc(c.label)}</button>`).join('')}</div>` : ''}
+    </article>`).join('') : `<div class="panel empty">${data.items.length ? 'В этом разделе отчётов нет.' : 'Отчёты появятся здесь, когда бот пришлёт следующий: итоги дня вечером, сводки утром, по понедельникам и 1 числа.'}</div>`}`;
+  $$('[data-rf]', view).forEach(b => b.addEventListener('click', () => { S.repFilter = b.dataset.rf; go('reports'); }));
 };
 
 const fmtWhen = v => v ? new Date(v).toLocaleString('ru-RU', {day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'}) : '—';
