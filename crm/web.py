@@ -21,7 +21,7 @@ from aiohttp import web  # noqa: E402
 
 import mango_client  # noqa: E402
 from tools import Forbidden, is_privileged  # noqa: E402
-from . import auth, cabinet, gsheets, journal, recording, reviews, store, training  # noqa: E402
+from . import ask as asking, auth, cabinet, gsheets, journal, recording, reviews, store, training  # noqa: E402
 from review import store as review_store  # noqa: E402
 from .dial import dial  # noqa: E402
 
@@ -432,6 +432,18 @@ async def api_reports(request):
     return web.json_response({'items': await journal.listing(request.app[POOL], await actor(request))})
 
 
+async def api_ask_history(request):
+    return web.json_response({'items': await asking.history(request.app[POOL], await actor(request))})
+
+
+async def api_ask(request):
+    who = await viewer(request)
+    if who.actor is None or (who.test and who.role != 'director'):
+        raise Forbidden(TEST_READONLY if who.test else 'Этот раздел недоступен.')
+    data = await body(request)
+    return web.json_response(await asking.ask(request.app[POOL], who.actor, data.get('question')))
+
+
 async def api_queue(request):
     who = await actor(request)
     return web.json_response(await store.queue(request.app[POOL], who.client_id, await ext_of(request, who)))
@@ -533,6 +545,8 @@ def build(pool) -> web.Application:
     app.router.add_get('/api/recording/{id}', api_recording)
     app.router.add_get('/api/review/{id}', api_review)
     app.router.add_get('/api/reports', api_reports)
+    app.router.add_get('/api/ask', api_ask_history)
+    app.router.add_post('/api/ask', api_ask)
     app.router.add_post('/api/review/{id}/train', api_review_train)
     app.router.add_get('/api/trainings', api_trainings)
     app.router.add_post('/api/trainings', api_training_assign)

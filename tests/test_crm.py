@@ -114,9 +114,9 @@ class DBCase(unittest.IsolatedAsyncioTestCase):
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS topic TEXT;
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS mode TEXT;
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS assigned_by_telegram_user_id BIGINT;""")
-        for name in ('008_call_reviews.sql', '009_callback_tasks.sql', '014_crm.sql', '015_crm_roles.sql', '016_crm_access.sql', '017_crm_reports.sql'):
+        for name in ('008_call_reviews.sql', '009_callback_tasks.sql', '014_crm.sql', '015_crm_roles.sql', '016_crm_access.sql', '017_crm_reports.sql', '018_crm_questions.sql'):
             await self.pool.execute((root / 'migrations' / name).read_text())
-        await self.pool.execute('TRUNCATE clients, crm_login_tokens, crm_sessions, crm_docs, crm_invites, crm_reports CASCADE')
+        await self.pool.execute('TRUNCATE clients, crm_login_tokens, crm_sessions, crm_docs, crm_invites, crm_reports, crm_questions CASCADE')
         from crypto_util import encrypt
         await self.pool.execute("INSERT INTO clients(id,timezone,processing_enabled,vpbx_api_key_enc,vpbx_api_salt_enc) "
                                 "VALUES(1,'Europe/Moscow',true,$1,$2)", encrypt('key'), encrypt('salt'))
@@ -580,6 +580,29 @@ class WebTests(DBCase):
             self.assertTrue(r['link'].startswith('https://t.me/trainer_bot?start=train_'))
             self.assertEqual(await self.pool.fetchval('SELECT topic FROM pending_train_assignments ORDER BY id DESC LIMIT 1'),
                              f'review:{call_id}')
+
+    async def test_ask_department(self):
+        h = {'X-CRM': '1'}
+        seen = []
+
+        async def fake_answer(pool, who, question, allow_course=False):
+            seen.append((who.role, who.extension, question))
+            return '<b>Ответ</b> по отделу <script>'
+        with patch('rop_agent.answer', fake_answer, create=True), patch.dict('sys.modules', {'rop_agent': type('M', (), {'answer': fake_answer})}):
+            await self.login(123)
+            r = await (await self.http.post('/api/ask', json={'question': 'Где я теряю?'}, headers=h)).json()
+            self.assertEqual(r['html'], '<b>Ответ</b> по отделу &lt;script&gt;')
+            self.assertEqual(seen, [('manager', '101', 'Где я теряю?')])
+            self.assertEqual((await self.http.post('/api/ask', json={'question': ' '}, headers=h)).status, 400)
+            await self.http.post('/api/logout', json={}, headers=h)
+            await self.login(901)
+            self.assertEqual((await (await self.http.get('/api/ask')).json())['items'], [])  # у руководителя своя история
+            await self.http.post('/api/ask', json={'question': 'Темы на планёрку'}, headers=h)
+            self.assertEqual(len((await (await self.http.get('/api/ask')).json())['items']), 1)
+            await self.http.post('/api/logout', json={}, headers=h)
+            with patch.dict(os.environ, {'CRM_TEST_KEY': TEST_KEY}):
+                await self.enter('manager', ext='101')
+            self.assertEqual((await self.http.post('/api/ask', json={'question': 'x'}, headers=h)).status, 403)
 
     async def test_personal_session_and_logout(self):
         await self.login(123)

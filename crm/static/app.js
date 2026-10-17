@@ -84,6 +84,7 @@ const ICON = {
   client: '<path d="M4 21V8l8-5 8 5v13"/><path d="M9 21v-6h6v6"/>',
   report: '<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h7M9 17h5"/>',
   train: '<path d="M4 18 10 12l4 4 6-8"/><path d="M15 8h5v5"/>',
+  ask: '<path d="M4 5h16v11H9l-5 4z"/><path d="M10 9.5a2 2 0 1 1 2.5 1.9c-.4.2-.5.5-.5.9M12 14h.01"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3M15 8l2 2"/>',
   star: '<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/>',
 };
@@ -99,6 +100,7 @@ const PAGES = [
   {id: 'stats', name: 'Итоги', icon: 'stats', roles: STAFF},
   {id: 'reports', name: 'Отчёты', icon: 'report', roles: STAFF},
   {id: 'training', name: 'Тренировки', icon: 'train', roles: STAFF},
+  {id: 'ask', name: 'Вопрос по отделу', icon: 'ask', roles: STAFF},
   {id: 'clients', name: 'Клиенты', icon: 'client', roles: ['director']},
   {id: 'access', name: 'Доступы', icon: 'key', roles: ['director']},
   {id: 'cab', name: 'Сводка', icon: 'stats', roles: ['client']},
@@ -687,6 +689,35 @@ VIEWS.training = async view => {
       await api('/api/trainings', {method: 'POST', scoped: false, body: {person_ext: $('#t-ext', view).value, mode: $('#t-mode', view).value, topic: $('#t-topic', view).value}});
       out.textContent = 'Назначено.'; setTimeout(() => go('training'), 700);
     } catch (e) { out.textContent = e.message; }
+  });
+};
+
+const qaHtml = q => `<article class="panel qa"><div class="q"><span class="muted">${fmtWhen(q.at)}</span>${esc(q.question)}</div>
+  <div class="a">${q.html || '<span class="muted">Ответа нет.</span>'}</div></article>`;
+
+VIEWS.ask = async view => {
+  const d = await api('/api/ask', {scoped: false});
+  const director = S.me.role === 'director';
+  const examples = director
+    ? ['Кто из менеджеров чаще всего теряет клиента на возражении «пришлите на почту»?', 'Что общего у звонков с результатом за неделю?', 'Какие три темы взять на планёрку завтра?']
+    : ['Где я чаще всего теряю клиента?', 'Что у меня получилось лучше всего на этой неделе?', 'Какие перезвоны я обещал на эту неделю?'];
+  view.innerHTML = `<div class="panel"><h2>Спросите про звонки отдела</h2>
+      <p class="muted">Отвечает агент РОПа по разобранным звонкам${director ? '' : ' (видит только ваши звонки)'}, как в боте. Ответ занимает до минуты.</p>
+      <textarea id="q-text" rows="3" maxlength="2000" placeholder="${esc(examples[0])}"></textarea>
+      <div class="row gapb chips">${examples.map(x => `<button class="btn small" data-ex="${esc(x)}">${esc(x)}</button>`).join('')}</div>
+      <button class="btn primary" id="q-go">Спросить</button><span class="muted" id="q-st"></span></div>
+    <div id="q-list">${d.items.map(qaHtml).join('')}</div>`;
+  const ta = $('#q-text', view);
+  $$('[data-ex]', view).forEach(b => b.addEventListener('click', () => { ta.value = b.dataset.ex; ta.focus(); }));
+  $('#q-go', view).addEventListener('click', async () => {
+    const btn = $('#q-go', view), st = $('#q-st', view);
+    btn.disabled = true; st.textContent = ' Смотрю данные…';
+    try {
+      const q = await api('/api/ask', {method: 'POST', scoped: false, body: {question: ta.value}});
+      $('#q-list', view).insertAdjacentHTML('afterbegin', qaHtml({...q, at: new Date().toISOString()}));
+      ta.value = ''; st.textContent = '';
+    } catch (e) { st.textContent = ' ' + e.message; }
+    btn.disabled = false;
   });
 };
 
