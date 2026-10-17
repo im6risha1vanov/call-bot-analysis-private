@@ -9,6 +9,7 @@ Yandex SpeechKit в сырой PCM (16 кГц, 16 бит, моно), плюс н
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import base64
 import json
 import logging
@@ -33,6 +34,9 @@ _SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
 _LONG = 140
 
 
+_FILLER_WORDS = {"Так…", "Угу…", "Ага…", "Так-так…"}
+
+
 class PhraseSplitter:
     """Копит куски текста от модели и отдаёт готовые к озвучке фразы."""
 
@@ -44,6 +48,15 @@ class PhraseSplitter:
         out = []
         while True:
             parts = _SENTENCE_END.split(self.buffer, maxsplit=1)
+            if len(parts) == 2 and len(parts[0].split()) == 1 and parts[0].strip() not in _FILLER_WORDS:
+                # «Хорошо.» отдельным куском звучит с паузой после себя: озвучиваем вместе со следующим предложением
+                rest = _SENTENCE_END.split(parts[1], maxsplit=1)
+                if len(rest) == 2 and rest[0].strip():
+                    joined = self.buffer[: len(self.buffer) - len(rest[1])]
+                    out.append(" ".join(joined.split()))
+                    self.buffer = rest[1]
+                    continue
+                return out
             if len(parts) == 2 and parts[0].strip():
                 out.append(parts[0].strip())
                 self.buffer = parts[1]
@@ -239,7 +252,8 @@ def _cache_path(text: str, voice: Voice):
         return None
     import hashlib
     from pathlib import Path
-    model = {"el:": ELEVEN_MODEL, "11:": ELEVEN_DIRECT_MODEL}.get(voice.name[:3], os.getenv("VOICE_TTS_API", "v3"))
+    model = {"el:": ELEVEN_MODEL, "11:": str(eleven_params())}.get(
+        voice.name[:3], os.getenv("VOICE_TTS_API", "v3"))
     key = json.dumps([model, voice.name, voice.role, round(voice.speed, 2), TTS_RATE, " ".join(text.split())], ensure_ascii=False)
     return Path(folder) / (hashlib.sha256(key.encode()).hexdigest() + ".pcm")
 
@@ -268,20 +282,347 @@ async def _eleven_voice_id(name: str) -> str:
     return found or name  # можно указать сразу voice_id
 
 
-async def _eleven_direct_tts(text: str, voice: Voice) -> bytes:
+# Настройки голоса ElevenLabs (как ползунки в их редакторе). Стабильность выше — интонация ровнее от фразы
+# к фразе, но суше; ниже — живее, но фразы звучат по-разному.
+ELEVEN_SETTINGS = {
+    "stability": float(os.getenv("VOICE_ELEVEN_STABILITY", "0.8")),
+    "similarity_boost": float(os.getenv("VOICE_ELEVEN_SIMILARITY", "0.8")),
+    "style": float(os.getenv("VOICE_ELEVEN_STYLE", "0")),
+}
+# Что робот сказал перед этой фразой: ElevenLabs продолжает ту же интонацию, а не начинает заново
+previous_phrase: contextvars.ContextVar[str] = contextvars.ContextVar("previous_phrase", default="")
+# id прошлых синтезов этого звонка (request stitching ElevenLabs): список на звонок, None вне звонка
+tts_chain: contextvars.ContextVar[list | None] = contextvars.ContextVar("tts_chain", default=None)
+ELEVEN_SEED = int(os.getenv("VOICE_ELEVEN_SEED", "4242"))
+
+
+# Настройки голоса со страницы /voice: файл VOICE_SETTINGS_FILE перечитывается при изменении, звонки
+# подхватывают его без перезапуска. Пустые поля — значения из .env.
+SETTINGS_FILE = os.getenv("VOICE_SETTINGS_FILE", "")
+_live_cache: dict = {"mtime": None, "data": {}}
+# Несохранённые настройки для «Прослушать» на странице
+settings_override: contextvars.ContextVar[dict | None] = contextvars.ContextVar("settings_override", default=None)
+SETTING_KEYS = {"voice_id": str, "model": str, "stability": float, "similarity": float, "style": float,
+                "speed": float, "speaker_boost": bool, "calm": bool, "tail_ms": int, "filler_after_ms": int,
+                "fillers": bool, "casual": float, "pause_ms": int, "fewer_commas": bool,
+                "inner_pause_ms": int, "whole_reply": bool}
+
+
+def clean_settings(data: dict) -> dict:
+    """Только известные поля нужного типа, в допустимых пределах."""
+    out = {}
+    for key, kind in SETTING_KEYS.items():
+        value = data.get(key)
+        if value is None or value == "":
+            continue
+        try:
+            value = kind(value) if kind is not bool else bool(value)
+        except (TypeError, ValueError):
+            continue
+        out[key] = value
+    for key, low, high in (("casual", 0, 1), ("stability", 0, 1), ("similarity", 0, 1), ("style", 0, 1), ("speed", 0.7, 1.2),
+                           ("tail_ms", 300, 2000), ("filler_after_ms", 100, 3000), ("pause_ms", 0, 600), ("inner_pause_ms", 40, 600)):
+        if key in out:
+            out[key] = min(max(out[key], low), high)
+    if "voice_id" in out and not re.fullmatch(r"[A-Za-z0-9]{10,40}", out["voice_id"]):
+        del out["voice_id"]
+    if "model" in out and not re.fullmatch(r"eleven_[a-z0-9_]{2,40}", out["model"]):
+        del out["model"]
+    return out
+
+
+def live_settings() -> dict:
+    if not SETTINGS_FILE:
+        return {}
+    try:
+        mtime = os.stat(SETTINGS_FILE).st_mtime
+    except OSError:
+        return {}
+    if mtime != _live_cache["mtime"]:
+        try:
+            with open(SETTINGS_FILE, encoding="utf-8") as f:
+                _live_cache["data"] = clean_settings(json.load(f))
+        except (OSError, ValueError) as e:
+            log.warning("настройки голоса %s не прочитаны: %s", SETTINGS_FILE, e)
+            _live_cache["data"] = {}
+        _live_cache["mtime"] = mtime
+    return _live_cache["data"]
+
+
+def setting(key: str, default):
+    override = settings_override.get()
+    return (override if override is not None else live_settings()).get(key, default)
+
+
+def save_settings(data: dict) -> dict:
+    data = clean_settings(data)
+    tmp = SETTINGS_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, SETTINGS_FILE)
+    return data
+
+
+def eleven_params() -> tuple[str, dict]:
+    """Модель и ползунки ElevenLabs с учётом страницы настроек."""
+    return setting("model", ELEVEN_DIRECT_MODEL), {
+        "stability": setting("stability", ELEVEN_SETTINGS["stability"]),
+        "similarity_boost": setting("similarity", ELEVEN_SETTINGS["similarity_boost"]),
+        "style": setting("style", ELEVEN_SETTINGS["style"]),
+        "use_speaker_boost": setting("speaker_boost", True),
+    }
+
+
+def effective_voice(voice: Voice) -> Voice:
+    """Голос ElevenLabs и темп со страницы настроек. Голоса Яндекса (автотест) не трогаем."""
+    if not voice.name.startswith("11:"):
+        return voice
+    voice_id = setting("voice_id", "")
+    return Voice(f"11:{voice_id}" if voice_id else voice.name, voice.role, setting("speed", voice.speed))
+
+
+async def _eleven_direct_tts(text: str, voice: Voice, on_pcm=None) -> bytes:
+    """Фраза голосом ElevenLabs. С on_pcm звук идёт потоком: on_pcm получает куски по мере синтеза."""
     voice_id = await _eleven_voice_id(voice.name.removeprefix("11:"))
     rate = int(os.getenv("VOICE_ELEVEN_PCM_RATE", "24000"))
-    body = {"text": text, "model_id": ELEVEN_DIRECT_MODEL, "language_code": "ru",
-            "voice_settings": {"stability": 0.5, "similarity_boost": 0.8, "speed": voice.speed}}
-    r = await _client().post(f"{ELEVEN_API}/text-to-speech/{voice_id}", params={"output_format": f"pcm_{rate}"},
-                             headers={"xi-api-key": os.environ["ELEVENLABS_API_KEY"]}, json=body)
-    if r.status_code != 200:
-        raise TTSRequestError(r.status_code, r.text, "ElevenLabs")
-    return resample(r.content, rate, TTS_RATE)
+    model, sliders = eleven_params()
+    body = {"text": text, "model_id": model, "language_code": "ru",
+            "voice_settings": {**sliders, "speed": min(max(voice.speed, 0.7), 1.2)}}
+    continuity = {}
+    if ELEVEN_SEED:
+        continuity["seed"] = ELEVEN_SEED  # одно «зерно» на все фразы: голос не гуляет от фразы к фразе
+    chain = tts_chain.get()
+    if chain:  # продолжение прошлых фраз этого звонка: та же интонация весь разговор
+        continuity["previous_request_ids"] = chain[-3:]
+    elif previous_phrase.get():
+        continuity["previous_text"] = previous_phrase.get()[-300:]
+    url, params = f"{ELEVEN_API}/text-to-speech/{voice_id}", {"output_format": f"pcm_{rate}"}
+    if on_pcm is not None:
+        url += "/stream"
+    headers = {"xi-api-key": os.environ["ELEVENLABS_API_KEY"]}
+    out = bytearray()
+    for attempt in ({**body, **continuity}, body) if continuity else (body,):
+        async with _client().stream("POST", url, params=params, headers=headers, json=attempt) as r:
+            if r.status_code == 400 and attempt is not body:  # модель не умеет связку: озвучиваем фразу отдельно
+                log.warning("ElevenLabs не принял связку фраз (%s): %s", ", ".join(continuity), (await r.aread())[:200])
+                continue
+            if r.status_code != 200:
+                raise TTSRequestError(r.status_code, (await r.aread()).decode(errors="replace"), "ElevenLabs")
+            if chain is not None and r.headers.get("request-id"):
+                chain.append(r.headers["request-id"])
+            odd = b""
+            async for chunk in r.aiter_bytes():
+                chunk = odd + chunk
+                cut = len(chunk) - len(chunk) % 2
+                chunk, odd = chunk[:cut], chunk[cut:]
+                pcm = resample(chunk, rate, TTS_RATE)
+                out.extend(pcm)
+                if on_pcm is not None and pcm:
+                    await on_pcm(pcm)
+            break
+    return bytes(out)
+
+
+# Восклицательный знак синтезатор читает радостно-приподнято, и это выдаёт робота: говорим ровно
+CALM = os.getenv("VOICE_CALM", "1") != "0"
+_CHEERFUL = re.compile(r"\b(Отлично|Замечательно|Прекрасно|Супер)\b", re.IGNORECASE)
+
+
+def calm_text(text: str) -> str:
+    if not setting("calm", CALM):
+        return text
+    text = re.sub(r"!+", ".", text)
+    text = _CHEERFUL.sub(lambda m: "Хорошо" if m.group(0)[0].isupper() else "хорошо", text)
+    return re.sub(r"\b(Хорошо|хорошо)([,.]\s*хорошо)+\b", r"\1", text, flags=re.IGNORECASE)
+
+
+# Разговорность: живой человек не говорит как диктор. Сокращает слова («пожалста», «щас», «тыщ») и иногда
+# запинается («ну», «э-э», повтор слова). 0 — диктор, 1 — очень разговорно. Выбор зависит от текста фразы,
+# а не от случая: одна и та же фраза звучит одинаково и берётся из кэша.
+CASUAL = float(os.getenv("VOICE_CASUAL", "0.5"))
+_REDUCTIONS = [
+    (r"\b[Пп]одскажите, пожалуйста,", lambda m: m.group(0)[0] + "одскажите,"),
+    (r"\b([Пп])ожалуйста\b", r"\1ожалста"),
+    (r"\b([Сс])ейчас\b", lambda m: "Щас" if m.group(1) == "С" else "щас"),
+    (r"\bтысяч\b", "тыщ"),
+    (r"\b([Зз])дравствуйте\b", r"\1драсьте"),
+    (r"\b([Сс])пасибо большое\b", r"\1пасибо"),
+    (r"^Понятно\b", "Ага, понятно"),
+    (r"\b([Нн])ичего страшного\b", r"\1ичё страшного"),
+    (r"\bсейчас\b", "щас"),
+]
+_HESITATIONS = ["Ну, ", "Так, ", "Так, вот, ", "Ну вот, "]
+
+
+def casual_text(text: str) -> str:
+    level = setting("casual", CASUAL)
+    if level <= 0 or not text.strip():
+        return text
+    import hashlib
+    import random as _random
+    rng = _random.Random(hashlib.sha256(text.encode()).digest())
+    for pattern, repl in _REDUCTIONS:
+        if rng.random() < level:
+            text = re.sub(pattern, repl, text, count=1)
+    words = text.split()
+    if len(words) < 6 or "голосовой помощник" in text or rng.random() > level * 0.5:  # запинка не в каждой фразе и не в коротких
+        return text
+    # повтор слова («подскажите, подскажите…») на звонке звучал как сбой: оставляем только «ну» и «э-э»
+    kind = rng.choice(["prefix", "prefix", "uh"])
+    if kind == "prefix" and not re.match(r"(Ну|Так|Угу|Ага)\b", text):
+        return rng.choice(_HESITATIONS) + text[0].lower() + text[1:]
+    if kind == "uh" and ", " in text:
+        head, tail = text.split(", ", 1)
+        return f"{head}, э-э, {tail}"
+    # повтор слова, как будто подбирает слово: «в каком… в каком городе»
+    for i in range(1, len(words) - 2):
+        if len(words[i]) >= 4 and words[i].isalpha():
+            return " ".join(words[:i] + [words[i - 1] + " " + words[i] + "…"] + words[i - 1:])
+    return text
+
+
+# Паузы. Ответ озвучивается по предложениям, и у каждого куска синтезатор оставляет тишину в начале и в конце:
+# между предложениями набегало полсекунды и больше. Обрезаем тишину по краям до PAUSE_MS в конце куска.
+PAUSE_MS = int(os.getenv("VOICE_PAUSE_MS", "120"))
+LEAD_MS = 30
+_SILENT = 400  # амплитуда из 32768: тише считаем тишиной (на телефоне шум линии выше)
+
+
+class PauseShaper:
+    """Укорачивает тишину в звуке по мере поступления (подходит и для потокового синтеза): в начале оставляет
+    lead_ms, внутри не больше inner_ms (половина до, половина после), в конце не больше tail_ms."""
+
+    def __init__(self, rate: int, inner_ms: int, tail_ms: int, lead_ms: int = LEAD_MS) -> None:
+        self.window = max(rate // 100, 1) * 2  # 10 мс в байтах
+        self.ms = lambda n: n * rate // 1000 * 2
+        self.inner, self.tail, self.lead = self.ms(inner_ms), self.ms(tail_ms), self.ms(lead_ms)
+        self.rest = b""  # неполное окно
+        self.quiet = bytearray()  # текущая тишина, ещё не отданная
+        self.started = False
+        self.raw = False  # не PCM (нечётная длина): отдаём как есть
+
+    def _loud(self, chunk: bytes) -> bool:
+        import array
+        return max(map(abs, array.array("h", chunk)), default=0) > _SILENT
+
+    def feed(self, data: bytes) -> bytes:
+        data = self.rest + data
+        cut = len(data) - len(data) % self.window
+        self.rest = data[cut:]
+        out = bytearray()
+        for i in range(0, cut, self.window):
+            chunk = data[i:i + self.window]
+            if not self._loud(chunk):
+                self.quiet += chunk
+                continue
+            if not self.started:
+                out += self.quiet[len(self.quiet) - min(len(self.quiet), self.lead):]
+            elif len(self.quiet) > self.inner:
+                head = self.inner // 2 // 2 * 2
+                out += self.quiet[:head] + self.quiet[len(self.quiet) - (self.inner - head):]
+            else:
+                out += self.quiet
+            self.quiet.clear()
+            self.started = True
+            out += chunk
+        return bytes(out)
+
+    def end(self) -> bytes:
+        tail = bytes(self.quiet + self.rest)
+        if not self.started:
+            return b""
+        return tail[: self.tail // 2 * 2]
+
+
+def shape_pauses(pcm: bytes, rate: int, inner_ms: int, tail_ms: int) -> bytes:
+    if len(pcm) % 2 or len(pcm) < rate // 5:  # меньше 0,1 с или не PCM: не трогаем
+        return pcm
+    shaper = PauseShaper(rate, inner_ms, tail_ms)
+    out = shaper.feed(pcm) + shaper.end()
+    return out or pcm
+
+
+def trim_silence(pcm: bytes, rate: int, pause_ms: int, lead_ms: int = LEAD_MS) -> bytes:
+    return shape_pauses(pcm, rate, 10**6, pause_ms)
+
+
+# Паузы внутри фразы: на точках, запятых и «?» синтезатор молчит 200–500 мс. Любую тишину внутри куска
+# длиннее INNER_PAUSE_MS укорачиваем до неё (половина до, половина после, чтобы не было щелчка).
+INNER_PAUSE_MS = int(os.getenv("VOICE_INNER_PAUSE_MS", "130"))
+
+
+def shorten_pauses(pcm: bytes, rate: int, max_ms: int) -> bytes:
+    if len(pcm) % 2 or len(pcm) < rate // 5:
+        return pcm
+    shaper = PauseShaper(rate, max_ms, 10**6, lead_ms=10**6)
+    return (shaper.feed(pcm) + shaper.end()) or pcm
+
+
+# Запятые после вводных слов синтезатор читает с заметной паузой: «Хорошо, подскажите, …»
+_INTRO_COMMA = re.compile(r"\b(Хорошо|Понятно|Поняла|Понял|Ага|Угу|Ну|Так|Подскажите|Скажите|Отлично|Да|Вот)(,)\s", re.IGNORECASE)
+
+
+def fewer_pauses(text: str) -> str:
+    if not setting("fewer_commas", True):
+        return text
+    text = _INTRO_COMMA.sub(lambda m: m.group(1) + " ", text)
+    # короткое «Хорошо.» перед вопросом читается с длинной паузой: сливаем в одну фразу
+    return re.sub(r"^(Хорошо|Понятно|Поняла|Ага|Угу|Так)\.\s+(\w)", lambda m: f"{m.group(1)}, {m.group(2).lower()}", text)
 
 
 async def synthesize_pcm(text: str, voice: Voice) -> bytes:
-    """Фраза в PCM TTS_RATE Гц, 16 бит, моно, с кэшем на диске."""
+    """Фраза в PCM TTS_RATE Гц, 16 бит, моно, с кэшем на диске, без лишней тишины по краям."""
+    pcm = await _synthesize_cached(spoken_text(text), voice)
+    return shape_pauses(pcm, TTS_RATE, setting("inner_pause_ms", INNER_PAUSE_MS), setting("pause_ms", PAUSE_MS))
+
+
+def spoken_text(text: str) -> str:
+    return fewer_pauses(casual_text(calm_text(text)))
+
+
+# Потоковый синтез ElevenLabs: первые звуки фразы приходят через 0,3–0,6 с вместо 1,3–2,2 с за всю фразу
+ELEVEN_STREAM = os.getenv("VOICE_ELEVEN_STREAM", "1") != "0"
+
+
+async def stream_pcm(text: str, voice: Voice, on_audio) -> bytes:
+    """Как synthesize_pcm, но отдаёт звук в on_audio кусками по мере синтеза. Возвращает весь звук."""
+    text = spoken_text(text)
+    voice = effective_voice(voice)
+    shaper = PauseShaper(TTS_RATE, setting("inner_pause_ms", INNER_PAUSE_MS), setting("pause_ms", PAUSE_MS))
+    path = _cache_path(text, voice)
+    if path is not None and path.exists() or not (ELEVEN_STREAM and voice.name.startswith("11:")):
+        pcm = await _synthesize_cached(text, voice)
+        out = shape_pauses(pcm, TTS_RATE, setting("inner_pause_ms", INNER_PAUSE_MS), setting("pause_ms", PAUSE_MS))
+        await on_audio(out)
+        return out
+    raw = bytearray()
+    sent = bytearray()
+
+    async def piece(pcm: bytes) -> None:
+        raw.extend(pcm)
+        shaped = shaper.feed(pcm)
+        if shaped:
+            sent.extend(shaped)
+            await on_audio(shaped)
+
+    await _eleven_direct_tts(text, voice, on_pcm=piece)
+    tail = shaper.end()
+    if tail:
+        sent.extend(tail)
+        await on_audio(tail)
+    if path is not None and raw:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_bytes(bytes(raw))
+            tmp.replace(path)
+        except OSError as e:
+            log.warning("кэш синтеза не записан: %s", e)
+    return bytes(sent)
+
+
+async def _synthesize_cached(text: str, voice: Voice) -> bytes:
+    voice = effective_voice(voice)
     path = _cache_path(text, voice)
     if path is not None and path.exists():
         return path.read_bytes()
@@ -379,6 +720,27 @@ MIN_CONFIDENCE = float(os.getenv("VOICE_MIN_CONFIDENCE", "0.5"))  # ниже —
 STALE_TAIL_S = int(os.getenv("VOICE_STALE_TAIL_MS", "3000")) / 1000  # страховка: 1,5 с резали клиента на полуслове
 
 
+# После этих слов фраза почти наверняка не закончена: ждём продолжения дольше
+HANGING_WORDS = {"город", "городе", "район", "районе", "улица", "в", "во", "на", "и", "а", "но", "или", "ну", "это",
+                 "около", "примерно", "где", "гдето", "где-то", "наверное", "так", "мм", "эм", "э", "у", "с", "к",
+                 "по", "до", "от", "за", "для", "что", "чтобы", "когда", "если", "потому", "зовут", "меня"}
+HANGING_GAP_S = int(os.getenv("VOICE_HANGING_GAP_MS", "1800")) / 1000
+# Короткие законченные ответы на вопросы да/нет: реплику закрываем почти сразу, без обычного ожидания
+# Голое «да» сюда не входит: после него часто идёт продолжение («да, актуален, но я за рулём»), и ранний
+# ответ на «да» уводил разговор на шаг вперёд (автотест fb7d8e1)
+SHORT_ANSWERS = {"да конечно", "актуально", "актуален", "да актуально",
+                 "да актуален", "не актуально", "неактуально", "уже не актуально", "нет не актуально",
+                 "интересовался", "интересовалась", "да интересовался", "да интересовалась", "не интересовался",
+                 "не интересовалась", "планирую", "планируем", "да планирую", "да планируем", "не планирую",
+                 "не планируем", "подходит", "да подходит", "устраивает", "да устраивает", "да верно", "верно"}
+SHORT_ANSWER_GAP_S = int(os.getenv("VOICE_SHORT_ANSWER_GAP_MS", "350")) / 1000
+
+
+def _hanging(text: str) -> bool:
+    words = re.sub(r"[^\w ]", " ", text.lower().replace("ё", "е")).split()
+    return bool(words) and words[-1] in HANGING_WORDS
+
+
 class UtteranceCollector:
     """Склеивает сообщения Deepgram в реплики: is_final копим, speech_final или UtteranceEnd закрывают реплику.
     По телефону speech_final часто не приходит (шум линии), а UtteranceEnd ждёт секунду и больше, поэтому
@@ -394,6 +756,7 @@ class UtteranceCollector:
         self.tail = ""          # промежуточный текст после последнего окончательного: клиент ещё говорит
         self.tail_at = 0.0      # когда промежуточный текст последний раз менялся
         self.final_at = 0.0
+        self.raw_tail = ""      # промежуточный текст как пришёл, с уже отвеченным началом
         self.closed_tail = ""   # реплику закрыли по промежуточному тексту: его запоздалый is_final не повторяем
 
     def gap_left(self, now: float) -> float | None:
@@ -401,9 +764,20 @@ class UtteranceCollector:
         if self.gap <= 0:
             return None
         if self.tail:
-            return max(self.tail_at + self.stale_tail - now, 0.0) if self.stale_tail > 0 else None
+            if self.stale_tail <= 0:
+                return None
+            wait = self.stale_tail
+            if " ".join(_words(self.tail)) in SHORT_ANSWERS:
+                wait = min(wait, SHORT_ANSWER_GAP_S)  # «да», «актуально»: ответ целиком, отвечаем сразу
+            if _hanging(self.tail):
+                wait = max(wait, HANGING_GAP_S)  # «город…», «где-то…»: клиент вспоминает продолжение
+            return max(self.tail_at + wait - now, 0.0)
         if not self.parts:
             return None
+        if _hanging(self.parts[-1]):
+            return max(self.final_at + HANGING_GAP_S - now, 0.0)
+        if " ".join(_words(" ".join(self.parts))) in SHORT_ANSWERS:
+            return max(self.final_at + SHORT_ANSWER_GAP_S - now, 0.0)
         finished = self.parts[-1].rstrip().endswith((".", "!", "?", "…"))
         return max(self.final_at + (self.gap if finished else self.open_gap) - now, 0.0)
 
@@ -413,6 +787,10 @@ class UtteranceCollector:
     def handle(self, message: dict) -> Heard | None:
         kind = message.get("type")
         if kind == "UtteranceEnd":
+            if self.parts and not self.tail and _hanging(self.parts[-1]):
+                # распознавание считает фразу законченной на «город»: ждём название ещё HANGING_GAP_S
+                self.final_at = time.monotonic()
+                return None
             return self._close()
         if kind != "Results":
             return None
@@ -423,7 +801,7 @@ class UtteranceCollector:
             log.info("не верю распознаванию (%.2f), это шум: «%s»", confidence, text)
             text = ""
         if message.get("is_final"):
-            self.tail = ""
+            self.tail = self.raw_tail = ""
             if text and self.closed_tail:
                 text = _without_prefix(text, self.closed_tail)  # уже отвеченное начало не повторяем
                 self.closed_tail = ""
@@ -435,6 +813,11 @@ class UtteranceCollector:
             if message.get("speech_final"):
                 return self._close()
             return Heard(" ".join(self.parts), False) if text else None
+        self.raw_tail = text
+        if text and self.closed_tail:
+            # Промежуточный текст копится с начала фразы. После раннего закрытия распознавание присылает
+            # уже отвеченное начало ещё раз: это не новая речь (автотест 03e93cc), берём только продолжение
+            text = _without_prefix(text, self.closed_tail)
         if text != self.tail:
             self.tail, self.tail_at = text, time.monotonic()
         if text:
@@ -443,8 +826,10 @@ class UtteranceCollector:
 
     def _close(self) -> Heard | None:
         words = self.parts + ([self.tail] if self.tail else [])
-        self.closed_tail = self.tail
-        self.tail, self.parts = "", []
+        # отвеченным считаем весь накопленный текст фразы, а не только последний кусок: окончательный текст
+        # Яндекса придёт целиком («ирина петровна завтра после шести»), повторять его нельзя (автотест 172f77a)
+        self.closed_tail = self.raw_tail if self.tail else ""
+        self.tail, self.parts, self.raw_tail = "", [], ""
         if not words:
             return None
         return Heard(" ".join(words), True)
@@ -460,6 +845,8 @@ def _without_prefix(text: str, prefix: str) -> str:
     norm = _words(text)
     if len(norm) == len(words) and norm[:len(head)] == head:
         return " ".join(words[len(head):])
+    if norm and head[:len(norm)] == norm:  # повтор начала уже отвеченного текста
+        return ""
     return text
 
 
@@ -525,6 +912,9 @@ def _log_asr(data: dict) -> None:
         log.info("Deepgram %s: %s", kind, json.dumps(data, ensure_ascii=False)[:200])
 
 
+YANDEX_TAIL_S = int(os.getenv("VOICE_YANDEX_TAIL_MS", "800")) / 1000
+
+
 class YandexStream:
     """Потоковое распознавание Yandex SpeechKit v3 (gRPC): русская речь по телефону понимается лучше Deepgram,
     конец фразы определяет сама модель (eou). Ответы переводятся в формат Deepgram, дальше тот же UtteranceCollector.
@@ -535,7 +925,9 @@ class YandexStream:
     def __init__(self, session=None, rate: int = SAMPLE_RATE) -> None:
         self.rate = rate
         self.ws = None  # keepalive() не нужен: звук идёт непрерывно
-        self.collector = UtteranceCollector()
+        # Конец реплики сообщает сам Яндекс (eou), но с запасом около секунды. Раньше закрываем сами, когда
+        # промежуточный текст не меняется YANDEX_TAIL_S: 0,6 с резали клиента на полуслове (автотест 5ab28c4)
+        self.collector = UtteranceCollector(stale_tail=setting("tail_ms", YANDEX_TAIL_S * 1000) / 1000)
         self.audio: asyncio.Queue[bytes | None] = asyncio.Queue()
         self.events: asyncio.Queue[dict | None] = asyncio.Queue()
         self.channel = None

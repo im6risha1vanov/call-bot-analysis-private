@@ -10,6 +10,7 @@ import asyncio
 import logging
 import os
 import random
+import re
 import time
 from typing import Awaitable, Callable
 
@@ -28,6 +29,18 @@ STOP_WORDS = {"стоп", "нет", "подождите", "погодите", "�
 # «эффект думания»: если модель не начала отвечать за FILLER_AFTER_S, робот говорит «так…», «угу…»
 FILLERS = [w.strip() for w in os.getenv("VOICE_FILLERS", "Так…|Угу…|Ага…|Так-так…").split("|") if w.strip()]
 FILLER_AFTER_S = int(os.getenv("VOICE_FILLER_AFTER_MS", "400")) / 1000
+FILLER_COOLDOWN_S = 6.0
+# Реплика озвучивается целиком, когда модель её дописала: ElevenLabs ведёт одну интонацию через всю реплику.
+# По предложениям быстрее на 0,3–0,6 с, но интонация начинается заново после каждой точки.
+WHOLE_REPLY = os.getenv("VOICE_WHOLE_REPLY", "1") != "0"
+_REACTION = re.compile(r"^(Угу|Ага|Так|Поняла|Понял|Понятно|Хорошо)[.,!…]*\s+(?=\S)", re.IGNORECASE)
+
+
+def _strip_reaction(phrase: str) -> str:
+    rest = _REACTION.sub("", phrase, count=1)
+    return rest[:1].upper() + rest[1:] if rest else phrase
+
+
 FILLER_CHANCE = float(os.getenv("VOICE_FILLER_CHANCE", "0.8"))  # не на каждой реплике, чтобы не звучало заученно
 
 SendAudio = Callable[[bytes], Awaitable[None]]
@@ -67,6 +80,12 @@ class CallSession:
         self.saved: dict | None = None
         self.heard_at = 0.0      # когда клиент закончил реплику: для замера, как быстро робот ответил
         self.last_filler = ""
+        self.filler_said_at = 0.0
+        self.filler_last_any = 0.0
+        self.quick_said = ""      # быстрый ответ, который ещё звучит: перебили — убрать из истории
+        self.tts_chain: list[str] = []  # id синтезов ElevenLabs этого звонка: следующая фраза продолжает их
+        self.said_before = ""     # прошлая фраза робота: по ней ElevenLabs держит ту же интонацию
+        self.reply_spoke = False  # робот уже начал озвучивать текущий ответ (для поиска пауз посреди ответа)
 
     # ------------------------------------------------------------------ жизненный цикл
 
@@ -129,10 +148,10 @@ class CallSession:
         if not final:
             await self.send_event({"type": "interim", "text": text})
             if self.audio_sent and self.is_speaking() and len(text.split()) >= BARGE_IN_WORDS:
-                await self._barge_in()
+                await self._barge_in(text)
             return
         if self.audio_sent and self.is_speaking():  # приветствие, которое ещё не прозвучало, не сбрасываем
-            await self._barge_in()
+            await self._barge_in(text)
         self.client_spoke = True
         self.heard_at = time.monotonic()
         await self.send_event({"type": "transcript", "role": "client", "text": text})
@@ -140,6 +159,8 @@ class CallSession:
 
     def _real_interruption(self, text: str) -> bool:
         words = speech._words(text)
+        if self.quick_said:  # быстрый ответ на «да», а клиент договаривает: слушаем его
+            return True
         if len(words) >= BARGE_IN_WORDS or any(w in STOP_WORDS for w in words):
             return True
         # робот вот-вот договорит: короткий ответ («да», «нет») — это ответ, а не шум
@@ -150,7 +171,11 @@ class CallSession:
         busy = self.reply_task is not None and not self.reply_task.done()
         return busy or self.pending > 0 or time.monotonic() < self.speaking_until
 
-    async def _barge_in(self) -> None:
+    async def _barge_in(self, text: str = "") -> None:
+        log.info("BARGE_IN: клиент перебил робота: «%s»", text)
+        if self.quick_said and self.dialog.undo_quick(self.quick_said):
+            log.info("быстрый ответ отменён: клиент не договорил")
+        self.quick_said = ""
         self.generation += 1
         if self.reply_task and not self.reply_task.done():
             self.reply_task.cancel()
@@ -167,14 +192,35 @@ class CallSession:
     # ------------------------------------------------------------------ робот
 
     async def _respond(self, text: str) -> None:
+        quick = getattr(self.dialog, "quick_reply", None)
+        fast = quick(text) if quick and text != SILENCE else None
+        if fast:  # ожидаемый ответ клиента: заготовка из анкеты, без ожидания модели
+            log.info("быстрый ответ без модели: «%s»", fast)
+            self.quick_said = fast
+            await self._say(fast)
+            await self.send_event({"type": "transcript", "role": "robot", "text": fast, "first_text_ms": 0})
+            self._arm_silence()
+            return
+        self.quick_said = ""
         splitter = speech.PhraseSplitter()
         generation = self.generation
+        whole = speech.setting("whole_reply", WHOLE_REPLY) and self.synthesize is speech.synthesize_pcm
+        held: list[str] = []
+        self.reply_spoke = False
         started = asyncio.Event()  # модель уже дала первую фразу: «так…» не нужно
         filler = asyncio.create_task(self._filler(generation, started)) if text != SILENCE else None
 
         async def on_text(chunk: str) -> None:
+            if chunk.strip() and not whole:  # целиком: звук начнётся только после всей реплики, «угу…» уместно
+                started.set()  # модель уже отвечает, даже если первое слово ещё ждёт склейки: «так…» не нужно
             for phrase in splitter.feed(chunk):
-                started.set()
+                if whole:  # вся реплика одним куском: интонация не сбрасывается на каждом предложении
+                    held.append(phrase)
+                    continue
+                if self.filler_said_at > time.monotonic() - 3:
+                    # после «Угу…» не говорим ещё и «Поняла.»: три реакции подряд звучат как робот
+                    phrase = _strip_reaction(phrase)
+                    self.filler_said_at = 0.0
                 await self._say(phrase, generation)
 
         try:
@@ -189,7 +235,14 @@ class CallSession:
             started.set()
             if filler is not None:
                 filler.cancel()
-        for phrase in splitter.flush():
+        rest = splitter.flush()
+        if whole:
+            text_all = " ".join(held + rest)
+            if self.filler_said_at > time.monotonic() - 3:
+                text_all = _strip_reaction(text_all)
+                self.filler_said_at = 0.0
+            rest = [text_all] if text_all.strip() else []
+        for phrase in rest:
             await self._say(phrase, generation)
         if turn.fallback:
             await self._say(turn.text, generation)  # прощание из анкеты: модель сама ничего не сказала
@@ -202,22 +255,26 @@ class CallSession:
             self._arm_silence()
 
     async def _filler(self, generation: int, started: asyncio.Event) -> None:
+        after = speech.setting("filler_after_ms", FILLER_AFTER_S * 1000) / 1000
         try:
-            await asyncio.wait_for(started.wait(), FILLER_AFTER_S)
+            await asyncio.wait_for(started.wait(), after)
             return
         except asyncio.TimeoutError:
             pass
-        if not FILLERS or generation != self.generation or self.pending or random.random() > FILLER_CHANCE:
+        if not FILLERS or not speech.setting("fillers", True) or generation != self.generation or self.pending or random.random() > FILLER_CHANCE:
             return
+        if time.monotonic() - self.filler_last_any < FILLER_COOLDOWN_S:
+            return  # не чаще раза в несколько секунд, даже если реплика клиента пришла кусками
         word = random.choice([w for w in FILLERS if w != self.last_filler] or FILLERS)
         self.last_filler = word
-        log.info("модель думает дольше %d мс: «%s»", FILLER_AFTER_S * 1000, word)
+        self.filler_said_at = self.filler_last_any = time.monotonic()
+        log.info("модель думает дольше %d мс: «%s»", after * 1000, word)
         await self._say(word, generation)
 
     async def _warm_up_voice(self) -> None:
         """Соединение с синтезом и «так…», «угу…» в кэше заранее: в разговоре они звучат без задержки."""
         await speech.warm_up_tts(self.voice)
-        for word in FILLERS:
+        for word in FILLERS + [item["reply"] for item in self.dialog.op.quick]:
             try:
                 await self.synthesize(word, self.voice)
             except Exception as e:
@@ -244,30 +301,46 @@ class CallSession:
         if int(generation) != self.generation or not self.voice_enabled:
             return
         started = time.monotonic()
+        speech.previous_phrase.set(self.said_before)
+        speech.tts_chain.set(self.tts_chain)
+        self.said_before = "" if phrase in FILLERS else phrase
+        first = True
+
+        async def play(pcm: bytes) -> None:
+            nonlocal first
+            if int(generation) != self.generation or not pcm:
+                return
+            now = time.monotonic()
+            if first:
+                first = False
+                log.info("синтез %d мс до первого звука, %d симв.: %s", (now - started) * 1000, len(phrase), self.voice.name)
+                self.audio_sent = True
+                self.reply_spoke = phrase not in FILLERS
+                if self.heard_at:
+                    log.info("ответ клиенту зазвучал через %d мс после его реплики", (now - self.heard_at) * 1000)
+                    self.heard_at = 0.0
+            self.speaking_until = max(now, self.speaking_until) + len(pcm) / speech.TTS_BYTES_PER_SECOND
+            await self.send_audio(pcm)
+
+        async def synth(voice: speech.Voice) -> None:
+            if self.synthesize is speech.synthesize_pcm:  # настоящий синтез: потоком, первые звуки раньше
+                await speech.stream_pcm(phrase, voice, play)
+            else:
+                await play(await self.synthesize(phrase, voice))
+
         try:
-            pcm = await self.synthesize(phrase, self.voice)
+            await synth(self.voice)
         except Exception as e:
             log.warning("синтез не удался: %s", e)
             await self.send_event({"type": "error", "text": f"синтез: {e}"})
-            if self.fallback_voice is None:
+            if self.fallback_voice is None or not first:
                 return
             # до конца звонка говорим голосом из анкеты, чтобы клиент не слушал тишину
             self.voice, self.fallback_voice = self.fallback_voice, None
             try:
-                pcm = await self.synthesize(phrase, self.voice)
+                await synth(self.voice)
             except Exception as e2:
                 log.warning("запасной голос тоже не сработал: %s", e2)
-                return
-        log.info("синтез %d мс, %d симв.: %s", (time.monotonic() - started) * 1000, len(phrase), self.voice.name)
-        if int(generation) != self.generation:
-            return
-        now = time.monotonic()
-        self.speaking_until = max(now, self.speaking_until) + len(pcm) / speech.TTS_BYTES_PER_SECOND
-        self.audio_sent = True
-        await self.send_audio(pcm)
-        if self.heard_at:
-            log.info("ответ клиенту зазвучал через %d мс после его реплики", (now - self.heard_at) * 1000)
-            self.heard_at = 0.0
 
     # ------------------------------------------------------------------ молчание
 

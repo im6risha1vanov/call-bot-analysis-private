@@ -293,6 +293,14 @@ class ToolTextGateTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(gate.call(), ("finish_call", {"outcome": "interested", "comment": "ок"}))
 
         gate = ToolTextGate(["finish_call"])
+        spoken = gate.feed("Спасибо за уточнение!\n\n") + gate.feed("[\n    \"finish_call\", {\"outcome\": \"callback\"}]")
+        self.assertEqual((spoken + gate.flush()).strip(), "Спасибо за уточнение!")
+        self.assertEqual(gate.call(), ("finish_call", {"outcome": "callback"}))
+        gate = ToolTextGate(["finish_call"])
+        gate.feed("Пока!\n[\"finish_call\", {\"outcome\": \"callback\"},\n    {\"x\": 1}]")
+        self.assertEqual(gate.call(), ("finish_call", {"outcome": "callback"}))
+
+        gate = ToolTextGate(["finish_call"])
         spoken = gate.feed("Какой материал вас интересует?\n\n Пользователь: Плёнка\n Ассистент: Отлично")
         self.assertEqual((spoken + gate.flush()).strip(), "Какой материал вас интересует?")
         self.assertIsNone(gate.call())
@@ -367,7 +375,8 @@ class SpeechTest(unittest.TestCase):
         out = []
         for chunk in ["Отлично", "! А в каком", " городе", " будет кухня? Спа", "сибо."]:
             out += s.feed(chunk)
-        self.assertEqual(out, ["Отлично!", "А в каком городе будет кухня?"])
+        # одно слово отдельным куском звучит с паузой: склеивается со следующим предложением
+        self.assertEqual(out, ["Отлично! А в каком городе будет кухня?"])
         self.assertEqual(s.flush(), ["Спасибо."])
         long = "Слово " * 30 + "запятая, и ещё немного текста"
         self.assertTrue(speech.PhraseSplitter().feed(long)[0].endswith(","))
@@ -394,7 +403,7 @@ class SpeechTest(unittest.TestCase):
         c = speech.UtteranceCollector(gap=0.5, open_gap=1.0, stale_tail=1.2)
         res = lambda t, final=False: {"type": "Results", "is_final": final, "speech_final": False, "channel": {"alternatives": [{"transcript": t}]}}
         self.assertIsNone(c.gap_left(0))  # ещё нечего закрывать
-        c.handle(res("Город", final=True))  # без точки: клиент, скорее всего, ещё договаривает
+        c.handle(res("Москва", final=True))  # без точки: клиент, скорее всего, ещё договаривает
         self.assertAlmostEqual(c.gap_left(c.final_at + 0.2), 0.8)
         c.handle(res("Краснодар.", final=True))
         self.assertAlmostEqual(c.gap_left(c.final_at + 0.2), 0.3)
@@ -402,7 +411,7 @@ class SpeechTest(unittest.TestCase):
         self.assertAlmostEqual(c.gap_left(c.tail_at + 1), 0.2)
         c.handle(res("и ещё Сочи", final=True))
         self.assertEqual(c.gap_left(c.final_at + 1), 0.0)
-        self.assertEqual(c.close_on_gap(), speech.Heard("Город Краснодар. и ещё Сочи", True))
+        self.assertEqual(c.close_on_gap(), speech.Heard("Москва Краснодар. и ещё Сочи", True))
         self.assertIsNone(c.gap_left(10))
 
     def test_collector_closes_on_stale_interim(self):
@@ -421,6 +430,57 @@ class SpeechTest(unittest.TestCase):
         self.assertIsNone(c.gap_left(10))
         c.handle(res("Краснодар", final=True))
         self.assertEqual(c.parts, ["Краснодар"])
+
+
+class CalmTextTest(unittest.TestCase):
+    def test_no_cheerful_tone(self):
+        self.assertEqual(speech.calm_text("Здравствуйте! Отлично, подскажите?"), "Здравствуйте. Хорошо, подскажите?")
+        self.assertEqual(speech.calm_text("Хорошо, отлично. Город?"), "Хорошо. Город?")
+        self.assertEqual(speech.calm_text("Плёнка — отличный выбор!"), "Плёнка — отличный выбор.")
+
+
+class FillerTest(unittest.TestCase):
+    def test_no_second_reaction_after_filler(self):
+        from voice.call import _strip_reaction
+        self.assertEqual(_strip_reaction("Поняла. Когда удобно, чтобы позвонил специалист?"), "Когда удобно, чтобы позвонил специалист?")
+        self.assertEqual(_strip_reaction("Поняла."), "Поняла.")
+
+
+class PauseTest(unittest.TestCase):
+    def test_trim_silence_keeps_pause(self):
+        import array, math
+        rate = 8000
+        tone = array.array("h", [int(5000 * math.sin(i / 3)) for i in range(rate)]).tobytes()
+        out = speech.trim_silence(bytes(rate) + tone + bytes(rate * 2), rate, 100)
+        self.assertAlmostEqual(len(out) / 2 / rate, 1.14, delta=0.03)  # 30 мс в начале, звук, 100 мс в конце
+
+    def test_long_inner_pause_is_shortened(self):
+        import array, math
+        rate = 8000
+        tone = array.array("h", [int(5000 * math.sin(i / 3)) for i in range(rate // 2)]).tobytes()
+        out = speech.shorten_pauses(tone + bytes(rate) + tone, rate, 100)  # 0,5 с тишины между словами
+        self.assertAlmostEqual(len(out) / 2 / rate, 1.1, delta=0.02)
+        self.assertEqual(speech.shorten_pauses(tone + bytes(rate // 10) + tone, rate, 150), tone + bytes(rate // 10) + tone)
+
+    def test_fewer_commas(self):
+        self.assertEqual(speech.fewer_pauses("Хорошо. Подскажите, когда удобно?"), "Хорошо, подскажите когда удобно?")
+
+
+class CasualTextTest(unittest.TestCase):
+    def test_levels(self):
+        phrase = "Подскажите, пожалуйста, на какую сумму вы ориентируетесь? Нужно от двухсот пятидесяти тысяч рублей."
+        token = speech.settings_override.set({"casual": 0})
+        self.assertEqual(speech.casual_text(phrase), phrase)
+        speech.settings_override.reset(token)
+        token = speech.settings_override.set({"casual": 1})
+        casual = speech.casual_text(phrase)
+        speech.settings_override.reset(token)
+        self.assertIn("тыщ", casual)
+        self.assertNotIn("пожалуйста", casual)
+        token = speech.settings_override.set({"casual": 1})
+        self.assertEqual(speech.casual_text(phrase), casual)  # одна фраза звучит одинаково: работает кэш
+        speech.settings_override.reset(token)
+        self.assertEqual(speech.casual_text("Так…"), "Так…")
 
 
 class SynthesisTest(unittest.IsolatedAsyncioTestCase):
@@ -554,6 +614,74 @@ class ElevenTest(unittest.IsolatedAsyncioTestCase):
             speech._eleven_direct.clear()
             del os.environ["ELEVENLABS_API_KEY"]
 
+    async def test_settings_page_file_changes_voice_and_sliders(self):
+        seen = []
+
+        def handler(request):
+            seen.append(json.loads(request.content))
+            return httpx.Response(200, content=b"\x00\x10" * 24)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            old = speech.SETTINGS_FILE
+            speech.SETTINGS_FILE = str(Path(tmp) / "voice.json")
+            os.environ["ELEVENLABS_API_KEY"] = "xi"
+            speech._http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+            try:
+                saved = speech.save_settings({"voice_id": "tj9wwIq7s2HekkDfg1KH", "model": "eleven_v4", "speed": 1.5,
+                                              "stability": 0.8, "tail_ms": 700, "junk": 1, "calm": False})
+                self.assertEqual((saved["speed"], saved["tail_ms"], "junk" in saved), (1.2, 700, False))
+                await speech.synthesize_pcm("Отлично!", speech.Voice("11:old", "", 1.0))
+                body = seen[-1]
+                self.assertEqual((body["model_id"], body["voice_settings"]["stability"], body["voice_settings"]["speed"],
+                                  body["text"]), ("eleven_v4", 0.8, 1.2, "Отлично!"))
+                self.assertEqual(speech.YandexStream().collector.stale_tail, 0.7)
+                # несохранённые ползунки страницы «Прослушать» не трогают звонки
+                token = speech.settings_override.set({"stability": 0.3})
+                await speech.synthesize_pcm("Да", speech.Voice("11:tj9wwIq7s2HekkDfg1KH"))
+                speech.settings_override.reset(token)
+                self.assertEqual(seen[-1]["voice_settings"]["stability"], 0.3)
+                # голос Яндекса (автотест) файл не меняет
+                self.assertEqual(speech.effective_voice(speech.Voice("dasha", "", 1.0)).name, "dasha")
+            finally:
+                speech._http = None
+                speech.SETTINGS_FILE = old
+                speech._live_cache.update(mtime=None, data={})
+                del os.environ["ELEVENLABS_API_KEY"]
+
+    async def test_stream_plays_pieces_and_fills_cache(self):
+        import array, math
+        tone = array.array("h", [int(5000 * math.sin(i / 3)) for i in range(4800)]).tobytes()
+        seen = []
+
+        def handler(request):
+            seen.append(request.url.path)
+            return httpx.Response(200, content=bytes(2400) + tone + bytes(9600), headers={"request-id": "r1"})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["VOICE_TTS_CACHE"] = tmp
+            os.environ["ELEVENLABS_API_KEY"] = "xi"
+            speech._http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+            heard = []
+
+            async def on_audio(pcm):
+                heard.append(pcm)
+            try:
+                chain = []
+                speech.tts_chain.set(chain)
+                out = await speech.stream_pcm("Хорошо", speech.Voice("11:tj9wwIq7s2HekkDfg1KH"), on_audio)
+                again = await speech.stream_pcm("Хорошо", speech.Voice("11:tj9wwIq7s2HekkDfg1KH"), on_audio)
+            finally:
+                speech._http = None
+                speech.tts_chain.set(None)
+                del os.environ["ELEVENLABS_API_KEY"]
+                os.environ["VOICE_TTS_CACHE"] = "off"
+        self.assertEqual(seen, ["/v1/text-to-speech/tj9wwIq7s2HekkDfg1KH/stream"])  # второй раз из кэша
+        self.assertEqual(chain, ["r1"])
+        self.assertEqual(b"".join(heard[:-1]), out)
+        self.assertEqual(out, again)
+        rate = speech.TTS_RATE
+        self.assertLess(len(out), len(tone) * rate // 24000 + rate // 2)  # тишина по краям обрезана
+
     def test_resample_keeps_level(self):
         import array
         src = array.array("h", [1000] * 100).tobytes()
@@ -562,6 +690,38 @@ class ElevenTest(unittest.IsolatedAsyncioTestCase):
 
 
 class CallSessionTest(unittest.IsolatedAsyncioTestCase):
+    async def test_whole_reply_is_one_synthesis(self):
+        client = FakeClient([say("Поняла, Краснодар. ", "Какой материал фасадов ", "вас интересует?")])
+        spoken = []
+
+        async def fake_stream(text, voice, on_audio):
+            spoken.append(text)
+            await on_audio(b"\x00\x00" * 160)
+            return b""
+
+        async def noop(*a):
+            pass
+
+        async def noop2(dialog, **kw):
+            return results.record(dialog, **kw)
+
+        original = speech.stream_pcm
+        speech.stream_pcm = fake_stream
+        try:
+            session = CallSession(Dialog(load("kitchen"), AnthropicBackend(client=client)), noop, noop, save=noop2)
+            session._warm_up_voice = lambda: asyncio.sleep(0)
+            await session.start()
+            await session.heard("Краснодар", True)
+            await session.reply_task
+            for _ in range(50):
+                if len(spoken) >= 2 and not session.pending:
+                    break
+                await asyncio.sleep(0.01)
+        finally:
+            speech.stream_pcm = original
+            await session.hangup()
+        self.assertEqual(spoken[1:], ["Поняла, Краснодар. Какой материал фасадов вас интересует?"])
+
     async def test_call_flow_sends_audio_and_result(self):
         client = FakeClient([
             say("Отлично! ", "В каком городе будет кухня?"),
@@ -585,16 +745,90 @@ class CallSessionTest(unittest.IsolatedAsyncioTestCase):
         session = CallSession(Dialog(load("kitchen"), AnthropicBackend(client=client)), send_audio, send_event, synthesize=synth, save=save)
         await session.start()
         await session.heard("да", False)
-        await session.heard("Да, актуально", True)
+        await session.heard("Да, актуально, присматриваюсь", True)
         await session.reply_task
         await session.heard("Бюджет тысяч сто", True)
         await session.reply_task
         await asyncio.wait_for(session.done.wait(), 2)
         result = [e for e in events if e["type"] == "result"][0]
         self.assertEqual(result["outcome"], "not_relevant")
-        self.assertEqual(len(audio), 4)  # приветствие + 2 фразы + прощание
+        self.assertEqual(len(audio), 3)  # приветствие + «Отлично! В каком городе…» одним куском + прощание
         self.assertEqual(saved, [{"phone": "", "mode": "браузер"}])
         self.assertIn({"type": "interim", "text": "да"}, events)
+
+    async def test_expected_answer_gets_quick_reply_without_model(self):
+        client = FakeClient([say("В каком городе будет кухня?")])
+        events, said = [], []
+
+        async def nothing(_):
+            pass
+
+        async def send_event(e):
+            events.append(e)
+
+        async def synth(text, voice):
+            said.append(text)
+            return b"\x00\x00" * 160
+
+        async def save(dialog, **kw):
+            return results.record(dialog, **kw)
+
+        session = CallSession(Dialog(load("kitchen"), AnthropicBackend(client=client)), nothing, send_event,
+                              synthesize=synth, save=save)
+        await session.start()
+        await session.heard("Да, актуально.", True)
+        await session.reply_task
+        self.assertEqual(client.requests, [])  # модель не спрашивали
+        quick = load("kitchen").quick[0]["reply"]
+        self.assertIn({"type": "transcript", "role": "robot", "text": quick, "first_text_ms": 0}, events)
+        for _ in range(100):  # дожидаемся, пока быстрый ответ прозвучит
+            if not session.is_speaking():
+                break
+            await asyncio.sleep(0.01)
+        await session.heard("Конечно", True)  # второй быстрый ответ: на вопрос о сроках
+        await session.reply_task
+        self.assertEqual(client.requests, [])
+        for _ in range(100):
+            if not session.is_speaking():
+                break
+            await asyncio.sleep(0.01)
+        await session.heard("Москва", True)  # дальше — модель, и она видит весь обмен
+        await session.reply_task
+        self.assertEqual(len(client.requests), 1)
+        self.assertIn(quick, json.dumps(client.requests[0], ensure_ascii=False))
+        await session.hangup()
+
+    async def test_client_continuing_over_quick_reply_undoes_it(self):
+        client = FakeClient([say("Поняла, перезвоню после семи.")])
+        events = []
+
+        async def nothing(_):
+            pass
+
+        async def send_event(e):
+            events.append(e)
+
+        async def synth(text, voice):
+            return b"\x00\x00" * speech.TTS_RATE * 2  # 2 секунды звука
+
+        async def save(dialog, **kw):
+            return results.record(dialog, **kw)
+
+        session = CallSession(Dialog(load("kitchen"), AnthropicBackend(client=client)), nothing, send_event,
+                              synthesize=synth, save=save)
+        await session.start()
+        session.speaking_until = 0.0
+        await session.heard("Да, актуально.", True)
+        await session.reply_task
+        for _ in range(100):
+            if session.audio_sent and session.is_speaking():
+                break
+            await asyncio.sleep(0.01)
+        await session.heard("но я за рулём", True)  # быстрый ответ ещё звучит
+        await session.reply_task
+        sent = client.requests[0]["messages"]
+        self.assertEqual(sent[-1], {"role": "user", "content": "Да, актуально. но я за рулём"})
+        await session.hangup()
 
     async def test_broken_voice_falls_back_to_operator_voice(self):
         audio, used = [], []
@@ -964,6 +1198,45 @@ class NoiseAndFillerTest(unittest.IsolatedAsyncioTestCase):
 
 
 class YandexAsrTest(unittest.IsolatedAsyncioTestCase):
+    def test_repeated_partial_after_early_close_is_not_new_speech(self):
+        c = speech.UtteranceCollector(gap=0.7, stale_tail=0.01)
+        part = lambda t: {"type": "Results", "is_final": False, "channel": {"alternatives": [{"transcript": t}]}}
+        fin = lambda t: {"type": "Results", "is_final": True, "channel": {"alternatives": [{"transcript": t}]}}
+        c.handle(part("в этом месяце хочу сделать"))
+        self.assertEqual(c.close_on_gap().text, "в этом месяце хочу сделать")
+        self.assertIsNone(c.handle(part("в этом месяце хочу")))
+        self.assertIsNone(c.handle(part("в этом месяце хочу сделать")))
+        self.assertIsNone(c.handle(fin("в этом месяце хочу сделать")))
+        self.assertIsNone(c.handle({"type": "UtteranceEnd"}))
+        self.assertEqual(c.handle(part("да")).text, "да")  # после окончательного текста — новая речь
+
+    def test_two_early_closes_then_whole_final(self):
+        c = speech.UtteranceCollector(gap=0.7, stale_tail=0.01)
+        part = lambda t: {"type": "Results", "is_final": False, "channel": {"alternatives": [{"transcript": t}]}}
+        fin = lambda t: {"type": "Results", "is_final": True, "channel": {"alternatives": [{"transcript": t}]}}
+        c.handle(part("ирина петровна"))
+        self.assertEqual(c.close_on_gap().text, "ирина петровна")
+        self.assertEqual(c.handle(part("ирина петровна завтра после шести")).text, "завтра после шести")
+        self.assertEqual(c.close_on_gap().text, "завтра после шести")
+        self.assertIsNone(c.handle(fin("ирина петровна завтра после шести")))  # не повторяем всю фразу
+        self.assertIsNone(c.handle({"type": "UtteranceEnd"}))
+
+    def test_utterance_end_on_hanging_word_waits(self):
+        c = speech.UtteranceCollector(gap=0.7, stale_tail=0.65)
+        fin = lambda t: {"type": "Results", "is_final": True, "channel": {"alternatives": [{"transcript": t}]}}
+        c.handle(fin("город"))
+        self.assertIsNone(c.handle({"type": "UtteranceEnd"}))  # не закрываем на «город»
+        self.assertGreater(c.gap_left(c.final_at), 1.5)
+        c.handle(fin("сыктывкар"))
+        self.assertEqual(c.handle({"type": "UtteranceEnd"}).text, "город сыктывкар")
+
+    def test_hanging_word_waits_longer(self):
+        c = speech.UtteranceCollector(gap=0.7, stale_tail=0.9)
+        c.handle({"type": "Results", "is_final": False, "channel": {"alternatives": [{"transcript": "город"}]}})
+        self.assertGreater(c.gap_left(c.tail_at), 1.5)
+        c.handle({"type": "Results", "is_final": False, "channel": {"alternatives": [{"transcript": "город сыктывкар"}]}})
+        self.assertLess(c.gap_left(c.tail_at), 1.0)
+
     def test_low_confidence_is_noise(self):
         c = speech.UtteranceCollector(gap=0.7)
         noise = {"type": "Results", "is_final": True, "channel": {"alternatives": [{"transcript": "Тонь", "confidence": 0.2}]}}
@@ -1003,3 +1276,39 @@ class YandexAsrTest(unittest.IsolatedAsyncioTestCase):
         except ImportError:
             expected = speech.DeepgramStream
         self.assertIsInstance(stream, expected)
+
+
+class PacerTest(unittest.IsolatedAsyncioTestCase):
+    async def test_burst_from_tunnel_is_played_every_20_ms(self):
+        import time as _t
+        from voice import pacer
+
+        async def robot(reader, writer):  # робот: читает UUID, шлёт пачкой 10 кадров и отбой
+            await pacer.read_frame(reader)
+            writer.write(b"".join(pacer.pack(pacer.KIND_AUDIO, bytes(320)) for _ in range(10)))
+            writer.write(pacer.pack(pacer.KIND_HANGUP, b""))
+            await writer.drain()
+            await asyncio.sleep(0.5)
+            writer.close()
+
+        bot = await asyncio.start_server(robot, "127.0.0.1", 0)
+        old = pacer.ROBOT
+        pacer.ROBOT = ("127.0.0.1", bot.sockets[0].getsockname()[1])
+        front = await asyncio.start_server(pacer.on_asterisk, "127.0.0.1", 0)
+        try:
+            reader, writer = await asyncio.open_connection("127.0.0.1", front.sockets[0].getsockname()[1])
+            writer.write(pacer.pack(0x01, bytes(16)))
+            await writer.drain()
+            times = []
+            while True:
+                kind, _ = await asyncio.wait_for(pacer.read_frame(reader), 3)
+                if kind == pacer.KIND_HANGUP:
+                    break
+                times.append(_t.monotonic())
+            writer.close()
+        finally:
+            pacer.ROBOT = old
+            front.close()
+            bot.close()
+        self.assertEqual(len(times), 10)
+        self.assertGreater(times[-1] - times[0], 0.15)  # пачка растянута во времени, а не вывалена разом

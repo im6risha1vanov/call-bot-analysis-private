@@ -10,6 +10,7 @@ transfer_to_specialist), поэтому итог всегда структури
 from __future__ import annotations
 
 import asyncio
+import re
 import logging
 import time
 from dataclasses import dataclass, field
@@ -99,6 +100,10 @@ def parse_result(name: str, data, op: Operator) -> CallResult:
     return CallResult(outcome, comment.strip()[:300], facts)
 
 
+def _norm(text: str) -> str:
+    return " ".join(re.sub(r"[^\w ]", " ", text.lower().replace("ё", "е")).split())
+
+
 class Dialog:
     def __init__(self, operator: Operator, backend=None):
         self.op = operator
@@ -142,6 +147,30 @@ class Dialog:
             return Turn(text, result)
         self.transcript.append(("robot", self.op.farewell))
         return Turn(self.op.farewell, result, fallback=True)
+
+    def quick_reply(self, client_text: str) -> str | None:
+        """Ожидаемый короткий ответ на вопрос робота («да», «актуально»): заготовка из анкеты, без модели.
+        Модель увидит этот обмен в истории и продолжит с него."""
+        if self.finished or not self.messages or self.messages[-1]["role"] != "assistant":
+            return None
+        asked = _norm(self.messages[-1]["content"])
+        answer = _norm(client_text)
+        for item in self.op.quick:
+            if _norm(item["after"]) in asked and answer in {_norm(a) for a in item["answers"]}:
+                self._add_client(client_text)
+                self._add_robot(item["reply"])
+                return item["reply"]
+        return None
+
+    def undo_quick(self, reply: str) -> bool:
+        """Клиент продолжил говорить поверх быстрого ответа: убираем его из истории, продолжение клиента
+        приклеится к его прошлой реплике («да» + «актуален, но я за рулём»), и ответит уже модель."""
+        if self.messages and self.messages[-1] == {"role": "assistant", "content": reply}:
+            self.messages.pop()
+            if self.transcript and self.transcript[-1] == ("robot", reply):
+                self.transcript.pop()
+            return True
+        return False
 
     async def reply(self, client_text: str, on_text: TextSink | None = None) -> Turn:
         """Ответ робота на реплику клиента. on_text получает куски текста по мере генерации."""

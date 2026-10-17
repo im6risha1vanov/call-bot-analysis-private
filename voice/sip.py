@@ -110,13 +110,27 @@ async def dial(phone: str, operator: str = "kitchen", *, originate=ari_originate
     phone = "".join(ch for ch in phone if ch.isdigit())
     if len(phone) < 10:
         raise ValueError("номер слишком короткий")
-    load(operator)  # анкета должна читаться до звонка
+    op = load(operator)  # анкета должна читаться до звонка
+    asyncio.create_task(_warm_up_greeting(op))
     call_id = str(uuidlib.uuid4())
     pending = PENDING[call_id] = Pending(phone, operator)
     await originate(call_id, phone)
     asyncio.create_task(_no_answer_watch(call_id, pending))
     log.info("звоню %s, id %s", phone, call_id)
     return call_id
+
+
+async def _warm_up_greeting(op) -> None:
+    """Пока идут гудки, синтезируем приветствие и заготовки: после «алло» они звучат сразу, без 2 с синтеза."""
+    speed = float(os.getenv("VOICE_SPEED") or op.voice_speed)
+    voice = speech.Voice(os.getenv("VOICE_VOICE") or op.voice, "" if os.getenv("VOICE_VOICE") else op.voice_role, speed)
+    from voice.call import FILLERS
+    for text in [op.greeting] + FILLERS + [item["reply"] for item in op.quick]:
+        try:
+            await speech.synthesize_pcm(text, voice)
+        except Exception as e:
+            log.info("заготовка «%s» не синтезирована заранее: %s", text[:30], e)
+            return
 
 
 async def _no_answer_watch(call_id: str, pending: Pending) -> None:
@@ -148,6 +162,8 @@ class PhoneCall:
         self.make_asr = make_asr
         self.synthesize, self.save = synthesize, save
         self.out = bytearray()            # звук робота, ещё не отправленный в Asterisk
+        self.late = 0                     # сколько раз кадр звука ушёл с опозданием
+        self.ran_dry = 0.0                # когда кончился звук робота
         self.lock = asyncio.Lock()
         self.first_words: asyncio.Future | None = None
         self.session: CallSession | None = None
@@ -179,8 +195,19 @@ class PhoneCall:
                 chunk = bytes(self.out[:FRAME_BYTES]).ljust(FRAME_BYTES, b"\0")
                 del self.out[:FRAME_BYTES]
                 await self.write(frame(KIND_AUDIO, chunk))
+                if not self.out:
+                    self.ran_dry = time.monotonic()
+            elif self.ran_dry and self.session is not None and self.session.reply_spoke and (
+                    self.session.pending or self.session.reply_task and not self.session.reply_task.done()):
+                # звук кончился, а следующая фраза ещё не готова (модель пишет или синтез): пауза посреди ответа
+                log.warning("AUDIO_GAP: пауза посреди ответа робота, следующая фраза не готова")
+                self.ran_dry = 0.0
             n += 1
             delay = start + n * 0.02 - time.monotonic()
+            if delay < -0.06 and self.out:  # кадр ушёл позже срока: клиент слышит запинку
+                self.late += 1
+                if self.late <= 20:
+                    log.warning("LATE_AUDIO: звук робота отстал на %d мс (сеть до Asterisk или занятый цикл)", -delay * 1000)
             if delay < -0.2:  # отстали (пауза в цикле): не догоняем рывком
                 start, n = time.monotonic(), 0
                 delay = 0.02
@@ -256,8 +283,19 @@ class PhoneASR:
         self.http = aiohttp.ClientSession()
         self.stream = speech.asr_stream(self.http, rate=RATE)
         self.opened = asyncio.Event()
+        self.closing = False
 
     async def run(self) -> None:
+        await self._listen()
+        if isinstance(self.stream, speech.YandexStream) and not self.closing:
+            # Яндекс оборвал поток посреди звонка: дослушиваем через Deepgram, иначе робот оглохнет
+            log.warning("распознавание Яндекса оборвалось, переключаюсь на Deepgram")
+            self.opened.clear()
+            old, self.stream = self.stream, speech.DeepgramStream(self.http, rate=RATE)
+            await old.close()
+            await self._listen()
+
+    async def _listen(self) -> None:
         try:
             await self.stream.open()
             self.opened.set()
@@ -273,6 +311,7 @@ class PhoneASR:
             await self.stream.send(pcm)
 
     async def close(self) -> None:
+        self.closing = True
         await self.stream.close()
         await self.http.close()
 

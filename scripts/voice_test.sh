@@ -9,10 +9,13 @@
 #           sim (прогнать робота текстом против симулированных клиентов),
 #           sip (обновить код и поднять телефонного робота, нужен scripts/voice_sip_setup.sh),
 #           dial НОМЕР (робот звонит на номер), stop, status,
+#           eleven (модели и голоса ElevenLabs), set-voice VOICE_ID МОДЕЛЬ STABILITY SIMILARITY [STYLE] [SPEED],
+#           pacer / pacer-remove (ровная подача звука в Asterisk на VPS, voice/pacer.py),
 #           autotest [АРГУМЕНТЫ] (виртуальный абонент говорит с роботом, итог на лист «Робот · Автотест»),
 #           watch-install / watch-remove (таймер: автотест после каждого нового коммита ветки),
 #           tick (то, что запускает таймер).
-# Страница открывается через туннель: ssh -L 8090:127.0.0.1:8090 root@SERVER, потом http://localhost:8090
+# Страница открывается через туннель: ssh -L 8091:127.0.0.1:8090 root@SERVER, потом http://localhost:8091
+# (настройки голоса: http://localhost:8091/voice)
 set -euo pipefail
 ACTION=${1:-start}
 BOT=/opt/callbot-astra
@@ -22,11 +25,12 @@ REMOTE=${VOICE_REMOTE:-private-backup}
 BRANCH=claude/voice-operator
 UNIT=callbot-voice-test
 WATCH=callbot-voice-autotest
-MAX_PER_DAY=${VOICE_AUTOTEST_MAX_PER_DAY:-12}
+MAX_PER_DAY=${VOICE_AUTOTEST_MAX_PER_DAY:-24}
 SIP_UNIT=callbot-voice-sip
 PY=$BOT/.venv/bin/python
 PYLIB=$DATA/pylib  # библиотеки только для робота (распознавание Яндекса), .venv бота не трогаем
 ASR_ENV=(-E PYTHONPATH="$PYLIB" -E VOICE_ASR=${VOICE_ASR:-yandex})
+SETTINGS_ENV=(-E VOICE_SETTINGS_FILE="$DATA/voice-settings.json")  # ползунки со страницы /voice, общие для страницы и звонков
 
 update() {
   cd "$BOT"
@@ -53,12 +57,18 @@ run() {  # одноразовый запуск с ключами бота от �
 }
 RUN_ENV=()
 
+RELAY_UNIT=/etc/systemd/system/callbot-voice-relay.service
+relay_vps() {  # VPS с Asterisk (voice_relay_setup.sh)
+  VPS=$(grep -o 'root@[0-9.]*' "$RELAY_UNIT" | cut -d@ -f2)
+  VPS_SSH=(ssh -i /root/.ssh/voice_relay -o BatchMode=yes "root@$VPS")
+}
+
 start_sip() {  # телефонный робот (AudioSocket 9092, звонки через 8092)
   systemctl stop "$SIP_UNIT" 2>/dev/null || true
   systemctl reset-failed "$SIP_UNIT" 2>/dev/null || true
   systemd-run --quiet --unit="$SIP_UNIT" --uid=callbot-astra --working-directory="$DIR" \
     -p EnvironmentFile="$BOT/.env" -E VOICE_LOG="$DATA/calls.jsonl" -E VOICE_TTS_CACHE="$DATA/tts-cache" \
-    -E VOICE_TTS_RATE=8000 -E VOICE_ELEVEN_PCM_RATE=8000 -E VOICE_ASR_DEBUG=1 "${ASR_ENV[@]}" \
+    -E VOICE_TTS_RATE=8000 -E VOICE_ELEVEN_PCM_RATE=8000 -E VOICE_ASR_DEBUG=1 "${ASR_ENV[@]}" "${SETTINGS_ENV[@]}" \
     -p Restart=on-failure "$PY" -m voice.sip serve
 }
 
@@ -69,9 +79,10 @@ case "$ACTION" in
     systemctl reset-failed "$UNIT" 2>/dev/null || true
     systemd-run --quiet --unit="$UNIT" --uid=callbot-astra --working-directory="$DIR" \
       -p EnvironmentFile="$BOT/.env" -E VOICE_LOG="$DATA/calls.jsonl" -E VOICE_TTS_CACHE="$DATA/tts-cache" -p Restart=on-failure \
-      "$PY" -m voice.web
+      "${SETTINGS_ENV[@]}" "$PY" -m voice.web
+    start_sip  # телефонный робот читает тот же файл настроек
     sleep 3
-    systemctl is-active "$UNIT"
+    systemctl is-active "$UNIT" "$SIP_UNIT"
     curl -s http://127.0.0.1:8090/operators; echo
     ;;
   bench)  # скорость моделей: bench МОДЕЛЬ...
@@ -94,6 +105,79 @@ case "$ACTION" in
     else
       asterisk -rx "pjsip show registrations" 2>/dev/null | grep -i mango || echo "asterisk не настроен: bash $DIR/scripts/voice_sip_setup.sh"
     fi
+    ;;
+  pacer)  # ровная подача звука робота в Asterisk на VPS (voice/pacer.py); откат: pacer-remove
+    update
+    relay_vps
+    scp -q -i /root/.ssh/voice_relay -o BatchMode=yes "$DIR/voice/pacer.py" "root@$VPS:/opt/voice-pacer.py"
+    sed -i 's/-R 127.0.0.1:9092:/-R 127.0.0.1:9094:/' "$RELAY_UNIT"  # туннель на VPS теперь 9094, 9092 у pacer
+    systemctl daemon-reload
+    systemctl restart callbot-voice-relay
+    "${VPS_SSH[@]}" 'bash -s' <<'REMOTE'
+cat > /etc/systemd/system/voice-pacer.service <<'UNIT'
+[Unit]
+Description=voicebot: even pacing of robot audio into Asterisk
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/voice-pacer.py
+DynamicUser=yes
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable -q voice-pacer
+systemctl restart voice-pacer
+sleep 2
+echo "pacer: $(systemctl is-active voice-pacer)"
+ss -ltn | grep -E ':909[24] ' || true
+REMOTE
+    ;;
+  pacer-remove)
+    relay_vps
+    "${VPS_SSH[@]}" 'systemctl disable --now voice-pacer 2>/dev/null; true'
+    sed -i 's/-R 127.0.0.1:9094:/-R 127.0.0.1:9092:/' "$RELAY_UNIT"
+    systemctl daemon-reload
+    systemctl restart callbot-voice-relay
+    echo "pacer убран, туннель снова на 9092"
+    ;;
+  eleven)  # модели и голоса аккаунта ElevenLabs (id для set-voice)
+    KEY=$(grep -m1 '^ELEVENLABS_API_KEY=' "$BOT/.env" | cut -d= -f2- | tr -d "\"' ")
+    curl -s https://api.elevenlabs.io/v1/models -H "xi-api-key: $KEY" \
+      | python3 -c 'import json,sys; d=json.load(sys.stdin); [print("model:", m["model_id"], "|", m.get("name", "")) for m in d] if isinstance(d, list) else print("модели:", d)'
+    curl -s https://api.elevenlabs.io/v1/voices -H "xi-api-key: $KEY" \
+      | python3 -c 'import json,sys; d=json.load(sys.stdin); [print("voice:", v["voice_id"], "|", v["name"]) for v in d.get("voices", [])] or print("голоса:", d)'
+    ;;
+  set-voice)  # set-voice VOICE_ID МОДЕЛЬ STABILITY SIMILARITY [STYLE] [SPEED], потом перезапуск робота
+    set_env() { if grep -q "^$1=" "$BOT/.env"; then sed -i "s|^$1=.*|$1=$2|" "$BOT/.env"; else echo "$1=$2" >> "$BOT/.env"; fi; }
+    set_env VOICE_VOICE "11:${2:?voice_id}"
+    MODEL=${3:?model_id}
+    if ! [[ "$MODEL" == eleven_* ]]; then  # короткое имя (v4, flash, multilingual): ищем id у ElevenLabs
+      KEY=$(grep -m1 '^ELEVENLABS_API_KEY=' "$BOT/.env" | cut -d= -f2- | tr -d "\"' ")
+      MODEL=$(curl -s https://api.elevenlabs.io/v1/models -H "xi-api-key: $KEY" | python3 -c '
+import json, sys
+want = sys.argv[1].lower()
+data = json.load(sys.stdin)
+if not isinstance(data, list):
+    sys.exit(f"ElevenLabs не дал список моделей: {json.dumps(data, ensure_ascii=False)[:300]}")
+ids = [m["model_id"] for m in data]
+print(next((i for i in ids if want in i.lower() and "sts" not in i), ""))' "$MODEL")
+      [ -n "$MODEL" ] || { echo "модель ${3} не найдена, список: bash -s eleven"; exit 1; }
+    fi
+    echo "модель: $MODEL"
+    set_env VOICE_ELEVEN_DIRECT_MODEL "$MODEL"
+    set_env VOICE_ELEVEN_STABILITY "${4:-0.65}"
+    set_env VOICE_ELEVEN_SIMILARITY "${5:-0.8}"
+    set_env VOICE_ELEVEN_STYLE "${6:-0}"
+    [ -n "${7:-}" ] && set_env VOICE_SPEED "$7"
+    grep -E '^VOICE_(VOICE|ELEVEN_|SPEED)' "$BOT/.env"
+    update
+    start_sip
+    sleep 3
+    systemctl is-active "$SIP_UNIT"
     ;;
   dial)
     PHONE=${2:?номер}
