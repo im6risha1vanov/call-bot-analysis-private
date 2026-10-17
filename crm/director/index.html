@@ -511,6 +511,8 @@ table.ctable th,table.ctable td{padding:9px 8px}
 <aside class="drawer" id="drawer" aria-label="Карточка" aria-hidden="true"></aside>
 <div class="toast" id="toast" role="status"></div>
 
+<link rel="stylesheet" href="/static/review.css">
+<script src="/static/review.js"></script>
 <script src="/director/shim.js"></script>
 <script src="/director/data.js"></script>
 <script>
@@ -1089,8 +1091,8 @@ function renderCallDrawer(){
     ${c.ob?`<div class="dblock"><small>Возражение клиента</small><div>${esc(c.ob)}</div></div>`:''}
     ${c.nx?`<div class="dblock"><small>Следующий шаг</small><div>${esc(c.nx)}</div></div>`:''}
     ${c.det?`<div class="dblock"><small>Подробно</small><div class="pre">${esc(c.det)}</div></div>`:''}
-    ${c.s==='b'&&/^\d+$/.test(String(c.id))?`<div class="dblock"><small>Запись звонка</small><audio class="rec" controls preload="none" src="/api/recording/${c.id}" style="width:100%;margin-top:6px"></audio></div>`:''}
-    ${c.s==='b'?'<p class="sub">Полный разбор этого звонка лежит в Telegram-боте и в таблице «Статистика звонков».</p>':''}
+    ${c.s==='b'&&/^\d+$/.test(String(c.id))?`<button class="btn primary" data-review="${c.id}">▶ Запись и подробный разбор</button>`:''}
+    ${c.s==='b'?'<p class="sub">В подробном разборе ошибки с таймкодами: нажмите на время, и запись перемотается на это место.</p>':''}
   </div>`}
 
 /* avr-resize: charts are drawn for the screen width */

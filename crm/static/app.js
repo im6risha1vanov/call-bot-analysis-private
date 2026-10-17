@@ -253,7 +253,8 @@ function workCard(el, item, onDone, extra = '') {
 }
 
 // Запись звонка из Mango: кнопка превращается в плеер, файл отдаёт наш сервер.
-const listenBtn = c => c.rec ? `<button class="btn small listen" data-rec="${c.id}">▶ Прослушать</button>` : '';
+const listenBtn = c => c.review ? `<button class="btn small listen" data-review="${c.id}">Подробный разбор${c.rec ? ' и запись' : ''}</button>`
+  : c.rec ? `<button class="btn small listen" data-rec="${c.id}">▶ Прослушать</button>` : '';
 document.addEventListener('click', e => {
   const b = e.target.closest('button[data-rec]');
   if (!b) return;

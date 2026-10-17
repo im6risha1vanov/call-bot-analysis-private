@@ -18,7 +18,7 @@ os.environ.setdefault('ENCRYPTION_KEY', 'q7m8b4gN0bO2PZqvG6b0yC3rA1D5pYc8tW2XkL9
 from crm import auth, cabinet, dial, gsheets, recording, store
 from review import callbacks, engine
 from review import store as review_store
-from tests.test_review import CALLBACK, WON
+from tests.test_review import CALLBACK, LOST, TRANSCRIPT, WON
 from tools import Actor, Forbidden
 
 DSN = os.environ.get('METHODOLOGY_TEST_DATABASE_URL')
@@ -437,6 +437,34 @@ class WebTests(DBCase):
                 patch('crm.gsheets.values', fake_values):
             await self.enter('client', client='Кухни')
             self.assertEqual((await self.http.get(f'/api/recording/{mine}')).status, 403)
+
+    async def test_review_with_timecodes(self):
+        call_id = await self.pool.fetchval(
+            "INSERT INTO calls(client_id,extension,transcript,call_started_at,client_number,duration_seconds,recording_id) "
+            "VALUES(1,'101',$1,now(),'79990001122',94,'rec-1') RETURNING id", TRANSCRIPT)
+        call = await self.pool.fetchrow('SELECT * FROM calls WHERE id=$1', call_id)
+        async with self.pool.acquire() as conn:
+            await review_store.save(conn, call, engine.validate(copy.deepcopy(LOST), TRANSCRIPT), 1.0)
+        await self.login(123)
+        r = await (await self.http.get(f'/api/review/{call_id}')).json()
+        self.assertEqual((r['manager'], r['rec'], r['success'], r['chance']), ('Первый', True, False, 'normal'))
+        miss = r['misses'][0]
+        self.assertEqual((miss['label'], miss['timecode'], miss['at'], miss['speaker']),
+                         ('не закреплён день перезвона', '00:05', 5, 'Клиент'))
+        self.assertIn('девятого ноября', miss['say'])
+        self.assertIn('[00:05]', r['summary'])
+        self.assertEqual(r['details'], LOST['details'])
+        self.assertEqual(r['next_step'], 'через месяц')
+        self.assertEqual(r['transcript'][0]['who'], 'Менеджер')
+        self.assertEqual([l['at'] for l in r['transcript']], sorted(l['at'] for l in r['transcript']))
+        card = await (await self.http.get('/api/card?number=89990001122')).json()
+        self.assertTrue(card['calls'][0]['review'])
+        await self.http.post('/api/logout', json={}, headers={'X-CRM': '1'})
+        await self.login(124)  # чужой менеджер разбор не видит
+        self.assertEqual((await self.http.get(f'/api/review/{call_id}')).status, 403)
+        await self.http.post('/api/logout', json={}, headers={'X-CRM': '1'})
+        await self.login(901)
+        self.assertEqual((await self.http.get(f'/api/review/{call_id}')).status, 200)
 
     async def test_personal_session_and_logout(self):
         await self.login(123)
