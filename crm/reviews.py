@@ -11,6 +11,7 @@ import html
 from review import engine, render
 from review import store as review_store
 from reports import fmt_phone
+from . import training
 
 SPEAKERS = {'manager': 'Менеджер', 'client': 'Клиент'}
 
@@ -101,5 +102,7 @@ async def review(pool, actor, call_id: int) -> dict:
         'facts': [{'name': n, 'value': v} for n, v in facts if v],
         'next_step': step.get('raw'),
         'rec': bool(call and call['rec']),
+        # «Потренировать» только самому менеджеру и только по ошибке из этого звонка.
+        'can_train': actor.role == 'manager' and bool(data.get('key_moment')) and bool(training.bot()),
         'transcript': transcript_lines(call['transcript'] if call else None, data.get('roles') or {}),
     }

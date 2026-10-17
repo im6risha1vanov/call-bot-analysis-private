@@ -32,7 +32,7 @@
           : '<div class="rvm-mut rvm-audio">Записи этого звонка в Mango нет, таймкоды только для ориентира.</div>'}</header>
       <div class="rvm-body">
         ${r.summary ? `<section><h3>Итог</h3><div class="rvm-pre">${tcLinks(r.summary)}</div></section>` : ''}
-        ${misses ? `<section><h3>Ошибки по времени</h3>${misses}</section>` : ''}
+        ${misses ? `<section><h3>Ошибки по времени</h3>${misses}${r.can_train ? '<button class="rvm-train">Потренировать этот момент в тренажёре</button><div class="rvm-mut rvm-train-out"></div>' : ''}</section>` : ''}
         ${good.length ? `<section><h3>Что получилось</h3>${good.map(m => item(m, 'good')).join('')}</section>` : ''}
         ${r.details ? `<section><h3>Подробный разбор</h3><div class="rvm-pre">${tcLinks(r.details)}</div></section>` : ''}
         ${r.facts.length || r.next_step ? `<section><h3>О клиенте</h3><dl class="rvm-kv">${r.facts.map(f => `<dt>${esc(f.name)}</dt><dd>${esc(f.value)}</dd>`).join('')}
@@ -40,6 +40,19 @@
         ${r.transcript.length ? `<details class="rvm-tr"><summary>Расшифровка разговора · ${r.transcript.length} реплик</summary>
           ${r.transcript.map(l => `<div class="rvm-line" data-line="${l.at}">${stamp(l.at, l.timecode)}<b>${esc(l.who)}</b> ${esc(l.text)}</div>`).join('')}</details>` : ''}
       </div>`;
+  }
+
+  async function train(btn, id) {
+    const out = btn.nextElementSibling;
+    btn.disabled = true;
+    try {
+      const r = await fetch('/api/review/' + encodeURIComponent(id) + '/train', {method: 'POST', credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json', 'X-CRM': '1'}, body: '{}'});
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.link) throw new Error(d.error || 'Не получилось создать тренировку.');
+      out.innerHTML = `Тренажёр повторит этот момент: клиент тот же, попробуй довести до шага. <a href="${esc(d.link)}" target="_blank" rel="noopener">Открыть тренажёр в Telegram</a>`;
+      window.open(d.link, '_blank', 'noopener');
+    } catch (e) { out.textContent = e.message; btn.disabled = false; }
   }
 
   async function open(id) {
@@ -53,6 +66,8 @@
     veil.addEventListener('click', close);
     box.addEventListener('click', e => {
       if (e.target.closest('.rvm-x')) return close();
+      const tr = e.target.closest('.rvm-train');
+      if (tr) { train(tr, id); return; }
       const t = e.target.closest('.rvm-t');
       if (!t) return;
       const a = box.querySelector('audio');

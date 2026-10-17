@@ -83,6 +83,7 @@ const ICON = {
   team: '<circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0"/><circle cx="17" cy="9" r="2.5"/><path d="M15 14.5a5 5 0 0 1 6 5.5"/>',
   client: '<path d="M4 21V8l8-5 8 5v13"/><path d="M9 21v-6h6v6"/>',
   report: '<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h7M9 17h5"/>',
+  train: '<path d="M4 18 10 12l4 4 6-8"/><path d="M15 8h5v5"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3M15 8l2 2"/>',
   star: '<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/>',
 };
@@ -97,6 +98,7 @@ const PAGES = [
   {id: 'calls', name: 'Звонки', icon: 'calls', roles: STAFF},
   {id: 'stats', name: 'Итоги', icon: 'stats', roles: STAFF},
   {id: 'reports', name: 'Отчёты', icon: 'report', roles: STAFF},
+  {id: 'training', name: 'Тренировки', icon: 'train', roles: STAFF},
   {id: 'clients', name: 'Клиенты', icon: 'client', roles: ['director']},
   {id: 'access', name: 'Доступы', icon: 'key', roles: ['director']},
   {id: 'cab', name: 'Сводка', icon: 'stats', roles: ['client']},
@@ -634,6 +636,58 @@ VIEWS.reports = async view => {
       ${r.calls.length ? `<div class="rep-calls">${r.calls.map(c => `<button class="btn small" data-review="${c.id}">${esc(c.label)}</button>`).join('')}</div>` : ''}
     </article>`).join('') : `<div class="panel empty">${data.items.length ? 'В этом разделе отчётов нет.' : 'Отчёты появятся здесь, когда бот пришлёт следующий: итоги дня вечером, сводки утром, по понедельникам и 1 числа.'}</div>`}`;
   $$('[data-rf]', view).forEach(b => b.addEventListener('click', () => { S.repFilter = b.dataset.rf; go('reports'); }));
+};
+
+function modal(html) {
+  const veil = document.createElement('div'); veil.className = 'rvm-veil';
+  const box = document.createElement('div'); box.className = 'rvm'; box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true');
+  box.innerHTML = html;
+  document.body.append(veil, box);
+  const close = () => { veil.remove(); box.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = e => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  veil.addEventListener('click', close);
+  box.addEventListener('click', e => { if (e.target.closest('.rvm-x')) close(); });
+  return box;
+}
+
+async function trainingDetail(id) {
+  const box = modal('<header class="rvm-head"><div class="rvm-mut">Загружаю…</div><button class="rvm-x" aria-label="Закрыть">×</button></header>');
+  let t;
+  try { t = await api('/api/trainings/' + id, {scoped: false}); } catch (e) { $('.rvm-mut', box).textContent = e.message; return; }
+  box.innerHTML = `<header class="rvm-head"><div><span class="rvm-chip">${esc(t.result)}</span><h2>${esc(t.who)} · ${esc(t.mode)}</h2>
+      <div class="rvm-mut">${fmtWhen(t.at)}${t.topic ? ' · ' + esc(t.topic) : ''}${t.test ? ' · пробная' : ''}</div></div><button class="rvm-x" aria-label="Закрыть">×</button></header>
+    <div class="rvm-body">${t.checks.length ? t.checks.map((c, i) => `<div class="rvm-item ${c.passed ? 'good' : 'miss'}">
+        <div><b>${i + 1}. Клиент:</b> ${esc(c.objection)}</div><div><b>Ответ:</b> ${esc(c.answer)}</div><div class="rvm-q">${c.passed ? 'Зачтено' : 'Не зачтено'}${c.comment ? ': ' + esc(c.comment) : ''}</div></div>`).join('')
+      : t.turns.length ? t.turns.map(x => `<div class="rvm-line"><b>${esc(x.who)}</b> ${esc(x.text)}</div>`).join('') : '<div class="rvm-mut">Реплик нет.</div>'}</div>`;
+}
+
+VIEWS.training = async view => {
+  const d = await api('/api/trainings');
+  const director = S.me.role === 'director';
+  const assign = director ? `<div class="panel"><h2>Назначить тренировку${S.ext ? '' : ''}</h2>
+      <p class="muted">Менеджеру придёт сообщение в боте с кнопкой старта, назначение появится и у него в CRM. Сам тренажёр работает в Telegram, там можно отвечать голосом.</p>
+      <div class="outform">
+        <label class="field">Менеджер<select id="t-ext">${S.me.team.map(m => `<option value="${esc(m.ext)}"${m.ext === S.ext ? ' selected' : ''}>${esc(m.name)} · доб. ${esc(m.ext)}</option>`).join('')}</select></label>
+        <label class="field">Режим<select id="t-mode"><option value="dialog">Разговор целиком</option><option value="drill">Отработка возражений</option></select></label>
+        <label class="field">Тема, если нужна<input id="t-topic" maxlength="200" placeholder="Например, «пришлите на почту»"></label>
+        <button class="btn primary" id="t-go">Назначить</button></div><div id="t-out" class="muted"></div></div>` : '';
+  const pending = d.pending.length ? `<div class="panel"><h2>Назначено, ещё не начато <span class="muted">· ${d.pending.length}</span></h2><div class="list">
+      ${d.pending.map(p => `<div class="row gapb"><span>${director ? esc(p.who) + ' · ' : ''}${esc(p.mode)}${p.topic ? ' · ' + esc(p.topic) : ''}</span>
+        ${p.link ? `<a class="btn small primary" href="${esc(p.link)}" target="_blank" rel="noopener">Начать в тренажёре</a>` : ''}</div>`).join('')}</div></div>` : '';
+  const list = d.items.length ? `<div class="panel"><h2>${director ? 'Тренировки менеджера' : 'Мои тренировки'} <span class="muted">· ${d.items.length}</span></h2><div class="scroll"><table class="tbl">
+      <thead><tr><th>Когда</th>${director ? '<th>Кто</th>' : ''}<th>Режим</th><th>Тема</th><th>Итог</th></tr></thead><tbody>
+      ${d.items.map(t => `<tr class="click" data-tid="${t.id}"><td>${fmtWhen(t.at)}</td>${director ? `<td>${esc(t.who)}</td>` : ''}<td>${esc(t.mode)}</td><td>${esc(t.topic || '')}</td><td>${esc(t.result)}${t.test ? ' <span class="muted">· пробная</span>' : ''}</td></tr>`).join('')}
+      </tbody></table></div></div>` : `<div class="panel empty">Тренировок пока не было.${director ? '' : ' Откройте подробный разбор звонка и нажмите «Потренировать этот момент».'}</div>`;
+  view.innerHTML = `<div class="stack">${assign}${pending}${list}</div>`;
+  $$('tr[data-tid]', view).forEach(tr => tr.addEventListener('click', () => trainingDetail(tr.dataset.tid)));
+  if (director) $('#t-go', view).addEventListener('click', async () => {
+    const out = $('#t-out', view);
+    try {
+      await api('/api/trainings', {method: 'POST', scoped: false, body: {person_ext: $('#t-ext', view).value, mode: $('#t-mode', view).value, topic: $('#t-topic', view).value}});
+      out.textContent = 'Назначено.'; setTimeout(() => go('training'), 700);
+    } catch (e) { out.textContent = e.message; }
+  });
 };
 
 const fmtWhen = v => v ? new Date(v).toLocaleString('ru-RU', {day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'}) : '—';

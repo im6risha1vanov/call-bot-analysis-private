@@ -21,7 +21,8 @@ from aiohttp import web  # noqa: E402
 
 import mango_client  # noqa: E402
 from tools import Forbidden, is_privileged  # noqa: E402
-from . import auth, cabinet, gsheets, journal, recording, reviews, store  # noqa: E402
+from . import auth, cabinet, gsheets, journal, recording, reviews, store, training  # noqa: E402
+from review import store as review_store  # noqa: E402
 from .dial import dial  # noqa: E402
 
 log = logging.getLogger('crm')
@@ -363,7 +364,34 @@ async def api_recording(request):
 
 
 async def api_review(request):
-    return web.json_response(await reviews.review(request.app[POOL], await actor(request), int_id(request.match_info['id'])))
+    who = await viewer(request)
+    if who.actor is None:
+        raise Forbidden('Этот раздел недоступен.')
+    data = await reviews.review(request.app[POOL], who.actor, int_id(request.match_info['id']))
+    data['can_train'] = data['can_train'] and not who.test
+    return web.json_response(data)
+
+
+async def api_review_train(request):
+    who = await actor(request, write=True)
+    assignment_id = await review_store.train_assignment(request.app[POOL], who, int_id(request.match_info['id']))
+    return web.json_response({'link': training.link(assignment_id)})
+
+
+async def api_trainings(request):
+    who = await actor(request)
+    return web.json_response(await training.listing(request.app[POOL], who, request.query.get('ext') or None))
+
+
+async def api_training(request):
+    return web.json_response(await training.detail(request.app[POOL], await actor(request), int_id(request.match_info['id'])))
+
+
+async def api_training_assign(request):
+    who = await director(request)
+    data = await body(request)
+    return web.json_response(await training.assign(request.app[POOL], who.actor, data.get('person_ext'),
+                                                   str(data.get('mode') or ''), data.get('topic')))
 
 
 def base_url(request) -> str:
@@ -505,6 +533,10 @@ def build(pool) -> web.Application:
     app.router.add_get('/api/recording/{id}', api_recording)
     app.router.add_get('/api/review/{id}', api_review)
     app.router.add_get('/api/reports', api_reports)
+    app.router.add_post('/api/review/{id}/train', api_review_train)
+    app.router.add_get('/api/trainings', api_trainings)
+    app.router.add_post('/api/trainings', api_training_assign)
+    app.router.add_get('/api/trainings/{id}', api_training)
     app.router.add_get('/api/access', api_access)
     app.router.add_post('/api/access', api_access_create)
     app.router.add_post('/api/access/{id}/revoke', api_access_revoke)
