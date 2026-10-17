@@ -11,6 +11,7 @@
 #   bash scripts/crm_setup.sh test-link-off    — выключить тестовую ссылку (личные ссылки работают)
 #   bash scripts/crm_setup.sh public-on        — открыть сайт всем только на просмотр: без ссылки сразу выбор входа
 #   bash scripts/crm_setup.sh public-off       — закрыть: снова только личные и тестовая ссылки, входы для просмотра гаснут
+#   bash scripts/crm_setup.sh director-link [TG] — личная ссылка директора (по умолчанию владельца из бота): с ней можно всё менять
 #   bash scripts/crm_setup.sh rollback         — выключить сайт и убрать CRM_URL (таблицы CRM остаются, они ничему не мешают)
 set -euo pipefail
 APP=/opt/callbot-astra
@@ -156,6 +157,29 @@ public-off)
   systemctl restart callbot-crm
   echo 'public access is off; personal links keep working'
   ;;
+director-link)
+  # Ссылка привязана к Telegram руководителя: под ней работают промты, а если его отключат от бота, она погаснет.
+  TG="${2:-$(psql "$DATABASE_URL" -At -c "SELECT telegram_user_id FROM employees WHERE role='owner' AND telegram_user_id IS NOT NULL ORDER BY client_id LIMIT 1")}"
+  [ -n "$TG" ] || { echo 'no owner linked to the bot; pass the Telegram id: director-link 123456'; exit 1; }
+  URL=$(grep -m1 '^CRM_URL=' .env | cut -d= -f2-)
+  DATABASE_URL="$DATABASE_URL" TG="$TG" .venv/bin/python - <<'PY' | sed "s|^|$URL/p/|"
+import asyncio, os
+import asyncpg
+from crm import auth
+
+async def main():
+    pool = await asyncpg.create_pool(os.environ['DATABASE_URL'], min_size=1, max_size=1)
+    tg = int(os.environ['TG'])
+    client_id = await pool.fetchval("SELECT client_id FROM employees WHERE telegram_user_id=$1 AND role IN ('owner','head') LIMIT 1", tg)
+    if client_id is None:
+        raise SystemExit('this Telegram id is not an owner or head in the bot')
+    print(await auth.invite_create(pool, client_id, 'director', tg=tg))
+    await pool.close()
+
+asyncio.run(main())
+PY
+  echo 'open this link once on each device; it stays signed in for 90 days. Revoke it in «Доступы».'
+  ;;
 status)
   git log -1 --oneline
   grep -q '^CRM_PUBLIC=1' .env && echo 'public view-only: ON' || echo 'public view-only: off'
@@ -175,7 +199,7 @@ rollback)
   echo "CRM is off. Caddy keeps running but has nothing behind it; stop it with: systemctl disable --now caddy"
   ;;
 *)
-  sed -n '2,14p' "$0"
+  sed -n '2,15p' "$0"
   exit 1
   ;;
 esac
