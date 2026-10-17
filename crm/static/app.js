@@ -87,6 +87,7 @@ const ICON = {
   ask: '<path d="M4 5h16v11H9l-5 4z"/><path d="M10 9.5a2 2 0 1 1 2.5 1.9c-.4.2-.5.5-.5.9M12 14h.01"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3M15 8l2 2"/>',
   people: '<circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/><path d="M19 4v4M17 6h4"/>',
+  robot: '<rect x="5" y="8" width="14" height="11" rx="3"/><path d="M12 4v4M9 13h.01M15 13h.01M9.5 16.5h5"/>',
   pen: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>',
   star: '<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/>',
 };
@@ -105,6 +106,7 @@ const PAGES = [
   {id: 'ask', name: 'Вопрос по отделу', icon: 'ask', roles: STAFF},
   {id: 'clients', name: 'Клиенты', icon: 'client', roles: ['director']},
   {id: 'staff', name: 'Сотрудники', icon: 'people', roles: ['director']},
+  {id: 'robot', name: 'Робот', icon: 'robot', roles: ['director']},
   {id: 'prompts', name: 'Промты', icon: 'pen', roles: ['director']},
   {id: 'access', name: 'Доступы', icon: 'key', roles: ['director']},
   {id: 'cab', name: 'Сводка', icon: 'stats', roles: ['client']},
@@ -937,6 +939,130 @@ VIEWS.prompts = async view => {
     }));
   };
   render();
+};
+
+// Голосовой робот: звонок роботом, голос и манера речи (как страница /voice робота), итоги звонков.
+const ROBOT_SLIDERS = [
+  ['speed', 'Скорость речи', 0.7, 1.2, 0.01, '1.0 обычно, 1.1 заметно быстрее, максимум 1.2'],
+  ['stability', 'Стабильность', 0, 1, 0.05, 'выше: ровнее и одинаковее от фразы к фразе; ниже: живее, но интонация гуляет'],
+  ['similarity', 'Схожесть с голосом', 0, 1, 0.05, ''],
+  ['style', 'Выразительность', 0, 1, 0.05, '0 спокойно; больше: эмоциональнее и чуть медленнее синтез'],
+];
+const ROBOT_MANNER = [
+  ['casual', 'Разговорность', 0, 1, 0.05, '0 как диктор; выше: «пожалста», «щас», «здрасьте», иногда «ну»'],
+  ['pause_ms', 'Пауза между фразами, мс', 0, 600, 10, 'тишина после каждого предложения'],
+  ['inner_pause_ms', 'Паузы на знаках, мс', 40, 600, 10, 'самая длинная пауза внутри фразы, всё длиннее укорачивается'],
+  ['tail_ms', 'Конец реплики клиента, мс', 300, 2000, 50, 'сколько тишины ждать перед ответом; меньше: быстрее, но может перебить'],
+  ['filler_after_ms', '«Так…» через, мс', 100, 3000, 50, 'когда сказать «Так…», если модель думает дольше'],
+];
+const ROBOT_CHECKS = [
+  ['speaker_boost', 'Усиление сходства с голосом'],
+  ['calm', 'Спокойный тон: «!» читать как точку, «отлично» как «хорошо»'],
+  ['whole_reply', 'Реплика на одном дыхании: озвучивать ответ целиком (ровнее интонация, ответ на 0,3–0,6 с позже)'],
+  ['fewer_commas', 'Меньше пауз на запятых'],
+  ['fillers', '«Так…», «Угу…», пока модель думает'],
+];
+const ROBOT_MODELS = [['eleven_v4', 'eleven_v4 (самая живая)'], ['eleven_multilingual_v2', 'eleven_multilingual_v2'],
+  ['eleven_flash_v2_5', 'eleven_flash_v2_5 (самая быстрая)'], ['eleven_turbo_v2_5', 'eleven_turbo_v2_5']];
+let robotAudio = null;
+
+function robotCall(c) {
+  modal(`<header class="rvm-head"><div><span class="rvm-chip ${c.good ? 'good' : ''}">${esc(c.outcome)}${c.transfer ? ' · перевод' : ''}</span>
+      <h2>Робот · ${esc(phone(c.phone))}</h2><div class="rvm-mut">${fmtWhen(c.at)}${c.seconds ? ' · ' + dur(c.seconds) : ''}</div></div>
+      <button class="rvm-x" aria-label="Закрыть">×</button></header>
+    <div class="rvm-body">${c.comment ? `<section><h3>Итог</h3><div>${esc(c.comment)}</div></section>` : ''}
+      ${Object.keys(c.facts).length ? `<section><h3>Что узнал</h3><dl class="rvm-kv">${Object.entries(c.facts).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl></section>` : ''}
+      <section><h3>Разговор</h3>${c.transcript.length ? c.transcript.map(l => `<div class="rvm-line"><b>${esc(l.who)}</b> ${esc(l.text)}</div>`).join('') : '<div class="rvm-mut">Разговора не было.</div>'}</section></div>`);
+}
+
+VIEWS.robot = async view => {
+  const [d, log] = await Promise.all([api('/api/robot', {scoped: false}), api('/api/robot/calls', {scoped: false})]);
+  const cfg = {...d.settings};
+  const slider = ([id, label, min, max, step, hint]) => `<div class="rb-row"><label for="rb-${id}">${label}</label>
+    <input type="range" id="rb-${id}" data-k="${id}" min="${min}" max="${max}" step="${step}" value="${cfg[id]}"><output id="rb-${id}-v"></output>
+    ${hint ? `<div class="muted">${hint}</div>` : ''}</div>`;
+  const models = ROBOT_MODELS.some(([m]) => m === cfg.model) ? ROBOT_MODELS : [...ROBOT_MODELS, [cfg.model, cfg.model]];
+  const ro = d.readonly ? ' disabled' : '';
+  view.innerHTML = `<div class="grid2"><div class="rb-col">
+    <div class="panel"><h2>Позвонить роботом</h2>
+      <p class="muted">${d.up ? '<span class="chip good">робот включён</span>' : '<span class="chip bad">робот выключен</span> Включается на сервере: <code>bash scripts/voice_test.sh sip</code>'}
+        Робот звонит с текущими сохранёнными настройками голоса. Звоните только тем, кто согласился на звонок.</p>
+      <div class="outform">
+        <label class="field">Номер<input id="rb-phone" inputmode="tel" placeholder="+7 999 123-45-67"></label>
+        <label class="field">Сценарий<select id="rb-op">${d.operators.map(o => `<option value="${esc(o.id)}">${esc(o.name)} · ${esc(o.company)}</option>`).join('')}</select></label>
+        <button class="btn primary" id="rb-call"${ro}>Позвонить роботом</button>
+        ${d.test_phones.length ? `<button class="btn" id="rb-me"${ro}>Позвонить мне</button>` : ''}</div>
+      <div class="muted" id="rb-call-st"></div></div>
+    <div class="panel"><h2>Голос</h2>
+      <div class="rb-row"><label for="rb-voice">Голос из аккаунта ElevenLabs</label><select id="rb-voice"><option value="">— указать voice_id —</option>
+        ${Object.entries(d.voices || {}).map(([name, id]) => `<option value="${esc(id)}"${id === cfg.voice_id ? ' selected' : ''}>${esc(name)}</option>`).join('')}</select></div>
+      <div class="rb-row"><label for="rb-voice_id">voice_id</label><input id="rb-voice_id" value="${esc(cfg.voice_id)}" autocomplete="off"></div>
+      <div class="rb-row"><label for="rb-model">Модель</label><select id="rb-model">${models.map(([m, t]) => `<option value="${esc(m)}"${m === cfg.model ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select></div>
+      ${ROBOT_SLIDERS.map(slider).join('')}</div>
+    <div class="panel"><h2>Манера и темп разговора</h2>
+      ${ROBOT_MANNER.map(slider).join('')}
+      ${ROBOT_CHECKS.map(([id, label]) => `<label class="rb-check"><input type="checkbox" data-c="${id}"${cfg[id] ? ' checked' : ''}> ${label}</label>`).join('')}</div>
+    <div class="panel"><h2>Проверка</h2>
+      <textarea id="rb-text" rows="3">Здравствуйте. Меня зовут Мария, я голосовой помощник, кухни на заказ. Вы недавно интересовались кухней, подскажите, вопрос ещё актуален?</textarea>
+      <div class="row"><button class="btn" id="rb-listen">Прослушать</button>
+        <button class="btn primary" id="rb-save"${d.can_save && !d.readonly ? '' : ' disabled'}>Сохранить для звонков</button>
+        <button class="btn" id="rb-reset">Вернуть сохранённое</button></div>
+      <div class="muted" id="rb-st">${d.can_save ? 'Сохранённые настройки действуют со следующего звонка, без перезапуска.' : 'Робот не установлен на этом сервере: сохранить некуда.'}</div></div>
+    </div>
+    <div class="panel"><h2>Звонки робота <span class="muted">· ${log.items.length}</span></h2>
+      ${log.items.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Когда</th><th>Номер</th><th>Итог</th><th class="n">Длит.</th></tr></thead><tbody>
+        ${log.items.map((c, i) => `<tr class="click" data-rc="${i}"><td>${fmtWhen(c.at)}</td><td>${esc(phone(c.phone))}</td>
+          <td><span class="chip ${c.good ? 'good' : ''}">${esc(c.outcome)}</span>${c.comment ? `<div class="muted">${esc(c.comment)}</div>` : ''}</td><td class="n">${c.seconds ? dur(c.seconds) : ''}</td></tr>`).join('')}</tbody></table></div>`
+        : '<div class="empty">Звонков по телефону ещё не было.</div>'}</div></div>`;
+  const show = el => { const v = Number(el.value); $(`#${el.id}-v`, view).textContent = el.dataset.k.endsWith('_ms') ? v : v.toFixed(2); };
+  $$('[data-k]', view).forEach(el => { show(el); el.addEventListener('input', () => show(el)); });
+  const voiceSel = $('#rb-voice', view), voiceId = $('#rb-voice_id', view);
+  voiceSel.addEventListener('change', () => { if (voiceSel.value) voiceId.value = voiceSel.value; });
+  voiceId.addEventListener('input', () => { voiceSel.value = [...voiceSel.options].some(o => o.value === voiceId.value) ? voiceId.value : ''; });
+  const collect = () => {
+    const out = {voice_id: voiceId.value.trim(), model: $('#rb-model', view).value};
+    $$('[data-k]', view).forEach(el => { out[el.dataset.k] = Number(el.value); });
+    $$('[data-c]', view).forEach(el => { out[el.dataset.c] = el.checked; });
+    return out;
+  };
+  const st = (text, err) => { const el = $('#rb-st', view); el.textContent = text; el.className = err ? 'muted bad-text' : 'muted'; };
+  $('#rb-listen', view).addEventListener('click', async () => {
+    const s = collect(), btn = $('#rb-listen', view);
+    if (!s.voice_id) return st('Выберите голос или впишите voice_id.', true);
+    robotAudio = robotAudio || new AudioContext(); await robotAudio.resume();
+    btn.disabled = true; st('Синтезирую…');
+    try {
+      const r = await fetch('/api/robot/preview', {method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json', 'X-CRM': '1'},
+        body: JSON.stringify({text: $('#rb-text', view).value, settings: s})});
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Синтез не получился.');
+      const rate = Number(r.headers.get('X-Rate') || 48000), pcm = new Int16Array(await r.arrayBuffer());
+      const buf = robotAudio.createBuffer(1, pcm.length, rate), ch = buf.getChannelData(0);
+      for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 32768;
+      const src = robotAudio.createBufferSource(); src.buffer = buf; src.connect(robotAudio.destination); src.start();
+      st(`Фраза ${(pcm.length / rate).toFixed(1)} с. Это ещё не сохранено.`);
+    } catch (e) { st(e.message, true); }
+    btn.disabled = false;
+  });
+  $('#rb-save', view).addEventListener('click', async () => {
+    try { await api('/api/robot/settings', {method: 'POST', scoped: false, body: collect()}); toast('Сохранено. Следующий звонок робота пойдёт с этими настройками.'); }
+    catch (e) { st(e.message, true); }
+  });
+  $('#rb-reset', view).addEventListener('click', () => go('robot'));
+  const dialNow = async number => {
+    const out = $('#rb-call-st', view);
+    out.textContent = 'Заказываю звонок…';
+    try {
+      const r = await api('/api/robot/call', {method: 'POST', scoped: false, body: {phone: number, operator: $('#rb-op', view).value}});
+      out.textContent = `Робот звонит на ${phone(r.number)}. Итог появится в списке справа после разговора, обновите страницу.`;
+    } catch (e) { out.textContent = e.message; }
+  };
+  $('#rb-call', view).addEventListener('click', () => {
+    const n = $('#rb-phone', view).value;
+    if (!n.trim()) return ($('#rb-call-st', view).textContent = 'Введите номер.');
+    if (confirm(`Робот позвонит на ${n}. Звонить?`)) dialNow(n);
+  });
+  $('#rb-me', view)?.addEventListener('click', () => dialNow(d.test_phones[0]));
+  $$('[data-rc]', view).forEach(tr => tr.addEventListener('click', () => robotCall(log.items[+tr.dataset.rc])));
 };
 
 // ---------- start ----------

@@ -22,7 +22,7 @@ from aiohttp import web  # noqa: E402
 import mango_client  # noqa: E402
 from tools import Forbidden, is_privileged  # noqa: E402
 from . import ask as asking, auth, cabinet, gsheets, journal, recording, reviews, staff, store, training  # noqa: E402
-from . import prompts as prompt_mode  # noqa: E402
+from . import prompts as prompt_mode, robot  # noqa: E402
 from review import store as review_store  # noqa: E402
 from .dial import dial  # noqa: E402
 
@@ -497,6 +497,31 @@ async def api_prompt_use(request):
                                                    str(data.get('scope') or '')))
 
 
+async def api_robot(request):
+    return web.json_response(await robot.overview(await director(request)))
+
+
+async def api_robot_calls(request):
+    return web.json_response({'items': await robot.calls(await director(request))})
+
+
+async def api_robot_settings(request):
+    who = await director(request)
+    return web.json_response(await robot.save_settings(who, await body(request)))
+
+
+async def api_robot_preview(request):
+    who = await director(request)
+    pcm, rate = await robot.preview(who, await body(request))
+    return web.Response(body=pcm, content_type='application/octet-stream', headers={'X-Rate': str(rate)})
+
+
+async def api_robot_call(request):
+    who = await director(request)
+    data = await body(request)
+    return web.json_response(await robot.call(who, data.get('phone'), data.get('operator')))
+
+
 async def api_reports(request):
     return web.json_response({'items': await journal.listing(request.app[POOL], await actor(request))})
 
@@ -627,6 +652,11 @@ def build(pool) -> web.Application:
     app.router.add_post('/api/staff', api_staff_add)
     app.router.add_post('/api/staff/{action}', api_staff_action)
     app.router.add_get('/api/prompts', api_prompts)
+    app.router.add_get('/api/robot', api_robot)
+    app.router.add_get('/api/robot/calls', api_robot_calls)
+    app.router.add_post('/api/robot/settings', api_robot_settings)
+    app.router.add_post('/api/robot/preview', api_robot_preview)
+    app.router.add_post('/api/robot/call', api_robot_call)
     app.router.add_get('/api/prompts/version/{id}', api_prompt_version)
     app.router.add_post('/api/prompts/version/{id}/use', api_prompt_use)
     app.router.add_get('/api/prompts/{kind}', api_prompt)

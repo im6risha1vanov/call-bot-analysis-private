@@ -623,6 +623,66 @@ class WebTests(DBCase):
             await self.pool.execute("UPDATE employees SET telegram_user_id=NULL WHERE extension='head'")
             self.assertEqual((await self.http.get('/api/me')).status, 401)
 
+    async def test_robot_page(self):
+        import tempfile
+        from aiohttp import web as aweb
+        from aiohttp.test_utils import TestServer
+        from crm import robot
+        from voice import speech
+        h = {'X-CRM': '1'}
+        dialed = []
+
+        async def fake_dial(request):
+            dialed.append(await request.json())
+            return aweb.json_response({'id': 'abc'})
+        fake = aweb.Application()
+        fake.router.add_post('/dial', fake_dial)
+        server = TestServer(fake)
+        await server.start_server()
+        tmp = Path(tempfile.mkdtemp())
+        log = tmp / 'calls.jsonl'
+        log.write_text('\n'.join(json.dumps(r, ensure_ascii=False) for r in [
+            {'at': '2026-10-17T10:00:00+03:00', 'phone': '79991112233', 'mode': 'телефон', 'outcome': 'interested',
+             'comment': 'Нужна кухня 3 м', 'facts': {'город': 'Краснодар'}, 'duration_s': 75,
+             'transcript': [['robot', 'Здравствуйте'], ['client', 'Да, актуально']]},
+            {'at': '2026-10-17T10:05:00+03:00', 'phone': '', 'mode': 'браузер', 'outcome': 'callback', 'transcript': []}]) + '\n')
+        robot._last_dial['at'] = 0.0
+        try:
+            with patch.object(robot, 'DATA', tmp), patch.object(robot, 'CALLS_LOG', log), \
+                    patch.object(speech, 'SETTINGS_FILE', str(tmp / 'voice-settings.json')), \
+                    patch.object(robot, 'api_port', lambda: server.port), \
+                    patch.dict(os.environ, {'CRM_TEST_KEY': TEST_KEY, 'ELEVENLABS_API_KEY': ''}):
+                await self.enter('manager', ext='101')
+                self.assertEqual((await self.http.get('/api/robot')).status, 403)
+                await self.http.get('/test-exit')
+                token = await auth.invite_create(self.pool, 1, 'director', tg='901')
+                await self.http.get('/p/' + token)
+                d = await (await self.http.get('/api/robot')).json()
+                self.assertTrue(d['up'])
+                self.assertIn('kitchen', [o['id'] for o in d['operators']])
+                self.assertIn('stability', d['settings'])
+                r = await self.http.post('/api/robot/settings', json={'voice_id': 'Voice1234567890', 'stability': 0.7, 'speed': 5, 'junk': 1},
+                                         headers=h)
+                self.assertEqual((await r.json())['saved'], {'voice_id': 'Voice1234567890', 'stability': 0.7, 'speed': 1.2})
+                self.assertEqual(json.loads((tmp / 'voice-settings.json').read_text())['voice_id'], 'Voice1234567890')
+                r = await self.http.post('/api/robot/call', json={'phone': '12345', 'operator': 'kitchen'}, headers=h)
+                self.assertEqual(r.status, 400)
+                r = await self.http.post('/api/robot/call', json={'phone': '8 999 111-22-33', 'operator': 'kitchen'}, headers=h)
+                self.assertEqual((await r.json())['number'], '79991112233')
+                self.assertEqual(dialed, [{'phone': '79991112233', 'operator': 'kitchen'}])
+                r = await self.http.post('/api/robot/call', json={'phone': '89991112233', 'operator': 'kitchen'}, headers=h)
+                self.assertEqual(r.status, 400)  # второй звонок сразу не уходит
+                calls = (await (await self.http.get('/api/robot/calls')).json())['items']
+                self.assertEqual(len(calls), 1)  # браузерный тест не показываем
+                self.assertEqual((calls[0]['outcome'], calls[0]['transcript'][0]['who']), ('Заинтересованный', 'Робот'))
+                with patch('voice.speech.synthesize_pcm', AsyncMock(return_value=b'\x00\x01' * 10)) as synth:
+                    r = await self.http.post('/api/robot/preview', json={'text': 'Привет', 'settings': {'voice_id': 'Voice2234567890', 'speed': 1.1}},
+                                             headers=h)
+                    self.assertEqual((r.status, len(await r.read())), (200, 20))
+                    self.assertEqual(synth.await_args.args[1].name, '11:Voice2234567890')
+        finally:
+            await server.close()
+
     async def test_personal_link_dies_with_employee(self):
         token = await auth.invite_create(self.pool, 1, 'manager', '102')
         r = await self.http.get('/p/' + token, allow_redirects=False)
