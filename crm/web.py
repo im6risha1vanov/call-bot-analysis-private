@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -22,7 +23,7 @@ from aiohttp import web  # noqa: E402
 import mango_client  # noqa: E402
 from tools import Forbidden, is_privileged  # noqa: E402
 from . import ask as asking, auth, cabinet, gsheets, journal, recording, reviews, staff, store, training  # noqa: E402
-from . import prompts as prompt_mode, robot  # noqa: E402
+from . import prompts as prompt_mode, robot, robot_api, robot_runner  # noqa: E402
 from review import store as review_store  # noqa: E402
 from .dial import dial  # noqa: E402
 
@@ -657,6 +658,7 @@ def build(pool) -> web.Application:
     app.router.add_post('/api/robot/settings', api_robot_settings)
     app.router.add_post('/api/robot/preview', api_robot_preview)
     app.router.add_post('/api/robot/call', api_robot_call)
+    app.router.add_routes(robot_api.routes(viewer, body, POOL))
     app.router.add_get('/api/prompts/version/{id}', api_prompt_version)
     app.router.add_post('/api/prompts/version/{id}/use', api_prompt_use)
     app.router.add_get('/api/prompts/{kind}', api_prompt)
@@ -683,6 +685,13 @@ async def make_app() -> web.Application:
         await pool.close()
         await mango_client.close()
     app.on_cleanup.append(close)
+
+    async def robot_cabinet(_app):  # кампании робота по расписанию и перенос итогов его звонков
+        task = asyncio.create_task(robot_runner.loop(pool)) if robot_runner.enabled() else None
+        yield
+        if task:
+            task.cancel()
+    app.cleanup_ctx.append(robot_cabinet)
     return app
 
 

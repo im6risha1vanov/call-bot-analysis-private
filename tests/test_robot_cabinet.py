@@ -1,0 +1,237 @@
+"""Кабинет голосового робота в CRM: операторы, контакты, стоп-лист, кампании по расписанию, звонки, аналитика.
+
+Робот подменён маленьким HTTP-сервером (/status, /dial), его журнал звонков — временным файлом.
+"""
+import base64
+import io
+import json
+import os
+import tempfile
+import unittest
+import zipfile
+from datetime import datetime, timezone
+from pathlib import Path
+from unittest.mock import patch
+
+from tests.test_crm import DSN, TEST_KEY, DBCase, WebTests, fake_values
+
+from crm import auth, robot, robot_runner, robot_store
+
+H = {'X-CRM': '1'}
+
+
+def xlsx(rows) -> bytes:
+    """Минимальный .xlsx: общие строки и один лист."""
+    strings, sheet = [], []
+    for i, row in enumerate(rows, 1):
+        cells = []
+        for j, value in enumerate(row):
+            ref = chr(65 + j) + str(i)
+            if isinstance(value, (int, float)):
+                cells.append(f'<c r="{ref}"><v>{value}</v></c>')
+            else:
+                strings.append(value)
+                cells.append(f'<c r="{ref}" t="s"><v>{len(strings) - 1}</v></c>')
+        sheet.append(f'<row r="{i}">{"".join(cells)}</row>')
+    ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w') as z:
+        z.writestr('xl/sharedStrings.xml', f'<sst xmlns="{ns}">' + ''.join(f'<si><t>{s}</t></si>' for s in strings) + '</sst>')
+        z.writestr('xl/worksheets/sheet1.xml', f'<worksheet xmlns="{ns}"><sheetData>{"".join(sheet)}</sheetData></worksheet>')
+    return buf.getvalue()
+
+
+class ParseTest(unittest.TestCase):
+    def test_xlsx_and_csv_contacts(self):
+        rows = robot_store.xlsx_rows(xlsx([['ФИО', 'Телефон', 'Комментарий'], ['Иван', 79990001122, 'кухня'], ['Пётр', '8 (999) 000-11-33', '']]))
+        contacts, bad = robot_store.contacts_from_rows(rows)
+        self.assertEqual([(c['phone'], c['name'], c['note']) for c in contacts],
+                         [('79990001122', 'Иван', 'кухня'), ('79990001133', 'Пётр', '')])
+        contacts, bad = robot_store.contacts_from_rows(robot_store.csv_rows('89990001144;Анна\nнет номера;x\n+7 999 000 11 44;Анна\n'))
+        self.assertEqual(([c['phone'] for c in contacts], bad), (['79990001144'], 1))
+        with self.assertRaises(ValueError):
+            robot_store.xlsx_rows(b'not a zip')
+
+    def test_window(self):
+        c = {'timezone': 'Asia/Yekaterinburg', 'days': [1, 2, 3, 4, 5], 'start_time': datetime(2026, 1, 1, 10).time(),
+             'end_time': datetime(2026, 1, 1, 19).time()}
+        # пятница 17.10.2026 06:00 UTC = 11:00 в Екатеринбурге
+        self.assertTrue(robot_store.in_window(c, datetime(2026, 10, 16, 6, tzinfo=timezone.utc)))
+        self.assertFalse(robot_store.in_window(c, datetime(2026, 10, 16, 3, tzinfo=timezone.utc)))  # 08:00
+        self.assertFalse(robot_store.in_window(c, datetime(2026, 10, 17, 6, tzinfo=timezone.utc)))  # суббота
+
+
+@unittest.skipUnless(DSN, 'METHODOLOGY_TEST_DATABASE_URL не задан')
+class CabinetTests(DBCase):
+    enter = WebTests.enter
+
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        from aiohttp.test_utils import TestClient, TestServer
+        from crm import web
+        web.SECURE_COOKIE = False
+        self.http = TestClient(TestServer(web.build(self.pool)))
+        await self.http.start_server()
+        self.addAsyncCleanup(self.http.close)
+        root = Path(__file__).resolve().parents[1]
+        await self.pool.execute((root / 'migrations' / '020_robot.sql').read_text())
+        await self.pool.execute('TRUNCATE robot_contacts, robot_stoplist, robot_campaigns, robot_targets, robot_calls, robot_options CASCADE')
+        from aiohttp import web as aweb
+        from aiohttp.test_utils import TestServer
+        from voice import operator as vop
+        self.tmp = Path(tempfile.mkdtemp())
+        self.log = self.tmp / 'calls.jsonl'
+        self.dialed, self.busy = [], {'active': 0, 'pending': 0}
+
+        async def fake_dial(request):
+            self.dialed.append(await request.json())
+            return aweb.json_response({'id': f'call-{len(self.dialed)}'})
+
+        async def fake_status(request):
+            return aweb.json_response(self.busy)
+        fake = aweb.Application()
+        fake.router.add_post('/dial', fake_dial)
+        fake.router.add_get('/status', fake_status)
+        self.robot = TestServer(fake)
+        await self.robot.start_server()
+        for p in (patch.object(robot, 'DATA', self.tmp), patch.object(robot, 'CALLS_LOG', self.log),
+                  patch.object(vop, 'EXTRA_DIR', self.tmp / 'operators'), patch.object(robot, 'api_port', lambda: self.robot.port),
+                  patch.dict(os.environ, {'CRM_TEST_KEY': TEST_KEY, 'KITCHEN_SHEET_ID': 'leads', 'VOICE_SHEET_ID': ''}),
+                  patch('crm.gsheets.values', fake_values)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    async def asyncTearDown(self):
+        await self.robot.close()
+        await super().asyncTearDown()
+
+    async def as_director(self):
+        await self.http.get('/p/' + await auth.invite_create(self.pool, 1, 'director', tg='901'))
+
+    def call_line(self, **rec):
+        base = {'at': datetime.now(timezone.utc).isoformat(timespec='seconds'), 'operator': 'kitchen', 'mode': 'телефон', 'outcome': 'ndz', 'comment': '',
+                'facts': {}, 'duration_s': 0, 'cost': 0, 'cost_unit': 'ток.', 'transcript': []}
+        with self.log.open('a', encoding='utf-8') as f:
+            f.write(json.dumps({**base, **rec}, ensure_ascii=False) + '\n')
+
+    async def test_director_campaign_end_to_end(self):
+        await self.as_director()
+        st = await (await self.http.get('/api/robot/cab')).json()
+        self.assertTrue(st['enabled'])
+        self.assertIn('kitchen', [o['id'] for o in st['operators']])
+
+        # оператор: встроенный не правится, копия правится и пишется TOML для робота
+        r = await self.http.post('/api/robot/cab/operators/kitchen', json={'name': 'Ольга'}, headers=H)
+        self.assertEqual(r.status, 400)
+        r = await self.http.post('/api/robot/cab/operators', json={'copy_from': 'kitchen', 'name': 'Ольга', 'rules': ['Не называй цены.'],
+                                                                     'fields': [{'key': '', 'text': 'Город: где кухня'}]}, headers=H)
+        self.assertEqual(r.status, 200, await r.text())
+        op = await r.json()
+        self.assertEqual((op['name'], op['rules'], op['fields']), ('Ольга', ['Не называй цены.'], [{'key': 'f1', 'text': 'Город: где кухня'}]))
+        from voice.operator import load
+        self.assertEqual(load(op['id']).name, 'Ольга')
+        r = await self.http.post('/api/robot/cab/operators', json={'copy_from': 'kitchen', 'plan': []}, headers=H)
+        self.assertIn('план', (await r.json())['error'])
+
+        # контакты из CSV и с листа таблицы, стоп-лист
+        csv_text = 'Телефон;Имя\n89990000011;Анна\n89990000012;Борис\n89990000013;Вера\n'
+        r = await self.http.post('/api/robot/cab/contacts/upload', json={'name': 'base.csv', 'text': csv_text}, headers=H)
+        self.assertEqual((await r.json())['total'], 3)
+        tabs = await (await self.http.get('/api/robot/cab/contacts/tabs')).json()
+        self.assertEqual(tabs, {'tabs': []})  # без Google: список листов не получен, но страница не падает
+        await self.http.post('/api/robot/cab/stop', json={'phones': '8 999 000 00 13'}, headers=H)
+
+        # кампания: расписание, все контакты, запуск
+        r = await self.http.post('/api/robot/cab/campaigns', json={'name': 'Тест', 'operator': op['id'], 'days': [1, 2, 3, 4, 5, 6, 7],
+                                                                     'start_time': '00:00', 'end_time': '23:59', 'attempts': 2,
+                                                                     'retry_minutes': 10, 'contacts': 'all'}, headers=H)
+        camp = await r.json()
+        self.assertEqual(camp['total'], 3)
+        r = await self.http.post('/api/robot/cab/campaigns', json={'name': 'x', 'operator': op['id'], 'days': [], 'contacts': 'all'}, headers=H)
+        self.assertEqual(r.status, 400)
+        await self.http.post(f"/api/robot/cab/campaigns/{camp['id']}/start", json={}, headers=H)
+
+        # расписание: робот занят — не звоним; свободен — звоним по одному, стоп-лист пропускаем
+        self.busy['active'] = 1
+        self.assertIsNone(await robot_runner.tick(self.pool))
+        self.busy['active'] = 0
+        first = await robot_runner.tick(self.pool)
+        self.assertEqual((first['phone'], first['campaign_id'], first['owner'], first['operator']), ('79990000011', camp['id'], '', op['id']))
+        self.assertEqual(self.dialed[0]['target_id'], first['target_id'])
+        self.assertEqual((await robot_runner.tick(self.pool))['phone'], '79990000012')
+        self.assertIsNone(await robot_runner.tick(self.pool))  # третий в стоп-листе, первые двое ждут итога
+
+        # итоги из журнала робота: недозвон уходит на повтор, заинтересованный закрыт, «не звонить» — в стоп-лист
+        meta = {'campaign_id': camp['id'], 'owner': ''}
+        self.call_line(call_id='a1', phone='79990000011', outcome='ndz', target_id=first['target_id'], **meta)
+        self.call_line(call_id='a2', phone='79990000012', outcome='interested', duration_s=120, cost=3000, tts_chars=2000,
+                       target_id=self.dialed[1]['target_id'], recording='a2.wav', transcript=[['robot', 'Здравствуйте']], **meta)
+        self.call_line(call_id='b1', phone='79990000099', outcome='do_not_call')
+        self.call_line(mode='браузер', phone='')
+        self.assertEqual(await robot_runner.ingest(self.pool), 3)
+        self.assertEqual(await robot_runner.ingest(self.pool), 0)  # повторно не переносит
+        targets = (await (await self.http.get(f"/api/robot/cab/campaigns/{camp['id']}/targets")).json())['items']
+        self.assertEqual([(t['phone'], t['done'], bool(t['next_at'])) for t in targets],
+                         [('79990000011', False, True), ('79990000012', True, False), ('79990000013', True, False)])
+        stop = (await (await self.http.get('/api/robot/cab/stop')).json())['items']
+        self.assertEqual(sorted(s['phone'] for s in stop), ['79990000013', '79990000099'])
+
+        # звонки, фильтр, CSV, запись
+        (self.tmp / 'recordings').mkdir()
+        (self.tmp / 'recordings' / 'a2.wav').write_bytes(b'RIFF0000WAVE')
+        calls = (await (await self.http.get('/api/robot/cab/calls')).json())['items']
+        self.assertEqual(len(calls), 3)
+        only = (await (await self.http.get('/api/robot/cab/calls?outcome=interested')).json())['items']
+        self.assertEqual([(c['id'], c['recording'], c['campaign']) for c in only], [('a2', True, 'Тест')])
+        csv_out = await (await self.http.get('/api/robot/cab/calls.csv')).text()
+        self.assertIn('79990000012;Тест;Заинтересованный;120', csv_out)
+        r = await self.http.get('/api/robot/cab/recording/a2')
+        self.assertEqual(r.status, 200)
+
+        # аналитика и цены: директор видит себестоимость
+        r = await self.http.post('/api/robot/cab/options', json={'prices': {'mango_min': '1,5', 'eleven_1k_chars': 10, 'llm_1k_tokens': 1}},
+                                 headers=H)
+        self.assertEqual((await r.json())['prices']['multiplier'], 3.0)
+        a = await (await self.http.get('/api/robot/cab/analytics')).json()
+        self.assertEqual((a['total'], a['reached'], a['leads'], a['dial_rate'], a['conversion']), (3, 2, 1, 66.7, 33.3))
+        self.assertEqual(a['cost'], 26.0)  # 2 мин × 1,5 + 2000 симв. × 10/1000 + 3000 ток. × 1/1000
+        self.assertEqual(a['lead_cost'], 26.0)
+        self.assertEqual({e['key']: e['count'] for e in a['ends']}['do_not_call'], 1)
+
+    async def test_client_paid_option(self):
+        token = await auth.invite_create(self.pool, 1, 'client', client_key='Кухни')
+        await self.http.get('/p/' + token)
+        st = await (await self.http.get('/api/robot/cab')).json()
+        self.assertFalse(st['enabled'])
+        self.assertEqual((await self.http.get('/api/robot/cab/calls')).status, 403)
+        await robot_store.set_option(self.pool, 'clients', ['Кухни'])
+        await robot_store.set_option(self.pool, 'prices', {'mango_min': 1, 'multiplier': 3})
+        self.call_line(call_id='c1', phone='79990000001', outcome='interested', duration_s=60, owner='Кухни')
+        self.call_line(call_id='d1', phone='79990000002', outcome='interested', duration_s=60)
+        await robot_runner.ingest(self.pool)
+        st = await (await self.http.get('/api/robot/cab?owner=')).json()
+        self.assertEqual((st['enabled'], st['owner'], st['owners']), (True, 'Кухни', []))
+        self.assertNotIn('kitchen', [o['id'] for o in st['operators']])  # встроенные операторы — нашего кабинета
+        calls = (await (await self.http.get('/api/robot/cab/calls')).json())['items']
+        self.assertEqual([(c['id'], c['cost']) for c in calls], [('c1', 3.0)])  # только свои, по цене ×3
+        tabs = await (await self.http.get('/api/robot/cab/contacts/tabs')).json()
+        self.assertEqual(tabs['tabs'], ['Кухни'])
+        r = await self.http.post('/api/robot/cab/contacts/sheet', json={'tab': 'Кухни'}, headers=H)
+        self.assertEqual((await r.json())['total'], 4)
+        data = base64.b64encode(xlsx([['Телефон'], [79990005555]])).decode()
+        r = await self.http.post('/api/robot/cab/contacts/upload', json={'name': 'база.xlsx', 'data': data}, headers=H)
+        self.assertEqual((await r.json())['total'], 5)
+        r = await self.http.post('/api/robot/cab/contacts/sheet', json={'tab': 'Окна'}, headers=H)
+        self.assertEqual(r.status, 400)
+        r = await self.http.post('/api/robot/cab/options', json={'clients': []}, headers=H)
+        self.assertEqual(r.status, 403)
+        r = await self.http.post('/api/robot/cab/operators', json={'copy_from': 'kitchen'}, headers=H)
+        self.assertEqual(r.status, 403)  # чужой (наш) оператор клиенту не виден
+
+    async def test_manager_and_test_client_cannot_write(self):
+        await self.enter('manager', ext='101')
+        self.assertEqual((await self.http.get('/api/robot/cab/calls')).status, 403)
+        await self.http.get('/test-exit')
+        await self.enter('director')
+        r = await self.http.post('/api/robot/cab/stop', json={'phones': '89990000013'}, headers=H)
+        self.assertEqual(r.status, 403)

@@ -106,7 +106,7 @@ const PAGES = [
   {id: 'ask', name: 'Вопрос по отделу', icon: 'ask', roles: STAFF},
   {id: 'clients', name: 'Клиенты', icon: 'client', roles: ['director']},
   {id: 'staff', name: 'Сотрудники', icon: 'people', roles: ['director']},
-  {id: 'robot', name: 'Робот', icon: 'robot', roles: ['director']},
+  {id: 'robot', name: 'Робот', icon: 'robot', roles: ['director', 'client']},
   {id: 'prompts', name: 'Промты', icon: 'pen', roles: ['director']},
   {id: 'access', name: 'Доступы', icon: 'key', roles: ['director']},
   {id: 'cab', name: 'Сводка', icon: 'stats', roles: ['client']},

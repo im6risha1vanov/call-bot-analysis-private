@@ -56,14 +56,16 @@ async def robot_up() -> bool:
 
 
 def operators() -> list[dict]:
-    from voice.operator import OPERATORS_DIR, OperatorError, load
+    """Операторы нашего кабинета: встроенные и заведённые директором в кабинете робота."""
+    from voice.operator import OperatorError, all_ids, load
     out = []
-    for path in sorted(OPERATORS_DIR.glob('*.toml')):
+    for op_id in all_ids():
         try:
-            op = load(path.stem)
-            out.append({'id': op.id, 'name': op.name, 'company': op.company})
+            op = load(op_id)
         except OperatorError:
             continue
+        if not op.owner:
+            out.append({'id': op.id, 'name': op.name, 'company': op.company})
     return out
 
 
