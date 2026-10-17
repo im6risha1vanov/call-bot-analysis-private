@@ -69,21 +69,27 @@ UNIT
       curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt > /etc/apt/sources.list.d/caddy-stable.list
       apt-get update -q && apt-get install -y -q caddy; }
   fi
-  if [ -s /etc/caddy/Caddyfile ] && ! grep -q '/usr/share/caddy\|callbot-crm' /etc/caddy/Caddyfile; then
-    echo "/etc/caddy/Caddyfile already has other sites, not touching it. Add this block by hand:"
-    echo "$DOMAIN { reverse_proxy 127.0.0.1:$PORT }"; exit 1
-  fi
-  cat > /etc/caddy/Caddyfile <<CADDY
-# callbot-crm: сайт CRM менеджеров (scripts/crm_setup.sh)
+  # Caddy уже может обслуживать другие сайты (callbot-analysis.ru): блок CRM дописываем, чужое не трогаем.
+  CF=/etc/caddy/Caddyfile
+  BLOCK="# callbot-crm: CRM for managers (scripts/crm_setup.sh)
 $DOMAIN {
 	encode gzip
 	reverse_proxy 127.0.0.1:$PORT
-	header Strict-Transport-Security "max-age=31536000"
+	header Strict-Transport-Security \"max-age=31536000\"
 	log {
 		output discard
 	}
-}
-CADDY
+}"
+  if [ ! -s "$CF" ] || grep -q '/usr/share/caddy' "$CF"; then
+    printf '%s\n' "$BLOCK" > "$CF"
+  elif ! grep -q "^$DOMAIN {" "$CF"; then
+    cp "$CF" "$STATE/Caddyfile.before.$(date +%s)"
+    printf '\n%s\n' "$BLOCK" >> "$CF"
+  fi
+  if ! caddy validate --config "$CF" --adapter caddyfile >/dev/null 2>&1; then
+    echo "Caddyfile is invalid after the change, restoring it:"; caddy validate --config "$CF" --adapter caddyfile 2>&1 | tail -3
+    LAST=$(ls -t "$STATE"/Caddyfile.before.* 2>/dev/null | head -1); [ -n "$LAST" ] && cp "$LAST" "$CF"; exit 1
+  fi
   if command -v ufw >/dev/null && ufw status | grep -q 'Status: active'; then ufw allow 80/tcp; ufw allow 443/tcp; fi
   systemctl enable caddy >/dev/null 2>&1 || true
   systemctl reload caddy 2>/dev/null || systemctl restart caddy
