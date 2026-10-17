@@ -1,5 +1,5 @@
 /* Одно меню директора (dirmenu.js) на странице аналитики и на страницах работы отдела. */
-.dm-side{display:flex;flex-direction:column;gap:1px}
+.dm-side{display:flex;flex-direction:column;gap:1px;min-height:0;overflow-y:auto;scrollbar-width:thin}
 .dm-item{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:7px;border:0;background:none;width:100%;
   color:var(--fg);font:inherit;font-size:14px;text-align:left;text-decoration:none;cursor:pointer}
 .dm-item:hover{background:var(--surface-2)}
@@ -8,7 +8,8 @@
 .dm-item[aria-current="page"] svg{opacity:1}
 .dm-more{color:var(--muted)}
 .dm-more[aria-expanded="true"]{color:var(--fg)}
-.dm-box{display:flex;flex-direction:column;gap:1px}
+.dm-box{display:flex;flex-direction:column;gap:1px;flex:none}
+.dm-side > .dm-item{flex:none}
 .dm-box[hidden],.dm-sheet[hidden]{display:none}
 .dm-label{font-size:11px;color:var(--muted);padding:10px 10px 4px}
 .dm-foot{margin-top:auto;padding:0 10px;font-size:12px;color:var(--muted);display:flex;justify-content:space-between;gap:8px}
