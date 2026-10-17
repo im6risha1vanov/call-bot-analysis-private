@@ -6,7 +6,7 @@
 #   bash scripts/crm_setup.sh install [DOMAIN] — миграции CRM, сервис callbot-crm, Caddy, CRM_URL, тестовая ссылка
 #                                                DOMAIN по умолчанию <ip>.sslip.io (бесплатный адрес под IP сервера)
 #   bash scripts/crm_setup.sh status           — сервис, адрес, проверка HTTPS и тестовая ссылка
-#   bash scripts/crm_setup.sh update           — после git pull: миграции CRM, перезапуск сайта и воркера бота
+#   bash scripts/crm_setup.sh update           — после git pull: миграции CRM, перезапуск сайта и бота
 #   bash scripts/crm_setup.sh new-test-link    — новая тестовая ссылка (старая перестаёт работать)
 #   bash scripts/crm_setup.sh test-link-off    — выключить тестовую ссылку (личные ссылки работают)
 #   bash scripts/crm_setup.sh rollback         — выключить сайт и убрать CRM_URL (таблицы CRM остаются, они ничему не мешают)
@@ -34,7 +34,7 @@ test_link() {
 }
 
 # Все миграции CRM; каждая только добавляет и повторный запуск ничего не ломает.
-migrate() { for f in migrations/014_crm.sql migrations/015_crm_roles.sql migrations/016_crm_access.sql migrations/017_crm_reports.sql migrations/018_crm_questions.sql; do
+migrate() { for f in migrations/014_crm.sql migrations/015_crm_roles.sql migrations/016_crm_access.sql migrations/017_crm_reports.sql migrations/018_crm_questions.sql migrations/019_crm_staff.sql; do
   psql "$DATABASE_URL" -q -v ON_ERROR_STOP=1 -f "$f"; done; }
 
 listeners() { ss -ltnpH "( sport = :80 or sport = :443 )" || true; }
@@ -123,11 +123,11 @@ $DOMAIN {
   ;;
 update)
   migrate
-  # Воркер бота кладёт отчёты в CRM, поэтому перезапускаем и его.
-  systemctl restart callbot-crm callbot-astra-worker
+  # Бот кладёт отчёты в CRM и берёт из неё список копий разборов, поэтому перезапускаем и его.
+  systemctl restart $BOT_SERVICES callbot-crm
   sleep 5
   git log -1 --oneline
-  systemctl is-active callbot-crm callbot-astra-worker
+  systemctl is-active $BOT_SERVICES callbot-crm
   echo "local: $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$PORT/api/me)  (401 is correct)"
   ;;
 test-link-off)

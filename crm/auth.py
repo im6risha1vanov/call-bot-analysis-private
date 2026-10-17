@@ -68,16 +68,33 @@ async def check_target(pool, client_id: int, role: str, extension, client_key) -
     return None, None
 
 
-async def invite_create(pool, client_id: int, role: str, extension=None, client_key=None, name=None) -> str:
-    """Личная ссылка. Токен показываем один раз, в базе только хэш."""
+async def directors(pool, client_id: int) -> list[dict]:
+    """Руководители и владелец, подключённые к боту: к ним можно привязать ссылку директора."""
+    rows = await pool.fetch(
+        """SELECT telegram_user_id, full_name, role FROM employees WHERE client_id=$1 AND role IN ('owner','head')
+           AND telegram_user_id IS NOT NULL ORDER BY role DESC, full_name""", client_id)
+    return [{'tg': str(r['telegram_user_id']), 'name': r['full_name'] or str(r['telegram_user_id'])} for r in rows]
+
+
+async def invite_create(pool, client_id: int, role: str, extension=None, client_key=None, name=None, tg=None) -> str:
+    """Личная ссылка. Токен показываем один раз, в базе только хэш.
+
+    tg — чья это ссылка директора: тогда в CRM он работает под своим Telegram ID
+    (личные промты), а если его отключат от бота, ссылка перестанет работать."""
     extension, client_key = await check_target(pool, client_id, role, extension, client_key)
     name = (str(name or '').strip() or None)
     if name and len(name) > 80:
         raise ValueError('Слишком длинное имя.')
+    tg_id = None
+    if role == 'director' and tg not in (None, ''):
+        person = next((d for d in await directors(pool, client_id) if d['tg'] == str(tg)), None)
+        if person is None:
+            raise ValueError('Этого руководителя нет в боте.')
+        tg_id, name = int(person['tg']), name or person['name']
     token = secrets.token_urlsafe(24)
     await pool.execute(
-        'INSERT INTO crm_invites(token_hash,role,client_id,extension,client_key,name) VALUES($1,$2,$3,$4,$5,$6)',
-        digest(token), role, client_id, extension, client_key, name)
+        'INSERT INTO crm_invites(token_hash,role,client_id,extension,client_key,name,telegram_user_id) VALUES($1,$2,$3,$4,$5,$6,$7)',
+        digest(token), role, client_id, extension, client_key, name, tg_id)
     return token
 
 
@@ -87,14 +104,15 @@ async def invite_login(pool, token: str | None) -> tuple[str, str] | None:
         return None
     row = await pool.fetchrow(
         """UPDATE crm_invites SET last_used_at=now() WHERE token_hash=$1 AND revoked_at IS NULL
-           RETURNING id, role, client_id, extension, client_key""", digest(token))
+           RETURNING id, role, client_id, extension, client_key, telegram_user_id""", digest(token))
     if row is None:
         return None
     session = secrets.token_urlsafe(32)
     await pool.execute(
         """INSERT INTO crm_sessions(token_hash,telegram_user_id,expires_at,role,client_id,extension,client_key,is_test,invite_id)
-           VALUES($1,NULL,now()+$2::interval,$3,$4,$5,$6,false,$7)""",
-        digest(session), PERSONAL_TTL, row['role'], row['client_id'], row['extension'], row['client_key'], row['id'])
+           VALUES($1,$8,now()+$2::interval,$3,$4,$5,$6,false,$7)""",
+        digest(session), PERSONAL_TTL, row['role'], row['client_id'], row['extension'], row['client_key'], row['id'],
+        row['telegram_user_id'])
     return session, row['role']
 
 
@@ -105,7 +123,8 @@ async def invites(pool, client_id: int) -> list[dict]:
            WHERE i.client_id=$1 AND i.revoked_at IS NULL ORDER BY i.role, i.created_at""", client_id)
     fmt = lambda v: v.strftime('%Y-%m-%dT%H:%M:%S%z') if v else None  # noqa: E731
     return [{'id': r['id'], 'role': r['role'], 'ext': r['extension'], 'client': r['client_key'],
-             'name': r['name'] or r['full_name'] or r['client_key'] or '', 'created': fmt(r['created_at']),
+             'name': r['name'] or r['full_name'] or r['client_key'] or '', 'tg': bool(r['telegram_user_id']),
+             'created': fmt(r['created_at']),
              'used': fmt(r['last_used_at'])} for r in rows]
 
 
@@ -129,7 +148,12 @@ async def viewer_for(pool, session: str | None) -> Viewer | None:
         return None
     if row['role']:
         actor = None
-        if row['role'] == 'director':
+        if row['role'] == 'director' and row['telegram_user_id']:
+            # Ссылка конкретного руководителя: отключили его от бота — ссылка не работает.
+            actor = await resolve_actor(pool, row['telegram_user_id'])
+            if actor is None or actor.client_id != row['client_id'] or actor.role not in ('owner', 'head'):
+                return None
+        elif row['role'] == 'director':
             actor = Actor(0, row['client_id'], 'owner', None)
         elif row['role'] == 'manager':
             # Менеджера убрали из отдела: личная ссылка перестаёт работать сразу.

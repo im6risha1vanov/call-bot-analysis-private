@@ -21,7 +21,8 @@ from aiohttp import web  # noqa: E402
 
 import mango_client  # noqa: E402
 from tools import Forbidden, is_privileged  # noqa: E402
-from . import ask as asking, auth, cabinet, gsheets, journal, recording, reviews, store, training  # noqa: E402
+from . import ask as asking, auth, cabinet, gsheets, journal, recording, reviews, staff, store, training  # noqa: E402
+from . import prompts as prompt_mode  # noqa: E402
 from review import store as review_store  # noqa: E402
 from .dial import dial  # noqa: E402
 
@@ -408,7 +409,8 @@ async def api_access(request):
         log.exception('список клиентов колл-центра не загрузился')
         clients = []
     return web.json_response({'invites': await auth.invites(pool, who.actor.client_id),
-                              'managers': await store.team(pool, who.actor.client_id), 'clients': clients})
+                              'managers': await store.team(pool, who.actor.client_id), 'clients': clients,
+                              'directors': await auth.directors(pool, who.actor.client_id)})
 
 
 async def api_access_create(request):
@@ -418,7 +420,7 @@ async def api_access_create(request):
     if role == 'client' and str(data.get('client') or '') not in [c['name'] for c in (await cabinet.summary())['clients']]:
         raise ValueError('Такого клиента нет.')
     token = await auth.invite_create(request.app[POOL], who.actor.client_id, role, data.get('person_ext'), data.get('client'),
-                                     data.get('name'))
+                                     data.get('name'), data.get('tg'))
     return web.json_response({'link': f'{base_url(request)}/p/{token}'})
 
 
@@ -426,6 +428,73 @@ async def api_access_revoke(request):
     who = await director(request)
     await auth.invite_revoke(request.app[POOL], who.actor.client_id, int_id(request.match_info['id']))
     return web.json_response({'ok': True})
+
+
+async def api_staff(request):
+    who = await director(request)
+    return web.json_response(await staff.listing(request.app[POOL], who.actor))
+
+
+async def api_staff_add(request):
+    who = await director(request)
+    data = await body(request)
+    return web.json_response(await staff.add(request.app[POOL], who.actor, str(data.get('role') or ''), data.get('person_ext'),
+                                             data.get('name'), data.get('username')))
+
+
+async def api_staff_action(request):
+    """Действие над сотрудником: invite — новая ссылка в бота, unlink — отключить, copies — копии разборов."""
+    who = await director(request)
+    data = await body(request)
+    pool, ext, action = request.app[POOL], data.get('person_ext'), request.match_info['action']
+    if action == 'invite':
+        return web.json_response(await staff.invite(pool, who.actor, ext))
+    if action == 'unlink':
+        await staff.unlink(pool, who.actor, ext)
+    elif action == 'copies':
+        await staff.set_copies(pool, who.actor, ext, bool(data.get('on')))
+    else:
+        raise web.HTTPNotFound()
+    return web.json_response({'ok': True})
+
+
+async def api_prompts(request):
+    return web.json_response(await prompt_mode.overview(request.app[POOL], await director(request)))
+
+
+async def api_prompt(request):
+    return web.json_response(await prompt_mode.state(request.app[POOL], await director(request), request.match_info['kind']))
+
+
+async def api_prompt_action(request):
+    who = await director(request)
+    data = await body(request)
+    pool, kind, action = request.app[POOL], request.match_info['kind'], request.match_info['action']
+    if action == 'edit':
+        out = await prompt_mode.edit(pool, who, kind, data.get('body'), data.get('history'), data.get('ask'))
+    elif action == 'preview':
+        out = await prompt_mode.preview(pool, who, kind, data.get('body'))
+    elif action == 'save':
+        out = await prompt_mode.save(pool, who, kind, data.get('body'), data.get('note'), str(data.get('scope') or ''),
+                                     data.get('token'))
+    elif action == 'personal-off':
+        await prompt_mode.drop_personal(pool, who, kind)
+        out = {'ok': True}
+    else:
+        raise web.HTTPNotFound()
+    return web.json_response(out)
+
+
+async def api_prompt_version(request):
+    return web.json_response(await prompt_mode.version_body(request.app[POOL], await director(request),
+                                                            int_id(request.match_info['id'])))
+
+
+async def api_prompt_use(request):
+    who = await director(request)
+    data = await body(request)
+    return web.json_response(await prompt_mode.use(request.app[POOL], who, int_id(request.match_info['id']),
+                                                   str(data.get('scope') or '')))
 
 
 async def api_reports(request):
@@ -554,6 +623,14 @@ def build(pool) -> web.Application:
     app.router.add_get('/api/access', api_access)
     app.router.add_post('/api/access', api_access_create)
     app.router.add_post('/api/access/{id}/revoke', api_access_revoke)
+    app.router.add_get('/api/staff', api_staff)
+    app.router.add_post('/api/staff', api_staff_add)
+    app.router.add_post('/api/staff/{action}', api_staff_action)
+    app.router.add_get('/api/prompts', api_prompts)
+    app.router.add_get('/api/prompts/version/{id}', api_prompt_version)
+    app.router.add_post('/api/prompts/version/{id}/use', api_prompt_use)
+    app.router.add_get('/api/prompts/{kind}', api_prompt)
+    app.router.add_post('/api/prompts/{kind}/{action}', api_prompt_action)
     app.router.add_get('/api/queue', api_queue)
     app.router.add_get('/api/tasks', api_tasks)
     app.router.add_post('/api/tasks/{id}', api_task_change)

@@ -82,14 +82,29 @@ async def train_assignment(pool, actor, call_id: int) -> int:
         actor.client_id, actor.extension, f'review:{call_id}', actor.telegram_user_id)
 
 
+def env_copy_tokens() -> list[str]:
+    return [t for t in (t.strip() for t in os.getenv('REVIEW_COPY_TO', '').split(',')) if t]
+
+
+async def copy_tokens(pool, client_id: int) -> tuple[list[str], str]:
+    """Список получателей копий и откуда он: 'crm' (раздел «Сотрудники») или 'env' (REVIEW_COPY_TO)."""
+    try:
+        tokens = await pool.fetchval('SELECT tokens FROM review_copy_lists WHERE client_id=$1', client_id)
+    except Exception as exc:
+        if exc.__class__.__name__ != 'UndefinedTableError':
+            raise
+        tokens = None  # до миграции 019
+    return (list(tokens), 'crm') if tokens is not None else (env_copy_tokens(), 'env')
+
+
 async def copy_chat_ids(pool, client_id: int) -> list[int]:
-    """Кому уходит полная копия каждого разбора: REVIEW_COPY_TO через запятую.
+    """Кому уходит полная копия каждого разбора: список из CRM, а пока его нет, REVIEW_COPY_TO через запятую.
 
     Число — Telegram ID. Иначе сотрудник бота по добавочному или имени
     (`head:marozeto`, `@marozeto`): его ID берётся из employees, когда он нажмёт
     /start; до этого он просто пропускается."""
     ids = []
-    for token in (t.strip() for t in os.getenv('REVIEW_COPY_TO', '').split(',')):
+    for token in (await copy_tokens(pool, client_id))[0]:
         if re.fullmatch(r'-?\d+', token):
             ids.append(int(token))
         elif token:

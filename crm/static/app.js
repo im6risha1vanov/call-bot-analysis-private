@@ -86,6 +86,8 @@ const ICON = {
   train: '<path d="M4 18 10 12l4 4 6-8"/><path d="M15 8h5v5"/>',
   ask: '<path d="M4 5h16v11H9l-5 4z"/><path d="M10 9.5a2 2 0 1 1 2.5 1.9c-.4.2-.5.5-.5.9M12 14h.01"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3M15 8l2 2"/>',
+  people: '<circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/><path d="M19 4v4M17 6h4"/>',
+  pen: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>',
   star: '<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/>',
 };
 const svg = k => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[k]}</svg>`;
@@ -102,6 +104,8 @@ const PAGES = [
   {id: 'training', name: 'Тренировки', icon: 'train', roles: STAFF},
   {id: 'ask', name: 'Вопрос по отделу', icon: 'ask', roles: STAFF},
   {id: 'clients', name: 'Клиенты', icon: 'client', roles: ['director']},
+  {id: 'staff', name: 'Сотрудники', icon: 'people', roles: ['director']},
+  {id: 'prompts', name: 'Промты', icon: 'pen', roles: ['director']},
   {id: 'access', name: 'Доступы', icon: 'key', roles: ['director']},
   {id: 'cab', name: 'Сводка', icon: 'stats', roles: ['client']},
   {id: 'cabint', name: 'Заинтересованные', icon: 'star', roles: ['client']},
@@ -726,13 +730,15 @@ const fmtWhen = v => v ? new Date(v).toLocaleString('ru-RU', {day: '2-digit', mo
 VIEWS.access = async view => {
   const d = await api('/api/access', {scoped: false});
   const roleName = {director: 'Директор', manager: 'Менеджер', client: 'Клиент'};
-  const who = i => i.role === 'manager' ? `${esc(i.name)} · доб. ${esc(i.ext)}` : esc(i.name || roleName[i.role]);
+  const who = i => i.role === 'manager' ? `${esc(i.name)} · доб. ${esc(i.ext)}` : esc(i.name || roleName[i.role]) + (i.tg ? ' · с Telegram' : '');
   view.innerHTML = `<div class="grid2"><div class="panel"><h2>Выдать личную ссылку</h2>
-      <p class="muted">По ссылке человек входит в CRM без пароля, на любом устройстве. Ссылку видно только сейчас: скопируйте и отправьте лично.</p>
+      <p class="muted">По ссылке человек входит в CRM без пароля, на любом устройстве. Ссылку видно только сейчас: скопируйте и отправьте лично.
+        Ссылка руководителя, привязанная к его Telegram, открывает ему и «Промты».</p>
       <div class="outform">
         <label class="field">Кому<select id="a-role"><option value="manager">Менеджеру</option><option value="client">Клиенту колл-центра</option><option value="director">Руководителю</option></select></label>
         <label class="field" id="a-ext-f">Менеджер<select id="a-ext">${d.managers.map(m => `<option value="${esc(m.ext)}">${esc(m.name)} · доб. ${esc(m.ext)}</option>`).join('')}</select></label>
         <label class="field" id="a-cl-f" hidden>Клиент<select id="a-client">${d.clients.map(c => `<option>${esc(c)}</option>`).join('')}</select></label>
+        <label class="field" id="a-tg-f" hidden>Чья ссылка<select id="a-tg">${d.directors.map(p => `<option value="${esc(p.tg)}">${esc(p.name)}</option>`).join('')}<option value="">Другой человек, без Telegram</option></select></label>
         <label class="field" id="a-name-f" hidden>Имя<input id="a-name" maxlength="80" placeholder="Например, Евгений"></label>
         <button class="btn primary" id="a-go">Создать ссылку</button></div>
       <div id="a-out"></div></div>
@@ -746,14 +752,16 @@ VIEWS.access = async view => {
   const sync = () => {
     $('#a-ext-f', view).hidden = role.value !== 'manager';
     $('#a-cl-f', view).hidden = role.value !== 'client';
-    $('#a-name-f', view).hidden = role.value !== 'director';
+    $('#a-tg-f', view).hidden = role.value !== 'director';
+    $('#a-name-f', view).hidden = role.value !== 'director' || $('#a-tg', view).value !== '';
   };
+  $('#a-tg', view).addEventListener('change', sync);
   role.addEventListener('change', sync);
   $('#a-go', view).addEventListener('click', async () => {
     const out = $('#a-out', view);
     try {
       const r = await api('/api/access', {method: 'POST', scoped: false, body: {role: role.value, person_ext: $('#a-ext', view).value,
-        client: $('#a-client', view).value, name: $('#a-name', view).value}});
+        client: $('#a-client', view).value, name: $('#a-tg', view).value ? '' : $('#a-name', view).value, tg: $('#a-tg', view).value}});
       out.innerHTML = `<div class="linkbox"><input readonly value="${esc(r.link)}" aria-label="Ссылка"><button class="btn small" id="a-copy">Скопировать</button></div>
         <p class="muted">Ссылка появится в списке после обновления страницы.</p>`;
       $('#a-copy', out).addEventListener('click', async () => {
@@ -767,6 +775,168 @@ VIEWS.access = async view => {
     try { await api(`/api/access/${b.dataset.revoke}/revoke`, {method: 'POST', scoped: false, body: {}}); go('access'); }
     catch (e) { alert(e.message); }
   }));
+};
+
+function linkBox(out, link, note) {
+  out.innerHTML = `<div class="linkbox"><input readonly value="${esc(link)}" aria-label="Ссылка"><button class="btn small">Скопировать</button></div>
+    ${note ? `<p class="muted">${esc(note)}</p>` : ''}`;
+  $('button', out).addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(link); $('button', out).textContent = 'Скопировано'; }
+    catch (e) { $('input', out).select(); }
+  });
+}
+
+VIEWS.staff = async view => {
+  const d = await api('/api/staff', {scoped: false});
+  const tgCell = p => p.linked ? `<span class="chip good">подключён</span>${p.username ? ' @' + esc(p.username) : ''}`
+    : p.invite_until ? `<span class="chip warn">ждёт по ссылке</span> до ${fmtWhen(p.invite_until)}` : '<span class="chip">не подключён</span>';
+  const reviewed = p => p.reviewed === null ? '' : p.reviewed ? 'да' : 'нет';
+  view.innerHTML = `<div class="panel"><h2>Сотрудники в боте <span class="muted">· ${d.items.length}</span></h2>
+      <p class="muted">Менеджеров из Mango бот добавляет сам. Человек подключается к боту по одноразовой ссылке-приглашению: открывает её и жмёт «Старт».
+        Отключённый от бота перестаёт получать сообщения, а на его место можно пригласить другого.</p>
+      <div class="scroll"><table class="tbl"><thead><tr><th>Кто</th><th>Роль</th><th class="n">Доб.</th><th>Бот</th><th class="hide-m">Звонки разбираются</th><th>Копии всех разборов</th><th></th></tr></thead><tbody>
+      ${d.items.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.role_title)}</td><td class="n">${/^\d+$/.test(p.ext) ? esc(p.ext) : '—'}</td>
+        <td>${tgCell(p)}</td><td class="hide-m">${reviewed(p)}</td>
+        <td>${p.can_copy ? `<label class="row"><input type="checkbox" data-copies="${esc(p.ext)}"${p.copies ? ' checked' : ''}> ${p.copies ? 'получает' : 'нет'}</label>` : (p.copies ? 'получает' : '')}</td>
+        <td><div class="row">${p.linked ? '' : `<button class="btn small" data-inv="${esc(p.ext)}">Ссылка в бота</button>`}
+          ${p.can_unlink ? `<button class="btn small" data-unlink="${esc(p.ext)}" data-name="${esc(p.name)}">Отключить</button>` : ''}</div></td></tr>
+        <tr hidden data-out="${esc(p.ext)}"><td colspan="7"></td></tr>`).join('')}</tbody></table></div>
+      <p class="muted">Копии всех разборов приходят в Telegram целиком, по каждому звонку, поэтому включаются только руководителям.
+        ${d.copies_source === 'env' ? 'Сейчас список копий взят из настроек сервера; после первого изменения здесь он хранится в CRM и меняется без перезапуска бота.' : ''}
+        ${d.copies_other ? `Ещё получателей не из списка сотрудников: ${d.copies_other}, они остаются.` : ''}</p></div>
+    <div class="panel"><h2>Добавить человека</h2>
+      <div class="outform">
+        <label class="field">Кто<select id="s-role"><option value="manager">Менеджер</option><option value="head">Руководитель</option></select></label>
+        <label class="field" id="s-ext-f">Добавочный в Mango<input id="s-ext" inputmode="numeric" maxlength="6" placeholder="15"></label>
+        <label class="field">Имя<input id="s-name" maxlength="80" placeholder="Например, Пётр Иванов"></label>
+        <label class="field">Ник в Telegram, если знаете<input id="s-user" maxlength="33" placeholder="@nick"></label>
+        <button class="btn primary" id="s-go">Добавить и дать ссылку</button></div>
+      <div id="s-out"></div>
+      <p class="muted">С ником хватит простого /start в боте, ссылка нужна на случай, если ника нет. Ссылка одноразовая и действует 7 дней.
+        Руководитель получает отчёты по отделу и горячие потери; копии всех разборов включаются отдельно в таблице выше.</p></div>`;
+  const role = $('#s-role', view);
+  role.addEventListener('change', () => { $('#s-ext-f', view).hidden = role.value !== 'manager'; });
+  $('#s-go', view).addEventListener('click', async () => {
+    const out = $('#s-out', view);
+    try {
+      const r = await api('/api/staff', {method: 'POST', scoped: false, body: {role: role.value, person_ext: $('#s-ext', view).value,
+        name: $('#s-name', view).value, username: $('#s-user', view).value}});
+      linkBox(out, r.link, 'Отправьте ссылку человеку лично. Он появится в таблице после обновления страницы.');
+    } catch (e) { out.innerHTML = `<p class="muted">${esc(e.message)}</p>`; }
+  });
+  $$('[data-inv]', view).forEach(b => b.addEventListener('click', async () => {
+    const row = $(`[data-out="${CSS.escape(b.dataset.inv)}"]`, view);
+    row.hidden = false;
+    try {
+      const r = await api('/api/staff/invite', {method: 'POST', scoped: false, body: {person_ext: b.dataset.inv}});
+      linkBox($('td', row), r.link, 'Ссылка одноразовая, действует 7 дней.');
+    } catch (e) { $('td', row).textContent = e.message; }
+  }));
+  $$('[data-unlink]', view).forEach(b => b.addEventListener('click', async () => {
+    if (!confirm(`Отключить ${b.dataset.name} от бота? Сообщения бота ему больше не придут. Вход в CRM по его личной ссылке закрывается в «Доступах».`)) return;
+    try { await api('/api/staff/unlink', {method: 'POST', scoped: false, body: {person_ext: b.dataset.unlink}}); go('staff'); }
+    catch (e) { alert(e.message); }
+  }));
+  $$('[data-copies]', view).forEach(c => c.addEventListener('change', async () => {
+    try { await api('/api/staff/copies', {method: 'POST', scoped: false, body: {person_ext: c.dataset.copies, on: c.checked}}); go('staff'); }
+    catch (e) { alert(e.message); c.checked = !c.checked; }
+  }));
+};
+
+// Режим промта: черновик живёт на странице, сохраняется только текст, по которому собран пример.
+VIEWS.prompts = async view => {
+  const o = await api('/api/prompts', {scoped: false});
+  const P = S.pm && o.kinds.some(k => k.kind === S.pm.kind) ? S.pm : (S.pm = {kind: o.kinds[0].kind});
+  const st = await api('/api/prompts/' + P.kind, {scoped: false});
+  if (P.start === undefined || P.loadedFor !== P.kind) Object.assign(P, {start: st.body, body: st.body, history: [], note: '', token: null, tokenBody: null, preview: null, diff: [], loadedFor: P.kind});
+  const changed = () => P.body !== P.start;
+  const canSave = () => changed() && P.token && P.tokenBody === P.body;
+  const diffHtml = lines => lines.length ? `<div class="pm-diff">${lines.map(l => `<div class="${l.op === '+' ? 'add' : 'del'}">${l.op === '+' ? '+' : '−'} ${esc(l.text)}</div>`).join('')}</div>` : '';
+  const render = () => {
+    view.innerHTML = `<div class="filters">${o.kinds.map(k => `<button data-kind="${k.kind}" aria-pressed="${k.kind === P.kind}">${esc(k.title)}</button>`).join('')}</div>
+    <div class="grid2"><div class="panel">
+      <h2>${esc(st.title)}</h2>
+      <p class="muted">Сейчас у вас действует ${esc(st.source)}${st.version ? ' (сохранение #' + st.version + ')' : ''}. Правки действуют и в боте.${st.hint ? ' ' + esc(st.hint) : ''}</p>
+      ${P.history.map(h => `<div class="pm-qa"><div class="q">${esc(h.ask)}</div><div class="muted">${esc(h.reply)}</div></div>`).join('')}
+      ${diffHtml(P.diff)}
+      <textarea id="pm-ask" rows="2" maxlength="2000" placeholder="Что поменять, обычными словами: например, «пиши короче и добавь, сколько звонков у каждого менеджера»"></textarea>
+      <div class="row gapb"><button class="btn primary" id="pm-edit">Поправить</button><span class="muted" id="pm-st"></span></div>
+      <details class="pm-text"${P.open ? ' open' : ''}><summary>Текст промта${changed() ? ' · изменён' : ''}</summary>
+        <textarea id="pm-body" rows="16" maxlength="20000">${esc(P.body)}</textarea></details>
+      <div class="row gapb">
+        <button class="btn" id="pm-prev"${changed() ? '' : ' disabled'}>Пример по новому тексту</button>
+        <button class="btn" id="pm-undo"${changed() ? '' : ' disabled'}>Отменить правки</button>
+        <button class="btn primary" data-save="me"${canSave() ? '' : ' disabled'}>Сохранить для себя</button>
+        <button class="btn primary" data-save="all"${canSave() ? '' : ' disabled'}>Сохранить для всех</button></div>
+      ${changed() && !canSave() ? '<p class="muted">Сохранить можно после примера по этому тексту.</p>' : ''}
+      ${P.preview ? `<div class="panel report">${P.preview.problem ? `<p><b>Пример не получился:</b> ${esc(P.preview.problem)}. Если сохранить так, при сбое бот пришлёт причину и стандартную версию. Лучше поправить текст ещё раз.</p>`
+        : `<div class="rep-head"><b>${P.kind === 'review' ? 'Пример разбора последнего звонка по новому тексту' : 'Пример отчёта по новому тексту'}</b>${P.preview.call_id ? `<button class="btn small" data-review="${P.preview.call_id}">Как было</button>` : ''}</div><div class="rep-body">${P.preview.html}</div>`}</div>` : ''}
+    </div>
+    <div class="panel"><h2>Сохранения</h2>
+      <p class="muted">✅ действует для вас, 🌐 для всех. Если 🌐 нет ни у одного, для всех действует исходная.</p>
+      ${st.personal ? '<button class="btn small" id="pm-common">Убрать личную, получать общую</button>' : ''}
+      <div class="pm-vers">${st.versions.map(v => `<div class="pm-ver"><div><b>${v.mine ? '✅ ' : ''}${v.common ? '🌐 ' : ''}#${v.id}</b> · ${fmtWhen(v.at)} · ${esc(v.scope)} · ${esc(v.who)}</div>
+        ${v.note ? `<div class="muted">${esc(v.note)}</div>` : ''}
+        <div class="row"><button class="btn small" data-vt="${v.id}">Текст</button><button class="btn small" data-use="${v.id}" data-scope="me">Вернуть для себя</button><button class="btn small" data-use="${v.id}" data-scope="all">Вернуть для всех</button></div></div>`).join('')}</div></div></div>`;
+    bind();
+  };
+  const reload = () => { P.loadedFor = null; go('prompts'); };
+  const bind = () => {
+    $$('[data-kind]', view).forEach(b => b.addEventListener('click', () => {
+      if (b.dataset.kind === P.kind || (changed() && !confirm('Несохранённые правки пропадут. Перейти?'))) return;
+      S.pm = {kind: b.dataset.kind}; go('prompts');
+    }));
+    const body = $('#pm-body', view);
+    body.addEventListener('input', () => { P.body = body.value; P.open = true; });
+    body.addEventListener('change', render);
+    $('details.pm-text', view).addEventListener('toggle', e => { P.open = e.target.open; });
+    $('#pm-edit', view).addEventListener('click', async () => {
+      const ask = $('#pm-ask', view).value, btn = $('#pm-edit', view);
+      btn.disabled = true; $('#pm-st', view).textContent = ' Правлю текст…';
+      try {
+        const r = await api(`/api/prompts/${P.kind}/edit`, {method: 'POST', scoped: false, body: {body: P.body, history: P.history, ask}});
+        P.history.push({ask, reply: r.reply});
+        P.diff = r.diff;
+        if (r.prompt) { P.body = r.prompt; P.note = r.changes || ask; P.preview = null; }
+        render();
+      } catch (e) { $('#pm-st', view).textContent = ' ' + e.message; btn.disabled = false; }
+    });
+    $('#pm-undo', view).addEventListener('click', () => { Object.assign(P, {body: P.start, diff: [], note: '', preview: null, token: null}); render(); });
+    $('#pm-prev', view).addEventListener('click', async () => {
+      const btn = $('#pm-prev', view); btn.disabled = true; btn.textContent = 'Собираю пример, до минуты…';
+      const text = P.body;
+      try {
+        const r = await api(`/api/prompts/${P.kind}/preview`, {method: 'POST', scoped: false, body: {body: text}});
+        Object.assign(P, {preview: r, token: r.token, tokenBody: text});
+      } catch (e) { P.preview = {problem: e.message}; }
+      render();
+    });
+    $$('[data-save]', view).forEach(b => b.addEventListener('click', async () => {
+      if (b.dataset.save === 'all' && !confirm(P.kind === 'review' ? 'Сохранить для всех? Так будут разбираться все звонки, в том числе менеджерам.' : 'Сохранить для всех?')) return;
+      try {
+        const r = await api(`/api/prompts/${P.kind}/save`, {method: 'POST', scoped: false, body: {body: P.body, note: P.note, scope: b.dataset.save, token: P.token}});
+        toast(`Сохранено ${b.dataset.save === 'all' ? 'для всех' : 'для вас'}: сохранение #${r.version}.`);
+        reload();
+      } catch (e) { alert(e.message); }
+    }));
+    $('#pm-common', view)?.addEventListener('click', async () => {
+      try { await api(`/api/prompts/${P.kind}/personal-off`, {method: 'POST', scoped: false, body: {}}); reload(); } catch (e) { alert(e.message); }
+    });
+    $$('[data-vt]', view).forEach(b => b.addEventListener('click', async () => {
+      try {
+        const v = await api('/api/prompts/version/' + b.dataset.vt, {scoped: false});
+        modal(`<header class="rvm-head"><div><h2>Сохранение #${v.id}</h2><div class="rvm-mut">${esc(v.note)}</div></div><button class="rvm-x" aria-label="Закрыть">×</button></header>
+          <div class="rvm-body"><div class="rvm-pre">${esc(v.body)}</div></div>`);
+      } catch (e) { alert(e.message); }
+    }));
+    $$('[data-use]', view).forEach(b => b.addEventListener('click', async () => {
+      const all = b.dataset.scope === 'all';
+      if (!confirm(`Вернуть сохранение #${b.dataset.use} ${all ? 'для всех' : 'для себя'}?`)) return;
+      try { await api(`/api/prompts/version/${b.dataset.use}/use`, {method: 'POST', scoped: false, body: {scope: b.dataset.scope}}); toast('Готово.'); reload(); }
+      catch (e) { alert(e.message); }
+    }));
+  };
+  render();
 };
 
 // ---------- start ----------

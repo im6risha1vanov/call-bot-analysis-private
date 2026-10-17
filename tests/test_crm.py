@@ -15,7 +15,7 @@ os.environ.setdefault('CVC_API_KEY', 'test')
 os.environ.setdefault('ANTHROPIC_API_KEY', 'test')
 os.environ.setdefault('ENCRYPTION_KEY', 'q7m8b4gN0bO2PZqvG6b0yC3rA1D5pYc8tW2XkL9uQeE=')
 
-from crm import auth, cabinet, dial, gsheets, journal, recording, store
+from crm import auth, cabinet, dial, gsheets, journal, recording, staff, store
 from review import callbacks, engine
 from review import store as review_store
 from tests.test_review import CALLBACK, LOST, TRANSCRIPT, WON
@@ -114,9 +114,12 @@ class DBCase(unittest.IsolatedAsyncioTestCase):
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS topic TEXT;
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS mode TEXT;
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS assigned_by_telegram_user_id BIGINT;""")
-        for name in ('008_call_reviews.sql', '009_callback_tasks.sql', '014_crm.sql', '015_crm_roles.sql', '016_crm_access.sql', '017_crm_reports.sql', '018_crm_questions.sql'):
+        for name in ('008_call_reviews.sql', '009_callback_tasks.sql', '012_prompt_versions.sql', '013_employee_invites.sql',
+                     '014_crm.sql', '015_crm_roles.sql', '016_crm_access.sql', '017_crm_reports.sql', '018_crm_questions.sql',
+                     '019_crm_staff.sql'):
             await self.pool.execute((root / 'migrations' / name).read_text())
-        await self.pool.execute('TRUNCATE clients, crm_login_tokens, crm_sessions, crm_docs, crm_invites, crm_reports, crm_questions CASCADE')
+        await self.pool.execute('TRUNCATE clients, crm_login_tokens, crm_sessions, crm_docs, crm_invites, crm_reports, crm_questions, '
+                                'employee_invites, prompt_active, prompt_versions, prompt_drafts, astra_daily_spend CASCADE')
         from crypto_util import encrypt
         await self.pool.execute("INSERT INTO clients(id,timezone,processing_enabled,vpbx_api_key_enc,vpbx_api_salt_enc) "
                                 "VALUES(1,'Europe/Moscow',true,$1,$2)", encrypt('key'), encrypt('salt'))
@@ -513,6 +516,112 @@ class WebTests(DBCase):
             cab = await (await self.http.get('/api/cabinet')).json()
             self.assertEqual(cab['name'], 'Кухни')
             self.assertEqual((await self.http.get('/api/queue')).status, 403)
+
+    async def test_staff_invite_unlink_and_copies(self):
+        import invites
+        h = {'X-CRM': '1'}
+        await self.pool.execute("INSERT INTO employees(client_id,extension,telegram_user_id,role,full_name) VALUES(1,'own',900,'owner','Владелец')")
+        with patch.dict(os.environ, {'CRM_TEST_KEY': TEST_KEY, 'BOT_USERNAME': 'averon_bot', 'REVIEW_COPY_TO': '900, 555'}):
+            await self.enter('manager', ext='101')
+            self.assertEqual((await self.http.get('/api/staff')).status, 403)
+            await self.http.get('/test-exit')
+            await self.enter('director')
+            d = await (await self.http.get('/api/staff')).json()
+            self.assertEqual([p['ext'] for p in d['items']], ['own', 'head', '101', '102'])
+            self.assertEqual((d['copies_source'], d['copies_other']), ('env', 1))
+            own = d['items'][0]
+            self.assertEqual((own['copies'], own['can_unlink'], own['can_copy']), (True, False, True))
+            # новый менеджер: строка и одноразовая ссылка в бота, по ней он подключается сам
+            r = await self.http.post('/api/staff', json={'role': 'manager', 'person_ext': '15', 'name': 'Пётр'}, headers=h)
+            link = (await r.json())['link']
+            self.assertTrue(link.startswith('https://t.me/averon_bot?start=inv_'), link)
+            row, why = await invites.accept(self.pool, link.rsplit('inv_', 1)[1], 555, 'Пётр Иванов')
+            self.assertEqual((row['extension'], row['role'], why), ('15', 'manager', None))
+            r = await self.http.post('/api/staff', json={'role': 'manager', 'person_ext': '15', 'name': 'Другой'}, headers=h)
+            self.assertEqual(r.status, 400)  # место занято подключённым человеком
+            r = await self.http.post('/api/staff', json={'role': 'manager', 'person_ext': 'own', 'name': 'X'}, headers=h)
+            self.assertEqual(r.status, 400)
+            # руководитель: head:<латиница>, ник сохраняется
+            r = await self.http.post('/api/staff', json={'role': 'head', 'name': 'Иван', 'username': '@Pivon_dopola'}, headers=h)
+            self.assertEqual(r.status, 200, await r.text())
+            self.assertEqual(await self.pool.fetchval("SELECT telegram_username FROM employees WHERE extension='head:ivan'"),
+                             'pivon_dopola')
+            # отключить: владельца нельзя, руководителя можно, его приглашения гаснут
+            self.assertEqual((await self.http.post('/api/staff/unlink', json={'person_ext': 'own'}, headers=h)).status, 403)
+            r = await self.http.post('/api/staff/invite', json={'person_ext': 'head'}, headers=h)
+            self.assertEqual(r.status, 400)  # уже подключён
+            self.assertEqual((await self.http.post('/api/staff/unlink', json={'person_ext': 'head'}, headers=h)).status, 200)
+            self.assertIsNone(await self.pool.fetchval("SELECT telegram_user_id FROM employees WHERE extension='head'"))
+            r = await self.http.post('/api/staff/invite', json={'person_ext': 'head'}, headers=h)
+            code = (await r.json())['link'].rsplit('inv_', 1)[1]
+            await self.http.post('/api/staff/unlink', json={'person_ext': 'head'}, headers=h)  # не подключён: 400
+            await self.pool.execute("UPDATE employees SET telegram_user_id=902 WHERE extension='head'")
+            await self.http.post('/api/staff/unlink', json={'person_ext': 'head'}, headers=h)
+            self.assertEqual((await invites.accept(self.pool, code, 777, 'x'))[0], None)
+            # копии разборов: менеджеру нельзя; список переезжает в базу и сразу действует
+            r = await self.http.post('/api/staff/copies', json={'person_ext': '101', 'on': True}, headers=h)
+            self.assertEqual(r.status, 400)
+            await self.pool.execute("UPDATE employees SET telegram_user_id=903 WHERE extension='head:ivan'")
+            r = await self.http.post('/api/staff/copies', json={'person_ext': 'head:ivan', 'on': True}, headers=h)
+            self.assertEqual(r.status, 200)
+            self.assertEqual(await review_store.copy_chat_ids(self.pool, 1), [900, 555, 903])
+            await self.http.post('/api/staff/copies', json={'person_ext': 'own', 'on': False}, headers=h)
+            self.assertEqual(await review_store.copy_chat_ids(self.pool, 1), [555, 903])
+            d = await (await self.http.get('/api/staff')).json()
+            self.assertEqual(d['copies_source'], 'crm')
+            self.assertEqual(next(p['copies'] for p in d['items'] if p['ext'] == 'head:ivan'), True)
+
+    async def test_director_link_bound_to_telegram_and_prompts(self):
+        from review import prompts
+        h = {'X-CRM': '1'}
+        with patch.dict(os.environ, {'CRM_TEST_KEY': TEST_KEY, 'PROMPT_EDITORS': '901, 905'}):
+            await self.enter('director')
+            r = await self.http.get('/api/prompts')
+            self.assertEqual(r.status, 403)  # тестовый вход без Telegram
+            self.assertIn('Доступах', (await r.json())['error'])
+            access = await (await self.http.get('/api/access')).json()
+            self.assertEqual(access['directors'], [{'tg': '901', 'name': 'Руководитель'}])
+            r = await self.http.post('/api/access', json={'role': 'director', 'tg': '124'}, headers=h)
+            self.assertEqual(r.status, 400)  # менеджер, не руководитель
+            r = await self.http.post('/api/access', json={'role': 'director', 'tg': '901'}, headers=h)
+            token = (await r.json())['link'].rsplit('/', 1)[1]
+            await self.http.get('/test-exit')
+        with patch.dict(os.environ, {'PROMPT_EDITORS': '901, 905'}), \
+                patch('crm.telegram.send', AsyncMock(return_value=True)) as send:
+            r = await self.http.get('/p/' + token, allow_redirects=False)
+            self.assertEqual(r.headers['Location'], '/director')
+            me = await (await self.http.get('/api/me')).json()
+            self.assertEqual((me['role'], me['name']), ('director', 'Руководитель'))
+            o = await (await self.http.get('/api/prompts')).json()
+            self.assertEqual([k['kind'] for k in o['kinds']], list(prompts.KINDS))
+            st = await (await self.http.get('/api/prompts/morning')).json()
+            self.assertEqual((st['body'], st['source']), (prompts.DIGESTS['morning'], 'исходная версия'))
+            new = 'Три темы на планёрку за {start}–{end}, коротко.'
+            r = await self.http.post('/api/prompts/morning/save', json={'body': new, 'scope': 'all', 'token': 'x'}, headers=h)
+            self.assertEqual(r.status, 400)  # без примера не сохраняется
+            with patch('review.prompt_ui.preview', AsyncMock(return_value=('<b>Итог</b> <a href="x">ок</a>', None, None))):
+                p = await (await self.http.post('/api/prompts/morning/preview', json={'body': new}, headers=h)).json()
+            self.assertEqual(p['html'], '<b>Итог</b> ок')
+            r = await self.http.post('/api/prompts/morning/save', json={'body': new + ' ', 'scope': 'all', 'token': p['token']},
+                                     headers=h)
+            self.assertEqual(r.status, 200)  # пробелы по краям не меняют текст
+            r = await self.http.post('/api/prompts/morning/save', json={'body': new + '!', 'scope': 'all', 'token': p['token']},
+                                     headers=h)
+            self.assertEqual(r.status, 400)  # другой текст — нужен новый пример
+            self.assertEqual((await prompts.common(self.pool, 'morning'))[0], new)
+            send.assert_awaited_once()
+            self.assertEqual(send.await_args.args[0], 905)
+            st = await (await self.http.get('/api/prompts/morning')).json()
+            self.assertEqual(st['source'], 'общая версия')
+            original = next(v['id'] for v in st['versions'] if v['note'] == prompts.ORIGINAL_NOTE)
+            r = await self.http.post(f'/api/prompts/version/{original}/use', json={'scope': 'me'}, headers=h)
+            self.assertEqual(r.status, 200)
+            self.assertEqual((await prompts.resolve(self.pool, 'morning', 901))[1], 'personal')
+            await self.http.post('/api/prompts/morning/personal-off', json={}, headers=h)
+            self.assertEqual((await prompts.resolve(self.pool, 'morning', 901))[0], new)
+            # руководителя отключили от бота — его ссылка директора больше не открывается
+            await self.pool.execute("UPDATE employees SET telegram_user_id=NULL WHERE extension='head'")
+            self.assertEqual((await self.http.get('/api/me')).status, 401)
 
     async def test_personal_link_dies_with_employee(self):
         token = await auth.invite_create(self.pool, 1, 'manager', '102')
