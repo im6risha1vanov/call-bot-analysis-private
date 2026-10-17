@@ -1,4 +1,4 @@
-"""CRM менеджера: вход, очередь, итоги, звонок через Mango. Данные вымышленные."""
+"""CRM: тестовые входы по ролям, очередь, итоги, звонок через Mango, кабинет клиента. Данные вымышленные."""
 import copy
 import json
 import os
@@ -15,7 +15,7 @@ os.environ.setdefault('CVC_API_KEY', 'test')
 os.environ.setdefault('ANTHROPIC_API_KEY', 'test')
 os.environ.setdefault('ENCRYPTION_KEY', 'q7m8b4gN0bO2PZqvG6b0yC3rA1D5pYc8tW2XkL9uQeE=')
 
-from crm import auth, dial, store
+from crm import auth, cabinet, dial, gsheets, store
 from review import callbacks, engine
 from review import store as review_store
 from tests.test_review import CALLBACK, WON
@@ -26,6 +26,32 @@ MSK = ZoneInfo('Europe/Moscow')
 MANAGER = Actor(123, 1, 'manager', '101')
 OTHER = Actor(124, 1, 'manager', '102')
 HEAD = Actor(901, 1, 'head', 'head')
+TEST_KEY = 'k' * 20
+SUMMARY = [['Тарифы'], ['Вид звонка', 'Цена'], ['Первичный звонок', '10 ₽'], ['Повторный звонок (после НДЗ)', '5 ₽'],
+           ['Звонок с результатом «Заинтересованный»', '150 ₽'], [], ['Клиент (название листа)', 'Первичные', 'Повторные',
+           'Заинтересованные', 'Сумма'], ['Кухни', '3', '2', '1', '190 ₽'], ['Окна', '0', '0', '0', '0 ₽'], ['ИТОГО', '3']]
+HEAD_ROW = ['id', 'Проект', 'Тег проекта', 'Телефон', 'Создано', 'Напоминание', 'Заметка', 'Комментарий',
+            'Звонок 1 (первичный)', 'Звонок 2 (повторный)', 'Звонок 3 (повторный)', 'Сумма', 'Дата базы',
+            'Дата звонка 1', 'Дата звонка 2', 'Дата звонка 3']
+CLIENT = [HEAD_ROW,
+          ['1', 'Кухни', 'сайт-а', '79990000001', '', '', '', 'хочет замер', 'НДЗ', 'Заинтересованный', '', '165',
+           '10.10.2026', '10.10.2026', '11.10.2026', ''],
+          ['2', 'Кухни', 'сайт-б', '79990000002', '', 'пт после 12', '', '', 'Перезвон', '', '', '10',
+           '10.10.2026', '10.10.2026', '', ''],
+          ['3', 'Кухни', 'сайт-а', '79990000003', '', '', '', '', 'НДЗ', 'НДЗ 2', '', '15',
+           '11.10.2026', '11.10.2026', '12.10.2026', ''],
+          ['4', 'Кухни', '', '79990000004', '', '', '', '', '', '', '', '', '12.10.2026', '', '', ''],
+          ['', 'итог']]
+
+
+async def fake_values(sheet, range_):
+    if sheet not in gsheets.allowed():
+        raise PermissionError('Эта таблица CRM недоступна.')
+    if range_.startswith('Сводка'):
+        return SUMMARY
+    if range_.startswith("'Кухни'"):
+        return CLIENT
+    raise LookupError('Такого листа нет.')
 
 
 class PureTests(unittest.TestCase):
@@ -47,6 +73,23 @@ class PureTests(unittest.TestCase):
         self.assertIsNone(found[2]['name'])
         self.assertEqual(bad, ['просто текст'])
 
+    def test_parse_summary_and_client(self):
+        info = cabinet.parse_summary(SUMMARY)
+        self.assertEqual([t['price'] for t in info['tariffs']], [10, 5, 150])
+        self.assertEqual([c['name'] for c in info['clients']], ['Кухни', 'Окна'])
+        self.assertEqual(info['clients'][0]['sum'], 190)
+        c = cabinet.parse_client(CLIENT)
+        self.assertEqual(c['counts'], {'total': 4, 'called': 3, 'not_called': 1, 'reached': 2, 'interested': 1,
+                                       'callback': 1, 'not_relevant': 0, 'no_answer': 1, 'other': 0})
+        self.assertEqual((c['cost'], c['since']), (190, '2026-10-10'))
+        self.assertEqual(c['interested'][0]['phone'], '79990000001')
+        self.assertEqual(c['interested'][0]['last'], '2026-10-11')
+        self.assertEqual(c['callbacks'][0]['remind'], 'пт после 12')
+        self.assertEqual(c['days'][0], {'day': '2026-10-12', 'calls': 1, 'repeat': 1})
+        day11 = next(d for d in c['days'] if d['day'] == '2026-10-11')
+        self.assertEqual((day11['calls'], day11['first'], day11['repeat'], day11['reached'], day11['interested']),
+                         (2, 1, 1, 1, 1))
+
 
 class DBCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -66,9 +109,9 @@ class DBCase(unittest.IsolatedAsyncioTestCase):
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS topic TEXT;
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS mode TEXT;
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS assigned_by_telegram_user_id BIGINT;""")
-        for name in ('008_call_reviews.sql', '009_callback_tasks.sql', '014_crm.sql'):
+        for name in ('008_call_reviews.sql', '009_callback_tasks.sql', '014_crm.sql', '015_crm_roles.sql'):
             await self.pool.execute((root / 'migrations' / name).read_text())
-        await self.pool.execute('TRUNCATE clients, crm_login_tokens, crm_sessions CASCADE')
+        await self.pool.execute('TRUNCATE clients, crm_login_tokens, crm_sessions, crm_docs CASCADE')
         from crypto_util import encrypt
         await self.pool.execute("INSERT INTO clients(id,timezone,processing_enabled,vpbx_api_key_enc,vpbx_api_salt_enc) "
                                 "VALUES(1,'Europe/Moscow',true,$1,$2)", encrypt('key'), encrypt('salt'))
@@ -246,24 +289,117 @@ class WebTests(DBCase):
         await super().asyncTearDown()
 
     async def login(self, tg):
-        token = await auth.issue_login(self.pool, tg)
-        r = await self.http.post('/api/login', json={'token': token})
-        self.assertEqual(r.status, 403)  # без заголовка X-CRM
-        r = await self.http.post('/api/login', json={'token': token}, headers={'X-CRM': '1'})
-        self.assertEqual(r.status, 200)
-        r = await self.http.post('/api/login', json={'token': token}, headers={'X-CRM': '1'})
-        self.assertEqual(r.status, 401)  # токен одноразовый
-        return token
+        """Личная сессия сотрудника: личного входа на сайте пока нет, кладём её в базу сами."""
+        token = 'personal-' + str(tg)
+        await self.pool.execute("INSERT INTO crm_sessions(token_hash,telegram_user_id,expires_at) VALUES($1,$2,now()+'1 day')",
+                                auth.digest(token), tg)
+        self.http.session.cookie_jar.update_cookies({'crm_session': token})
 
-    async def test_login_me_and_logout(self):
-        r = await self.http.get('/api/me')
-        self.assertEqual(r.status, 401)
-        r = await self.http.get('/in/whatever')
-        self.assertEqual(r.status, 200)
-        self.assertIn("frame-ancestors 'none'", r.headers['Content-Security-Policy'])
+    async def enter(self, role, **extra):
+        r = await self.http.post('/api/test/login', json={'key': TEST_KEY, 'role': role, **extra})
+        self.assertEqual(r.status, 403)  # без заголовка X-CRM
+        r = await self.http.post('/api/test/login', json={'key': TEST_KEY, 'role': role, **extra}, headers={'X-CRM': '1'})
+        self.assertEqual(r.status, 200, await r.text())
+        return (await r.json())['go']
+
+    async def test_test_link_and_three_entries(self):
+        with patch.dict(os.environ, {'CRM_TEST_KEY': TEST_KEY, 'KITCHEN_SHEET_ID': 'leads'}), \
+                patch('crm.gsheets.values', fake_values):
+            self.assertEqual((await self.http.get('/api/me')).status, 401)
+            self.assertEqual((await self.http.get('/t/wrong-key-wrong-key')).status, 404)
+            r = await self.http.get('/t/' + TEST_KEY)
+            self.assertEqual(r.status, 200)
+            self.assertIn("frame-ancestors 'none'", r.headers['Content-Security-Policy'])
+            opts = await (await self.http.get('/api/test/options?key=' + TEST_KEY)).json()
+            self.assertEqual(([m['ext'] for m in opts['managers']], opts['clients']), (['101', '102'], ['Кухни', 'Окна']))
+            r = await self.http.post('/api/test/login', json={'key': 'nope', 'role': 'director'}, headers={'X-CRM': '1'})
+            self.assertEqual(r.status, 404)
+
+            # директор: своя страница, таблицы через сервер, общая база
+            self.assertEqual(await self.enter('director'), '/director')
+            me = await (await self.http.get('/api/me')).json()
+            self.assertEqual((me['role'], me['test'], me['can_dial']), ('director', True, False))
+            r = await self.http.get('/director')
+            self.assertEqual(r.status, 200)
+            self.assertIn("'unsafe-inline'", r.headers['Content-Security-Policy'])
+            self.assertEqual((await self.http.get('/director/shim.js')).status, 200)
+            self.assertEqual((await self.http.get('/director/../web.py')).status, 404)
+            r = await self.http.post('/api/gs', json={'spreadsheetId': 'leads', 'range': 'Сводка!A1:F80'}, headers={'X-CRM': '1'})
+            self.assertEqual((await r.json())['values'][1][0], 'Вид звонка')
+            r = await self.http.post('/api/gs', json={'spreadsheetId': 'other', 'range': 'A1'}, headers={'X-CRM': '1'})
+            self.assertEqual(r.status, 403)
+            clients = await (await self.http.get('/api/cabinet')).json()
+            self.assertEqual(len(clients['clients']), 2)
+            cab = await (await self.http.get('/api/cabinet?client=Кухни')).json()
+            self.assertEqual(cab['counts']['interested'], 1)
+            self.assertEqual((await self.http.get('/api/queue?ext=102')).status, 200)
+            r = await self.http.post('/api/leads', json={'text': '89991112233', 'ext': '102'}, headers={'X-CRM': '1'})
+            self.assertEqual(r.status, 403)  # тестовый вход только смотрит очереди
+
+            # менеджер: только своя очередь и только просмотр
+            await self.http.get('/test-exit')
+            self.assertEqual((await self.http.get('/api/me')).status, 401)
+            r = await self.http.post('/api/test/login', json={'key': TEST_KEY, 'role': 'manager', 'ext': '999'},
+                                     headers={'X-CRM': '1'})
+            self.assertEqual(r.status, 400)
+            self.assertEqual(await self.enter('manager', ext='102'), '/')
+            me = await (await self.http.get('/api/me')).json()
+            self.assertEqual((me['role'], me['name'], me['ext'], me['readonly'], me['can_dial']),
+                             ('manager', 'Второй', '102', True, False))
+            self.assertEqual((await self.http.get('/api/queue')).status, 200)
+            await store.add_leads(self.pool, 1, '101', '89991112233', 'ГЦК')
+            q = await (await self.http.get('/api/queue?ext=101')).json()
+            self.assertEqual(q['items'], [])  # чужой добавочный в запросе не действует
+            self.assertEqual((await self.http.get('/director')).status, 403)
+            self.assertEqual((await self.http.get('/api/cabinet')).status, 403)
+            with patch('crm.dial.mango_client.callback', AsyncMock(return_value={'result': 1000})) as cb:
+                r = await self.http.post('/api/dial', json={'number': '89991234567'}, headers={'X-CRM': '1'})
+            self.assertEqual(r.status, 403)
+            cb.assert_not_awaited()
+
+            # клиент: только свой кабинет
+            await self.http.get('/test-exit')
+            r = await self.http.post('/api/test/login', json={'key': TEST_KEY, 'role': 'client', 'client': 'Чужой'},
+                                     headers={'X-CRM': '1'})
+            self.assertEqual(r.status, 400)
+            self.assertEqual(await self.enter('client', client='Кухни'), '/')
+            me = await (await self.http.get('/api/me')).json()
+            self.assertEqual((me['role'], me['name']), ('client', 'Кухни'))
+            cab = await (await self.http.get('/api/cabinet?client=Окна')).json()
+            self.assertEqual((cab['name'], cab['counts']['total']), ('Кухни', 4))  # чужое имя в запросе не действует
+            for path in ('/api/queue', '/api/tasks', '/api/leads', '/api/stats', '/director', '/api/docs?path=a/b'):
+                self.assertEqual((await self.http.get(path)).status, 403, path)
+            r = await self.http.post('/api/gs', json={'spreadsheetId': 'leads', 'range': 'Сводка!A1'}, headers={'X-CRM': '1'})
+            self.assertEqual(r.status, 403)
+
+    async def test_test_link_off_without_key(self):
+        with patch.dict(os.environ, {'CRM_TEST_KEY': ''}):
+            self.assertEqual((await self.http.get('/t/' + TEST_KEY)).status, 404)
+        with patch.dict(os.environ, {'CRM_TEST_KEY': 'short'}):
+            self.assertEqual((await self.http.get('/t/short')).status, 404)
+
+    async def test_director_docs(self):
+        with patch.dict(os.environ, {'CRM_TEST_KEY': TEST_KEY}):
+            await self.enter('director')
+        h = {'X-CRM': '1'}
+        await self.http.post('/api/docs', json={'path': 'pipe/deals/a1', 'op': 'set', 'data': {'stage': 'new', 'x': {'a': 1}}}, headers=h)
+        await self.http.post('/api/docs', json={'path': 'pipe/deals/a1', 'op': 'update', 'data': {'x': {'b': 2}}}, headers=h)
+        await self.http.post('/api/docs', json={'path': 'pipe/deals/a2', 'op': 'set', 'data': {'stage': 'won'}}, headers=h)
+        await self.http.post('/api/docs', json={'path': 'pipe/deals/a2/notes/n', 'op': 'set', 'data': {'t': 1}}, headers=h)
+        got = await (await self.http.get('/api/docs?path=pipe/deals/a1')).json()
+        self.assertEqual(got['data'], {'stage': 'new', 'x': {'a': 1, 'b': 2}})
+        col = await (await self.http.get('/api/docs?collection=pipe/deals')).json()
+        self.assertEqual(sorted(d['path'] for d in col['docs']), ['pipe/deals/a1', 'pipe/deals/a2'])
+        await self.http.post('/api/docs', json={'path': 'pipe/deals/a1', 'op': 'delete'}, headers=h)
+        self.assertIsNone((await (await self.http.get('/api/docs?path=pipe/deals/a1')).json())['data'])
+        for bad in ('../x', 'a//b', 'a/b c', ''):
+            r = await self.http.post('/api/docs', json={'path': bad, 'op': 'set', 'data': {}}, headers=h)
+            self.assertEqual(r.status, 400, bad)
+
+    async def test_personal_session_and_logout(self):
         await self.login(123)
         me = await (await self.http.get('/api/me')).json()
-        self.assertEqual((me['name'], me['ext'], me['can_dial'], me['privileged']), ('Первый', '101', True, False))
+        self.assertEqual((me['name'], me['ext'], me['can_dial'], me['privileged'], me['test']), ('Первый', '101', True, False, False))
         r = await self.http.post('/api/logout', json={}, headers={'X-CRM': '1'})
         self.assertEqual(r.status, 200)
         self.assertEqual((await self.http.get('/api/me')).status, 401)

@@ -21,12 +21,16 @@ from aiohttp import web  # noqa: E402
 
 import mango_client  # noqa: E402
 from tools import Forbidden, is_privileged  # noqa: E402
-from . import auth, store  # noqa: E402
+from . import auth, cabinet, gsheets, store  # noqa: E402
 from .dial import dial  # noqa: E402
 
 log = logging.getLogger('crm')
 STATIC = Path(__file__).resolve().parent / 'static'
+DIRECTOR = Path(__file__).resolve().parent / 'director'
+# Снимок разобранных звонков до 07.10 с номерами клиентов: лежит только на сервере, не в git.
+DIRECTOR_DATA = Path(os.getenv('CRM_DIRECTOR_DATA', str(ROOT / 'crm_private' / 'team-data.js')))
 COOKIE = 'crm_session'
+TEST_COOKIE = 'crm_test'
 POOL = web.AppKey('pool', asyncpg.Pool)
 SECURE_COOKIE = os.getenv('CRM_COOKIE_SECURE', '1') != '0'
 HEADERS = {
@@ -36,6 +40,11 @@ HEADERS = {
     'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'no-referrer',
 }
+# Страница директора перенесена из claude.ai как есть: встроенные скрипты и шрифты Google.
+DIRECTOR_CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' "
+                "https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; "
+                "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+TEST_READONLY = 'Тестовый вход только для просмотра: звонки и отметки работают во входе самого менеджера.'
 
 
 def fail(status: int, text: str) -> web.Response:
@@ -61,15 +70,34 @@ async def guard(request: web.Request, handler):
         log.exception('ошибка CRM: %s %s', request.method, request.path)
         response = fail(500, 'Что-то пошло не так. Попробуйте ещё раз.')
     response.headers.update(HEADERS)
+    if request.path.startswith('/director'):
+        response.headers['Content-Security-Policy'] = DIRECTOR_CSP
     if request.path.startswith('/api/'):
         response.headers['Cache-Control'] = 'no-store'
     return response
 
 
-async def actor(request: web.Request):
-    who = await auth.actor_for(request.app[POOL], request.cookies.get(COOKIE))
+async def viewer(request: web.Request) -> auth.Viewer:
+    who = await auth.viewer_for(request.app[POOL], request.cookies.get(COOKIE))
     if who is None:
-        raise web.HTTPUnauthorized(reason='Войдите по ссылке из бота: команда /crm.')
+        raise web.HTTPUnauthorized(reason='Откройте CRM по своей ссылке.')
+    return who
+
+
+async def actor(request: web.Request, write: bool = False):
+    """Сотрудник отдела: директор или менеджер. write=True закрыт для тестового входа."""
+    who = await viewer(request)
+    if who.actor is None:
+        raise Forbidden('Этот раздел недоступен.')
+    if write and who.test:
+        raise Forbidden(TEST_READONLY)
+    return who.actor
+
+
+async def director(request: web.Request) -> auth.Viewer:
+    who = await viewer(request)
+    if who.role != 'director':
+        raise Forbidden('Раздел директора.')
     return who
 
 
@@ -117,27 +145,55 @@ async def ext_of(request: web.Request, who, value=None) -> str:
 # ---- страницы ----
 
 async def index(request):
+    who = await auth.viewer_for(request.app[POOL], request.cookies.get(COOKIE))
+    if who is not None and who.role == 'director' and 'work' not in request.query:
+        raise web.HTTPFound('/director')
     return web.FileResponse(STATIC / 'index.html')
 
 
-async def login_page(request):
-    # Сама ссылка ничего не меняет: токен тратит POST со страницы, иначе его
-    # съест предпросмотр ссылки в Telegram.
-    return web.FileResponse(STATIC / 'login.html')
+async def test_page(request):
+    if not auth.test_key_ok(request.match_info['key']):
+        raise web.HTTPNotFound()
+    response = web.FileResponse(STATIC / 'test.html')
+    response.set_cookie(TEST_COOKIE, request.match_info['key'], max_age=int(auth.TEST_TTL.total_seconds()),
+                        httponly=True, secure=SECURE_COOKIE, samesite='Strict', path='/')
+    return response
+
+
+async def test_exit(request):
+    await auth.logout(request.app[POOL], request.cookies.get(COOKIE))
+    key = request.cookies.get(TEST_COOKIE)
+    response = web.HTTPFound(f'/t/{key}' if auth.test_key_ok(key) else '/')
+    response.del_cookie(COOKIE, path='/')
+    raise response
+
+
+async def logout_page(request):
+    await auth.logout(request.app[POOL], request.cookies.get(COOKIE))
+    response = web.HTTPFound('/')
+    response.del_cookie(COOKIE, path='/')
+    raise response
+
+
+async def director_page(request):
+    await director(request)
+    return web.FileResponse(DIRECTOR / 'index.html')
+
+
+async def director_file(request):
+    await director(request)
+    name = request.match_info['name']
+    if name == 'data.js':
+        if DIRECTOR_DATA.is_file():
+            return web.FileResponse(DIRECTOR_DATA, headers={'Content-Type': 'text/javascript; charset=utf-8'})
+        # Без снимка страница работает на живых данных из таблиц, только без истории до 07.10.
+        return web.FileResponse(DIRECTOR / 'empty-data.js', headers={'Content-Type': 'text/javascript; charset=utf-8'})
+    if name not in ('shim.js',):
+        raise web.HTTPNotFound()
+    return web.FileResponse(DIRECTOR / name)
 
 
 # ---- API ----
-
-async def api_login(request):
-    data = await body(request)
-    session = await auth.redeem(request.app[POOL], str(data.get('token') or ''))
-    if session is None:
-        return fail(401, 'Ссылка устарела или уже использована. Получите новую в боте: /crm.')
-    response = web.json_response({'ok': True})
-    response.set_cookie(COOKIE, session, max_age=int(auth.SESSION_TTL.total_seconds()), httponly=True,
-                        secure=SECURE_COOKIE, samesite='Strict', path='/')
-    return response
-
 
 async def api_logout(request):
     await auth.logout(request.app[POOL], request.cookies.get(COOKIE))
@@ -147,17 +203,133 @@ async def api_logout(request):
 
 
 async def api_me(request):
-    who = await actor(request)
+    who = await viewer(request)
     pool = request.app[POOL]
+    if who.role == 'client':
+        return web.json_response({'name': who.client_key, 'role': 'client', 'test': who.test, 'client': who.client_key,
+                                  'privileged': False, 'can_dial': False, 'team': []})
+    a = who.actor
     name = await pool.fetchval('SELECT full_name FROM employees WHERE client_id=$1 AND telegram_user_id=$2 LIMIT 1',
-                               who.client_id, who.telegram_user_id)
-    privileged = is_privileged(who)
+                               a.client_id, a.telegram_user_id) if a.telegram_user_id else None
+    if name is None and a.extension:
+        name = await pool.fetchval('SELECT full_name FROM employees WHERE client_id=$1 AND extension=$2 LIMIT 1',
+                                   a.client_id, a.extension)
+    privileged = is_privileged(a)
+    can_dial = str(a.extension or '').isdigit() and not who.test
     return web.json_response({
-        'name': name or '', 'role': who.role, 'ext': who.extension if str(who.extension or '').isdigit() else None,
-        'can_dial': str(who.extension or '').isdigit(), 'privileged': privileged,
-        'team': await store.team(pool, who.client_id) if privileged else [],
+        'name': name or ('Директор' if who.role == 'director' else ''), 'role': who.role, 'test': who.test,
+        'ext': a.extension if str(a.extension or '').isdigit() else None,
+        'can_dial': can_dial, 'privileged': privileged, 'readonly': who.test,
+        'team': await store.team(pool, a.client_id) if privileged else [],
         'outcomes': store.OUTCOMES, 'needs_date': sorted(store.NEEDS_DATE), 'lead_status': store.LEAD_STATUS,
     })
+
+
+async def api_test_options(request):
+    if not auth.test_key_ok(request.query.get('key')):
+        raise web.HTTPNotFound()
+    pool = request.app[POOL]
+    client_id = await pool.fetchval('SELECT id FROM clients WHERE processing_enabled ORDER BY id LIMIT 1')
+    try:
+        clients = [c['name'] for c in (await cabinet.summary())['clients']]
+    except Exception:
+        log.exception('список клиентов колл-центра не загрузился')
+        clients = []
+    return web.json_response({'managers': await store.team(pool, client_id) if client_id else [], 'clients': clients})
+
+
+async def api_test_login(request):
+    data = await body(request)
+    if not auth.test_key_ok(data.get('key')):
+        raise web.HTTPNotFound()
+    role = str(data.get('role') or '')
+    client_key = None
+    if role == 'client':
+        names = [c['name'] for c in (await cabinet.summary())['clients']]
+        client_key = str(data.get('client') or '')
+        if client_key not in names:
+            raise ValueError('Такого клиента нет.')
+    session = await auth.test_login(request.app[POOL], role, data.get('ext'), client_key)
+    response = web.json_response({'ok': True, 'go': '/director' if role == 'director' else '/'})
+    response.set_cookie(COOKIE, session, max_age=int(auth.TEST_TTL.total_seconds()), httponly=True,
+                        secure=SECURE_COOKIE, samesite='Strict', path='/')
+    return response
+
+
+async def api_gs(request):
+    await director(request)
+    data = await body(request)
+    try:
+        rows = await gsheets.values(str(data.get('spreadsheetId') or ''), str(data.get('range') or ''))
+    except PermissionError as exc:
+        raise Forbidden(str(exc))
+    except LookupError as exc:
+        raise ValueError(str(exc))
+    return web.json_response({'values': rows})
+
+
+def doc_path(value) -> str:
+    path = str(value or '')
+    parts = path.split('/')
+    if not path or len(path) > 300 or any(not p or p in ('.', '..') or not all(ch.isalnum() or ch in '_-.~:@+' for ch in p)
+                                          for p in parts):
+        raise ValueError('Неверный путь.')
+    return path
+
+
+async def api_docs(request):
+    await director(request)
+    pool = request.app[POOL]
+    if 'path' in request.query:
+        row = await pool.fetchval('SELECT data FROM crm_docs WHERE path=$1', doc_path(request.query['path']))
+        return web.json_response({'data': json.loads(row) if row else None})
+    prefix = doc_path(request.query.get('collection')) + '/'
+    rows = await pool.fetch("SELECT path, data FROM crm_docs WHERE path LIKE $1 || '%' AND position('/' in substr(path, $2)) = 0",
+                            prefix.replace('%', r'\%').replace('_', r'\_'), len(prefix) + 1)
+    return web.json_response({'docs': [{'path': r['path'], 'data': json.loads(r['data'])} for r in rows]})
+
+
+def merge(old: dict, new: dict) -> dict:
+    out = dict(old)
+    for k, v in new.items():
+        out[k] = merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+    return out
+
+
+async def api_docs_write(request):
+    await director(request)
+    data = await body(request)
+    path, op, value = doc_path(data.get('path')), data.get('op'), data.get('data')
+    pool = request.app[POOL]
+    if op == 'delete':
+        await pool.execute('DELETE FROM crm_docs WHERE path=$1', path)
+    elif op in ('set', 'update') and isinstance(value, dict):
+        async with pool.acquire() as conn, conn.transaction():
+            old = await conn.fetchval('SELECT data FROM crm_docs WHERE path=$1 FOR UPDATE', path)
+            if op == 'update':
+                value = merge(json.loads(old) if old else {}, value)
+            await conn.execute(
+                """INSERT INTO crm_docs(path,data,updated_at) VALUES($1,$2::jsonb,now())
+                   ON CONFLICT(path) DO UPDATE SET data=EXCLUDED.data, updated_at=now()""", path, json.dumps(value))
+    else:
+        raise ValueError('Неверная запись.')
+    return web.json_response({'ok': True})
+
+
+async def api_cabinet(request):
+    who = await viewer(request)
+    if who.role == 'client':
+        name = who.client_key
+    elif who.role == 'director':
+        name = request.query.get('client')
+        if not name:
+            return web.json_response({'clients': (await cabinet.summary())['clients']})
+    else:
+        raise Forbidden('Кабинет клиента недоступен.')
+    try:
+        return web.json_response(await cabinet.cabinet(name))
+    except LookupError as exc:
+        raise ValueError(str(exc))
 
 
 async def api_queue(request):
@@ -171,7 +343,7 @@ async def api_tasks(request):
 
 
 async def api_task_change(request):
-    who = await actor(request)
+    who = await actor(request, write=True)
     data = await body(request)
     await store.change_task(request.app[POOL], who, who.client_id, await ext_of(request, who, data.get('ext')),
                             int_id(request.match_info['id']), str(data.get('action') or ''),
@@ -188,7 +360,7 @@ async def api_leads(request):
 
 
 async def api_leads_add(request):
-    who = await actor(request)
+    who = await actor(request, write=True)
     data = await body(request)
     result = await store.add_leads(request.app[POOL], who.client_id, await ext_of(request, who, data.get('ext')),
                                    str(data.get('text') or ''), data.get('source'))
@@ -196,7 +368,7 @@ async def api_leads_add(request):
 
 
 async def api_lead_delete(request):
-    who = await actor(request)
+    who = await actor(request, write=True)
     await store.delete_lead(request.app[POOL], who.client_id, await ext_of(request, who), int_id(request.match_info['id']))
     return web.json_response({'ok': True})
 
@@ -208,7 +380,7 @@ async def api_card(request):
 
 
 async def api_dial(request):
-    who = await actor(request)
+    who = await actor(request, write=True)
     data = await body(request)
     # Только со своего добавочного: руководитель без добавочного звонить не может.
     result = await dial(request.app[POOL], who.client_id, who.extension, data.get('number'), who.telegram_user_id)
@@ -216,7 +388,7 @@ async def api_dial(request):
 
 
 async def api_outcome(request):
-    who = await actor(request)
+    who = await actor(request, write=True)
     data = await body(request)
     dial_id = data.get('dial_id')
     result = await store.outcome(
@@ -243,11 +415,20 @@ def build(pool) -> web.Application:
     app = web.Application(middlewares=[guard], client_max_size=512 * 1024)
     app[POOL] = pool
     app.router.add_get('/', index)
-    app.router.add_get('/in/{token}', login_page)
+    app.router.add_get('/t/{key}', test_page)
+    app.router.add_get('/test-exit', test_exit)
+    app.router.add_get('/logout', logout_page)
+    app.router.add_get('/director', director_page)
+    app.router.add_get('/director/{name}', director_file)
     app.router.add_static('/static/', STATIC, show_index=False)
-    app.router.add_post('/api/login', api_login)
     app.router.add_post('/api/logout', api_logout)
     app.router.add_get('/api/me', api_me)
+    app.router.add_get('/api/test/options', api_test_options)
+    app.router.add_post('/api/test/login', api_test_login)
+    app.router.add_post('/api/gs', api_gs)
+    app.router.add_get('/api/docs', api_docs)
+    app.router.add_post('/api/docs', api_docs_write)
+    app.router.add_get('/api/cabinet', api_cabinet)
     app.router.add_get('/api/queue', api_queue)
     app.router.add_get('/api/tasks', api_tasks)
     app.router.add_post('/api/tasks/{id}', api_task_change)

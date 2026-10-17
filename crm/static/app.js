@@ -81,17 +81,28 @@ const ICON = {
   calls: '<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/>',
   stats: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
   team: '<circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0"/><circle cx="17" cy="9" r="2.5"/><path d="M15 14.5a5 5 0 0 1 6 5.5"/>',
+  client: '<path d="M4 21V8l8-5 8 5v13"/><path d="M9 21v-6h6v6"/>',
+  star: '<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/>',
 };
 const svg = k => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[k]}</svg>`;
 
+const STAFF = ['manager', 'director'];
 const PAGES = [
-  {id: 'queue', name: 'Очередь', icon: 'queue'},
-  {id: 'tasks', name: 'Перезвоны', icon: 'tasks'},
-  {id: 'leads', name: 'База', icon: 'leads'},
-  {id: 'calls', name: 'Звонки', icon: 'calls'},
-  {id: 'stats', name: 'Итоги', icon: 'stats'},
-  {id: 'team', name: 'Команда', icon: 'team', privileged: true},
+  {id: 'team', name: 'Команда', icon: 'team', roles: ['director']},
+  {id: 'queue', name: 'Очередь', icon: 'queue', roles: STAFF},
+  {id: 'tasks', name: 'Перезвоны', icon: 'tasks', roles: STAFF},
+  {id: 'leads', name: 'База', icon: 'leads', roles: STAFF},
+  {id: 'calls', name: 'Звонки', icon: 'calls', roles: STAFF},
+  {id: 'stats', name: 'Итоги', icon: 'stats', roles: STAFF},
+  {id: 'clients', name: 'Клиенты', icon: 'client', roles: ['director']},
+  {id: 'cab', name: 'Сводка', icon: 'stats', roles: ['client']},
+  {id: 'cabint', name: 'Заинтересованные', icon: 'star', roles: ['client']},
+  {id: 'cabcb', name: 'Перезвоны', icon: 'tasks', roles: ['client']},
+  {id: 'cabdays', name: 'По дням', icon: 'calls', roles: ['client']},
 ];
+const HOME = {manager: 'queue', director: 'team', client: 'cab'};
+const ROLE_NAME = {manager: 'Менеджер', director: 'Директор', client: 'Клиент'};
+const allowed = p => p.roles.includes(S.me.role);
 const OUT_CLASS = {meeting: 'o-good', proposal: 'o-good', callback: 'o-mid', interested: 'o-mid',
                    no_answer: '', not_interested: 'o-bad', bad_number: 'o-bad'};
 const OUT_ORDER = ['no_answer', 'callback', 'meeting', 'proposal', 'interested', 'not_interested', 'bad_number'];
@@ -101,12 +112,12 @@ const OPTIONAL_DATE = new Set(['proposal', 'interested']);
 function showLogin(reason) {
   root.innerHTML = `<div class="login panel">
     <div class="logo"><i></i>Averon <b>CRM</b></div>
-    <h1>Войдите через бота</h1>
-    <p class="muted">${esc(reason || 'Отправьте боту команду /crm и нажмите «Открыть CRM».')}</p></div>`;
+    <h1>Вход в CRM</h1>
+    <p class="muted">${esc(reason || 'Откройте CRM по своей ссылке.')}</p></div>`;
 }
 
 function shell() {
-  const pages = PAGES.filter(p => !p.privileged || S.me.privileged);
+  const pages = PAGES.filter(allowed);
   const people = S.me.privileged ? `<label class="field"><select id="pick-ext" aria-label="Менеджер">${
     S.me.team.map(p => `<option value="${esc(p.ext)}"${p.ext === S.ext ? ' selected' : ''}>${esc(p.name)} · ${esc(p.ext)}</option>`).join('')
   }</select></label>` : '';
@@ -114,14 +125,17 @@ function shell() {
     <aside class="side">
       <div class="logo"><i></i>Averon <b>CRM</b></div>
       <nav class="nav">${pages.map(p => `<button data-page="${p.id}">${svg(p.icon)}<span>${p.name}</span><span class="count" id="count-${p.id}"></span></button>`).join('')}</nav>
-      <div class="side-foot"><span>${esc(S.me.name)}${S.me.ext ? ' · доб. ' + esc(S.me.ext) : ''}</span><button id="logout">Выйти</button></div>
+      <div class="side-foot"><span>${esc(S.me.name)}${S.me.ext ? ' · доб. ' + esc(S.me.ext) : ''}</span>
+        ${S.me.role === 'director' ? '<a class="btn small" href="/director">Аналитика директора</a>' : ''}
+        ${S.me.test ? '<a class="btn small" href="/test-exit">Сменить вход</a>' : '<button id="logout">Выйти</button>'}</div>
     </aside>
     <div class="main">
+      ${S.me.test ? `<div class="banner"><b>Тестовый вход · ${esc(ROLE_NAME[S.me.role] || '')}</b><span>${S.me.role === 'manager' ? 'Только просмотр: звонки и отметки работают во входе самого менеджера.' : S.me.role === 'director' ? 'Очереди менеджеров здесь только для просмотра.' : 'Так кабинет увидит клиент.'}</span>${S.me.role === 'director' ? '<a href="/director">Аналитика директора</a>' : ''}<a href="/test-exit">Сменить вход</a></div>` : ''}
       <header class="top"><h1 id="title"></h1><span class="sp"></span>${people}</header>
       <main class="content" id="view"></main>
     </div></div>`;
   $$('.nav button').forEach(b => b.addEventListener('click', () => go(b.dataset.page)));
-  $('#logout').addEventListener('click', async () => { await api('/api/logout', {method: 'POST', body: {}}).catch(() => {}); showLogin(); });
+  if ($('#logout')) $('#logout').addEventListener('click', async () => { await api('/api/logout', {method: 'POST', body: {}}).catch(() => {}); showLogin(); });
   const pick = $('#pick-ext');
   if (pick) pick.addEventListener('change', () => { S.ext = pick.value; S.queue = null; S.pos = 0; S.dial = null; save(); go(S.page); });
 }
@@ -130,7 +144,7 @@ function save() { try { localStorage.setItem('crm', JSON.stringify({page: S.page
 function load() { try { return JSON.parse(localStorage.getItem('crm') || '{}'); } catch (e) { return {}; } }
 
 async function go(page) {
-  if (!PAGES.some(p => p.id === page && (!p.privileged || S.me.privileged))) page = 'queue';
+  if (!PAGES.some(p => p.id === page && allowed(p))) page = HOME[S.me.role] || 'queue';
   S.page = page; save();
   $$('.nav button').forEach(b => b.setAttribute('aria-current', b.dataset.page === page ? 'page' : 'false'));
   $('#title').textContent = PAGES.find(p => p.id === page).name;
@@ -161,9 +175,9 @@ function workCard(el, item, onDone, extra = '') {
       <button class="btn primary big" data-act="dial" ${canDial ? '' : 'disabled'}>📞 Позвонить</button>
       <button class="btn" data-act="copy">Скопировать номер</button>
     </div>
-    ${canDial ? '' : '<div class="ringing">Звонить можно только со своего добавочного в Mango. Руководитель видит очередь менеджера, но звонит менеджер.</div>'}
+    ${canDial ? '' : `<div class="ringing">${S.me.readonly ? 'Тестовый вход: звонок и итог работают во входе самого менеджера.' : 'Звонить можно только со своего добавочного в Mango. Руководитель видит очередь менеджера, но звонит менеджер.'}</div>`}
     <div class="ringing hidden" id="ring"></div>
-    <div class="outs">
+    <div class="outs${S.me.readonly ? ' hidden' : ''}">
       <h3>Итог звонка</h3>
       <div class="outgrid">${OUT_ORDER.map(k => `<button data-out="${k}" class="${OUT_CLASS[k]}" aria-pressed="false">${esc(S.me.outcomes[k])}</button>`).join('')}</div>
       <div class="outform hidden" id="outform">
@@ -328,9 +342,9 @@ VIEWS.tasks = async view => {
       <div class="item"><div class="main-l"><div class="t"><span class="num">${esc(phone(t.number))}</span>${t.title ? ' · ' + esc(t.title) : ''}</div>
       <div class="s">${esc(t.label)} · ${esc(dueText(t))}${t.note ? ' · «' + esc(t.note) + '»' : ''}</div></div>
       <div class="row"><button class="btn small primary" data-open="${t.id}">Открыть</button>
-      <button class="btn small" data-move="${t.id}">Перенести</button>
+      ${S.me.readonly ? '' : `<button class="btn small" data-move="${t.id}">Перенести</button>
       <button class="btn small" data-done="${t.id}">Выполнено</button>
-      <button class="btn small danger" data-cancel="${t.id}">Отменить</button></div></div>`).join('')}</div>` : '';
+      <button class="btn small danger" data-cancel="${t.id}">Отменить</button>`}</div></div>`).join('')}</div>` : '';
   }).join('')}</div>`;
   const byId = Object.fromEntries(data.items.map(t => [t.id, t]));
   $$('[data-open]', view).forEach(b => b.addEventListener('click', () => drawer(byId[b.dataset.open], () => go('tasks'))));
@@ -364,10 +378,10 @@ VIEWS.leads = async view => {
       ${data.items.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Номер</th><th>Клиент</th><th class="hide-m">Источник</th><th>Статус</th><th></th></tr></thead><tbody>
       ${data.items.map(l => `<tr class="click" data-id="${l.id}"><td class="num">${esc(phone(l.number))}</td><td>${esc(l.title || '')}${l.note ? `<div class="muted">${esc(l.note)}</div>` : ''}</td>
         <td class="hide-m">${esc(l.source)}</td><td><span class="chip ${l.status === 'new' ? 'acc' : ['meeting', 'proposal'].includes(l.status) ? 'good' : ['not_interested', 'bad_number'].includes(l.status) ? 'bad' : 'warn'}">${esc(l.label)}${l.status === 'no_answer' ? ' · ' + l.attempts : ''}</span></td>
-        <td><button class="btn small danger" data-del="${l.id}" aria-label="Удалить номер">✕</button></td></tr>`).join('')}
+        <td>${S.me.readonly ? '' : `<button class="btn small danger" data-del="${l.id}" aria-label="Удалить номер">✕</button>`}</td></tr>`).join('')}
       </tbody></table></div>${data.items.length >= 500 ? '<p class="muted">Показаны последние 500.</p>' : ''}` : '<div class="empty">Здесь пока пусто. Вставьте номера справа.</div>'}
     </div>
-    <div class="panel"><h2>Добавить номера</h2>
+    <div class="panel${S.me.readonly ? ' hidden' : ''}"><h2>Добавить номера</h2>
       <p class="muted">По одному на строку. Можно сразу с именем и компанией через точку с запятой: <span class="num">89991234567; Иван; ООО Ромашка</span>. Повторы и номера, которые уже есть, пропущу.</p>
       <label class="field">Номера<textarea id="l-text" rows="10" placeholder="+7 999 123-45-67; Иван Петров; ООО Ромашка"></textarea></label>
       <label class="field">Откуда база<input id="l-src" maxlength="80" list="l-srcs" placeholder="например, ГЦК 17.10"><datalist id="l-srcs">${data.sources.map(s => `<option value="${esc(s)}">`).join('')}</datalist></label>
@@ -384,7 +398,7 @@ VIEWS.leads = async view => {
     if (!confirm('Удалить номер из базы?')) return;
     try { await api('/api/leads/' + b.dataset.del, {method: 'DELETE'}); toast('Удалён'); go('leads'); } catch (e) { toast(e.message, true); }
   }));
-  $('#l-add').addEventListener('click', async () => {
+  if (!S.me.readonly) $('#l-add').addEventListener('click', async () => {
     const text = $('#l-text').value;
     if (!text.trim()) { toast('Вставьте номера', true); return; }
     try {
@@ -486,6 +500,102 @@ VIEWS.team = async view => {
   }));
 };
 
+// ---------- кабинет клиента колл-центра ----------
+const rub = v => Math.round(v || 0).toLocaleString('ru-RU') + ' ₽';
+const pctOf = (a, b) => b ? Math.round(a / b * 100) + '%' : '—';
+const RESULT = {interested: ['Заинтересованный', 'good'], callback: ['Перезвон', 'warn'], not_relevant: ['Неактуально', 'bad'],
+                no_answer: ['Не дозвонились', ''], not_called: ['Ещё не звонили', ''], other: ['Другое', '']};
+
+async function cabinetData(name) {
+  const key = name || '';
+  if (!S.cabCache || S.cabCache.key !== key || Date.now() - S.cabCache.at > 120000) {
+    const c = await api('/api/cabinet' + (name ? '?client=' + encodeURIComponent(name) : ''), {scoped: false});
+    S.cabCache = {key, at: Date.now(), c};
+  }
+  return S.cabCache.c;
+}
+
+function cabHeader(c) {
+  return `<p class="muted">Данные колл-центра Averon по базе «${esc(c.name)}»${c.since ? ` с ${ddmm(c.since)}` : ''}. Обновляются из таблицы обзвона.</p>`;
+}
+
+function cabSummary(c) {
+  const k = c.counts;
+  const t = Object.fromEntries((c.tariffs || []).map(x => [x.name, x.price]));
+  const bases = c.bases.filter(b => b.date);
+  return `${cabHeader(c)}<div class="kpis">
+      <div class="kpi"><b>${k.total}</b><span>номеров передано</span></div>
+      <div class="kpi"><b>${k.called}</b><span>обзвонено · ${pctOf(k.called, k.total)}</span></div>
+      <div class="kpi"><b>${k.reached}</b><span>дозвонились · ${pctOf(k.reached, k.called)}</span></div>
+      <div class="kpi"><b>${k.interested}</b><span>заинтересованных</span></div>
+      <div class="kpi"><b>${rub(c.summary.sum)}</b><span>к оплате</span></div></div>
+    <div class="grid2"><div class="panel"><h2>Итог по номерам</h2><table class="tbl"><tbody>
+      ${['interested', 'callback', 'not_relevant', 'no_answer', 'not_called', 'other'].filter(x => k[x]).map(x =>
+        `<tr><td><span class="chip ${RESULT[x][1]}">${RESULT[x][0]}</span></td><td class="n">${k[x]}</td><td class="n muted">${pctOf(k[x], k.total)}</td></tr>`).join('')}
+      </tbody></table>
+      ${bases.length ? `<h2 class="gap">По базам</h2><div class="scroll"><table class="tbl"><thead><tr><th>База от</th><th class="n">Номеров</th><th class="n">Обзвонено</th><th class="n">Дозвон</th><th class="n">Заинтерес.</th></tr></thead><tbody>
+        ${bases.map(b => `<tr><td>${ddmm(b.date)}.${b.date.slice(0, 4)}</td><td class="n">${b.total}</td><td class="n">${b.called || 0}</td><td class="n">${pctOf(b.reached || 0, b.called || 0)}</td><td class="n">${b.interested || 0}</td></tr>`).join('')}
+      </tbody></table></div>` : ''}</div>
+    <div class="stack"><div class="panel"><h2>Расчёт</h2><table class="tbl"><tbody>
+      <tr><td>Первичных звонков</td><td class="n">${c.summary.first}</td><td class="n muted">${t['Первичный звонок'] != null ? '× ' + t['Первичный звонок'] + ' ₽' : ''}</td></tr>
+      <tr><td>Повторных звонков</td><td class="n">${c.summary.repeat}</td><td class="n muted">${t['Повторный звонок (после НДЗ)'] != null ? '× ' + t['Повторный звонок (после НДЗ)'] + ' ₽' : ''}</td></tr>
+      <tr><td>Заинтересованных</td><td class="n">${c.summary.interested}</td><td class="n muted">${t['Звонок с результатом «Заинтересованный»'] != null ? '× ' + t['Звонок с результатом «Заинтересованный»'] + ' ₽' : ''}</td></tr>
+      <tr><td><b>Итого</b></td><td></td><td class="n"><b>${rub(c.summary.sum)}</b></td></tr></tbody></table></div>
+    <div class="panel"><h2>Последние заинтересованные <span class="muted">· ${c.interested.length}</span></h2>${c.interested.length ? `<div class="list">${c.interested.slice(0, 5).map(leadRow).join('')}</div>` : '<div class="empty">Пока нет.</div>'}</div></div></div>`;
+}
+
+function leadRow(l) {
+  return `<div class="item"><div class="main-l"><div class="t num">${esc(phone(l.phone) || l.phone)}</div>
+    <div class="s">${esc([l.source, l.comment].filter(Boolean).join(' · '))}</div></div>
+    <div class="r">${l.last ? ddmm(l.last) : ''}${l.remind ? `<span class="chip warn">${esc(l.remind)}</span>` : ''}</div></div>`;
+}
+
+function cabLeads(c, kind) {
+  const list = kind === 'int' ? c.interested : c.callbacks;
+  if (!list.length) return `${cabHeader(c)}<div class="panel empty">${kind === 'int' ? 'Заинтересованных пока нет.' : 'Перезвонов сейчас нет.'}</div>`;
+  return `${cabHeader(c)}<div class="panel scroll"><table class="tbl"><thead><tr><th>Телефон</th><th>Звонок</th>${kind === 'cb' ? '<th>Напоминание</th>' : ''}<th class="hide-m">Источник</th><th>Комментарий оператора</th></tr></thead><tbody>
+    ${list.map(l => `<tr><td class="num">${esc(phone(l.phone) || l.phone)}</td><td>${l.last ? ddmm(l.last) : ''}<div class="muted">${esc(l.attempts.filter(Boolean).join(' → '))}</div></td>
+      ${kind === 'cb' ? `<td>${esc(l.remind || '')}</td>` : ''}<td class="hide-m">${esc(l.source)}</td><td>${esc(l.comment)}</td></tr>`).join('')}
+    </tbody></table></div>`;
+}
+
+function cabDays(c) {
+  const days = c.days.slice(0, 30).reverse();
+  const max = Math.max(1, ...days.map(d => d.calls));
+  return `${cabHeader(c)}<div class="panel"><h2>Звонки по дням</h2>${days.length > 1 ? `<div class="bars">${days.map(d =>
+      `<div class="bar" title="${ddmm(d.day)}: ${d.calls} звонков, дозвонились ${d.reached || 0}"><div class="stackbar"><i data-h="${(d.reached || 0) / max * 100}"></i><i class="b2" data-h="${(d.calls - (d.reached || 0)) / max * 100}"></i></div><span>${ddmm(d.day)}</span></div>`).join('')}</div>
+      <p class="muted">Зелёным дозвонились, серым не взяли трубку.</p>` : ''}
+    <div class="scroll"><table class="tbl"><thead><tr><th>День</th><th class="n">Звонков</th><th class="n hide-m">Первичных</th><th class="n hide-m">Повторных</th><th class="n">Дозвонились</th><th class="n">Заинтерес.</th></tr></thead><tbody>
+    ${c.days.map(d => `<tr><td>${ddmm(d.day)}</td><td class="n">${d.calls}</td><td class="n hide-m">${d.first || 0}</td><td class="n hide-m">${d.repeat || 0}</td><td class="n">${d.reached || 0}</td><td class="n">${d.interested || 0}</td></tr>`).join('')}
+    </tbody></table></div></div>`;
+}
+
+VIEWS.cab = async view => { view.innerHTML = cabSummary(await cabinetData()); };
+VIEWS.cabint = async view => { view.innerHTML = cabLeads(await cabinetData(), 'int'); };
+VIEWS.cabcb = async view => { view.innerHTML = cabLeads(await cabinetData(), 'cb'); };
+VIEWS.cabdays = async view => { view.innerHTML = cabDays(await cabinetData()); heights(view); };
+
+VIEWS.clients = async view => {
+  if (S.cabName) {
+    const c = await cabinetData(S.cabName);
+    const tab = S.cabTab || 'cab';
+    view.innerHTML = `<div class="row gapb"><button class="btn small" id="cab-back">← Все клиенты</button><b>${esc(c.name)}</b></div>
+      <div class="filters">${[['cab', 'Сводка'], ['int', 'Заинтересованные'], ['cb', 'Перезвоны'], ['days', 'По дням']].map(([k, t]) =>
+        `<button data-tab="${k}" aria-pressed="${tab === k}">${t}</button>`).join('')}</div>
+      <div id="cabbody">${tab === 'cab' ? cabSummary(c) : tab === 'days' ? cabDays(c) : cabLeads(c, tab)}</div>`;
+    heights(view);
+    $('#cab-back').addEventListener('click', () => { S.cabName = null; go('clients'); });
+    $$('[data-tab]', view).forEach(b => b.addEventListener('click', () => { S.cabTab = b.dataset.tab; go('clients'); }));
+    return;
+  }
+  const data = await api('/api/cabinet', {scoped: false});
+  if (!data.clients.length) { view.innerHTML = '<div class="panel empty">В таблице колл-центра пока нет клиентов.</div>'; return; }
+  view.innerHTML = `<div class="panel scroll"><h2>Клиенты колл-центра</h2><table class="tbl"><thead><tr><th>Клиент</th><th class="n">Первичных</th><th class="n">Повторных</th><th class="n">Заинтерес.</th><th class="n">Сумма</th></tr></thead><tbody>
+    ${data.clients.map(c => `<tr class="click" data-name="${esc(c.name)}"><td>${esc(c.name)}</td><td class="n">${c.first}</td><td class="n">${c.repeat}</td><td class="n">${c.interested}</td><td class="n">${rub(c.sum)}</td></tr>`).join('')}
+    </tbody></table><p class="muted">Нажмите на клиента, чтобы открыть его кабинет так, как его видит клиент.</p></div>`;
+  $$('tr[data-name]', view).forEach(tr => tr.addEventListener('click', () => { S.cabName = tr.dataset.name; S.cabTab = 'cab'; go('clients'); }));
+};
+
 // ---------- start ----------
 (async () => {
   try {
@@ -500,7 +610,7 @@ VIEWS.team = async view => {
     S.ext = S.me.team.some(p => p.ext === saved.ext) ? saved.ext : S.me.team[0]?.ext || null;
   }
   shell();
-  go(saved.page || (S.me.privileged ? 'team' : 'queue'));
+  go(saved.page || HOME[S.me.role]);
   // Очередь и счётчики обновляются раз в минуту, если менеджер не заполняет итог.
   setInterval(async () => {
     if (document.hidden || S.busy || S.dial || $('.drawer') || $('#outform:not(.hidden)')) return;

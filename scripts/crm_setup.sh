@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# CRM менеджеров (crm/): сайт на этом сервере за Caddy с HTTPS, вход по /crm из бота.
+# CRM (crm/): один сайт на этом сервере за Caddy с HTTPS, входы Директор / Менеджер / Клиент.
+# Пока вход один: тестовая ссылка https://DOMAIN/t/<CRM_TEST_KEY> с выбором роли.
 # Запуск на сервере (root), из /opt/callbot-astra:
 #   bash scripts/crm_setup.sh check            — что занимает порты 80/443, есть ли Caddy, файрвол
-#   bash scripts/crm_setup.sh install [DOMAIN] — миграция 014, сервис callbot-crm, Caddy, CRM_URL, перезапуск бота
+#   bash scripts/crm_setup.sh install [DOMAIN] — миграции 014-015, сервис callbot-crm, Caddy, CRM_URL, тестовая ссылка
 #                                                DOMAIN по умолчанию <ip>.sslip.io (бесплатный адрес под IP сервера)
-#   bash scripts/crm_setup.sh status           — сервис, адрес и проверка HTTPS
+#   bash scripts/crm_setup.sh status           — сервис, адрес, проверка HTTPS и тестовая ссылка
+#   bash scripts/crm_setup.sh new-test-link    — новая тестовая ссылка (старая перестаёт работать)
 #   bash scripts/crm_setup.sh rollback         — выключить сайт и убрать CRM_URL (таблицы CRM остаются, они ничему не мешают)
 set -euo pipefail
 APP=/opt/callbot-astra
@@ -19,6 +21,14 @@ default_domain() {
   local ip
   ip=$(curl -4 -s --max-time 5 https://ifconfig.me || hostname -I | awk '{print $1}')
   echo "${ip//./-}.sslip.io"
+}
+
+new_key() { head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24; }
+test_link() {
+  local url key
+  url=$(grep -m1 '^CRM_URL=' .env | cut -d= -f2- || true)
+  key=$(grep -m1 '^CRM_TEST_KEY=' .env | cut -d= -f2- || true)
+  [ -n "$url" ] && [ -n "$key" ] && echo "test link: $url/t/$key"
 }
 
 listeners() { ss -ltnpH "( sport = :80 or sport = :443 )" || true; }
@@ -40,6 +50,8 @@ install)
   git rev-parse HEAD > "$STATE/commit.before"
   cp .env "$STATE/env.before.$(date +%s)"
   psql "$DATABASE_URL" -q -v ON_ERROR_STOP=1 -f migrations/014_crm.sql
+  psql "$DATABASE_URL" -q -v ON_ERROR_STOP=1 -f migrations/015_crm_roles.sql
+  grep -q '^CRM_TEST_KEY=' .env || echo "CRM_TEST_KEY=$(new_key)" >> .env
   cat > "$UNIT" <<UNIT
 [Unit]
 Description=Averon CRM for managers (crm/web.py)
@@ -94,6 +106,7 @@ $DOMAIN {
   systemctl enable caddy >/dev/null 2>&1 || true
   systemctl reload caddy 2>/dev/null || systemctl restart caddy
   if grep -q '^CRM_URL=' .env; then sed -i "s|^CRM_URL=.*|CRM_URL=https://$DOMAIN|" .env; else echo "CRM_URL=https://$DOMAIN" >> .env; fi
+  # Бот тоже перезапускаем: в этой ветке у него исправлены кнопки перезвонов.
   systemctl restart $BOT_SERVICES callbot-crm
   sleep 8
   git log -1 --oneline
@@ -101,6 +114,13 @@ $DOMAIN {
   echo "local: $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$PORT/api/me)  (401 is correct)"
   echo "https: $(curl -s -o /dev/null -w '%{http_code}' --max-time 30 https://$DOMAIN/api/me)  (401 is correct; certificate may take a minute)"
   echo "CRM_URL=https://$DOMAIN"
+  test_link
+  ;;
+new-test-link)
+  sed -i '/^CRM_TEST_KEY=/d' .env
+  echo "CRM_TEST_KEY=$(new_key)" >> .env
+  systemctl restart callbot-crm
+  test_link
   ;;
 status)
   git log -1 --oneline
@@ -111,18 +131,16 @@ status)
   psql "$DATABASE_URL" -At -c "SELECT 'sessions '||count(*) FROM crm_sessions WHERE expires_at>now()" \
                           -c "SELECT 'leads '||count(*) FROM crm_leads" \
                           -c "SELECT 'dials today '||count(*) FROM crm_dials WHERE created_at>current_date"
+  test_link || echo 'test link not set'
   journalctl -u callbot-crm -n 5 --no-pager -o cat || true
   ;;
 rollback)
   systemctl disable --now callbot-crm || true
   sed -i '/^CRM_URL=/d' .env
-  systemctl restart $BOT_SERVICES
-  sleep 5
-  systemctl is-active $BOT_SERVICES
   echo "CRM is off. Caddy keeps running but has nothing behind it; stop it with: systemctl disable --now caddy"
   ;;
 *)
-  sed -n '2,8p' "$0"
+  sed -n '2,10p' "$0"
   exit 1
   ;;
 esac

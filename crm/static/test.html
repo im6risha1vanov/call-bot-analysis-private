@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<title>Вход в Averon CRM</title>
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/test.js" defer></script>
+</head>
+<body>
+<main class="entry">
+  <div class="logo"><i></i>Averon <b>CRM</b></div>
+  <h1>Выберите вход</h1>
+  <p class="muted">Тестовая ссылка: можно посмотреть CRM глазами каждого. Менеджер и клиент здесь только смотрят, звонки отключены.</p>
+  <div class="entries">
+    <section class="panel ent">
+      <h2>Директор</h2>
+      <p class="muted">Сводка отдела, менеджеры, воронка, журнал звонков, перезвоны, колл-центр и база лидов. Отсюда же видны очереди менеджеров и кабинеты клиентов.</p>
+      <button class="btn primary big" data-role="director">Войти как директор</button>
+    </section>
+    <section class="panel ent">
+      <h2>Менеджер</h2>
+      <p class="muted">Очередь обзвона, кнопка «Позвонить» через Mango, итог звонка, перезвоны, своя база номеров и итоги дня.</p>
+      <label class="field">Менеджер<select id="ext"><option>Загружаю…</option></select></label>
+      <button class="btn primary big" data-role="manager">Войти как менеджер</button>
+    </section>
+    <section class="panel ent">
+      <h2>Клиент</h2>
+      <p class="muted">Кабинет клиента колл-центра: сколько номеров обзвонили, дозвон, заинтересованные с телефонами, перезвоны и сумма к оплате.</p>
+      <label class="field">Клиент<select id="client"><option>Загружаю…</option></select></label>
+      <button class="btn primary big" data-role="client">Войти как клиент</button>
+    </section>
+  </div>
+  <p class="muted" id="err"></p>
+</main>
+</body>
+</html>

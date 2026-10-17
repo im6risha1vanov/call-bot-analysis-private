@@ -147,7 +147,7 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
 .stackbar{display:flex;flex-direction:column-reverse;width:100%;max-width:38px;flex:1;justify-content:flex-start}
 
 @media (max-width: 860px){
-  .app{grid-template-columns:1fr}
+  .app{grid-template-columns:minmax(0,1fr)}
   .side{position:fixed;bottom:0;top:auto;left:0;right:0;height:auto;flex-direction:row;padding:6px;z-index:10;border-right:0;border-top:1px solid var(--line)}
   .side .logo,.side-foot{display:none}
   .nav{flex-direction:row;width:100%;justify-content:space-around}
@@ -155,9 +155,21 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
   .nav .count{position:absolute;top:0;right:6px;margin:0}
   .top{padding:10px 16px}
   .content{padding:14px 16px 96px}
-  .grid2{grid-template-columns:1fr}
+  .grid2{grid-template-columns:minmax(0,1fr)}
   .work .phone{font-size:24px}
   .tbl .hide-m{display:none}
 }
 .login .logo{justify-content:center}
 .panel .field + .field,.panel .field + .row{margin-top:10px}
+
+/* вход и переключатель ролей */
+.entry{max-width:1100px;margin:6vh auto;padding:0 16px 40px}
+.entry h1{font-size:24px;margin:18px 0 6px}
+.entries{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-top:20px}
+.ent{display:flex;flex-direction:column;gap:12px}
+.ent h2{font-size:17px;margin:0}
+.ent p{margin:0;flex:1}
+.banner{background:var(--heat-soft);color:var(--heat);padding:8px 24px;font-size:13px;display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+.banner a{color:inherit;font-weight:600}
+.panel h2.gap{margin-top:18px}
+.row.gapb{margin-bottom:12px}

@@ -1,0 +1,1573 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<title>AveronCRM</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&family=Unbounded:wght@500;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: app shell — fixed sidebar of modules, top bar with client and balance, content pane; drawer slides in for a contact card */
+:root{
+  --bg:#f3f5f3; --surface:#ffffff; --surface-2:#eef1ee; --line:#dde3de; --fg:#13201c; --muted:#5d6b66;
+  --accent:#0d7a63; --accent-ink:#ffffff; --accent-soft:#d9efe8;
+  --heat:#d9761a; --heat-soft:#fbead8;
+  --s-search:#0d7a63; --s-site:#3f63c4; --s-call:#c2543a;
+  --good:#1f8a4c; --warn:#b7791f; --bad:#c0392b;
+  --display:"Unbounded","Golos Text",system-ui,sans-serif;
+  --body:"Golos Text",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,"SFMono-Regular",Menlo,monospace;
+  --r:10px;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0e1513; --surface:#151e1b; --surface-2:#1b2622; --line:#2a3732; --fg:#e6eeea; --muted:#93a39d;
+  --accent:#3cc2a0; --accent-ink:#06261e; --accent-soft:#163a31;
+  --heat:#f0a050; --heat-soft:#3a2a18;
+  --s-search:#3cc2a0; --s-site:#7f9cf0; --s-call:#ec8a70;
+  --good:#4cc782; --warn:#e2b04f; --bad:#ef7565; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0e1513; --surface:#151e1b; --surface-2:#1b2622; --line:#2a3732; --fg:#e6eeea; --muted:#93a39d;
+  --accent:#3cc2a0; --accent-ink:#06261e; --accent-soft:#163a31;
+  --heat:#f0a050; --heat-soft:#3a2a18;
+  --s-search:#3cc2a0; --s-site:#7f9cf0; --s-call:#ec8a70;
+  --good:#4cc782; --warn:#e2b04f; --bad:#ef7565; color-scheme:dark}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{background:var(--bg);color:var(--fg);font-family:var(--body);font-size:14px;line-height:1.45}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.app{display:grid;grid-template-columns:256px minmax(0,1fr);min-height:100%}
+/* sidebar */
+.side{background:var(--surface);border-right:1px solid var(--line);padding:20px 14px;display:flex;flex-direction:column;gap:18px;position:sticky;top:0;height:100vh}
+.logo{font-family:var(--display);font-weight:700;font-size:18px;letter-spacing:-.01em;display:flex;align-items:center;gap:8px;padding:0 8px}
+.logo i{width:22px;height:22px;border-radius:6px;background:var(--accent);display:grid;place-items:center}
+.logo i::after{content:"";width:8px;height:8px;border-radius:50%;background:var(--accent-ink);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent-ink) 35%,transparent)}
+.logo b{color:var(--accent)}
+.navgroup{display:flex;flex-direction:column;gap:2px}
+.navlabel{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);padding:0 10px 6px}
+.nav{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:8px;border:0;background:none;text-align:left;width:100%;color:var(--fg)}
+.nav:hover{background:var(--surface-2)}
+.nav[aria-current="page"]{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.nav svg{width:18px;height:18px;flex:none}
+.nav .soon{margin-left:auto;font-size:10.5px;padding:2px 6px;border-radius:999px;background:var(--surface-2);color:var(--muted);font-weight:500}
+.nav .count{margin-left:auto;font-size:11px;padding:1px 7px;border-radius:999px;background:var(--heat);color:#fff;font-weight:600}
+.side-foot{margin-top:auto;font-size:12px;color:var(--muted);padding:10px;border-top:1px solid var(--line)}
+/* main */
+.main{min-width:0;display:flex;flex-direction:column}
+.top{display:flex;align-items:center;gap:16px;padding:14px 28px;border-bottom:1px solid var(--line);background:var(--surface);flex-wrap:wrap}
+.client{display:flex;flex-direction:column}
+.client b{font-weight:600}
+.client span{font-size:12px;color:var(--muted)}
+.top .spacer{flex:1}
+.demo{font-size:12px;padding:4px 10px;border-radius:999px;background:var(--heat-soft);color:var(--heat);font-weight:600}
+.balance{display:flex;align-items:center;gap:10px;padding:6px 12px;border:1px solid var(--line);border-radius:8px}
+.balance small{color:var(--muted);font-size:11.5px;display:block}
+.btn{border:1px solid var(--line);background:var(--surface);padding:8px 14px;border-radius:8px;font-weight:500}
+.btn:hover{background:var(--surface-2)}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.btn.primary:hover{filter:brightness(1.07)}
+.btn.sm{padding:5px 10px;font-size:12.5px}
+.content{padding:24px 28px 48px;display:flex;flex-direction:column;gap:22px;max-width:1240px;width:100%}
+h1{font-family:var(--display);font-weight:500;font-size:24px;letter-spacing:-.015em;margin:0;text-wrap:balance}
+.lead{color:var(--muted);margin:4px 0 0;max-width:68ch}
+.head{display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap}
+.head .spacer{flex:1}
+/* KPI */
+.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+.kpi{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px}
+.kpi small{color:var(--muted);font-size:12.5px;display:block}
+.kpi .v{font-family:var(--mono);font-size:26px;font-weight:600;margin-top:6px;letter-spacing:-.02em}
+.kpi .d{font-size:12px;margin-top:2px;color:var(--good)}
+.kpi .d.down{color:var(--bad)}
+.kpi.hot{border-color:var(--heat);background:linear-gradient(var(--heat-soft),var(--heat-soft))}
+.kpi.hot .v{color:var(--heat)}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:18px;min-width:0}
+.panel h2{font-size:15px;font-weight:600;margin:0 0 4px}
+.panel .sub{color:var(--muted);font-size:12.5px;margin:0 0 12px}
+.grid2{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:14px}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-bottom:8px}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{width:10px;height:10px;border-radius:3px;display:inline-block}
+.chart svg{width:100%;height:auto;display:block}
+/* chips */
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:3px 9px;border-radius:999px;white-space:nowrap;font-weight:500}
+.chip::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+.src-search{color:var(--s-search);background:color-mix(in srgb,var(--s-search) 12%,transparent)}
+.src-site{color:var(--s-site);background:color-mix(in srgb,var(--s-site) 12%,transparent)}
+.src-call{color:var(--s-call);background:color-mix(in srgb,var(--s-call) 12%,transparent)}
+.st{font-size:12px;padding:3px 9px;border-radius:6px;font-weight:600;white-space:nowrap}
+.st-new{background:var(--heat-soft);color:var(--heat)}
+.st-work{background:color-mix(in srgb,var(--s-site) 14%,transparent);color:var(--s-site)}
+.st-hot{background:var(--accent-soft);color:var(--accent)}
+.st-no{background:var(--surface-2);color:var(--muted)}
+/* tables */
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r);background:var(--surface)}
+table{border-collapse:collapse;width:100%;min-width:760px}
+th{font-size:11.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:500;text-align:left;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--surface-2)}
+td{padding:11px 14px;border-bottom:1px solid var(--line);vertical-align:middle}
+tr:last-child td{border-bottom:0}
+tbody tr.click{cursor:pointer}
+tbody tr.click:hover td{background:var(--surface-2)}
+td .what{font-weight:500}
+td .meta{font-size:12px;color:var(--muted)}
+.filters{display:flex;gap:8px;flex-wrap:wrap}
+.fbtn{border:1px solid var(--line);background:var(--surface);padding:6px 12px;border-radius:999px;font-size:13px}
+.fbtn[aria-pressed="true"]{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+/* feed */
+.feed{display:flex;flex-direction:column}
+.feed .row{display:flex;gap:12px;padding:10px 0;border-bottom:1px solid var(--line);align-items:flex-start}
+.feed .row:last-child{border-bottom:0}
+.feed .row .t{font-size:12px;color:var(--muted);width:44px;flex:none;padding-top:2px}
+.feed .row .b{min-width:0;flex:1}
+.feed .row .b p{margin:2px 0 0;color:var(--muted);font-size:12.5px}
+/* campaigns */
+.camps{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.camp{display:flex;flex-direction:column;gap:12px}
+.camp .ttl{display:flex;align-items:center;gap:10px}
+.camp .ttl b{font-size:15px}
+.camp .ttl .spacer{flex:1}
+.on{font-size:12px;font-weight:600;color:var(--good)}
+.off{font-size:12px;font-weight:600;color:var(--muted)}
+.funnel{display:flex;flex-direction:column;gap:6px}
+.frow{display:grid;grid-template-columns:110px minmax(0,1fr) 54px;gap:10px;align-items:center;font-size:12.5px}
+.frow .bar{height:10px;border-radius:5px;background:var(--surface-2);overflow:hidden}
+.frow .bar i{display:block;height:100%;background:var(--accent);border-radius:5px}
+.frow:last-child .bar i{background:var(--heat)}
+.frow .n{text-align:right}
+.call{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 14px;padding:12px 0;border-bottom:1px solid var(--line)}
+.call:last-child{border-bottom:0}
+.call .ai{grid-column:1/-1;font-size:12.5px;background:var(--surface-2);border-radius:8px;padding:8px 10px;color:var(--fg)}
+.call .ai b{color:var(--accent);font-weight:600}
+/* pixel */
+.code{font-family:var(--mono);font-size:12px;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:12px;overflow-x:auto;white-space:pre;color:var(--fg)}
+.steps{display:flex;gap:10px;flex-wrap:wrap;align-items:center;font-size:13px}
+.ok{color:var(--good);font-weight:600}
+/* segments */
+.tags{display:flex;gap:8px;flex-wrap:wrap}
+.tag{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:8px;padding:5px 6px 5px 10px;font-size:13px;background:var(--surface)}
+.tag button{border:0;background:none;color:var(--muted);padding:0 4px;font-size:15px;line-height:1}
+.addrow{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.addrow input,.field input{border:1px solid var(--line);background:var(--surface);color:var(--fg);border-radius:8px;padding:8px 10px;font:inherit;min-width:0;flex:1}
+.seggrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.range{display:flex;align-items:center;gap:12px}
+.range input{flex:1;accent-color:var(--accent)}
+/* soon */
+.soonbox{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:24px;align-items:center}
+.soonbox ul{margin:12px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:6px}
+.mock{border:1px dashed var(--line);border-radius:var(--r);padding:14px;display:flex;flex-direction:column;gap:8px;background:var(--surface-2)}
+.mock .l{height:10px;border-radius:5px;background:var(--line)}
+/* drawer */
+.scrim{position:fixed;inset:0;background:color-mix(in srgb,#000 35%,transparent);opacity:0;pointer-events:none;transition:opacity .2s}
+.scrim.open{opacity:1;pointer-events:auto}
+.drawer{position:fixed;top:0;right:0;height:100%;width:min(440px,100%);background:var(--surface);border-left:1px solid var(--line);transform:translateX(100%);transition:transform .25s ease;display:flex;flex-direction:column;z-index:5;padding-top:env(safe-area-inset-top,0px)}
+.drawer.open{transform:none}
+.drawer header{padding:18px 20px;border-bottom:1px solid var(--line);display:flex;gap:12px;align-items:flex-start}
+.drawer header .x{margin-left:auto;border:0;background:none;font-size:22px;line-height:1;color:var(--muted)}
+.drawer .body{padding:18px 20px;overflow-y:auto;display:flex;flex-direction:column;gap:16px}
+.kv{display:grid;grid-template-columns:120px minmax(0,1fr);gap:8px 12px;font-size:13px}
+.kv dt{color:var(--muted)}
+.kv dd{margin:0}
+.timeline{display:flex;flex-direction:column;gap:0;border-left:2px solid var(--line);margin-left:6px}
+.timeline div{position:relative;padding:0 0 14px 16px;font-size:13px}
+.timeline div::before{content:"";position:absolute;left:-7px;top:4px;width:12px;height:12px;border-radius:50%;background:var(--surface);border:2px solid var(--accent)}
+.timeline small{display:block;color:var(--muted);font-size:12px}
+.drawer footer{margin-top:auto;padding:14px 20px calc(14px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--line);display:flex;gap:8px;flex-wrap:wrap}
+.toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom,0px));transform:translate(-50%,20px);background:var(--fg);color:var(--bg);padding:10px 16px;border-radius:8px;font-size:13px;opacity:0;transition:all .2s;pointer-events:none;z-index:9}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+/* kanban */
+.board{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(188px,1fr);gap:12px;overflow-x:auto;padding-bottom:6px}
+.col{background:var(--surface-2);border-radius:var(--r);padding:10px;display:flex;flex-direction:column;gap:8px;min-height:220px;transition:outline-color .15s;outline:2px dashed transparent;outline-offset:-2px}
+.col.over{outline-color:var(--accent)}
+.colhead{display:flex;align-items:baseline;gap:8px;padding:2px 4px 6px}
+.colhead b{font-size:13px}
+.colhead .n{font-size:12px;color:var(--muted)}
+.colhead .sum{margin-left:auto;white-space:nowrap;font-size:12px;color:var(--muted)}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px 12px;display:flex;flex-direction:column;gap:6px;cursor:grab}
+.card:active{cursor:grabbing}
+.card .r{display:flex;align-items:center;gap:6px 8px;flex-wrap:wrap}
+.card .r .spacer{flex:1}
+.card .nx{font-size:12px;color:var(--muted)}
+.card .nx.late{color:var(--bad);font-weight:500}
+.ava{width:22px;height:22px;border-radius:50%;background:var(--accent-soft);color:var(--accent);font-size:10.5px;font-weight:700;display:grid;place-items:center;flex:none}
+.mv{white-space:nowrap;flex:none;border:1px solid var(--line);background:none;border-radius:6px;font-size:12px;padding:2px 8px;color:var(--muted)}
+/* reviews */
+.mgrs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+.mgr{display:flex;flex-direction:column;gap:6px}
+.mgr .top2{display:flex;align-items:center;gap:10px}
+.mgr .pct{font-family:var(--mono);font-size:22px;font-weight:600}
+.mgr .bar{height:6px;border-radius:3px;background:var(--surface-2);overflow:hidden}
+.mgr .bar i{display:block;height:100%;background:var(--accent)}
+.mgr .err{font-size:12.5px;color:var(--muted)}
+.mgr .err b{color:var(--fg);font-weight:500}
+.rv{border-bottom:1px solid var(--line)}
+.rv:last-child{border-bottom:0}
+.rv>button{display:grid;grid-template-columns:52px minmax(0,1fr) auto;gap:12px;align-items:center;width:100%;text-align:left;background:none;border:0;padding:12px 4px}
+.rv>button:hover{background:var(--surface-2)}
+.rv .detail{padding:0 4px 16px 68px;display:flex;flex-direction:column;gap:10px}
+.five{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:4px}
+.quote{border-left:3px solid var(--heat);padding:6px 12px;background:var(--heat-soft);border-radius:0 8px 8px 0;font-size:13px}
+.quote .tc{font-family:var(--mono);font-size:12px;color:var(--heat);margin-right:6px}
+.better{border-left:3px solid var(--accent);padding:6px 12px;background:var(--accent-soft);border-radius:0 8px 8px 0;font-size:13px}
+.res-meet{background:var(--accent-soft);color:var(--accent)}
+.res-cb{background:color-mix(in srgb,var(--s-site) 14%,transparent);color:var(--s-site)}
+.res-kp{background:color-mix(in srgb,var(--warn) 16%,transparent);color:var(--warn)}
+.res-lost{background:color-mix(in srgb,var(--bad) 12%,transparent);color:var(--bad)}
+/* trainer */
+.scen{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.scen .panel{display:flex;flex-direction:column;gap:8px}
+.scen .why{font-size:12.5px;color:var(--muted)}
+.chat{display:flex;flex-direction:column;gap:8px;max-width:620px}
+.msg{padding:9px 12px;border-radius:12px;font-size:13.5px;max-width:85%}
+.msg.c{background:var(--surface-2);align-self:flex-start;border-bottom-left-radius:4px}
+.msg.m{background:var(--accent);color:var(--accent-ink);align-self:flex-end;border-bottom-right-radius:4px}
+.msg.f{align-self:stretch;max-width:none;background:var(--heat-soft);border-radius:8px;font-size:13px}
+.prog{display:grid;grid-template-columns:150px minmax(0,1fr) 44px;gap:10px;align-items:center;font-size:13px;padding:6px 0}
+.prog .bar{height:8px;border-radius:4px;background:var(--surface-2);overflow:hidden}
+.prog .bar i{display:block;height:100%;background:var(--accent)}
+/* pricing */
+.plans{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.plan{display:flex;flex-direction:column;gap:10px;position:relative}
+.plan.cur{border:2px solid var(--accent)}
+.plan .badge{position:absolute;top:-11px;left:16px;background:var(--accent);color:var(--accent-ink);font-size:11.5px;font-weight:600;padding:2px 10px;border-radius:999px}
+.plan .price{font-family:var(--mono);font-size:26px;font-weight:600}
+.plan .price small{font-family:var(--body);font-size:13px;color:var(--muted);font-weight:400}
+.plan ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:5px;font-size:13px}
+.plan .btn{margin-top:auto}
+.note{font-size:12.5px;color:var(--muted);background:var(--surface-2);border-radius:8px;padding:10px 12px}
+.pkgbar{display:flex;align-items:center;gap:16px}
+.pkgbar small{display:block;color:var(--muted);font-size:12px}
+.pkgbar b{font-size:22px;font-weight:600}
+.pkgbar .pk-r{text-align:right}
+.pkgbar .track{flex:1;height:14px;border-radius:7px;background:var(--surface-2);overflow:hidden}
+.pkgbar .track i{display:block;height:100%;background:var(--accent);border-radius:7px}
+.sblock{background:var(--surface-2);border-radius:8px;padding:10px 12px;margin-bottom:8px}
+.sblock p{margin:4px 0 0;font-size:13px}
+.feed .row.click{cursor:pointer;align-items:center}
+.feed .row.click:hover{background:var(--surface-2)}
+.plans{grid-template-columns:repeat(auto-fit,minmax(190px,1fr))!important}
+.mobnav{display:none}
+@media (max-width:980px){
+  .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .grid2,.camps,.seggrid,.soonbox,.scen,.plans{grid-template-columns:minmax(0,1fr)}
+  .mgrs{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .rv .detail{padding-left:4px}
+}
+@media (max-width:760px){
+  .app{grid-template-columns:minmax(0,1fr)}
+  .side{display:none}
+  .mobnav{display:flex;gap:6px;overflow-x:auto;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--surface)}
+  .mobnav .nav{width:auto;white-space:nowrap;padding:7px 12px}
+  .top{padding:12px 16px}
+  .content{padding:18px 16px 40px}
+  .balance{display:none}
+  .top .demo{order:3}
+  #topup{padding:6px 12px;font-size:13px}
+  h1{font-size:20px}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+/* working version additions */
+.main{min-width:0}
+.me{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted)}
+.me select{max-width:160px}
+.empty{max-width:560px;margin:40px auto;text-align:center}
+.mut{color:var(--muted)}
+.nowrap{white-space:nowrap}
+.src-other{background:var(--surface-2);color:var(--muted)}
+.st-bad{background:color-mix(in srgb,var(--bad) 12%,transparent);color:var(--bad)}
+.steps3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+.steps3 .panel{display:flex;flex-direction:column;gap:10px}
+.steps3 h2{margin:0}
+.stepn{display:inline-grid;place-items:center;width:28px;height:28px;border-radius:50%;background:var(--accent-soft);color:var(--accent);font-family:Unbounded,sans-serif;font-size:13px}
+.pk-l{display:flex;flex-direction:column}
+.search{border:1px solid var(--line);background:var(--surface);color:var(--fg);border-radius:8px;padding:7px 10px;font:inherit;min-width:0;flex:1 1 220px}
+.fsep{width:1px;align-self:stretch;background:var(--line);margin:0 4px}
+.bulk{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 12px;border:1px solid var(--accent);background:var(--accent-soft);border-radius:8px;margin-bottom:12px}
+.srclist{display:flex;flex-direction:column;gap:8px}
+.srow{display:flex;align-items:center;gap:10px;font-size:13.5px}
+.srow .sv{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card .ct{font-size:14px;overflow-wrap:anywhere}
+.mh{font-size:11.5px;color:var(--muted);margin-bottom:3px}
+.chk{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--muted)}
+.copyrow{display:flex;align-items:center;gap:10px;justify-content:space-between;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2);font-size:18px}
+.stbtns{display:flex;flex-wrap:wrap;gap:6px}
+.stb{border:1px solid var(--line);background:var(--surface);color:var(--fg);border-radius:8px;padding:6px 10px;font:inherit;font-size:13px;cursor:pointer}
+.stb.on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent);font-weight:600}
+.fl{display:flex;flex-direction:column;gap:6px;font-size:12.5px;color:var(--muted);font-weight:500;min-width:0}
+.fl input,.fl select,.fl textarea,.me select,.bulk select,.chat textarea,.chat input{border:1px solid var(--line);background:var(--surface);color:var(--fg);border-radius:8px;padding:8px 10px;font:inherit;font-size:14px;min-width:0;width:100%}
+.me select,.bulk select{width:auto;padding:5px 8px;font-size:13px}
+.fl textarea{resize:vertical;font-family:"JetBrains Mono",monospace;font-size:13px}
+.fgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.fgrid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px}
+.form{display:flex;flex-direction:column;gap:12px}
+.mlist{display:flex;flex-direction:column;gap:8px}
+.mrow{display:flex;align-items:center;gap:10px;font-size:14px}
+.mrow>span:nth-child(2){flex:1}
+input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+@media (max-width:760px){.steps3,.fgrid{grid-template-columns:minmax(0,1fr)}.fsep{display:none}.me select{max-width:120px}}
+.msg.m .mh{color:inherit;opacity:.8}
+/* phone layout */
+a.btn{text-decoration:none;display:inline-flex;align-items:center;justify-content:center}
+.searchrow{display:flex;margin-top:-4px}
+.nlist{display:none}
+.callbtn{display:grid;place-items:center;width:44px;height:44px;border-radius:50%;background:var(--accent);color:var(--accent-ink);flex:none;align-self:center}
+.callbtn svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;stroke-linejoin:round}
+.tab .tbadge{position:absolute;top:2px;left:calc(50% + 6px);font-style:normal;font-size:10px;line-height:16px;min-width:16px;padding:0 4px;border-radius:999px;background:var(--heat);color:#fff;font-weight:700}
+@media (max-width:760px){
+  .mobnav{position:fixed;left:0;right:0;bottom:0;z-index:4;display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:0;padding:4px 2px calc(4px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--line);border-bottom:0;background:var(--surface);overflow:visible}
+  .tab{position:relative;display:flex;flex-direction:column;align-items:center;gap:3px;border:0;background:none;color:var(--muted);font:inherit;font-size:10.5px;padding:6px 0;border-radius:8px;min-width:0}
+  .tab span{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tab svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .tab[aria-current="page"]{color:var(--accent);font-weight:600}
+  .content{padding:16px 16px calc(96px + env(safe-area-inset-bottom,0px))}
+  .top{gap:10px;padding:10px 16px;flex-wrap:nowrap;position:sticky;top:0;z-index:3}
+  .top .client{min-width:0}
+  .top .client b,.top .client span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .me{flex:none}
+  .me select{max-width:128px}
+  .head{align-items:stretch;gap:10px}
+  .head>div:first-child{flex-basis:100%}
+  .head .lead{font-size:14px}
+  .head .spacer{display:none}
+  .head .btn{flex:1;min-height:44px}
+  .filters{flex-wrap:nowrap;overflow-x:auto;margin:0 -16px;padding:0 16px 2px;scrollbar-width:none}
+  .filters::-webkit-scrollbar{display:none}
+  .fbtn{flex:none;padding:8px 14px}
+  .numtable{display:none}
+  .nlist{display:flex;flex-direction:column;gap:8px}
+  .ncard{display:flex;gap:12px;align-items:flex-start;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:12px;cursor:pointer}
+  .ncard>input{margin-top:4px;width:18px;height:18px;flex:none}
+  .nmain{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px}
+  .nr1{display:flex;align-items:center;gap:8px;justify-content:space-between}
+  .nr1 .num{font-size:16px;font-weight:600}
+  .nr2,.nr3{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);min-width:0}
+  .nr2 .what{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .bulk{position:fixed;left:12px;right:12px;bottom:calc(76px + env(safe-area-inset-bottom,0px));z-index:4;margin:0;box-shadow:0 6px 24px rgba(0,0,0,.18);background:var(--surface)}
+  .bulk select{flex:1}
+  .board{grid-auto-columns:82%;scroll-snap-type:x mandatory;margin:0 -16px;padding:0 16px 6px;scroll-padding:0 16px}
+  .col{scroll-snap-align:start}
+  .card{cursor:pointer}
+  .mv{min-height:36px;padding:6px 12px}
+  .kpi .v{font-size:22px}
+  .drawer{width:100%;border-left:0}
+  .drawer .body{padding:16px}
+  .drawer footer .btn{flex:1;min-height:44px}
+  .copyrow{flex-wrap:wrap;font-size:17px}
+  .copyrow .num{flex-basis:100%}
+  .copyrow .btn{flex:1;min-height:40px}
+  .copyrow .spacer{display:none}
+  .stb{padding:9px 12px}
+  .fl input,.fl select,.fl textarea,.chat input,.chat textarea,.search,.addrow input,.bulk select,.me select{font-size:16px}
+  .fgrid2{grid-template-columns:minmax(0,1fr)}
+  form[data-chat]{flex-wrap:wrap}
+  form[data-chat] #chatin{flex-basis:100%}
+  form[data-chat] .btn{margin-left:auto;min-height:44px}
+  .toast{bottom:calc(84px + env(safe-area-inset-bottom,0px));max-width:calc(100% - 32px)}
+  .steps3 .btn{min-height:44px}
+}
+.srctbl{min-width:520px}
+@media (max-width:760px){.srctbl{min-width:0;font-size:13px}.srctbl th:nth-child(3),.srctbl td:nth-child(3){display:none}.srctbl td:first-child{overflow-wrap:anywhere}.srctbl th,.srctbl td{padding-left:8px;padding-right:8px}}
+.toast{z-index:6}
+@media (max-width:760px){.srctbl td:first-child{min-width:112px;overflow-wrap:break-word}.srctbl th:nth-child(4),.srctbl td:nth-child(4){display:none}.bulk b{flex-basis:100%}.bulk .btn{min-height:40px}}
+
+/* sales team dashboard */
+:root{--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100;--q1:#cde2fb;--q2:#9ec5f4;--q3:#5598e7;--q4:#256abf;--q5:#104281;--qbar:#2a78d6}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;--q1:#184f95;--q2:#1c5cab;--q3:#2a78d6;--q4:#5598e7;--q5:#9ec5f4;--qbar:#3987e5}}
+:root[data-theme="dark"]{--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;--q1:#184f95;--q2:#1c5cab;--q3:#2a78d6;--q4:#5598e7;--q5:#9ec5f4;--qbar:#3987e5}
+[data-zone="team"] .me,[data-zone="team"] .balance{display:none}
+.mdot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px;vertical-align:1px;flex:none}
+.chart{width:100%;height:auto;display:block;overflow:visible}
+.chart .grid{stroke:var(--line);stroke-width:1}
+.chart .base{stroke:var(--muted);stroke-width:1}
+.chart .axis{fill:var(--muted);font-size:11px;font-family:var(--body)}
+.chart .hit{cursor:default}
+.chart .hit:hover{fill:color-mix(in srgb,var(--fg) 5%,transparent)}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:10px;font-size:12.5px;color:var(--muted)}
+.legend span{display:inline-flex;align-items:center}
+#tip{position:fixed;z-index:20;pointer-events:none;background:var(--surface);color:var(--fg);border:1px solid var(--line);box-shadow:0 8px 24px rgba(0,0,0,.14);border-radius:8px;padding:8px 10px;font-size:12.5px;line-height:1.5;max-width:260px;opacity:0;transition:opacity .12s}
+#tip.show{opacity:1}
+#tip .tt{color:var(--muted);margin-top:2px}
+.grid2.even{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+.grid2.inner{gap:24px}
+.tfunnel{display:flex;flex-direction:column;gap:12px}
+.tfk{display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px}
+.tfk b{font-size:15px}
+.tfbar{height:12px;border-radius:4px;background:var(--surface-2)}
+.tfbar i{display:block;height:100%;background:var(--qbar);border-radius:4px}
+.tfp{font-size:11.5px;color:var(--muted);margin-top:3px;min-height:14px}
+.gotrow{margin-top:14px;padding-top:12px;border-top:1px solid var(--line);font-size:13px;color:var(--muted)}
+.gotrow b{color:var(--fg)}
+.hbars{display:flex;flex-direction:column;gap:9px}
+.hb{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) 64px;gap:10px;align-items:center;font-size:13px}
+.hk{overflow:hidden;text-overflow:ellipsis}
+.hbar{height:10px;background:var(--surface-2);border-radius:4px}
+.hbar i{display:block;height:100%;background:var(--qbar);border-radius:4px}
+.hv{text-align:right}
+.hv small{color:var(--muted);font-family:var(--body)}
+.heat{display:grid;gap:3px;font-size:11px;color:var(--muted)}
+.heat .hh{text-align:center}
+.heat .hd{display:flex;align-items:center}
+.hc{display:block;aspect-ratio:1.4;border-radius:3px;background:var(--surface-2)}
+.hc.l1{background:var(--q1)}.hc.l2{background:var(--q2)}.hc.l3{background:var(--q3)}.hc.l4{background:var(--q4)}.hc.l5{background:var(--q5)}
+.heatlg{display:flex;align-items:center;gap:4px;margin-top:10px;font-size:11.5px;color:var(--muted)}
+.heatlg i{width:16px;aspect-ratio:1.4}
+.k5{grid-template-columns:repeat(5,minmax(0,1fr))}
+.mtable td{white-space:nowrap}
+.mtable td:nth-child(8){white-space:normal;min-width:180px}
+.mcards{display:none}
+.foot{font-size:12.5px;color:var(--muted);margin:0}
+.cblist{display:flex;flex-direction:column}
+.cbrow{display:flex;gap:14px;align-items:flex-start;padding:12px 0;border-top:1px solid var(--line)}
+.cbrow:first-child{border-top:0}
+.cbd{display:flex;flex-direction:column;min-width:64px}
+.cbd b{font-family:var(--mono);font-size:15px}
+.cbrow.late .cbd b{color:var(--bad)}
+.cbrow.done{opacity:.6}
+.cbm{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
+.cbm .nr1{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.cbq{font-size:13px;color:var(--fg);background:var(--surface-2);border-radius:8px;padding:6px 10px}
+.cbrow .btn{flex:none;font-family:var(--mono);font-size:12.5px}
+.morelist{display:flex;flex-direction:column;gap:4px}
+.morelist .nav{padding:12px;background:var(--surface);border:1px solid var(--line)}
+.dblock{display:flex;flex-direction:column;gap:4px;font-size:14px}
+.dblock small{color:var(--muted);font-size:12px;font-weight:500}
+.dblock.good div{color:var(--good);font-weight:600}
+.dblock.bad div{color:var(--bad);font-weight:600}
+.pre{white-space:pre-line}
+table.mini{min-width:0;font-size:13px}
+table.mini th,table.mini td{padding:7px 10px}
+@media (max-width:980px){.k5{grid-template-columns:repeat(2,minmax(0,1fr))}.grid2.even{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:760px){
+  .mobnav{grid-template-columns:repeat(5,minmax(0,1fr))}
+  .mtable{display:none}
+  .mcards{display:flex;flex-direction:column;gap:8px}
+  .mcard{border:1px solid var(--line);border-radius:var(--r);padding:12px;display:flex;flex-direction:column;gap:8px;cursor:pointer}
+  .mch{display:flex;align-items:center;gap:4px}
+  .mcg{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;font-size:11px;color:var(--muted)}
+  .mcg b{display:block;font-size:16px;color:var(--fg)}
+  .hb{grid-template-columns:minmax(0,1fr) 70px 54px}
+  .cbrow{flex-wrap:wrap}
+  .cbrow .btn{margin-left:78px}
+  .nr3{color:var(--fg)}
+}
+table.ctable{min-width:0;font-size:13px}
+table.ctable th,table.ctable td{padding:9px 8px}
+@media (max-width:760px){table.ctable{min-width:640px}}
+.livebar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;font-size:13px;color:var(--muted);max-width:90ch}
+.livebar span{flex:1 1 260px}
+.ldot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--muted)}
+.ldot.on{background:#1baf7a;box-shadow:0 0 0 3px color-mix(in srgb,#1baf7a 25%,transparent)}
+.ldot.wait{background:#eda100}
+.head .livebar .btn{flex:none;min-height:32px}
+.pcard{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px 12px;display:flex;flex-direction:column;gap:6px;cursor:pointer}
+.pcard:hover{border-color:var(--accent)}
+.pcard:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.pcard .ct{font-size:13.5px;overflow-wrap:anywhere}
+.pcard .r{display:flex;align-items:center;gap:6px 8px;flex-wrap:wrap}
+.pcard .pnote{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.pboard .col{min-height:120px;max-height:640px;overflow-y:auto}
+.cbrow.click{cursor:pointer}
+.pcard .nx{font-size:12px;color:var(--muted)}
+.pcard .nx.late{color:var(--bad);font-weight:500}
+.rbar{display:inline-block;width:72px;height:8px;background:var(--surface-2);border-radius:4px;vertical-align:middle;margin-right:8px;overflow:hidden}
+.rbar i{display:block;height:100%;background:var(--qbar);border-radius:4px}
+.mpcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px}
+.mlist{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:8px}
+.mlist .ncard{display:flex;gap:12px;align-items:flex-start;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:12px;cursor:pointer}
+.mlist .nmain{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px}
+.mlist .nr1{display:flex;align-items:center;gap:8px;justify-content:space-between;font-size:13px}
+.mlist .nr2,.mlist .nr3{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted);min-width:0}
+.mlist .nr2 .what{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* полоска входов CRM на сервере */
+.crm-switch{display:flex;gap:16px;align-items:center;flex-wrap:wrap;padding:7px 20px;font-size:13px;background:var(--accent-soft);color:var(--accent);border-bottom:1px solid var(--line);position:relative;z-index:30}
+.crm-switch a{color:inherit;font-weight:600}
+.crm-switch span{margin-left:auto;color:var(--muted)}
+
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side" aria-label="Разделы">
+    <div class="logo"><i></i>Averon<b>CRM</b></div>
+    <nav class="navgroup" id="nav-main"></nav>
+    <nav class="navgroup" id="nav-acc"></nav>
+    <div class="side-foot" id="sidefoot">Загрузка…</div>
+  </aside>
+  <div class="main">
+    <div class="top">
+      <div class="client"><b id="coname">AveronCRM</b><span id="cosub">Кабинет клиента</span></div>
+      <div class="spacer"></div>
+      <label class="me" for="mesel">Я: <select id="mesel" aria-label="Кто работает"></select></label>
+      <div class="balance"><div><small>Номеров в пакете осталось</small><span class="num" id="bal">—</span></div></div>
+    </div>
+    <div class="mobnav" id="mobnav" aria-label="Разделы"></div>
+    <main class="content" id="view"><div class="empty"><h1>Загрузка…</h1><p class="lead">Подключаемся к базе AveronCRM.</p></div></main>
+  </div>
+</div>
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-label="Карточка" aria-hidden="true"></aside>
+<div class="toast" id="toast" role="status"></div>
+
+<script src="/director/shim.js"></script>
+<script src="/director/data.js"></script>
+<script>
+const ICONS={
+  leads:'<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/>',
+  mgr:'<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/>',
+  pipe:'<path d="M3 4h18l-7 8v6l-4 2v-8z"/>',
+  team:'<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
+  calls:'<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/>',
+  callbacks:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  olga:'<path d="M4 14v-2a8 8 0 0 1 16 0v2"/><rect x="3" y="14" width="4" height="6" rx="1"/><rect x="17" y="14" width="4" height="6" rx="1"/>',
+  more:'<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>',
+  overview:'<path d="M3 13h7V3H3zM14 21h7V11h-7zM3 21h7v-5H3zM14 7h7V3h-7z"/>',
+  numbers:'<circle cx="9" cy="8" r="4"/><path d="M2 21c0-4 3-6 7-6s7 2 7 6M17 11l2 2 4-4"/>',
+  sources:'<path d="M4 6h16M7 12h10M10 18h4"/>',
+  deals:'<rect x="3" y="4" width="5" height="16" rx="1"/><rect x="10" y="4" width="5" height="10" rx="1"/><rect x="17" y="4" width="4" height="6" rx="1"/>',
+  chat:'<path d="M4 4h16v12H9l-5 4z"/><circle cx="9" cy="10" r="1"/><circle cx="13" cy="10" r="1"/>',
+  settings:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>'
+};
+const PAGES=[
+  {id:'team',name:'Сводка отдела',tab:'Сводка',grp:'team'},
+  {id:'mgr',name:'Менеджеры',tab:'Менеджеры',grp:'team'},
+  {id:'pipe',name:'Воронка продаж',tab:'Воронка',grp:'team'},
+  {id:'calls',name:'Журнал звонков',tab:'Звонки',grp:'team'},
+  {id:'callbacks',name:'Перезвоны',tab:'Перезвоны',grp:'team'},
+  {id:'olga',name:'Колл-центр · Ольга',tab:'Ольга',grp:'team',noTab:true},
+  {id:'leads',name:'База лидов',tab:'База',grp:'team',noTab:true},
+];
+const SRC={site:'Сайт конкурента',call:'Звонок конкуренту',other:'Другое'};
+const SRCC={site:'src-site',call:'src-call',other:'src-other'};
+const ST={new:['Новый','st-new'],work:['В работе','st-work'],nr:['Недозвон','st-no'],lead:['Лид','st-hot'],no:['Не интересен','st-no'],bad:['Нерабочий','st-bad']};
+const STAGES=[{id:'new',n:'Новая'},{id:'meet',n:'Встреча / замер'},{id:'offer',n:'КП / расчёт'},{id:'contract',n:'Договор'},{id:'paid',n:'Оплачено'},{id:'lost',n:'Отказ'}];
+const ITEMS_PER_BATCH=700;
+
+const S={ready:false,nodb:false,readonly:false,settings:null,settingsLoaded:false,batches:[],sources:[],deals:[],chat:[],err:''};
+let db=null,user=null,dl=null,myId=null;
+let current='team',numFilter={status:'all',src:'all',owner:'all',q:''},openRef=null,selected=new Set(),dragId=null,pendingRender=false;
+
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt=n=>Math.round(+n||0).toLocaleString('ru-RU');
+const ico=id=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${ICONS[id]}</svg>`;
+function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('show');clearTimeout(toast.h);toast.h=setTimeout(()=>t.classList.remove('show'),2600)}
+function lsGet(k,d){try{const v=localStorage.getItem(k);return v==null?d:v}catch(e){return d}}
+function lsSet(k,v){try{localStorage.setItem(k,v)}catch(e){}}
+const today=()=>new Date().toISOString().slice(0,10);
+function dt(iso){if(!iso)return'';const d=new Date(iso);if(isNaN(d))return'';const t=String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');const td=new Date();const same=d.toDateString()===td.toDateString();const y=new Date(td);y.setDate(td.getDate()-1);return (same?'сегодня':d.toDateString()===y.toDateString()?'вчера':String(d.getDate()).padStart(2,'0')+'.'+String(d.getMonth()+1).padStart(2,'0'))+', '+t}
+function normPhone(raw){let d=String(raw).replace(/\D/g,'');if(d.length===10)d='7'+d;if(d.length===11&&d[0]==='8')d='7'+d.slice(1);if(d.length!==11||d[0]!=='7')return null;return '+7 '+d.slice(1,4)+' '+d.slice(4,7)+'-'+d.slice(7,9)+'-'+d.slice(9,11)}
+function newId(){return Date.now().toString(36)+Math.random().toString(36).slice(2,7)}
+
+/* ---------- derived data ---------- */
+function allNumbers(){const out=[];for(const b of S.batches){const it=b.items||{};for(const k in it){const n=it[k];if(n&&n.phone)out.push({...n,bid:b.id,nid:k,ref:b.id+'/'+k})}}out.sort((a,b)=>(b.ts||'').localeCompare(a.ts||''));return out}
+function managers(){return (S.settings&&Array.isArray(S.settings.managers))?S.settings.managers:[]}
+function mgrName(id){if(id==='kc')return'Колл-центр Averon';const m=managers().find(x=>x.id===id);return m?m.name:''}
+function initials(name){return String(name||'?').split(/\s+/).filter(Boolean).slice(0,2).map(w=>w[0]).join('').toUpperCase()}
+function me(){return lsGet('avr-me','')}
+function pkg(){const p=(S.settings&&S.settings.pkg)||{};return {name:p.name||'',total:+p.total||0,price:+p.price||0,start:p.start||'',limit:+p.limit||0}}
+function stats(){
+  const nums=allNumbers(),p=pkg();
+  const inPkg=p.start?nums.filter(n=>(n.ts||'').slice(0,10)>=p.start):nums;
+  const c=st=>inPkg.filter(n=>n.status===st).length;
+  const leads=c('lead'),processed=inPkg.filter(n=>n.status&&n.status!=='new').length,reached=leads+c('no');
+  const deals=S.deals.filter(d=>d.stage!=='lost'),paid=S.deals.filter(d=>d.stage==='paid');
+  const revenue=paid.reduce((a,d)=>a+(+d.sum||0),0);
+  return {nums,inPkg,shipped:inPkg.length,processed,reached,leads,newCount:nums.filter(n=>n.status==='new').length,deals:deals.length,paid:paid.length,revenue,bad:c('bad')};
+}
+
+/* ---------- writes ---------- */
+async function guard(fn,okMsg){
+  if(S.readonly){toast('У вас доступ только на просмотр');return false}
+  try{await fn();if(okMsg)toast(okMsg);return true}
+  catch(e){const c=e&&e.code;
+    if(c==='invalid_argument'){S.readonly=true;toast('Не удалось сохранить: у вас нет прав на изменение');render()}
+    else if(c==='quota_exceeded')toast('База заполнена. Удалите старые номера или сделки');
+    else if(c==='resource_exhausted')toast('Слишком много действий подряд, повторите через минуту');
+    else toast('Не удалось сохранить, попробуйте ещё раз');
+    return false}
+}
+const updNumber=(n,patch,msg)=>guard(()=>db.doc('batches/'+n.bid).update({items:{[n.nid]:{...patch,updatedAt:new Date().toISOString()}}}),msg);
+
+async function importNumbers(text,kind,from){
+  const existing=new Set(allNumbers().map(n=>n.phone));
+  const lines=String(text).split(/\r?\n/);const fresh=[];let dup=0,badc=0;
+  for(const line of lines){if(!line.trim())continue;
+    const m=line.match(/\+?\d[\d\s\-()]{8,16}\d/);const ph=m&&normPhone(m[0]);
+    if(!ph){badc++;continue}
+    if(existing.has(ph)){dup++;continue}existing.add(ph);
+    const rest=line.replace(m[0],'');const dom=rest.match(/[a-z0-9][a-z0-9.-]*\.[a-zа-я]{2,}/i);
+    const cp=!dom&&rest.match(/\+?\d[\d\s\-()]{8,16}\d/);const cph=cp&&normPhone(cp[0]);
+    const k=dom?'site':cph?'call':kind;const f=dom?dom[0].toLowerCase():cph?(cph+' '+rest.replace(cp[0],'').replace(/^[\s;,\t]+|[\s;,\t]+$/g,'')).trim():from;
+    fresh.push({phone:ph,src:k,from:f||'',status:'new',owner:'',note:'',ts:new Date().toISOString()});
+  }
+  if(!fresh.length){toast(`Новых номеров нет. Дублей: ${dup}, не распознано: ${badc}`);return false}
+  const d=today();let k=0,i=0;
+  const sizeOf=id=>{const b=S.batches.find(x=>x.id===id);return b?Object.keys(b.items||{}).length:0};
+  const ok=await guard(async()=>{
+    while(i<fresh.length){
+      let id='d'+d+'-'+k;while(sizeOf(id)>=ITEMS_PER_BATCH){k++;id='d'+d+'-'+k}
+      const room=ITEMS_PER_BATCH-sizeOf(id);const chunk=fresh.slice(i,i+room);const items={};
+      chunk.forEach(n=>items[newId()]=n);
+      const ex=S.batches.find(x=>x.id===id);
+      if(ex)await db.doc('batches/'+id).update({items});else await db.doc('batches/'+id).set({date:d,createdAt:new Date().toISOString(),items});
+      i+=chunk.length;k++;
+    }
+  });
+  if(ok){toast(`Загружено ${fresh.length} номеров`+(dup?`, дублей пропущено: ${dup}`:'')+(badc?`, не распознано: ${badc}`:''));
+    const known=new Set(S.sources.map(s=>s.kind+'|'+s.value));
+    for(const n of fresh){const key=n.src+'|'+n.from;if(n.from&&!known.has(key)){known.add(key);await guard(()=>db.collection('sources').add({kind:n.src,value:n.from,createdAt:new Date().toISOString()}))}}
+  }
+  return ok;
+}
+
+/* ---------- rendering ---------- */
+function chip(src,from){return `<span class="chip ${SRCC[src]||'src-other'}">${SRC[src]||'Другое'}</span>`}
+function stb(s){const v=ST[s]||ST.new;return `<span class="st ${v[1]}">${v[0]}</span>`}
+function ava(id){if(!id)return '<span class="meta">никто</span>';if(id==='kc')return '<span class="meta">КЦ Averon</span>';const n=mgrName(id);return `<span class="ava" title="${esc(n)}">${esc(initials(n))}</span>`}
+
+function navHtml(p,st){const extra=p.id==='numbers'&&st.newCount?`<span class="count">${st.newCount}</span>`:'';return `<button class="nav" data-go="${p.id}" ${p.id===current?'aria-current="page"':''}>${ico(p.id)}<span>${p.name}</span>${extra}</button>`}
+function renderChrome(st){
+  $('#nav-main').innerHTML='<div class="navlabel">Отдел продаж</div>'+PAGES.filter(p=>p.grp==='team').map(p=>navHtml(p,st)).join('')+(PAGES.some(p=>p.grp==='main')?'<div class="navlabel">Кабинет клиента ГЦК</div>'+PAGES.filter(p=>p.grp==='main').map(p=>navHtml(p,st)).join(''):'');
+  const zone=TEAM_PAGES.has(current)?'team':'client';document.body.dataset.zone=zone;
+  $('#nav-acc').innerHTML=PAGES.some(p=>p.grp==='acc')?'<div class="navlabel">Аккаунт</div>'+PAGES.filter(p=>p.grp==='acc').map(p=>navHtml(p,st)).join(''):'';
+  $('#mobnav').innerHTML=[...PAGES.filter(p=>p.grp==='team'&&!p.noTab),{id:'more',tab:'Ещё'}].map(p=>`<button class="tab" data-go="${p.id}" ${p.id===current||(p.id==='more'&&!TEAM_PAGES.has(current))?'aria-current="page"':''}>${ico(p.id)}<span>${p.tab}</span>${p.id==='numbers'&&st.newCount?`<i class="tbadge">${st.newCount>99?'99+':st.newCount}</i>`:''}</button>`).join('');
+  const s=S.settings||{},p=pkg();
+  if(zone==='team'){$('#coname').textContent='Averon · отдел продаж';$('#cosub').textContent='Данные на '+DATA.asof.slice(8,10)+'.'+DATA.asof.slice(5,7)+', '+DATA.asof.slice(11,16)}else{
+  $('#coname').textContent=s.company||'AveronCRM';
+  $('#cosub').textContent=p.name?`Пакет «${p.name}»`:'Кабинет клиента ГЦК';}
+  $('#bal').textContent=p.total?`${fmt(Math.max(0,p.total-st.shipped))} из ${fmt(p.total)}`:'—';
+  $('#sidefoot').innerHTML=S.readonly?'Только просмотр':(s.coordinator?`Координатор: ${esc(s.coordinator)}`:'AveronCRM · рабочая версия');
+  const sel=$('#mesel');const opts='<option value="">не выбран</option>'+managers().map(m=>`<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('');
+  if(sel.dataset.sig!==opts){sel.innerHTML=opts;sel.dataset.sig=opts}
+  sel.value=me();
+}
+// keeps what a person has typed but not saved when a live update redraws the page
+function keepEdits(el,paint){const kept={};el.querySelectorAll('input[id],textarea[id],select[id]').forEach(f=>{if(f.type==='checkbox'||f.type==='file')return;const def=f.tagName==='SELECT'?Math.max(0,[...f.options].findIndex(o=>o.defaultSelected)):0;const changed=f.tagName==='SELECT'?f.selectedIndex!==def:f.value!==f.defaultValue;if(changed)kept[f.id]=f.value});paint();for(const id in kept){const f=el.querySelector('#'+CSS.escape(id));if(f)f.value=kept[id]}}
+function render(){
+  const active=document.activeElement;
+  if(active&&$('#view').contains(active)&&/^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)&&!/^(checkbox|radio)$/.test(active.type)){pendingRender=true;renderDrawer();return}
+  pendingRender=false;
+  const st=stats();renderChrome(st);
+  let html;
+  if(TEAM_PAGES.has(current))html=VIEWS[current](st);
+  else if(S.nodb)html=`<div class="empty"><h1>База недоступна</h1><p class="lead">Чтобы работать в AveronCRM, войдите в claude.ai и откройте эту страницу по ссылке, которой с вами поделились.</p></div>`;
+  else if(!S.ready)html=`<div class="empty"><h1>Загрузка…</h1><p class="lead">Подключаемся к базе AveronCRM.</p></div>`;
+  else if(!S.settings&&current!=='settings')html=onboarding();
+  else html=VIEWS[current](st);
+  keepEdits($('#view'),()=>{$('#view').innerHTML=html});
+  renderDrawer();
+  lsSet('avr-page',current);
+}
+
+function onboarding(){return `<div class="head"><div><h1>Добро пожаловать в AveronCRM</h1><p class="lead">Здесь вы работаете с номерами потенциальных клиентов: загружаете ежедневную отгрузку, распределяете номера между менеджерами, отмечаете лидов и ведёте сделки до оплаты. Начните с трёх шагов.</p></div></div>
+  <div class="steps3"><section class="panel"><b class="stepn">1</b><h2>Компания и пакет</h2><p class="sub">Название, пакет номеров и дата старта</p><button class="btn primary" data-go="settings">Заполнить</button></section>
+  <section class="panel"><b class="stepn">2</b><h2>Менеджеры</h2><p class="sub">Кто будет обрабатывать номера</p><button class="btn" data-go="settings">Добавить</button></section>
+  <section class="panel"><b class="stepn">3</b><h2>Первые номера</h2><p class="sub">Вставьте номера из выгрузки Averon</p><button class="btn" data-import="1">Загрузить</button></section></div>`}
+
+const VIEWS={
+overview(st){
+  const p=pkg(),left=Math.max(0,p.total-st.shipped),days=p.limit?Math.ceil(left/p.limit):null;
+  const perNum=p.total?p.price/p.total:0,spent=perNum*st.shipped,leadCost=st.leads?spent/st.leads:0;
+  const conv=st.processed?Math.round(st.leads/st.processed*1000)/10:0;
+  const f=[['Отгружено',st.shipped],['Обработано',st.processed],['Дозвонились',st.reached],['Лиды',st.leads],['Сделки',st.deals],['Оплачено',st.paid]];
+  const bySrc=sourceStats(st.nums).slice(0,6);
+  return `
+  <div class="head"><div><h1>${p.name?`Пакет «${esc(p.name)}»`:'Обзор'}</h1><p class="lead">${p.total?`Отгружено ${fmt(st.shipped)} номеров из ${fmt(p.total)}.${days!=null?` При ${p.limit} номерах в день остатка хватит примерно на ${days} дн.`:''} `:''}${st.newCount?`Не взято в работу: ${st.newCount}.`:'Все номера в работе.'}</p></div><div class="spacer"></div><button class="btn" data-import="1">Загрузить номера</button><button class="btn primary" data-go="numbers">Открыть номера</button></div>
+  ${p.total?`<section class="panel"><div class="pkgbar"><div class="pk-l"><small>Отгружено</small><b class="num">${fmt(st.shipped)}</b></div><div class="track"><i style="width:${Math.min(100,st.shipped/p.total*100)}%"></i></div><div class="pk-r"><small>Осталось</small><b class="num">${fmt(left)}</b></div></div><p class="sub" style="margin:8px 0 0">${p.start?`Старт ${esc(p.start.split('-').reverse().join('.'))} · `:''}${fmt(p.price)} ₽${perNum?` · ${fmt(perNum)} ₽ за номер`:''}</p></section>`:''}
+  <div class="kpis">
+    <div class="kpi"><small>Лидов</small><div class="v">${fmt(st.leads)}</div><div class="d">${conv}% от обработанных</div></div>
+    <div class="kpi"><small>Цена лида</small><div class="v">${leadCost?fmt(leadCost)+' ₽':'—'}</div><div class="d mut">по цене отгруженных номеров</div></div>
+    <div class="kpi"><small>Сделок</small><div class="v">${fmt(st.deals)}</div><div class="d mut">оплачено ${fmt(st.paid)}</div></div>
+    <div class="kpi hot"><small>Выручка</small><div class="v">${fmt(st.revenue)} ₽</div><div class="d">${p.price&&st.revenue?`в ${Math.round(st.revenue/p.price*10)/10} раза больше цены пакета`:'по оплаченным сделкам'}</div></div>
+  </div>
+  <div class="grid2">
+    <section class="panel"><h2>Что стало с номерами</h2><p class="sub">С начала пакета</p>
+      <div class="funnel">${f.map(r=>`<div class="frow"><span>${r[0]}</span><span class="bar"><i style="width:${f[0][1]?Math.max(1,r[1]/f[0][1]*100):0}%"></i></span><span class="n num">${fmt(r[1])}</span></div>`).join('')}</div></section>
+    <section class="panel"><h2>Лучшие источники</h2><p class="sub">Доля лидов среди обработанных номеров</p>
+      ${bySrc.length?`<div class="srclist">${bySrc.map(s=>`<div class="srow"><span class="sv">${esc(s.value||'без источника')}</span><span class="num mut">${fmt(s.n)}</span><b class="num" style="color:${s.p==null?'var(--muted)':s.p<5?'var(--bad)':'var(--good)'}">${s.p==null?'—':s.p+'%'}</b></div>`).join('')}</div>`:'<p class="mut">Появится после первой загрузки номеров.</p>'}</section>
+  </div>`;
+},
+numbers(st){
+  let rows=st.nums;const F=numFilter;
+  if(F.status!=='all')rows=rows.filter(n=>n.status===F.status);
+  if(F.src!=='all')rows=rows.filter(n=>n.src===F.src);
+  if(F.owner==='mine')rows=rows.filter(n=>n.owner&&n.owner===me());else if(F.owner==='none')rows=rows.filter(n=>!n.owner);else if(F.owner==='kc')rows=rows.filter(n=>n.owner==='kc');
+  if(F.q){const q=F.q.replace(/\D/g,'');const t=F.q.toLowerCase();rows=rows.filter(n=>(q&&n.phone.replace(/\D/g,'').includes(q))||(n.from||'').toLowerCase().includes(t)||(n.note||'').toLowerCase().includes(t))}
+  const total=rows.length;rows=rows.slice(0,300);
+  const fb=(key,val,name)=>`<button class="fbtn" data-f="${key}:${val}" aria-pressed="${F[key]===val}">${name}</button>`;
+  const selCount=[...selected].filter(r=>st.nums.some(n=>n.ref===r)).length;
+  return `
+  <div class="head"><div><h1>Номера клиентов</h1><p class="lead">Номера людей, которые были на сайтах ваших конкурентов или звонили им. Возьмите номер себе, передайте колл-центру, после звонка отметьте результат.</p></div><div class="spacer"></div><button class="btn" id="export">Выгрузить CSV</button><button class="btn primary" data-import="1">Загрузить номера</button></div>
+  <div class="filters">${fb('status','all','Все')}${fb('status','new','Новые')}${fb('status','work','В работе')}${fb('status','nr','Недозвон')}${fb('status','lead','Лиды')}${fb('status','no','Не интересен')}${fb('status','bad','Нерабочие')}</div>
+  <div class="filters">${fb('owner','all','Все')}${fb('owner','mine','Мои')}${fb('owner','none','Ничьи')}${fb('owner','kc','У колл-центра')}<span class="fsep"></span>${fb('src','all','Любой источник')}${fb('src','site','Сайт конкурента')}${fb('src','call','Звонок конкуренту')}</div>
+  <div class="searchrow"><input class="search" id="q" type="search" placeholder="Поиск по номеру, источнику, заметке" value="${esc(F.q)}" aria-label="Поиск"></div>
+  ${selCount?`<div class="bulk"><b>Выбрано: ${selCount}</b><select id="bulkowner" aria-label="Кому передать"><option value="">Передать…</option>${managers().map(m=>`<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('')}<option value="kc">Колл-центру Averon</option></select><button class="btn sm" id="bulkgo">Передать</button><button class="btn sm" id="bulkclear">Снять выбор</button></div>`:''}
+  ${st.nums.length?`<div class="tablewrap numtable"><table><thead><tr><th style="width:36px"><input type="checkbox" id="selall" aria-label="Выбрать все"></th><th>Когда</th><th>Телефон</th><th>Источник</th><th>Откуда номер</th><th>Обрабатывает</th><th>Статус</th></tr></thead>
+  <tbody>${rows.map(n=>`<tr class="click" data-num="${esc(n.ref)}" tabindex="0"><td><input type="checkbox" data-sel="${esc(n.ref)}" ${selected.has(n.ref)?'checked':''} aria-label="Выбрать"></td><td class="nowrap">${dt(n.ts)}</td><td class="num nowrap">${esc(n.phone)}</td><td>${chip(n.src)}</td><td class="what">${esc(n.from)}</td><td>${ava(n.owner)}</td><td>${stb(n.status)}</td></tr>`).join('')||'<tr><td colspan="7" class="mut">Нет номеров по этому фильтру</td></tr>'}</tbody></table></div>
+  <div class="nlist">${rows.map(n=>`<div class="ncard" data-num="${esc(n.ref)}" tabindex="0"><input type="checkbox" data-sel="${esc(n.ref)}" ${selected.has(n.ref)?'checked':''} aria-label="Выбрать"><div class="nmain"><div class="nr1"><span class="num">${esc(n.phone)}</span>${stb(n.status)}</div><div class="nr2">${chip(n.src)}<span class="what">${esc(n.from||'')}</span></div><div class="nr3">${ava(n.owner)}<span>${dt(n.ts)}</span></div></div><a class="callbtn" href="tel:${esc(n.phone.replace(/[^+\d]/g,''))}" aria-label="Позвонить ${esc(n.phone)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg></a></div>`).join('')||'<p class="mut">Нет номеров по этому фильтру</p>'}</div>
+  ${total>300?`<p class="sub">Показаны первые 300 из ${fmt(total)}. Уточните фильтр или поиск.</p>`:''}`
+  :`<section class="panel empty"><h2>Номеров пока нет</h2><p class="sub">Вставьте номера из выгрузки Averon: по одному в строке, можно вместе с сайтом или телефоном конкурента.</p><button class="btn primary" data-import="1">Загрузить номера</button></section>`}`;
+},
+sources(st){
+  const list=sourceStats(st.nums);
+  const lim=pkg().limit;
+  const tbl=kind=>{const r=list.filter(s=>s.kind===kind);return r.length?`<div class="tablewrap" style="border:0"><table class="srctbl"><thead><tr><th>${kind==='site'?'Сайт':'Телефон'}</th><th>Номеров</th><th>Обработано</th><th>Лидов</th><th>Конверсия</th><th></th></tr></thead><tbody>${r.map(s=>`<tr><td>${esc(s.value)}</td><td class="num">${fmt(s.n)}</td><td class="num">${fmt(s.proc)}</td><td class="num">${fmt(s.l)}</td><td><b class="num" style="color:${s.p==null?'var(--muted)':s.p<5?'var(--bad)':'var(--good)'}">${s.p==null?'—':s.p+'%'}</b></td><td>${s.docId?`<button class="btn sm" data-delsrc="${esc(s.docId)}">Убрать</button>`:''}</td></tr>`).join('')}</tbody></table></div>`:'<p class="mut">Пока нет.</p>'};
+  return `
+  <div class="head"><div><h1>Источники</h1><p class="lead">Сайты и телефоны конкурентов, по которым Averon собирает номера. Смотрите, какие дают лидов. Слабые источники отметьте координатору, он заменит их.</p></div></div>
+  <section class="panel"><h2>Сайты конкурентов</h2>${tbl('site')}<form class="addrow" data-addsrc="site"><input id="add-site" placeholder="сайт конкурента, например kuhni.ru" aria-label="Сайт конкурента"><button class="btn">Добавить</button></form></section>
+  <section class="panel"><h2>Телефоны конкурентов</h2>${tbl('call')}<form class="addrow" data-addsrc="call"><input id="add-call" placeholder="+7 495 000-00-00 · название" aria-label="Телефон конкурента"><button class="btn">Добавить</button></form></section>
+  ${list.some(s=>s.kind==='other')?`<section class="panel"><h2>Другие</h2>${tbl('other')}</section>`:''}
+  <p class="sub">Номеров в день по договору: <b class="num">${lim||'не указано'}</b>. Изменить можно в настройках.</p>`;
+},
+deals(st){
+  const sumOf=a=>a.reduce((x,d)=>x+(+d.sum||0),0);
+  const active=S.deals.filter(d=>d.stage!=='paid'&&d.stage!=='lost');
+  const late=S.deals.filter(d=>d.nextDate&&d.nextDate<today()&&d.stage!=='paid'&&d.stage!=='lost');
+  return `
+  <div class="head"><div><h1>Сделки</h1><p class="lead">Лиды из номеров становятся сделками. Перетаскивайте карточки между этапами или нажимайте «дальше». В карточке укажите сумму и следующий шаг с датой.</p></div><div class="spacer"></div><button class="btn primary" id="newdeal">Новая сделка</button></div>
+  <div class="kpis">
+    <div class="kpi"><small>В работе</small><div class="v">${fmt(sumOf(active))} ₽</div><div class="d mut">${active.length} сделок</div></div>
+    <div class="kpi"><small>Оплачено</small><div class="v">${fmt(st.revenue)} ₽</div><div class="d mut">${st.paid} сделок</div></div>
+    <div class="kpi"><small>Конверсия лид → оплата</small><div class="v">${st.leads?Math.round(st.paid/st.leads*100):0}%</div></div>
+    <div class="kpi ${late.length?'hot':''}"><small>Просроченные шаги</small><div class="v">${late.length}</div></div>
+  </div>
+  <div class="board">${STAGES.map((s,si)=>{const ds=S.deals.filter(d=>(d.stage||'new')===s.id).sort((a,b)=>(a.nextDate||'9').localeCompare(b.nextDate||'9'));return `<div class="col" data-col="${s.id}"><div class="colhead"><b>${s.n}</b><span class="n">${ds.length}</span><span class="sum num">${fmt(sumOf(ds)/1000)}к ₽</span></div>
+    ${ds.map(d=>{const isLate=d.nextDate&&d.nextDate<today()&&s.id!=='paid'&&s.id!=='lost';return `<div class="card" draggable="true" data-deal="${esc(d.id)}" tabindex="0"><b class="ct">${esc(d.title||d.phone||'Сделка')}</b><div class="r"><span class="num">${fmt(d.sum)} ₽</span><span class="spacer"></span>${ava(d.owner)}</div>${d.next||d.nextDate?`<div class="nx ${isLate?'late':''}">${esc(d.next||'')}${d.nextDate?' · '+esc(d.nextDate.split('-').reverse().join('.')):''}</div>`:''}${si<4?`<div class="r"><span class="spacer"></span><button class="mv" data-next="${esc(d.id)}">дальше →</button></div>`:''}</div>`}).join('')}</div>`}).join('')}</div>`;
+},
+chat(){
+  return `
+  <div class="head"><div><h1>Координатор</h1><p class="lead">Переписка с координатором Averon: замена источников, лимит номеров, вопросы по сценарию. Видят все, у кого есть доступ к кабинету.</p></div></div>
+  <section class="panel"><div class="chat" id="chatbox">${S.chat.length?S.chat.map(m=>`<div class="msg ${m.author===myId?'m':'c'}"><div class="mh" data-author="${esc(m.author||'')}">${m.coord?'Координатор':''}${m.coord?' · ':''}${dt(m.ts)}</div>${esc(m.text)}</div>`).join(''):'<p class="mut">Сообщений пока нет. Напишите координатору первым.</p>'}</div>
+    <form class="addrow" data-chat="1"><input id="chatin" placeholder="Сообщение" aria-label="Сообщение координатору"><label class="chk"><input type="checkbox" id="ascoord"> я координатор</label><button class="btn primary">Отправить</button></form></section>`;
+},
+settings(){
+  const s=S.settings||{},p=pkg();
+  return `
+  <div class="head"><div><h1>Настройки</h1><p class="lead">Данные компании, пакет номеров и менеджеры. Видны всем, у кого есть доступ к кабинету.</p></div></div>
+  <form class="panel form" data-settings="1">
+    <h2>Компания и пакет</h2>
+    <div class="fgrid">
+      <label class="fl">Название компании<input id="s-company" value="${esc(s.company||'')}" placeholder="Например, Студия кухонь «Дуб и сталь»"></label>
+      <label class="fl">Координатор Averon<input id="s-coord" value="${esc(s.coordinator||'')}" placeholder="Имя координатора"></label>
+      <label class="fl">Пакет<select id="s-pkg">${['Пилотный','Стандартный','Стандартный+','Премиум','Индивидуальный'].map(n=>`<option ${p.name===n?'selected':''}>${n}</option>`).join('')}</select></label>
+      <label class="fl">Номеров в пакете<input id="s-total" type="number" min="0" step="any" value="${p.total||''}" placeholder="3000"></label>
+      <label class="fl">Стоимость пакета, ₽<input id="s-price" type="number" min="0" step="any" value="${p.price||''}" placeholder="165000"></label>
+      <label class="fl">Дата старта<input id="s-start" type="date" value="${esc(p.start)}"></label>
+      <label class="fl">Номеров в день<input id="s-limit" type="number" min="0" step="any" value="${p.limit||''}" placeholder="100"></label>
+    </div>
+    <div class="addrow"><button class="btn primary">Сохранить</button></div>
+  </form>
+  <section class="panel"><h2>Менеджеры</h2><p class="sub">Кто обрабатывает номера. Каждый выбирает себя вверху страницы в поле «Я».</p>
+    <div class="mlist">${managers().map(m=>`<div class="mrow"><span class="ava">${esc(initials(m.name))}</span><span>${esc(m.name)}</span><span class="spacer"></span><button class="btn sm" data-delmgr="${esc(m.id)}">Убрать</button></div>`).join('')||'<p class="mut">Пока никого.</p>'}</div>
+    <form class="addrow" data-addmgr="1"><input id="m-name" placeholder="Имя и фамилия" aria-label="Имя менеджера"><button class="btn">Добавить</button></form></section>`;
+}
+};
+
+function sourceStats(nums){
+  const map=new Map();
+  for(const s of S.sources){map.set(s.kind+'|'+s.value,{kind:s.kind,value:s.value,docId:s.id,n:0,proc:0,l:0})}
+  for(const n of nums){const key=(n.src||'other')+'|'+(n.from||'');let r=map.get(key);if(!r){r={kind:n.src||'other',value:n.from||'',n:0,proc:0,l:0};map.set(key,r)}r.n++;if(n.status&&n.status!=='new')r.proc++;if(n.status==='lead')r.l++}
+  return [...map.values()].map(r=>({...r,p:r.proc>=10?Math.round(r.l/r.proc*1000)/10:null})).sort((a,b)=>b.n-a.n);
+}
+
+/* ---------- drawer ---------- */
+function renderDrawer(){
+  const d=$('#drawer');
+  if(!openRef){d.classList.remove('open');d.setAttribute('aria-hidden','true');$('#scrim').classList.remove('open');return}
+  const a=document.activeElement;if(a&&d.contains(a)&&/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))return;
+  let html='';
+  if(openRef.type==='num'){const n=allNumbers().find(x=>x.ref===openRef.id);if(!n){openRef=null;return renderDrawer()}
+    const deal=n.deal&&S.deals.find(x=>x.id===n.deal);
+    html=`<header><div><div style="margin-bottom:6px">${chip(n.src)}</div><h2 class="num" style="margin:0;font-size:19px">${esc(n.phone)}</h2><div class="mut" style="font-size:12.5px;margin-top:4px">${dt(n.ts)} · ${esc(n.from||'источник не указан')}</div></div><button class="x" id="close" aria-label="Закрыть">×</button></header>
+    <div class="body">
+      <div class="copyrow"><span class="num">${esc(n.phone)}</span><span class="spacer"></span><a class="btn sm primary" href="tel:${esc(n.phone.replace(/[^+\d]/g,''))}">Позвонить</a><button class="btn sm" data-copy="${esc(n.phone)}">Скопировать</button></div>
+      <label class="fl">Статус<div class="stbtns">${Object.keys(ST).map(k=>`<button class="stb ${n.status===k?'on':''}" data-setst="${k}">${ST[k][0]}</button>`).join('')}</div></label>
+      <label class="fl">Обрабатывает<select id="d-owner"><option value="">никто</option>${managers().map(m=>`<option value="${esc(m.id)}" ${n.owner===m.id?'selected':''}>${esc(m.name)}</option>`).join('')}<option value="kc" ${n.owner==='kc'?'selected':''}>Колл-центр Averon</option></select></label>
+      <label class="fl">Заметка<textarea id="d-note" rows="4" placeholder="Что сказал клиент, когда перезвонить">${esc(n.note||'')}</textarea></label>
+      <div class="addrow" style="margin-top:0"><button class="btn sm" id="d-savenote">Сохранить заметку</button></div>
+      ${deal?`<div class="sblock"><b>Сделка</b><p>${esc(deal.title)} · ${STAGES.find(s=>s.id===deal.stage)?.n||''} · ${fmt(deal.sum)} ₽</p><button class="btn sm" data-opendeal="${esc(deal.id)}">Открыть сделку</button></div>`:''}
+      ${n.updatedAt?`<p class="sub">Изменён ${dt(n.updatedAt)}</p>`:''}
+    </div>
+    <footer>${n.owner?'':`<button class="btn primary" data-take="1">Взять себе</button><button class="btn" data-tokc="1">Передать в КЦ</button>`}${!deal?`<button class="btn ${n.owner?'primary':''}" data-mkdeal="1">Создать сделку</button>`:''}</footer>`;
+  }else if(openRef.type==='deal'){const isNew=openRef.id==='new';const dl=isNew?{title:'',phone:'',sum:'',stage:'new',owner:me(),next:'',nextDate:''}:S.deals.find(x=>x.id===openRef.id);if(!dl){openRef=null;return renderDrawer()}
+    html=`<header><div><h2 style="margin:0;font-size:17px">${isNew?'Новая сделка':esc(dl.title||'Сделка')}</h2>${dl.createdAt?`<div class="mut" style="font-size:12.5px;margin-top:4px">создана ${dt(dl.createdAt)}</div>`:''}</div><button class="x" id="close" aria-label="Закрыть">×</button></header>
+    <form class="body" data-deal-form="${esc(openRef.id)}">
+      <label class="fl">Название<input id="dl-title" value="${esc(dl.title)}" placeholder="Например, угловая кухня, Химки" required></label>
+      <label class="fl">Телефон<input id="dl-phone" value="${esc(dl.phone)}" placeholder="+7 900 000-00-00"></label>
+      <div class="fgrid2"><label class="fl">Сумма, ₽<input id="dl-sum" type="number" min="0" step="any" value="${esc(dl.sum)}"></label>
+      <label class="fl">Этап<select id="dl-stage">${STAGES.map(s=>`<option value="${s.id}" ${dl.stage===s.id?'selected':''}>${s.n}</option>`).join('')}</select></label></div>
+      <label class="fl">Ответственный<select id="dl-owner"><option value="">никто</option>${managers().map(m=>`<option value="${esc(m.id)}" ${dl.owner===m.id?'selected':''}>${esc(m.name)}</option>`).join('')}</select></label>
+      <div class="fgrid2"><label class="fl">Следующий шаг<input id="dl-next" value="${esc(dl.next)}" placeholder="Замер, звонок, КП"></label>
+      <label class="fl">Когда<input id="dl-date" type="date" value="${esc(dl.nextDate)}"></label></div>
+      <div class="addrow"><button class="btn primary">${isNew?'Создать':'Сохранить'}</button>${isNew?'':`<button type="button" class="btn" data-deldeal="${esc(dl.id)}">Удалить</button>`}</div>
+    </form>`;
+  }else if(openRef.type==='call'){html=renderCallDrawer();if(!html){openRef=null;return renderDrawer()}
+  }else if(openRef.type==='client'){html=renderClientDrawer();if(!html){openRef=null;return renderDrawer()}
+  }else if(openRef.type==='import'){
+    html=`<header><div><h2 style="margin:0;font-size:17px">Загрузить номера</h2><div class="mut" style="font-size:12.5px;margin-top:4px">Из выгрузки Averon, Excel или CSV</div></div><button class="x" id="close" aria-label="Закрыть">×</button></header>
+    <form class="body" data-import-form="1">
+      <p class="sub" style="margin:0">По одному номеру в строке. Если в строке есть сайт конкурента, он станет источником сам. Повторы и уже загруженные номера пропускаются.</p>
+      <label class="fl">Номера<textarea id="im-text" rows="9" placeholder="+7 916 384-42-18;kuhni.ru&#10;89036120755&#10;9252709130"></textarea></label>
+      <label class="fl">Или файл CSV / TXT<input id="im-file" type="file" accept=".csv,.txt,text/csv,text/plain"></label>
+      <div class="fgrid2"><label class="fl">Источник по умолчанию<select id="im-kind"><option value="site">Сайт конкурента</option><option value="call">Звонок конкуренту</option><option value="other">Другое</option></select></label>
+      <label class="fl">Какой именно<input id="im-from" placeholder="kuhni.ru или +7 495 …" list="srclist"></label></div>
+      <datalist id="srclist">${S.sources.map(s=>`<option value="${esc(s.value)}">`).join('')}</datalist>
+      <div class="addrow"><button class="btn primary" id="im-go">Загрузить</button></div>
+    </form>`;
+  }
+  const key=openRef.type+':'+openRef.id;if(d.dataset.ref===key)keepEdits(d,()=>{d.innerHTML=html});else d.innerHTML=html;d.dataset.ref=key;d.classList.add('open');d.setAttribute('aria-hidden','false');$('#scrim').classList.add('open');
+}
+function openDrawer(type,id){openRef={type,id};renderDrawer();setTimeout(()=>{const f=$('#drawer input:not([type=checkbox]),#drawer textarea,#close');f&&f.focus()},60)}
+function closeDrawer(){openRef=null;renderDrawer();if(pendingRender)render()}
+
+/* ---------- names in chat ---------- */
+async function paintNames(){if(!user||current!=='chat')return;const els=[...document.querySelectorAll('.mh[data-author]')];const ids=[...new Set(els.map(e=>e.dataset.author).filter(Boolean))];if(!ids.length)return;const ps=await user.profiles(ids);els.forEach(e=>{const p=ps[e.dataset.author];if(p&&!e.dataset.named){e.dataset.named='1';e.prepend(document.createTextNode((p.isMe?'Вы':(p.name||'Участник'))+' · '))}})}
+
+/* ---------- events ---------- */
+function go(id){if(!VIEWS[id])return;current=id;selected.clear();render();window.scrollTo(0,0);if(id==='chat'){paintNames();const b=$('#chatbox');b&&(b.scrollTop=b.scrollHeight)}}
+document.addEventListener('click',async e=>{
+  if(e.target.closest('a[href]'))return;
+  const t=e.target.closest('button,[data-num],[data-deal],[data-sel],[data-call],[data-mgr],#scrim');if(!t)return;const ds=t.dataset;
+  if(t.id==='scrim'||t.id==='close')return closeDrawer();
+  if(ds.go)return go(ds.go);
+  if(ds.tf){const [k,v]=ds.tf.split(':');(ds.obj==='team'?teamF:callF)[k]=v;return render()}
+  if(ds.mgr){callF={m:ds.mgr,r:'all',ty:'all',q:''};return go('calls')}
+  if(ds.call&&!e.target.closest('a'))return openDrawer('call',ds.call);
+  if(ds.import)return openDrawer('import','');
+  if(ds.f){const [k,v]=ds.f.split(':');numFilter[k]=v;return render()}
+  if(ds.sel!==undefined&&t.tagName==='INPUT'){e.stopPropagation();t.checked?selected.add(ds.sel):selected.delete(ds.sel);return render()}
+  if(t.id==='selall')return;
+  if(ds.num&&!e.target.closest('input'))return openDrawer('num',ds.num);
+  if(ds.deal&&!e.target.closest('button'))return openDrawer('deal',ds.deal);
+  if(ds.opendeal)return openDrawer('deal',ds.opendeal);
+  if(ds.copy){try{await navigator.clipboard.writeText(ds.copy);toast('Номер скопирован')}catch(err){toast('Скопируйте номер вручную')}return}
+  const n=openRef&&openRef.type==='num'?allNumbers().find(x=>x.ref===openRef.id):null;
+  if(ds.setst&&n)return updNumber(n,{status:ds.setst},'Статус: '+ST[ds.setst][0]);
+  if(ds.take&&n){if(!me()){toast('Сначала выберите себя вверху в поле «Я»');return}return updNumber(n,{owner:me(),status:n.status==='new'?'work':n.status},'Номер ваш')}
+  if(ds.tokc&&n)return updNumber(n,{owner:'kc',status:n.status==='new'?'work':n.status},'Передан колл-центру');
+  if(t.id==='d-savenote'&&n)return updNumber(n,{note:$('#d-note').value.slice(0,2000)},'Заметка сохранена');
+  if(ds.mkdeal&&n){const id=newId();const ok=await guard(()=>db.doc('deals/'+id).set({title:'Сделка '+n.phone,phone:n.phone,sum:0,stage:'new',owner:n.owner&&n.owner!=='kc'?n.owner:me(),next:'',nextDate:'',numRef:n.ref,createdAt:new Date().toISOString()}));if(ok){await updNumber(n,{deal:id,status:'lead'});openDrawer('deal',id);toast('Сделка создана')}return}
+  if(ds.next){const d=S.deals.find(x=>x.id===ds.next);const i=STAGES.findIndex(s=>s.id===(d.stage||'new'));if(d&&i<4)return guard(()=>db.doc('deals/'+d.id).update({stage:STAGES[i+1].id}),'→ '+STAGES[i+1].n);return}
+  if(ds.deldeal){if(t.dataset.confirm!=='1'){t.dataset.confirm='1';t.textContent='Точно удалить?';return}const ok=await guard(()=>db.doc('deals/'+ds.deldeal).delete(),'Сделка удалена');if(ok)closeDrawer();return}
+  if(t.id==='newdeal')return openDrawer('deal','new');
+  if(ds.delsrc){if(t.dataset.confirm!=='1'){t.dataset.confirm='1';t.textContent='Убрать?';return}return guard(()=>db.doc('sources/'+ds.delsrc).delete(),'Источник убран')}
+  if(ds.delmgr){if(t.dataset.confirm!=='1'){t.dataset.confirm='1';t.textContent='Точно?';return}return guard(()=>db.doc('app/settings').update({managers:managers().filter(m=>m.id!==ds.delmgr)}),'Менеджер убран')}
+  if(t.id==='bulkclear'){selected.clear();return render()}
+  if(t.id==='bulkgo'){const to=$('#bulkowner').value;if(!to){toast('Выберите, кому передать');return}const nums=allNumbers().filter(x=>selected.has(x.ref));const byB={};nums.forEach(x=>{(byB[x.bid]=byB[x.bid]||{})[x.nid]={owner:to,status:x.status==='new'?'work':x.status,updatedAt:new Date().toISOString()}});const ok=await guard(async()=>{for(const b in byB)await db.doc('batches/'+b).update({items:byB[b]})});if(ok){toast(`Передано: ${nums.length}`);selected.clear();render()}return}
+  if(t.id==='export')return exportCsv();
+});
+document.addEventListener('change',e=>{
+  const t=e.target;
+  if(t.id==='mesel'){lsSet('avr-me',t.value);toast(t.value?'Вы: '+mgrName(t.value):'Менеджер не выбран');return render()}
+  if(t.id==='selall'){const st=stats();const vis=[...document.querySelectorAll('[data-sel]')].map(x=>x.dataset.sel);vis.forEach(r=>t.checked?selected.add(r):selected.delete(r));return render()}
+  if(t.id==='d-owner'){const n=allNumbers().find(x=>x.ref===openRef?.id);if(n)updNumber(n,{owner:t.value,status:n.status==='new'&&t.value?'work':n.status},t.value?'Передан: '+mgrName(t.value):'Ответственный снят');t.blur();return}
+  if(t.id==='im-file'&&t.files[0]){const r=new FileReader();r.onload=()=>{$('#im-text').value=String(r.result);toast('Файл прочитан, проверьте и нажмите «Загрузить»')};r.readAsText(t.files[0])}
+});
+document.addEventListener('input',e=>{if(e.target.id==='cq'){callF.q=e.target.value;clearTimeout(window._cqt);window._cqt=setTimeout(()=>{const pos=e.target.selectionStart;e.target.blur();render();const q=$('#cq');if(q){q.focus();try{q.setSelectionRange(pos,pos)}catch(_){}}},350);return}if(e.target.id==='q'){numFilter.q=e.target.value;clearTimeout(window._qt);window._qt=setTimeout(()=>{const pos=e.target.selectionStart;e.target.blur();render();const q=$('#q');if(q){q.focus();try{q.setSelectionRange(pos,pos)}catch(_){}}},350)}});
+document.addEventListener('focusout',()=>{setTimeout(()=>{const a=document.activeElement;if(pendingRender&&!(a&&/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)))render()},0)});
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeDrawer();if(e.key==='Enter'&&e.target.dataset&&(e.target.dataset.num||e.target.dataset.deal||e.target.dataset.call||e.target.dataset.mgr)&&(e.target.tagName==='TR'||e.target.classList.contains('ncard')||e.target.classList.contains('mcard'))||(e.key==='Enter'&&e.target.classList&&e.target.classList.contains('card'))){const D=e.target.dataset;if(D.mgr){callF={m:D.mgr,r:'all',ty:'all',q:''};go('calls')}else if(D.call)openDrawer('call',D.call);else D.num?openDrawer('num',D.num):openDrawer('deal',D.deal)}});
+document.addEventListener('submit',async e=>{
+  e.preventDefault();const f=e.target;
+  if(f.dataset.importForm){const btn=$('#im-go');btn.disabled=true;btn.textContent='Загружаю…';const ok=await importNumbers($('#im-text').value,$('#im-kind').value,$('#im-from').value.trim());btn.disabled=false;btn.textContent='Загрузить';if(ok){closeDrawer();go('numbers')}return}
+  if(f.dataset.chat){const v=$('#chatin').value.trim();if(!v)return;const coord=$('#ascoord').checked;const id=new Date().toISOString().replace(/[^0-9]/g,'')+'-'+Math.random().toString(36).slice(2,6);const ok=await guard(()=>db.doc('chat/'+id).set({text:v.slice(0,4000),author:myId||'',coord,ts:new Date().toISOString()}));if(ok){$('#chatin').value='';$('#chatin').blur();render();const b=$('#chatbox');b&&(b.scrollTop=b.scrollHeight)}return}
+  if(f.dataset.settings){const data={company:$('#s-company').value.trim().slice(0,200),coordinator:$('#s-coord').value.trim().slice(0,100),pkg:{name:$('#s-pkg').value,total:+$('#s-total').value||0,price:+$('#s-price').value||0,start:$('#s-start').value||'',limit:+$('#s-limit').value||0},managers:managers(),updatedAt:new Date().toISOString()};const ok=await guard(()=>db.doc('app/settings').set(data),'Настройки сохранены');if(ok){document.activeElement&&document.activeElement.blur();render()}return}
+  if(f.dataset.addmgr){const v=$('#m-name').value.trim();if(!v)return;const list=[...managers(),{id:'m'+newId(),name:v.slice(0,80)}];const base=S.settings||{company:'',coordinator:'',pkg:{name:'Стандартный',total:0,price:0,start:'',limit:0}};const ok=await guard(()=>S.settings?db.doc('app/settings').update({managers:list}):db.doc('app/settings').set({...base,managers:list}),'Менеджер добавлен');if(ok){$('#m-name').value='';$('#m-name').blur();render()}return}
+  if(f.dataset.addsrc){const k=f.dataset.addsrc;const inp=f.querySelector('input');const v=inp.value.trim();if(!v)return;if(S.sources.some(s=>s.kind===k&&s.value===v)){toast('Такой источник уже есть');return}const ok=await guard(()=>db.collection('sources').add({kind:k,value:v.slice(0,200),createdAt:new Date().toISOString()}),'Источник добавлен. Сообщите координатору, чтобы он подключил его');if(ok){inp.value='';inp.blur();render()}return}
+  if(f.dataset.dealForm!==undefined){const id=f.dataset.dealForm;const data={title:$('#dl-title').value.trim().slice(0,200),phone:$('#dl-phone').value.trim().slice(0,40),sum:+$('#dl-sum').value||0,stage:$('#dl-stage').value,owner:$('#dl-owner').value,next:$('#dl-next').value.trim().slice(0,200),nextDate:$('#dl-date').value||''};if(!data.title){toast('Укажите название');return}
+    if(id==='new'){const nid=newId();const ok=await guard(()=>db.doc('deals/'+nid).set({...data,createdAt:new Date().toISOString()}),'Сделка создана');if(ok){document.activeElement.blur();closeDrawer();if(current!=='deals')go('deals')}}
+    else{const ok=await guard(()=>db.doc('deals/'+id).update(data),'Сохранено');if(ok){document.activeElement.blur();closeDrawer()}}return}
+});
+/* drag deals */
+document.addEventListener('dragstart',e=>{const c=e.target.closest&&e.target.closest('[data-deal]');if(c){dragId=c.dataset.deal;e.dataTransfer.effectAllowed='move';try{e.dataTransfer.setData('text/plain',dragId)}catch(_){}}});
+document.addEventListener('dragover',e=>{const col=e.target.closest&&e.target.closest('[data-col]');if(col&&dragId){e.preventDefault();document.querySelectorAll('.col.over').forEach(c=>c!==col&&c.classList.remove('over'));col.classList.add('over')}});
+document.addEventListener('drop',e=>{const col=e.target.closest&&e.target.closest('[data-col]');if(col&&dragId){e.preventDefault();const d=S.deals.find(x=>x.id===dragId);const to=col.dataset.col;if(d&&d.stage!==to)guard(()=>db.doc('deals/'+d.id).update({stage:to}),'→ '+STAGES.find(s=>s.id===to).n)}dragId=null});
+document.addEventListener('dragend',()=>{dragId=null;document.querySelectorAll('.col.over').forEach(c=>c.classList.remove('over'))});
+
+async function exportCsv(){
+  if(!dl){toast('Выгрузка недоступна в этом окне');return}
+  const rows=[['Дата','Телефон','Источник','Откуда номер','Обрабатывает','Статус','Заметка']].concat(allNumbers().map(n=>[n.ts?new Date(n.ts).toLocaleString('ru-RU'):'',n.phone,SRC[n.src]||'',n.from||'',mgrName(n.owner),(ST[n.status]||ST.new)[0],n.note||'']));
+  const csv='﻿'+rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(';')).join('\r\n');
+  try{await dl.save({filename:'averoncrm-nomera-'+today()+'.csv',data:csv})}catch(e){if(e&&e.code!=='declined')toast('Не удалось выгрузить файл')}
+}
+
+/* ---------- boot ---------- */
+/* ---------- отдел продаж: реальные звонки, перезвоны и колл-центр ---------- */
+const TEAM_PAGES=new Set(['team','mgr','pipe','calls','callbacks','olga','leads','more']);
+const MGR=['Илья Козлов','Марк Амирханян','Ефим Лузин'];
+/* менеджеры, которых больше нет в Манго; робот на добавочном 13 остаётся в отчёте */
+const GONE=['Андрей Глуховской','Глуховской Андрей'];
+const isGone=m=>GONE.includes(m);
+DATA.gone=DATA.calls.filter(c=>isGone(c.m)&&c.r).length;DATA.calls=DATA.calls.filter(c=>!isGone(c.m));
+const MCLR=m=>`var(--s${MGR.indexOf(m)+1},var(--muted))`;
+const RES={ok:['Результат','st-hot'],hot:['Горячий, потерян','st-new'],lost:['Потерян, шанс был','st-work'],no:['Без шанса','st-no']};
+const TYN={cold:'Холодный',repeat:'Повторный',gate:'Секретарь'};
+const WD=['Вс','Пн','Вт','Ср','Чт','Пт','Сб'];
+let TODAY,LAST_DAY;
+function recomputeDates(){TODAY=DATA.asof.slice(0,10);LAST_DAY=DATA.calls.reduce((m,c)=>{const d=c.t.slice(0,10);return d<=TODAY&&d>m?d:m},'')}
+recomputeDates();
+const PERIODS=[['all','Всё время'],['7','Последние 7 дней'],['sep','Сентябрь'],['oct','Октябрь']];
+let teamF={per:'all',m:'all'},callF={m:'all',r:'all',ty:'all',q:''};
+const pad=n=>String(n).padStart(2,'0');
+const dShort=d=>{const [y,m,dd]=d.slice(0,10).split('-');return dd+'.'+m};
+const dLong=s=>{const [y,m,dd]=s.slice(0,10).split('-');return dd+'.'+m+'.'+y+(s.length>10?' '+s.slice(11,16):'')};
+const pct=(a,b)=>b?Math.round(a/b*100)+'%':'—';
+const telHref=p=>'tel:'+String(p||'').replace(/[^+\d]/g,'');
+const fmtPhone=p=>{const d=String(p||'').replace(/\D/g,'');return d.length===11?'+7 '+d.slice(1,4)+' '+d.slice(4,7)+'-'+d.slice(7,9)+'-'+d.slice(9):p||''};
+function addDays(s,n){const d=new Date(s+'T12:00:00Z');d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10)}
+function inPeriod(t,per){const d=t.slice(0,10);if(per==='7')return d>=addDays(LAST_DAY,-6)&&d<=LAST_DAY;if(per==='sep')return d<'2026-10-01';if(per==='oct')return d>='2026-10-01';return true}
+function talks(f){return DATA.calls.filter(c=>c.r&&inPeriod(c.t,f.per)&&(f.m==='all'||c.m===f.m))}
+function mdot(m){return `<i class="mdot" style="background:${MCLR(m)}"></i>`}
+function resChip(r){const v=RES[r];return v?`<span class="st ${v[1]}">${v[0]}</span>`:'<span class="meta">без разговора</span>'}
+function tip(html){return ` data-tip="${esc(html)}"`}
+function teamStats(list){
+  const s={talks:list.length,ok:0,hot:0,lost:0,no:0,meet:0,kp:0,cb:0,dmp:0};
+  for(const c of list){s[c.r]++;if(c.r==='ok'){if(c.g.includes('встреча'))s.meet++;if(c.g.includes('КП'))s.kp++;if(c.g.includes('перезвон'))s.cb++;if(c.g.includes('контакт ЛПР'))s.dmp++}}
+  s.chance=s.ok+s.hot+s.lost;return s}
+function topLoss(list){const m={};list.forEach(c=>{if(c.l)m[c.l]=(m[c.l]||0)+1});return Object.entries(m).sort((a,b)=>b[1]-a[1])}
+function fbT(obj,key,val,name,extra=''){return `<button class="fbtn" data-tf="${key}:${val}" data-obj="${obj}" aria-pressed="${(obj==='team'?teamF:callF)[key]===val}">${extra}${name}</button>`}
+
+/* stacked bars by day; series = [{name,color,key}] , rows = [{d, v:{key:n}, extra}] */
+function stackChart(rows,series,opts={}){
+  const narrow=innerWidth<760;const W=narrow?400:720,H=narrow?230:(opts.h||250),L=30,R=6,T=10,B=26;const n=rows.length;if(!n)return '<p class="mut">Нет данных за период</p>';
+  const max=Math.max(1,...rows.map(r=>series.reduce((a,s)=>a+(r.v[s.key]||0),0)));
+  const step=niceStep(max);const top=Math.ceil(max/step)*step;
+  const bw=(W-L-R)/n,gap=Math.min(10,bw*.28),w=Math.max(3,bw-gap);
+  const y=v=>T+(H-T-B)*(1-v/top);
+  let g='';for(let v=0;v<=top;v+=step){g+=`<line x1="${L}" x2="${W-R}" y1="${y(v)}" y2="${y(v)}" class="grid"/><text x="${L-6}" y="${y(v)+4}" class="axis" text-anchor="end">${v}</text>`}
+  const every=Math.ceil(n/(narrow?6:12));
+  rows.forEach((r,i)=>{const x=L+i*bw+gap/2;let base=0;const parts=series.filter(s=>r.v[s.key]);
+    parts.forEach((s,j)=>{const v=r.v[s.key];const y1=y(base+v),y0=y(base);const h=Math.max(0,y0-y1-(j<parts.length-1?0:0)-(j>0?2:0));
+      g+=`<rect x="${x}" y="${y1}" width="${w}" height="${Math.max(h,1)}" rx="${j===parts.length-1?3:1}" fill="${s.color}"/>`;base+=v});
+    const tot=series.reduce((a,s)=>a+(r.v[s.key]||0),0);
+    const t=`<b>${esc(r.label||dShort(r.d))}</b>`+series.map(s=>r.v[s.key]?`<div><i class="mdot" style="background:${s.color}"></i>${esc(s.name)}: ${r.v[s.key]}</div>`:'').join('')+(r.extra||'')+(series.length>1?`<div class="tt">Всего: ${tot}</div>`:'');
+    g+=`<rect x="${L+i*bw}" y="${T}" width="${bw}" height="${H-T-B}" fill="transparent" class="hit"${tip(t)}/>`;
+    if(i%every===0||i===n-1&&n<=12)g+=`<text x="${x+w/2}" y="${H-8}" class="axis" text-anchor="middle">${esc(r.short||dShort(r.d))}</text>`});
+  g+=`<line x1="${L}" x2="${W-R}" y1="${y(0)}" y2="${y(0)}" class="base"/>`;
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(opts.label||'График')}">${g}</svg>`}
+function niceStep(max){const raw=max/4;const p=Math.pow(10,Math.floor(Math.log10(raw)));for(const m of [1,2,5,10])if(raw<=m*p)return m*p;return 10*p}
+function legend(series){return `<div class="legend">${series.map(s=>`<span><i class="mdot" style="background:${s.color}"></i>${esc(s.name)}</span>`).join('')}</div>`}
+function hbars(items,opts={}){const max=Math.max(1,...items.map(i=>i[1]));return `<div class="hbars">${items.map(([k,v,sub])=>`<div class="hb"${tip(`<b>${esc(k)}</b><div>${v}${opts.unit||''}${sub?' · '+esc(sub):''}</div>`)}><span class="hk">${esc(k)}</span><span class="hbar"><i style="width:${Math.max(2,v/max*100)}%"></i></span><span class="hv num">${v}${sub?`<small> ${esc(sub)}</small>`:''}</span></div>`).join('')||'<p class="mut">Нет потерь за период</p>'}</div>`}
+function funnelHtml(steps){const max=steps[0][1]||1;return `<div class="tfunnel">${steps.map(([k,v,note],i)=>`<div class="tf"${tip(`<b>${esc(k)}</b><div>${v} · ${pct(v,max)} от первого шага</div>${note?`<div class="tt">${esc(note)}</div>`:''}`)}><div class="tfk"><span>${esc(k)}</span><b class="num">${fmt(v)}</b></div><div class="tfbar"><i style="width:${Math.max(1.5,v/max*100)}%"></i></div><div class="tfp">${i?pct(v,steps[i-1][1])+' от предыдущего':''}</div></div>`).join('')}</div>`}
+
+function heatmap(list){
+  const hours=[];for(let h=9;h<=19;h++)hours.push(h);
+  const days=[1,2,3,4,5];const cnt={};let max=0;
+  list.forEach(c=>{const d=new Date(c.t.slice(0,10)+'T12:00:00Z').getUTCDay();const h=+c.t.slice(11,13);if(!days.includes(d))days.push(d);const k=d+'-'+h;cnt[k]=(cnt[k]||0)+1;if(cnt[k]>max)max=cnt[k]});
+  days.sort((a,b)=>((a+6)%7)-((b+6)%7));
+  const lvl=v=>!v?0:Math.min(5,Math.ceil(v/max*5));
+  return `<div class="heat" style="grid-template-columns:28px repeat(${hours.length},minmax(0,1fr))"><span></span>${hours.map(h=>`<span class="hh">${h}</span>`).join('')}
+  ${days.map(d=>`<span class="hd">${WD[d]}</span>${hours.map(h=>{const v=cnt[d+'-'+h]||0;return `<span class="hc l${lvl(v)}"${tip(`<b>${WD[d]}, ${h}:00–${h+1}:00</b><div>${v} разговоров</div>`)}></span>`}).join('')}`).join('')}</div>
+  <div class="heatlg"><span>меньше</span>${[1,2,3,4,5].map(l=>`<i class="hc l${l}"></i>`).join('')}<span>больше</span></div>`}
+
+function dayRows(list){
+  if(!list.length)return[];
+  const ds=list.map(c=>c.t.slice(0,10)).sort();let d=ds[0];const end=ds[ds.length-1];const rows=[];
+  while(d<=end){const wd=new Date(d+'T12:00:00Z').getUTCDay();const day=list.filter(c=>c.t.startsWith(d));
+    if(day.length||(wd!==0&&wd!==6)){const v={};day.forEach(c=>v[c.m]=(v[c.m]||0)+1);const ok=day.filter(c=>c.r==='ok').length;
+      rows.push({d,v,extra:day.length?`<div class="tt">С результатом: ${ok}</div>`:'',label:WD[wd]+', '+dShort(d)})}
+    d=addDays(d,1)}
+  return rows}
+
+Object.assign(VIEWS,{
+team(){
+  const list=talks(teamF);const s=teamStats(list);const all=talks({per:teamF.per,m:'all'});
+  const ms=MGR.filter(m=>DATA.calls.some(c=>c.m===m&&c.r));
+  const series=(teamF.m==='all'?ms:[teamF.m]).map(m=>({name:m,color:MCLR(m),key:m}));
+  const durs=list.filter(c=>c.dur);const avg=durs.length?Math.round(durs.reduce((a,c)=>a+c.dur,0)/durs.length):0;
+  const rowsM=ms.map(m=>{const l=all.filter(c=>c.m===m);const x=teamStats(l);const tl=topLoss(l)[0];const dd=l.filter(c=>c.dur);return {m,x,tl,avg:dd.length?Math.round(dd.reduce((a,c)=>a+c.dur,0)/dd.length):0}}).filter(r=>r.x.talks);
+  const loss=topLoss(list);
+  return `
+  <div class="head"><div><h1>Отдел продаж</h1><p class="lead">Разговоры менеджеров Averon с клиентами. До 07.10 разобраны все записанные звонки, с 07.10 данные берутся из разборов бота.</p>${liveNote()}</div></div>
+  <div class="filters">${PERIODS.map(([k,n])=>fbT('team','per',k,n)).join('')}</div>
+  <div class="filters">${fbT('team','m','all','Все менеджеры')}${ms.map(m=>fbT('team','m',m,m,mdot(m))).join('')}</div>
+  <div class="kpis">
+    <div class="kpi"><small>Разговоров</small><div class="v">${fmt(s.talks)}</div><div class="d mut">${avg?'в среднем '+Math.floor(avg/60)+' мин '+pad(avg%60)+' с':'длительность есть до 07.10'}</div></div>
+    <div class="kpi"><small>С результатом</small><div class="v">${fmt(s.ok)}</div><div class="d">${pct(s.ok,s.talks)} разговоров</div></div>
+    <div class="kpi"><small>Встречи и КП</small><div class="v">${s.meet} · ${s.kp}</div><div class="d mut">встреч · КП отправлено</div></div>
+    <div class="kpi ${s.hot?'hot':''}"><small>Потеряно с шансом</small><div class="v">${fmt(s.hot+s.lost)}</div><div class="d mut">из них горячих ${s.hot}</div></div>
+  </div>
+  ${mangoBlock()}
+  <div class="grid2">
+    <section class="panel"><h2>Разговоры по дням</h2><p class="sub">По менеджерам. Наведите на столбец, чтобы увидеть цифры</p>${stackChart(dayRows(list),series,{label:'Разговоры по дням'})}${legend(series)}</section>
+    <section class="panel"><h2>Воронка разговора</h2><p class="sub">Что происходит с разговором после того, как клиент взял трубку</p>${funnelHtml([['Разговоры',s.talks],['Был шанс на результат',s.chance,'Клиент не отказал окончательно'],['С результатом',s.ok,'Встреча, КП, перезвон на дату или контакт ЛПР'],['Встреча или КП',list.filter(c=>c.r==='ok'&&(c.g.includes('встреча')||c.g.includes('КП'))).length]])}
+      <div class="gotrow"><span>Результаты: </span><b>${s.cb}</b> перезвон на дату · <b>${s.kp}</b> КП · <b>${s.meet}</b> встреч · <b>${s.dmp}</b> контакт ЛПР</div></section>
+  </div>
+  <section class="panel"><h2>Менеджеры</h2><p class="sub">${PERIODS.find(p=>p[0]===teamF.per)[1]}. Нажмите на строку, чтобы открыть звонки менеджера</p>
+    <div class="tablewrap" style="border:0"><table class="mtable"><thead><tr><th>Менеджер</th><th>Разговоров</th><th>С результатом</th><th>Встреч</th><th>КП</th><th>Перезвон на дату</th><th>Потеряно с шансом</th><th>Чаще всего теряет</th><th>Ср. длит.</th></tr></thead><tbody>
+    ${rowsM.map(r=>`<tr class="click" data-mgr="${esc(r.m)}" tabindex="0"><td class="nowrap">${mdot(r.m)}${esc(r.m)}</td><td class="num">${r.x.talks}</td><td class="num">${r.x.ok} <span class="meta">${pct(r.x.ok,r.x.talks)}</span></td><td class="num">${r.x.meet}</td><td class="num">${r.x.kp}</td><td class="num">${r.x.cb}</td><td class="num">${r.x.hot+r.x.lost} <span class="meta">горячих ${r.x.hot}</span></td><td>${r.tl?esc(r.tl[0])+' <span class="meta">'+r.tl[1]+'</span>':'—'}</td><td class="num nowrap">${r.avg?Math.floor(r.avg/60)+':'+pad(r.avg%60):'—'}</td></tr>`).join('')||'<tr><td colspan="9" class="mut">Нет разговоров за период</td></tr>'}
+    </tbody></table></div>
+    <div class="mcards">${rowsM.map(r=>`<div class="mcard click" data-mgr="${esc(r.m)}" tabindex="0"><div class="mch">${mdot(r.m)}<b>${esc(r.m)}</b><span class="spacer"></span><span class="num">${pct(r.x.ok,r.x.talks)}</span></div><div class="mcg"><span><b class="num">${r.x.talks}</b>разговоров</span><span><b class="num">${r.x.ok}</b>с результатом</span><span><b class="num">${r.x.meet}·${r.x.kp}</b>встреч·КП</span><span><b class="num">${r.x.hot+r.x.lost}</b>потеряно</span></div>${r.tl?`<div class="meta">Чаще всего: ${esc(r.tl[0])} (${r.tl[1]})</div>`:''}</div>`).join('')}</div>
+  </section>
+  <div class="grid2 even">
+    <section class="panel"><h2>Где теряем разговоры с шансом</h2><p class="sub">Ключевой момент, после которого результат ушёл. ${s.hot+s.lost} разговоров</p>${hbars(loss)}</section>
+    <section class="panel"><h2>Когда идут разговоры</h2><p class="sub">По дням недели и часам, московское время</p>${heatmap(list)}</section>
+  </div>
+  ${DATA.missing?`<p class="foot">В таблице бота у ${DATA.missing} ${plural(DATA.missing,'звонка','звонков','звонков')} заполнено только время, без итога разбора. В отчёт они не вошли.</p>`:''}
+  <p class="foot">Не учтены ${DATA.excluded.debt} звонков по списанию долгов и банкротству физлиц: это не продажи Averon. Андрея Глуховского больше нет в Манго, его ${DATA.gone} ${plural(DATA.gone,'разговор','разговора','разговоров')} за сентябрь в отчёт не входят. Звонки без разговора (автоответчик, обрыв) в отчёт не входят.</p>`},
+
+calls(){
+  let list=DATA.calls.filter(c=>c.r);const F=callF;
+  if(F.m!=='all')list=list.filter(c=>c.m===F.m);if(F.r!=='all')list=list.filter(c=>F.r==='lostall'?(c.r==='hot'||c.r==='lost'):c.r===F.r);if(F.ty!=='all')list=list.filter(c=>c.ty===F.ty);
+  if(F.q){const q=F.q.replace(/\D/g,''),t=F.q.toLowerCase();list=list.filter(c=>(q&&String(c.ph).replace(/\D/g,'').includes(q))||(c.co||'').toLowerCase().includes(t)||(c.rop||'').toLowerCase().includes(t)||(c.l||'').includes(t))}
+  const total=list.length;list=list.slice(0,300);
+  const ms=MGR.filter(m=>DATA.calls.some(c=>c.m===m&&c.r));
+  const what=c=>c.r==='ok'?esc(c.g.join(', ')||'результат'):esc(c.l||'');
+  return `
+  <div class="head"><div><h1>Журнал звонков</h1><p class="lead">Все разговоры менеджеров с итогом разбора. Нажмите на звонок, чтобы открыть подробности.</p>${liveNote()}</div></div>
+  <div class="filters">${fbT('calls','m','all','Все')}${ms.map(m=>fbT('calls','m',m,(m.split(' ')[1]?m.split(' ')[0]+' '+m.split(' ')[1][0]+'.':m),mdot(m))).join('')}</div>
+  <div class="filters">${fbT('calls','r','all','Любой итог')}${fbT('calls','r','ok','Результат')}${fbT('calls','r','hot','Горячие потерянные')}${fbT('calls','r','lostall','Все потерянные с шансом')}${fbT('calls','r','no','Без шанса')}<span class="fsep"></span>${fbT('calls','ty','all','Любой тип')}${fbT('calls','ty','cold','Холодный')}${fbT('calls','ty','repeat','Повторный')}${fbT('calls','ty','gate','Секретарь')}</div>
+  <div class="searchrow"><input class="search" id="cq" type="search" placeholder="Поиск по телефону, компании, причине" value="${esc(F.q)}" aria-label="Поиск звонков"></div>
+  <p class="sub" style="margin:0">Найдено ${total}${total>300?', показаны первые 300':''}</p>
+  <div class="tablewrap numtable"><table><thead><tr><th>Когда</th><th>Менеджер</th><th>Тип</th><th>Итог</th><th>Что получили или где потеряли</th><th>Компания</th><th>Телефон</th></tr></thead><tbody>
+  ${list.map(c=>`<tr class="click" data-call="${c.id}" tabindex="0"><td class="nowrap">${dLong(c.t)}</td><td class="nowrap">${mdot(c.m)}${esc(c.m)}</td><td>${TYN[c.ty]||''}</td><td>${resChip(c.r)}</td><td class="what">${what(c)}</td><td class="what">${esc(c.co||'')}</td><td class="num nowrap">${esc(fmtPhone(c.ph))}</td></tr>`).join('')||'<tr><td colspan="7" class="mut">Нет звонков по фильтру</td></tr>'}</tbody></table></div>
+  <div class="nlist">${list.map(c=>`<div class="ncard" data-call="${c.id}" tabindex="0"><div class="nmain"><div class="nr1"><span class="nowrap">${mdot(c.m)}${esc(c.m)}</span>${resChip(c.r)}</div><div class="nr2"><span>${dLong(c.t)}</span><span>${TYN[c.ty]||''}</span>${c.co?`<span class="what">${esc(c.co)}</span>`:''}</div><div class="nr3">${what(c)}</div></div><a class="callbtn" href="${telHref(c.ph)}" aria-label="Позвонить"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg></a></div>`).join('')||'<p class="mut">Нет звонков по фильтру</p>'}</div>`},
+
+callbacks(){
+  const g={'просрочен':[],'today':[],'next':[],'закрыт':[]};
+  DATA.callbacks.forEach(c=>{if(c.st==='просрочен')g['просрочен'].push(c);else if(c.st.startsWith('закрыт'))g['закрыт'].push(c);else if(c.d<=TODAY)g.today.push(c);else g.next.push(c)});
+  const sec=(title,arr,cls)=>arr.length?`<section class="panel"><h2>${title} <span class="meta">${arr.length}</span></h2><div class="cblist">${arr.map(c=>`<div class="cbrow ${cls}"><div class="cbd"><b>${dShort(c.d)}</b><span class="meta">${c.tm==='примерно'?'примерно':esc(c.tm)}</span></div><div class="cbm"><div class="nr1"><span class="nowrap">${mdot(c.m)}${esc(c.m)}</span><span class="st ${c.what==='Встреча'?'st-hot':'st-work'}">${esc(c.what)}</span></div>${c.co?`<div class="meta">${esc(c.co)}</div>`:''}<div class="cbq">«${esc(c.txt)}»</div><div class="meta">${esc(c.st)} · звонок ${c.id}</div></div><a class="btn sm" href="${telHref(c.ph)}">${esc(fmtPhone(c.ph))}</a></div>`).join('')}</div></section>`:'';
+  return `
+  <div class="head"><div><h1>Перезвоны</h1><p class="lead">Договорённости, которые бот нашёл в разговорах. Статусы из таблицы бота: перезвон закрывается, когда менеджер снова звонит клиенту.</p>${liveNote()}</div></div>
+  <div class="kpis"><div class="kpi ${g['просрочен'].length?'hot':''}"><small>Просрочено</small><div class="v">${g['просрочен'].length}</div></div><div class="kpi"><small>На сегодня</small><div class="v">${g.today.length}</div></div><div class="kpi"><small>Дальше</small><div class="v">${g.next.length}</div></div><div class="kpi"><small>Закрыто</small><div class="v">${g['закрыт'].length}</div></div></div>
+  ${sec('Просрочено',g['просрочен'],'late')}${sec('На сегодня',g.today,'')}${sec('Дальше',g.next,'')}${sec('Закрыто',g['закрыт'],'done')}`},
+
+olga(){
+  const O=DATA.olga;const C=O.clients;
+  const tot={leads:0,first:0,repeat:0,int:0,sum:0};C.forEach(c=>{tot.leads+=c.first;tot.first+=c.first;tot.repeat+=c.repeat;tot.int+=c.interested;tot.sum+=c.sum});
+  const fin=c=>{const r={reached:0,int:0,no:0,cb:0,dead:0,wait:0};c.combos.forEach(([a,b,d,n])=>{const s=[a,b,d].filter(Boolean);const last=s[s.length-1]||'';
+    if(s.some(x=>/Неактуально|Перезвон|Заинтересованный/.test(x)))r.reached+=n;
+    if(last==='Заинтересованный')r.int+=n;else if(last==='Неактуально')r.no+=n;else if(last==='Перезвон')r.cb+=n;else if(last==='НДЗ 3')r.dead+=n;else r.wait+=n});return r};
+  const F=C.map(fin);const KI=Math.max(0,C.findIndex(c=>/кухон/i.test(c.name)));const K=C[KI],FK=F[KI];const reached=F.reduce((a,f)=>a+f.reached,0);
+  const ser=[{name:'Первичные',color:'var(--s1)',key:'f'},{name:'Повторные после НДЗ',color:'var(--s2)',key:'r'}];
+  const rows=O.days.filter(([d,f,r])=>f+r||![0,6].includes(new Date(d+'T12:00:00Z').getUTCDay())&&d<TODAY).map(([d,f,r,i,s])=>({d,v:{f,r},label:WD[new Date(d+'T12:00:00Z').getUTCDay()]+', '+dShort(d),extra:`<div class="tt">Заинтересованных: ${i} · ${fmt(s)} ₽</div>`}));
+  const src={};O.sources.forEach(([p,n,s])=>{const [seg,ph]=p.split(' ');const k=ph;(src[k]=src[k]||{ph,n:0,s:0,seg:[],int:0});src[k].n+=n;src[k].s+=s;src[k].seg.push(seg)});
+  O.interested.forEach(([id,p])=>{const ph=p.split(' ')[1];if(src[ph])src[ph].int++});
+  const srcL=Object.values(src).sort((a,b)=>b.n-a.n);
+  const B=O.bot;const att=Object.entries(B.attempts);const attT=att.reduce((a,x)=>a+x[1],0);
+  return `
+  <div class="head"><div><h1>Колл-центр · Ольга</h1><p class="lead">Обзвон лидов для клиентов: ${C.map(c=>esc(c.name.charAt(0).toLowerCase()+c.name.slice(1))+(c.since?' с '+dShort(c.since):'')).join(', ')}. Тарифы: первичный звонок ${O.tariff.first} ₽, повторный после НДЗ ${O.tariff.repeat} ₽, заинтересованный ${O.tariff.interested} ₽. Цифры из таблицы «Прозвон лидов».</p>${liveNote()}</div></div>
+  <div class="kpis k5">
+    <div class="kpi"><small>Лидов</small><div class="v">${fmt(tot.leads)}</div><div class="d mut">${C.length} ${plural(C.length,'клиент','клиента','клиентов')}</div></div>
+    <div class="kpi"><small>Звонков</small><div class="v">${fmt(tot.first+tot.repeat)}</div><div class="d mut">${tot.first} первичных · ${tot.repeat} повторных</div></div>
+    <div class="kpi"><small>Дозвонились</small><div class="v">${pct(reached,tot.leads)}</div><div class="d mut">${reached} лидов из ${tot.leads}</div></div>
+    <div class="kpi"><small>Заинтересованных</small><div class="v">${tot.int}</div><div class="d">${tot.leads?(tot.int/tot.leads*100).toFixed(1).replace('.',','):0}% лидов</div></div>
+    <div class="kpi"><small>Сумма по тарифу</small><div class="v">${fmt(tot.sum)} ₽</div><div class="d mut">≈ ${tot.leads?fmt(tot.sum/tot.leads):0} ₽ за лид</div></div>
+  </div>
+  <section class="panel"><h2>Звонки по дням</h2><p class="sub">Первичные и повторные звонки. Наведите на столбец, чтобы увидеть сумму и заинтересованных</p>${stackChart(rows,ser,{label:'Звонки Ольги по дням'})}${legend(ser)}</section>
+  <section class="panel"><h2>По клиентам</h2><p class="sub">Чем закончился каждый лид: последний статус после всех попыток (до трёх на лида)</p>
+    <div class="tablewrap" style="border:0"><table class="ctable"><thead><tr><th>Клиент</th><th>Лидов</th><th>Звонков</th><th>Дозвонились</th><th>Неактуально</th><th>Перезвон</th><th>Нет ответа за 3 раза</th><th>Ждут попытки</th><th>Заинтересованы</th><th>Сумма</th></tr></thead><tbody>
+    ${C.map((c,i)=>{const f=F[i];return `<tr><td><b>${esc(c.name)}</b><div class="meta">с ${dLong(c.since)}</div></td><td class="num">${c.first}${c.notCalled?`<div class="meta">ещё ${c.notCalled} не звонили</div>`:''}</td><td class="num">${c.first+c.repeat}</td><td class="num">${f.reached} <span class="meta">${pct(f.reached,c.first)}</span></td><td class="num">${f.no}</td><td class="num">${f.cb}</td><td class="num">${f.dead}</td><td class="num">${f.wait}</td><td class="num"><b>${f.int}</b></td><td class="num nowrap">${fmt(c.sum)} ₽</td></tr>`}).join('')}</tbody></table></div></section>
+  <div class="grid2 even">
+    <section class="panel"><h2>Воронка лидов · кухонные гарнитуры</h2><p class="sub">${K.first} лидов с ${dShort(K.since)}</p>${funnelHtml([['Лиды',K.first],['Дозвонились',FK.reached,'Хотя бы один живой ответ'],['Не отказались сразу',FK.int+FK.cb,'Заинтересованные и перезвоны'],['Заинтересованы',FK.int]])}</section>
+    <section class="panel"><h2>Заинтересованные лиды</h2><p class="sub">Всё, что отмечено «Заинтересованный» в таблице</p><div class="cblist">${O.interested.length?'':'<p class="mut">Пока нет</p>'}${O.interested.map(([id,p,base,day,cl])=>`<div class="cbrow"><div class="cbd"><b>${dShort(day)}</b><span class="meta">интерес</span></div><div class="cbm"><div><b>Лид ${id}</b></div><div class="meta">${cl&&!/кухон/i.test(cl)?esc(cl)+' · ':''}Проект ${esc(p)}${base?' · база от '+dShort(base):''}</div>${id===1813853618?'<div class="cbq">По записи бот отметил этот звонок как «Перезвон»: клиент согласен на пластик от 250 тыс. и просил перезвонить в понедельник после обеда, но город и имя не собраны.</div>':''}</div></div>`).join('')}</div></section>
+  </div>
+  <section class="panel"><h2>Источники лидов · кухонные гарнитуры</h2><p class="sub">Номер из названия проекта в таблице. Сегменты B1–B6 объединены</p>
+    <div class="tablewrap" style="border:0"><table class="srctbl"><thead><tr><th>Источник</th><th>Сегменты</th><th>Лидов</th><th>Заинтересованы</th><th>Сумма</th></tr></thead><tbody>
+    ${srcL.map(s=>`<tr><td class="num nowrap">${s.ph.length>5?esc(fmtPhone(s.ph)):'без номера («'+esc(s.ph)+'»)'}</td><td class="meta">${esc(s.seg.join(', '))}</td><td class="num">${s.n}</td><td class="num">${s.int?'<b>'+s.int+'</b>':'0'}</td><td class="num nowrap">${fmt(s.s)} ₽</td></tr>`).join('')}</tbody></table></div></section>
+  <section class="panel"><h2>Что видит бот в записях Ольги</h2><p class="sub">Бот разбирает её звонки из телефонии с 07.10: ${B.leads} лидов, ${attT} попыток. Таблица выше ведётся вручную с 30.09, поэтому цифры не совпадают</p>
+    <div class="grid2 even inner"><div>${hbars(att.map(([k,v])=>[k,v,pct(v,attT)]))}</div>
+    <div><table class="mini"><thead><tr><th>День</th><th>Первичных</th><th>Повторных</th><th>Сумма</th></tr></thead><tbody>${B.days.map(([d,f,r,t,s])=>`<tr><td>${dShort(d)}</td><td class="num">${f}</td><td class="num">${r}</td><td class="num">${fmt(s)} ₽</td></tr>`).join('')}</tbody></table></div></div>
+    <h2 style="margin-top:18px">Кому Ольге перезвонить <span class="meta">${B.callbacks.length}</span></h2><p class="sub">Лиды, где последняя или одна из попыток закончилась «Перезвоном»</p>
+    <div class="cblist">${B.callbacks.map(([ph,p,a,b,c,t,rem,mat])=>`<div class="cbrow"><div class="cbd"><b>${dShort(t)}</b><span class="meta">${t.slice(11,16)}</span></div><div class="cbm"><div class="nr1"><span>${[a,b,c].filter(Boolean).map(esc).join(' → ')}</span></div>${p?`<div class="meta">Проект ${esc(p)}</div>`:''}${rem||mat?`<div class="cbq">${esc([rem&&'Удобно: '+rem,mat&&'Материал: '+mat].filter(Boolean).join(' · '))}</div>`:''}</div><a class="btn sm" href="${telHref(ph)}">${esc(fmtPhone(ph))}</a></div>`).join('')}</div></section>`},
+
+more(){return `<div class="head"><div><h1>Разделы</h1></div></div><div class="morelist">${PAGES.map(p=>`<button class="nav" data-go="${p.id}">${ico(p.id)}<span>${p.name}</span></button>`).join('')}</div>`}
+});
+
+function renderCallDrawer(){
+  const c=DATA.calls.find(x=>String(x.id)===String(openRef.id));if(!c)return '';
+  return `<header><div><div style="margin-bottom:6px">${resChip(c.r)}</div><h2 style="margin:0;font-size:18px">${mdot(c.m)}${esc(c.m)}</h2><div class="mut" style="font-size:12.5px;margin-top:4px">${dLong(c.t)} · ${TYN[c.ty]||''}${c.dur?' · '+Math.floor(c.dur/60)+':'+pad(c.dur%60):''} · звонок ${c.id}</div></div><button class="x" id="close" aria-label="Закрыть">×</button></header>
+  <div class="body">
+    <div class="copyrow"><span class="num">${esc(fmtPhone(c.ph))}</span><span class="spacer"></span><a class="btn sm primary" href="${telHref(c.ph)}">Позвонить</a><button class="btn sm" data-copy="${esc(fmtPhone(c.ph))}">Скопировать</button></div>
+    ${c.co||c.ind?`<dl class="kv">${c.co?`<dt>Компания</dt><dd>${esc(c.co)}</dd>`:''}${c.ind?`<dt>Сфера</dt><dd>${esc(c.ind)}</dd>`:''}</dl>`:''}
+    ${c.r==='ok'?`<div class="dblock good"><small>Результат</small><div>${esc(c.g.join(', ')||'есть')}</div></div>`:c.l?`<div class="dblock bad"><small>Где потеряли</small><div>${esc(c.l)}</div></div>`:''}
+    ${c.rop?`<div class="dblock"><small>Коротко для руководителя</small><div>${esc(c.rop)}</div></div>`:''}
+    ${c.kw?`<div class="dblock"><small>Что произошло</small><div>${esc(c.kw)}</div></div>`:''}
+    ${c.ks?`<div class="dblock"><small>Как можно было сказать</small><div>«${esc(c.ks)}»</div></div>`:''}
+    ${c.ob?`<div class="dblock"><small>Возражение клиента</small><div>${esc(c.ob)}</div></div>`:''}
+    ${c.nx?`<div class="dblock"><small>Следующий шаг</small><div>${esc(c.nx)}</div></div>`:''}
+    ${c.det?`<div class="dblock"><small>Подробно</small><div class="pre">${esc(c.det)}</div></div>`:''}
+    ${c.s==='b'?'<p class="sub">Полный разбор этого звонка лежит в Telegram-боте и в таблице «Статистика звонков».</p>':''}
+  </div>`}
+
+/* avr-resize: charts are drawn for the screen width */
+{let wasN=innerWidth<760;addEventListener('resize',()=>{const n=innerWidth<760;if(n!==wasN){wasN=n;if(TEAM_PAGES.has(current))render()}})}
+
+/* ---------- живые данные из Google Таблиц ---------- */
+const GS='Google Sheets';
+const SHEET_BOT='1chzMdgtuHf2ipvaVH6zEuY_aHAEolr15NqB9NMAZrKU',SHEET_LEADS='1mH4MXECrtCStfCpf54DK50_rCOwVVDUir8c_Tz3OVX0';
+const LIVE_EVERY=15*60*1000;
+const SNAP={asof:DATA.asof,bot:DATA.calls.filter(c=>c.s==='b')};
+const BASE_CALLS=DATA.calls.filter(c=>c.s==='a');
+const LIVE={mcp:null,state:'off',err:null,at:null,src:'snap',busy:false,timer:null,lastJson:''};
+function plural(n,a,b,c){n=Math.abs(n)%100;const m=n%10;return n>10&&n<20?c:m>1&&m<5?b:m===1?a:c}
+const mskNow=()=>new Date(Date.now()+3*3600e3).toISOString().slice(0,16);
+const ruDate=v=>{const m=String(v||'').match(/(\d{2})\.(\d{2})\.(\d{4})(?:\s+(\d{1,2}):(\d{2}))?/);return m?`${m[3]}-${m[2]}-${m[1]}`+(m[4]?`T${m[4].padStart(2,'0')}:${m[5]}`:''):''};
+const num=v=>{const n=parseFloat(String(v??'').replace(/\s/g,'').replace(/[^\d.,-]/g,'').replace(',','.'));return isFinite(n)?n:0};
+const cell=(r,i)=>i>=0&&r[i]!=null?String(r[i]).trim():'';
+function mgrName(n){n=String(n||'').trim();if(!n)return '';if(isGone(n))return 'Робот';if(MGR.includes(n))return n;const sw=n.split(/\s+/).reverse().join(' ');if(MGR.includes(sw))return sw;MGR.push(n);return n}
+
+async function gsRange(spreadsheetId,range){
+  const r=await LIVE.mcp.callTool(GS,'get_values',{spreadsheetId,range},{cache:false});
+  let p=r.payload;if(typeof p==='string'){try{p=JSON.parse(p)}catch(e){p={}}}
+  return (p&&p.values)||[];
+}
+async function withRetry(fn){try{return await fn()}catch(e){if(e&&e.retryable){await new Promise(r=>setTimeout(r,Math.min(e.retryAfterMs||0,60000)||1500+Math.random()*2000));return fn()}throw e}}
+
+/* таблица бота «Статистика звонков»: Звонки и Перезвоны */
+const RESMAP={'Результат':'ok','Горячий, потерян':'hot','Потерян, шанс был':'lost','Без шанса':'no'};
+const TYMAP={'холодный':'cold','повторный':'repeat','секретарь':'gate'};
+const LOSSMAP={'не ответили на вопрос о цене':'не ответили на вопрос клиента','вопрос клиента без ответа':'не ответили на вопрос клиента','рассказ о продукте вместо следующего шага':'рассказывал о продукте вместо шага'};
+function parseBotCalls(rows){
+  const h=rows[0]||[];const ix=n=>h.indexOf(n);
+  const I={t:ix('Дата'),m:ix('Менеджер'),ph:ix('Телефон'),co:ix('Компания'),r:ix('Итог'),g:ix('Результат'),l:ix('Где потерян'),kw:ix('Ключевой момент'),ks:ix('Как можно было'),ob:ix('Возражение'),nx:ix('Следующий шаг'),ty:ix('Тип звонка'),id:ix('ID звонка')};
+  const out=[];let missing=0;
+  rows.slice(1).forEach(r=>{
+    const t=ruDate(cell(r,I.t));if(!t||t.length<16||t<'2026-10-07')return;
+    const res=RESMAP[cell(r,I.r)];
+    if(!res){if(r.filter(x=>String(x).trim()).length<=1){const old=SNAP.bot.find(c=>c.t===t);if(old)out.push(old);else missing++}return}
+    const g=cell(r,I.g).split(',').map(x=>x.trim()).filter(Boolean).map(x=>x==='перезвон в конкретный день'?'перезвон':x);
+    const l=cell(r,I.l);
+    out.push({id:cell(r,I.id)||t,t,m:mgrName(cell(r,I.m)),s:'b',ty:TYMAP[cell(r,I.ty)]||'',r:res,g:res==='ok'?g:[],l:res==='hot'||res==='lost'?(LOSSMAP[l]||l||null):null,
+      ph:cell(r,I.ph),co:cell(r,I.co)||null,kw:cell(r,I.kw)||null,ks:cell(r,I.ks)||null,ob:cell(r,I.ob)||null,nx:cell(r,I.nx)||null});
+  });
+  return {calls:out,missing};
+}
+function parseCallbacks(rows){
+  const h=rows[0]||[];const ix=n=>h.indexOf(n);
+  const I={d:ix('Дата'),tm:ix('Время'),m:ix('Менеджер'),co:ix('Компания'),ph:ix('Телефон'),what:ix('Что'),txt:ix('Договорённость'),st:ix('Статус'),id:ix('ID звонка')};
+  return rows.slice(1).map(r=>{const d=ruDate(cell(r,I.d));if(!d||!cell(r,I.ph))return null;
+    return {d:d.slice(0,10),tm:cell(r,I.tm),m:mgrName(cell(r,I.m)),co:cell(r,I.co),ph:cell(r,I.ph),what:cell(r,I.what)||'Перезвон',txt:cell(r,I.txt),st:cell(r,I.st)||'открыт',id:cell(r,I.id)}}).filter(Boolean)
+    .sort((a,b)=>a.d<b.d?-1:a.d>b.d?1:0);
+}
+
+/* лист бота «Все звонки»: каждый звонок из Манго по дням и сотрудникам */
+function parseMango(rows){
+  const h=rows[0]||[];const ix=n=>h.indexOf(n);const tk=h.findIndex(x=>/^Разговоров от/.test(String(x)));
+  const I={d:ix('Дата'),m:ix('Сотрудник'),x:ix('Добавочный'),o:ix('Исходящих'),a:ix('Дозвонились'),t:tk,i:ix('Входящих'),mi:ix('Пропущено входящих'),mn:ix('Минут разговора'),rv:ix('Разобрано ботом')};
+  if(I.d<0||I.o<0)return null;
+  const min=num((String(h[tk]||'').match(/\d+/)||['30'])[0])||30;
+  const out=rows.slice(1).map(r=>{const d=ruDate(cell(r,I.d));if(!d)return null;const n=cell(r,I.m);
+    return [d,isGone(n)?'Робот':(MGR.includes(n)?n:MGR.includes(n.split(/\s+/).reverse().join(' '))?n.split(/\s+/).reverse().join(' '):n),cell(r,I.x),...[I.o,I.a,I.t,I.i,I.mi,I.mn,I.rv].map(i=>num(cell(r,i)))]}).filter(Boolean);
+  return {min,rows:out};
+}
+/* база лидов: группы по дате базы, сегменту и источнику */
+const LBR=[['Уже купили или выбрали',/купил|заказал|доставил|выбрал|определил|решил|нашл|подобрал|уже есть|есть кухня|уже вс[её]/],
+  ['Просят не звонить',/не звоните|уберите|достали|надоел/],
+  ['Не клиент: фирма или служебный номер',/компани|монтаж|сотруднич|сам с |сам могу|предложить|номер для|не существует|технич|мтт|банк|мегафон|ваканс|агентств|агенств|риелтор|застройщ|сз |служба безоп|опрос/],
+  ['Не интересовались',/не\s*(рассм|инт|интр|собира|оставл|запраш)|ошиблись|откуда|с чего вы|нет такого запроса|первый раз|никогда|не знаю/],
+  ['Другой регион',/не в мск|не москв|регион|обл\b|област|край|башкир|махачкал|ростов|краснодар|анап/],
+  ['Просто смотрели',/просто (смотр|зашл)/],
+  ['Позже, не сейчас',/полгода|следующ|декабр|позже|потом/],
+  ['Бросили трубку',/брос|сброс|не стал слушать|до свидания|прекратил/],
+  ['Нужно другое: дешевле или другой товар',/дешев|дорог|шкаф|стол\b/]];
+const LB_OTHER='Отказ без объяснения';
+function lbReason(t){t=String(t||'').toLowerCase();const r=LBR.find(([k,re])=>re.test(t));return r?r[0]:LB_OTHER}
+function lbSrc(p,tag){const seg=((p.match(/^(B\d+)/i)||[])[1]||'').toUpperCase();const ph=(p.match(/(\d{10,11})\D*$/)||[])[1]||'';
+  return {seg,src:ph&&tag?tag:ph?ph:p.replace(/^B\d+_/i,'').trim()||'без проекта',ph}}
+function lbAdd(lb,r,I,a){
+  const base=ruDate(cell(r,I.base)).slice(0,10);const {seg,src,ph}=lbSrc(cell(r,I.p),cell(r,I.tag));const k=base+'|'+seg+'|'+src;
+  const g=lb[k]||(lb[k]={b:base,seg,src,ph:[],n:0,called:0,reached:0,int:0,no:0,cb:0,dead:0,wait:0,sum:0,att:[0,0,0],rs:{}});
+  g.n++;if(ph&&!g.ph.includes(ph))g.ph.push(ph);
+  const s=a.filter(Boolean);if(!s.length)return;g.called++;g.sum+=num(cell(r,I.sum));
+  const first=a.findIndex(x=>x&&!/^НДЗ/.test(x));if(first>=0){g.reached++;g.att[first]++}
+  const last=s[s.length-1];
+  if(a.includes('Заинтересованный'))g.int++;else if(last==='Неактуально'){g.no++;const why=lbReason(cell(r,I.cm));g.rs[why]=(g.rs[why]||0)+1}
+  else if(last==='Перезвон')g.cb++;else if(last==='НДЗ 3')g.dead++;else g.wait++;
+}
+
+/* таблица «Прозвон лидов»: Ольга */
+function findRow(rows,first){return rows.findIndex(r=>cell(r,0)===first)}
+function parseSummary(rows){
+  const tariff={first:0,repeat:0,interested:0};const ti=findRow(rows,'Вид звонка');
+  if(ti>=0){tariff.first=num(cell(rows[ti+1]||[],1));tariff.repeat=num(cell(rows[ti+2]||[],1));tariff.interested=num(cell(rows[ti+3]||[],1))}
+  const clients=[];const ci=findRow(rows,'Клиент (название листа)');
+  if(ci>=0)for(let i=ci+1;i<rows.length;i++){const r=rows[i];const n=cell(r||[],0);if(!n)break;if(n==='ИТОГО')break;clients.push({name:n,first:num(r[1]),repeat:num(r[2]),interested:num(r[3]),sum:num(r[4])})}
+  return {tariff,clients};
+}
+const projKey=p=>{p=String(p||'').trim();const seg=(p.match(/^(B\d+)/i)||[])[1]||'';const tail=(p.match(/(\S+)\s*$/)||[])[1]||'';const ph=(tail.match(/(\d+)\D*$/)||[])[1];return seg&&ph?`${seg.toUpperCase()} ${ph}`:p.replace(/_/g,' ')};
+function parseClientSheet(name,rows){
+  const h=rows[0]||[];const ix=n=>h.indexOf(n);
+  const I={id:ix('id'),p:ix('Проект'),tag:ix('Тег проекта'),cm:ix('Комментарий'),c1:ix('Звонок 1 (первичный)'),c2:ix('Звонок 2 (повторный)'),c3:ix('Звонок 3 (повторный)'),sum:ix('Сумма'),base:ix('Дата базы'),d1:ix('Дата звонка 1'),d2:ix('Дата звонка 2'),d3:ix('Дата звонка 3')};
+  const combos={},sources={},interested=[],lb={};let since='',notCalled=0;
+  rows.slice(1).forEach(r=>{
+    if(!/^\d+$/.test(cell(r,I.id)))return;
+    const a=[cell(r,I.c1),cell(r,I.c2),cell(r,I.c3)];lbAdd(lb,r,I,a);if(!a.some(Boolean)){notCalled++;return}const k=a.join('|');combos[k]=(combos[k]||0)+1;
+    const base=ruDate(cell(r,I.base));if(base&&(!since||base<since))since=base;
+    const pk=projKey(cell(r,I.p));const s=sources[pk]||(sources[pk]=[pk,0,0]);s[1]++;s[2]+=num(cell(r,I.sum));
+    const ii=a.indexOf('Заинтересованный');
+    if(ii>=0){const day=ruDate(cell(r,[I.d1,I.d2,I.d3][ii]))||base;interested.push([Number(cell(r,I.id)),pk,base,day.slice(0,10),name])}
+  });
+  return {since,notCalled,lb:Object.values(lb),combos:Object.entries(combos).map(([k,n])=>[...k.split('|'),n]),sources:Object.values(sources).sort((a,b)=>a[0]<b[0]?-1:1),interested};
+}
+function parseDays(rows,width){return rows.slice(1).map(r=>{const d=ruDate(cell(r,0));if(!d)return null;return [d,...r.slice(1,width).map(num)]}).filter(Boolean).sort((a,b)=>a[0]<b[0]?-1:1)}
+function parseOlgaBot(sum,days,calls){
+  const all=sum.find(r=>cell(r,0)==='Всего')||[];
+  const attempts={};const ai=findRow(sum,'Итог');
+  if(ai>=0)for(let i=ai+1;i<sum.length;i++){const k=cell(sum[i]||[],0);if(!k||/^Лидов/.test(k))break;attempts[k]=num(sum[i][1])}
+  const lr=sum.find(r=>/^Лидов/.test(cell(r,0)))||[];
+  const up=(sum.find(r=>/^Обновлено ботом/.test(cell(r,0)))||[''])[0];
+  const h=calls[0]||[];const ix=n=>h.indexOf(n);
+  const I={ph:ix('Телефон'),p:ix('Проект'),rem:ix('Напоминание'),c1:ix('Звонок 1'),c2:ix('Звонок 2'),c3:ix('Звонок 3'),d1:ix('Дата звонка 1'),d2:ix('Дата звонка 2'),d3:ix('Дата звонка 3'),mat:ix('Материал'),when:ix('Удобное время')};
+  const cbs=calls.slice(1).filter(r=>/^\+?\d{10,}/.test(cell(r,I.ph))).map(r=>{
+    const a=[cell(r,I.c1),cell(r,I.c2),cell(r,I.c3)];if(!a.includes('Перезвон'))return null;
+    const t=[I.d3,I.d2,I.d1].map(i=>ruDate(cell(r,i))).find(Boolean)||'';
+    return [cell(r,I.ph),cell(r,I.p)?projKey(cell(r,I.p)):'',a[0],a[1],a[2],t,cell(r,I.when)||cell(r,I.rem),cell(r,I.mat)]}).filter(Boolean)
+    .sort((a,b)=>a[5]<b[5]?1:-1);
+  return {updated:ruDate(up),leads:num(lr[1]),first:num(all[1]),repeat:num(all[2]),sum:num(all[4]),attempts,
+    days:parseDays(days,6).map(([d,f,r,t,i,s])=>[d,f,r,t,s]),callbacks:cbs};
+}
+
+async function fetchBot(){
+  const [calls,cbs,all]=await Promise.all([gsRange(SHEET_BOT,'Звонки!A1:P1000'),gsRange(SHEET_BOT,'Перезвоны!A1:I1000'),
+    gsRange(SHEET_BOT,"'Все звонки'!A1:J3000").catch(()=>null)]);
+  return {...parseBotCalls(calls),callbacks:parseCallbacks(cbs),mango:all?parseMango(all):null};
+}
+async function fetchLeads(){
+  const [sum,days,oSum,oDays,oCalls]=await Promise.all([gsRange(SHEET_LEADS,'Сводка!A1:F60'),gsRange(SHEET_LEADS,'По дням!A1:F400'),
+    gsRange(SHEET_LEADS,"'Ольга · Сводка'!A1:E60"),gsRange(SHEET_LEADS,"'Ольга · По дням'!A1:F400"),gsRange(SHEET_LEADS,"'Ольга · Звонки'!A1:R2000")]);
+  const S=parseSummary(sum);
+  const sheets=await Promise.all(S.clients.map(c=>gsRange(SHEET_LEADS,`'${c.name.replace(/'/g,"''")}'!A1:P3000`).then(rows=>parseClientSheet(c.name,rows))));
+  const clients=S.clients.map((c,i)=>({...c,since:sheets[i].since||'',combos:sheets[i].combos,notCalled:sheets[i].notCalled,lb:sheets[i].lb}));
+  const KI=clients.findIndex(c=>/кухон/i.test(c.name));
+  return {tariff:S.tariff,days:parseDays(days,6).map(([d,f,r,t,i,s])=>[d,f,r,i,s]),clients,
+    sources:KI>=0?sheets[KI].sources:[],interested:sheets.flatMap(s=>s.interested).sort((a,b)=>a[3]<b[3]?-1:1),
+    bot:parseOlgaBot(oSum,oDays,oCalls)};
+}
+
+function applyLive(p){
+  DATA.asof=p.at;DATA.calls=[...BASE_CALLS,...p.calls].sort((a,b)=>a.t<b.t?1:a.t>b.t?-1:0);DATA.callbacks=p.callbacks;DATA.missing=p.missing;
+  if(p.olga&&p.olga.clients&&p.olga.clients.length)DATA.olga=p.olga;if(p.mango)DATA.mango=p.mango;
+  recomputeDates();
+}
+async function liveRefresh(manual){
+  if(!LIVE.mcp||LIVE.busy)return;LIVE.busy=true;if(LIVE.state!=='ok')LIVE.state='loading';if(manual)render();
+  try{
+    const [bot,leads]=await Promise.allSettled([withRetry(fetchBot),withRetry(fetchLeads)]);
+    if(bot.status==='rejected'&&leads.status==='rejected')throw bot.reason;
+    const at=mskNow();
+    const p={at,calls:bot.status==='fulfilled'?bot.value.calls:DATA.calls.filter(c=>c.s==='b'),callbacks:bot.status==='fulfilled'?bot.value.callbacks:DATA.callbacks,
+      missing:bot.status==='fulfilled'?bot.value.missing:(DATA.missing||0),mango:bot.status==='fulfilled'?bot.value.mango:(DATA.mango||null),olga:leads.status==='fulfilled'?leads.value:DATA.olga};
+    applyLive(p);
+    LIVE.state='ok';LIVE.src='live';LIVE.at=at;LIVE.err=(bot.status==='rejected'?bot.reason:leads.status==='rejected'?leads.reason:null);
+    LIVE.partial=bot.status==='rejected'?'bot':leads.status==='rejected'?'leads':null;
+    shareLive(p);
+  }catch(e){LIVE.state='err';LIVE.err=e||{code:'upstream_error'}}
+  LIVE.busy=false;if(TEAM_PAGES.has(current))render();
+}
+/* последняя живая выгрузка в базе страницы: её видят те, у кого нет доступа к таблицам */
+async function shareLive(p){
+  if(!db||S.readonly)return;
+  const {at,...rest}=p;const json=JSON.stringify(rest);if(json===LIVE.lastJson)return;
+  if(json.length>240000)return;
+  try{await db.doc('live/team').set({at,json});LIVE.lastJson=json}catch(e){}
+}
+function listenShared(){
+  if(!db)return;
+  db.doc('live/team').onSnapshot(s=>{
+    if(!s.exists)return;const d=s.data();if(!d||!d.json||!d.at)return;
+    if(LIVE.src==='live'||d.at<=DATA.asof)return;
+    try{applyLive({at:d.at,...JSON.parse(d.json)});LIVE.src='shared';LIVE.at=d.at;if(TEAM_PAGES.has(current))render()}catch(e){}
+  },()=>{});
+}
+const ERRTXT={
+  needs_reauth:'Подключение Google Sheets истекло. Переподключите его в claude.ai → Settings → Connectors.',
+  server_not_connected:'Чтобы видеть свежие цифры, подключите Google Sheets в claude.ai → Settings → Connectors.',
+  selection_required:'Подключено несколько Google Sheets: выберите один в запросе claude.ai.',
+  not_in_manifest:'Доступ к Google Таблицам для этой страницы не разрешён.',
+  consent_required:'Доступ к Google Таблицам для этой страницы не разрешён.',
+  approval_required:'Нужно разрешить чтение Google Таблиц.',
+  blocked_by_policy:'Чтение Google Таблиц запрещено настройками организации.',
+  server_unavailable:'Google Таблицы сейчас не отвечают. Повторю при следующем обновлении.',
+  tool_error:'Google не отдал таблицу. Проверьте, что у вашего Google-аккаунта есть доступ к обеим таблицам.'
+};
+function liveNote(){
+  const when=LIVE.at?dLong(LIVE.at):dLong(DATA.asof);
+  const btn=(t,a)=>`<button class="btn sm" data-live="${a}">${t}</button>`;
+  let dot='',txt='',act='';
+  if(LIVE.state==='loading'){dot='wait';txt='Загружаю свежие данные из Google Таблиц…'}
+  else if(LIVE.state==='ok'){dot='on';txt=`Живые данные из Google Таблиц на ${when}. Обновляются каждые 15 минут.`;act=btn('Обновить сейчас','refresh');
+    if(LIVE.partial)txt+=` ${LIVE.partial==='bot'?'Таблица бота':'Таблица «Прозвон лидов»'} не загрузилась, по ней показаны прошлые цифры.`}
+  else if(LIVE.state==='err'){const c=LIVE.err&&LIVE.err.code;dot='off';txt=`${ERRTXT[c]||'Не удалось загрузить Google Таблицы.'} Показаны данные на ${when}.`;
+    act=['not_in_manifest','consent_required','approval_required','upstream_error','server_unavailable','tool_error'].includes(c)||!ERRTXT[c]?btn(c==='not_in_manifest'||c==='consent_required'||c==='approval_required'?'Разрешить':'Повторить','refresh'):''}
+  else{dot='off';txt=LIVE.src==='shared'?`Данные из Google Таблиц на ${when}. Чтобы они обновлялись сами, подключите Google Sheets в claude.ai → Settings → Connectors.`:`Снимок на ${when}. Чтобы видеть свежие цифры, подключите Google Sheets в claude.ai → Settings → Connectors.`}
+  return `<div class="livebar"><i class="ldot ${dot}"></i><span>${esc(txt)}</span>${act}</div>`;
+}
+document.addEventListener('click',e=>{const b=e.target.closest&&e.target.closest('[data-live]');if(b){e.preventDefault();liveRefresh(true)}});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&LIVE.mcp&&LIVE.state!=='loading'&&LIVE.at&&Date.now()-LIVE.t0>LIVE_EVERY)liveRefresh()});
+async function liveBoot(){
+  const c=window.claude;if(!c||!c.use)return;
+  listenShared();
+  const mcp=await c.use('mcp');if(!mcp){if(TEAM_PAGES.has(current))render();return}
+  LIVE.mcp=mcp;LIVE.t0=Date.now();
+  await liveRefresh(true);LIVE.t0=Date.now();
+  LIVE.timer=setInterval(()=>{if(document.hidden)return;LIVE.t0=Date.now();liveRefresh()},LIVE_EVERY);
+}
+
+
+/* ---------- воронка продаж: клиенты по этапам ---------- */
+const PSTAGES=[
+  {id:'talk',n:'Разговор',d:'Менеджер поговорил с клиентом'},
+  {id:'step',n:'Следующий шаг',d:'Договорились о перезвоне на дату или вышли на ЛПР'},
+  {id:'offer',n:'КП или встреча',d:'Отправили КП или назначили встречу'},
+  {id:'contract',n:'Договор',d:'Отмечается вручную в карточке клиента'},
+  {id:'paid',n:'Оплачено',d:'Отмечается вручную в карточке клиента'}];
+const PIDX=Object.fromEntries(PSTAGES.map((s,i)=>[s.id,i]));
+let pipeF={per:'all',m:'all'};
+const phKey=p=>String(p||'').replace(/\D/g,'').slice(-10);
+function autoStage(cs){let i=0;cs.forEach(c=>{if(c.r!=='ok')return;i=Math.max(i,c.g.includes('КП')||c.g.includes('встреча')?2:1)});return i}
+function pipeClients(){
+  const by={};
+  DATA.calls.forEach(c=>{if(!c.r||!c.ph)return;const k=phKey(c.ph);if(k.length<10)return;(by[k]=by[k]||[]).push(c)});
+  const cbs={};(DATA.callbacks||[]).forEach(c=>{if(/закрыт/.test(c.st))return;const k=phKey(c.ph);if(!cbs[k]||c.d<cbs[k].d)cbs[k]=c});
+  return Object.entries(by).map(([k,cs])=>{
+    cs.sort((a,b)=>a.t<b.t?-1:a.t>b.t?1:0);const last=cs[cs.length-1];const man=(S.pipe||{})[k]||null;
+    const auto=autoStage(cs);let st=auto;const lost=!!man&&man.stage==='lost';
+    if(man&&PIDX[man.stage]!=null)st=Math.max(auto,PIDX[man.stage]);
+    const co=[...cs].reverse().map(c=>c.co).find(Boolean)||'';
+    const g=[...new Set(cs.filter(c=>c.r==='ok').flatMap(c=>c.g))];
+    return {k,ph:last.ph,co,m:last.m,first:cs[0].t,last:last.t,calls:cs,auto,st,lost,man,g,cb:cbs[k]||null,hot:cs.some(c=>c.r==='hot')};
+  });
+}
+function pipeList(){return pipeClients().filter(c=>inPeriod(c.first,pipeF.per)&&(pipeF.m==='all'||c.m===pipeF.m))}
+function fbP(key,val,name,extra=''){return `<button class="fbtn" data-pf="${key}:${val}" aria-pressed="${pipeF[key]===val}">${extra}${name}</button>`}
+function pcard(c){
+  const sum=c.man&&+c.man.sum?`<span class="num">${fmt(c.man.sum)} ₽</span>`:'';
+  const late=c.cb&&c.cb.d<TODAY;
+  return `<div class="pcard" data-client="${c.k}" tabindex="0"><b class="ct">${esc(c.co||fmtPhone(c.ph))}</b>
+    <div class="r">${mdot(c.m)}<span class="meta">${esc(c.m)}</span></div>
+    <div class="r"><span class="meta">${c.g.length?esc(c.g.join(', ')):c.hot?'горячий, потерян':'разговор'} · ${dShort(c.last)}</span><span class="spacer"></span>${sum}</div>
+    ${c.cb&&!c.lost&&c.st<4?`<div class="nx ${late?'late':''}">${esc(c.cb.what||'Перезвон')} ${dShort(c.cb.d)}${late?' · просрочен':''}</div>`:''}
+    ${c.man&&c.man.note?`<div class="meta pnote">${esc(c.man.note)}</div>`:''}</div>`;
+}
+Object.assign(VIEWS,{
+pipe(){
+  const all=pipeList();const ms=MGR.filter(m=>DATA.calls.some(c=>c.m===m&&c.r));
+  const reach=PSTAGES.map((s,i)=>all.filter(c=>c.st>=i).length);
+  const act=all.filter(c=>!c.lost&&c.st>=1&&c.st<4);
+  const paid=all.filter(c=>c.st>=4&&!c.lost);const paidSum=paid.reduce((a,c)=>a+(+(c.man&&c.man.sum)||0),0);
+  const contracts=all.filter(c=>c.st>=3&&!c.lost);
+  const lost=all.filter(c=>c.lost);
+  const offerSplit=(()=>{const o=all.filter(c=>c.st>=2);return {kp:o.filter(c=>c.g.includes('КП')).length,meet:o.filter(c=>c.g.includes('встреча')).length}})();
+  const cols=[
+    {id:'step',n:'Следующий шаг',list:all.filter(c=>!c.lost&&c.st===1)},
+    {id:'offer',n:'КП или встреча',list:all.filter(c=>!c.lost&&c.st===2)},
+    {id:'contract',n:'Договор',list:all.filter(c=>!c.lost&&c.st===3)},
+    {id:'paid',n:'Оплачено',list:paid},
+    {id:'lost',n:'Отказ',list:lost}];
+  const colSum=l=>l.reduce((a,c)=>a+(+(c.man&&c.man.sum)||0),0);
+  return `
+  <div class="head"><div><h1>Воронка продаж</h1><p class="lead">Клиенты, с которыми поговорили менеджеры. Первые три этапа CRM ставит сама по разборам звонков. Договор, оплату и отказ отмечает руководитель или менеджер в карточке клиента.</p>${liveNote()}</div></div>
+  <div class="filters">${PERIODS.map(([k,n])=>fbP('per',k,n)).join('')}</div>
+  <div class="filters">${fbP('m','all','Все менеджеры')}${ms.map(m=>fbP('m',m,m,mdot(m))).join('')}</div>
+  <div class="kpis">
+    <div class="kpi"><small>Клиентов в воронке</small><div class="v">${fmt(all.length)}</div><div class="d mut">с кем был разговор</div></div>
+    <div class="kpi"><small>В работе</small><div class="v">${fmt(act.length)}</div><div class="d mut">есть шаг, КП, встреча или договор</div></div>
+    <div class="kpi"><small>Договоров</small><div class="v">${fmt(contracts.length)}</div><div class="d mut">${contracts.length?pct(contracts.length,all.length)+' клиентов':'отметьте в карточке клиента'}</div></div>
+    <div class="kpi"><small>Оплачено</small><div class="v">${fmt(paidSum)} ₽</div><div class="d mut">${paid.length} ${plural(paid.length,'клиент','клиента','клиентов')}</div></div>
+  </div>
+  <section class="panel"><h2>Воронка по клиентам</h2><p class="sub">Сколько клиентов дошли до каждого этапа. Период считается по дате первого разговора, менеджер — тот, кто говорил с клиентом последним</p>
+    ${funnelHtml(PSTAGES.map((s,i)=>[s.n,reach[i],s.d]))}
+    <div class="gotrow"><span>Переходы: </span>${PSTAGES.slice(1).map((s,i)=>`${esc(PSTAGES[i].n)} → ${esc(s.n)} <b>${pct(reach[i+1],reach[i])}</b>`).join(' · ')}</div>
+    <div class="gotrow"><span>Из «КП или встреча»: </span><b>${offerSplit.kp}</b> с КП · <b>${offerSplit.meet}</b> со встречей${lost.length?` · <b>${lost.length}</b> в отказе`:''}</div></section>
+  <section class="panel"><h2>Клиенты по этапам</h2><p class="sub">Нажмите на карточку, чтобы увидеть звонки клиента и поменять этап. Клиенты, с которыми был только разговор без результата, сюда не выводятся: их ${fmt(all.filter(c=>!c.lost&&c.st===0).length)}</p>
+    <div class="board pboard">${cols.map(col=>{const shown=col.list.sort((a,b)=>a.last<b.last?1:-1).slice(0,60);const s=col.id==='lost'?0:colSum(col.list);return `<div class="col"><div class="colhead"><b>${col.n}</b><span class="n">${col.list.length}</span>${s?`<span class="sum num">${fmt(s)} ₽</span>`:''}</div>
+      ${shown.map(pcard).join('')||'<p class="meta" style="padding:4px">Пока никого</p>'}${col.list.length>shown.length?`<p class="meta">и ещё ${col.list.length-shown.length}</p>`:''}</div>`}).join('')}</div></section>`;
+}});
+function renderClientDrawer(){
+  const c=pipeClients().find(x=>x.k===openRef.id);if(!c)return '';
+  const man=c.man||{};const canEdit=db&&!S.readonly;
+  const stLabel=c.lost?'Отказ':PSTAGES[c.st].n;
+  const opts=[['','Как по звонкам: '+PSTAGES[c.auto].n],...PSTAGES.slice(1).map(s=>[s.id,s.n]),['lost','Отказ']];
+  return `<header><div><div style="margin-bottom:6px"><span class="st ${c.lost?'st-no':c.st>=3?'st-hot':'st-work'}">${esc(stLabel)}</span></div><h2 style="margin:0;font-size:18px">${esc(c.co||fmtPhone(c.ph))}</h2><div class="mut" style="font-size:12.5px;margin-top:4px">${mdot(c.m)}${esc(c.m)} · первый разговор ${dLong(c.first)}</div></div><button class="x" id="close" aria-label="Закрыть">×</button></header>
+  <div class="body">
+    <div class="copyrow"><span class="num">${esc(fmtPhone(c.ph))}</span><span class="spacer"></span><a class="btn sm primary" href="${telHref(c.ph)}">Позвонить</a><button class="btn sm" data-copy="${esc(fmtPhone(c.ph))}">Скопировать</button></div>
+    ${c.cb?`<div class="dblock"><small>${esc(c.cb.what||'Перезвон')} · ${esc(c.cb.st)}</small><div>${dLong(c.cb.d)}${c.cb.tm&&c.cb.tm!=='примерно'?' '+esc(c.cb.tm):c.cb.tm?' (примерно)':''}. «${esc(c.cb.txt||'')}»</div></div>`:''}
+    <div class="dblock"><small>Звонки клиенту · ${c.calls.length}</small><div class="cblist">${[...c.calls].reverse().map(x=>`<div class="cbrow click" data-call="${x.id}" tabindex="0"><div class="cbd"><b>${dShort(x.t)}</b><span class="meta">${x.t.slice(11,16)}</span></div><div class="cbm"><div class="nr1">${resChip(x.r)}<span class="meta">${esc(x.m)}</span></div><div class="meta">${x.r==='ok'?esc(x.g.join(', ')||'результат'):esc(x.l||'')}</div></div></div>`).join('')}</div></div>
+    ${canEdit?`<form data-pipe-form="${c.k}">
+      <label class="fl">Этап<select id="pp-stage">${opts.map(([v,n])=>`<option value="${v}" ${(man.stage||'')===v?'selected':''}>${esc(n)}</option>`).join('')}</select></label>
+      <label class="fl">Сумма сделки, ₽<input id="pp-sum" type="number" min="0" step="any" value="${esc(man.sum||'')}" placeholder="Для договора и оплаты"></label>
+      <label class="fl">Заметка<textarea id="pp-note" rows="3" placeholder="Что решили, кто ЛПР, причина отказа">${esc(man.note||'')}</textarea></label>
+      <div class="addrow"><button class="btn primary">Сохранить</button></div>
+      ${man.at?`<p class="sub">Изменено ${dLong(man.at)}</p>`:''}
+    </form>`:`<p class="sub">${db?'У вас доступ только на просмотр.':'Этап можно поменять, когда страница открыта в claude.ai.'}</p>`}
+  </div>`;
+}
+document.addEventListener('click',e=>{
+  const f=e.target.closest&&e.target.closest('[data-pf]');if(f){const [k,v]=f.dataset.pf.split(':');pipeF[k]=v;render();return}
+  const c=e.target.closest&&e.target.closest('[data-client]');if(c&&!e.target.closest('a,button')){openDrawer('client',c.dataset.client)}
+});
+document.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.dataset&&e.target.dataset.client)openDrawer('client',e.target.dataset.client)});
+document.addEventListener('submit',async e=>{
+  const f=e.target;if(f.dataset.pipeForm===undefined)return;e.preventDefault();
+  const k=f.dataset.pipeForm;const stage=$('#pp-stage').value;const sum=+$('#pp-sum').value||0;const note=$('#pp-note').value.trim().slice(0,1000);
+  const at=mskNow();
+  const ok=await guard(()=>!stage&&!sum&&!note?db.doc('pipe/'+k).delete():db.doc('pipe/'+k).set({stage,sum,note,at,by:myId||''}),'Сохранено');
+  if(ok){document.activeElement&&document.activeElement.blur();closeDrawer()}
+});
+function pipeBoot(){
+  if(!db)return;
+  db.collection('pipe').onSnapshot(q=>{S.pipe=Object.fromEntries(q.docs.map(d=>[d.id,d.data()]));if(current==='pipe'||(openRef&&openRef.type==='client'))render()},()=>{});
+}
+
+/* ---------- все звонки и база лидов ---------- */
+const ECLR=n=>MGR.slice(0,4).includes(n)?MCLR(n):/Ольга/.test(n)?'#8a63d2':n==='Робот'?'#7d8590':'#a9b0b8';
+const hm=m=>m>=60?Math.floor(m/60)+' ч '+pad(m%60)+' мин':m+' мин';
+function mangoBlock(){
+  const M=DATA.mango;
+  if(!M)return `<section class="panel"><h2>Все звонки из Манго</h2><p class="sub" style="margin:0">Здесь будут все звонки из телефонии, включая недозвоны и короткие: наборы, дозвоны, время на линии и пропущенные входящие. Появятся после обновления бота: он начнёт вести лист «Все звонки» в таблице «Статистика звонков».</p></section>`;
+  const rows=M.rows.filter(r=>inPeriod(r[0],teamF.per)&&(teamF.m==='all'||r[1]===teamF.m));
+  const by={};rows.forEach(([d,n,x,o,a,t,i,mi,mn,rv])=>{const e=by[n]||(by[n]={n,x,o:0,a:0,t:0,i:0,mi:0,mn:0,rv:0,days:new Set()});e.o+=o;e.a+=a;e.t+=t;e.i+=i;e.mi+=mi;e.mn+=mn;e.rv+=rv;if(o)e.days.add(d)});
+  const E=Object.values(by).sort((a,b)=>b.o-a.o||b.i-a.i);
+  const T=E.reduce((s,e)=>{['o','a','t','i','mi','mn','rv'].forEach(k=>s[k]+=e[k]);return s},{o:0,a:0,t:0,i:0,mi:0,mn:0,rv:0});
+  const ser=E.filter(e=>e.o).map(e=>({name:e.n,color:ECLR(e.n),key:e.n}));
+  const ds=[...new Set(rows.map(r=>r[0]))].sort();const days=[];
+  if(ds.length){let d=ds[0];while(d<=ds[ds.length-1]){const wd=new Date(d+'T12:00:00Z').getUTCDay();const day=rows.filter(r=>r[0]===d);
+    if(day.length||(wd!==0&&wd!==6)){const v={};let a=0,t=0;day.forEach(r=>{if(r[3])v[r[1]]=(v[r[1]]||0)+r[3];a+=r[4];t+=r[5]});
+      days.push({d,v,label:WD[wd]+', '+dShort(d),extra:day.length?`<div class="tt">Дозвонились: ${a} · разговоров от ${M.min} с: ${t}</div>`:''})}
+    d=addDays(d,1)}}
+  const per=E.reduce((a,e)=>a+e.days.size,0);
+  return `<section class="panel"><h2>Все звонки из Манго</h2><p class="sub">Каждый звонок из телефонии, а не только разобранные: недозвоны, короткие, входящие. ${PERIODS.find(p=>p[0]===teamF.per)[1]}</p>
+    ${rows.length?`<div class="kpis k5 inner">
+      <div class="kpi"><small>Исходящих наборов</small><div class="v">${fmt(T.o)}</div><div class="d mut">${per?'≈ '+Math.round(T.o/per)+' в день на сотрудника':''}</div></div>
+      <div class="kpi"><small>Дозвонились</small><div class="v">${pct(T.a,T.o)}</div><div class="d mut">${fmt(T.a)} из ${fmt(T.o)} наборов</div></div>
+      <div class="kpi"><small>Разговоров от ${M.min} с</small><div class="v">${fmt(T.t)}</div><div class="d mut">${pct(T.t,T.o)} наборов</div></div>
+      <div class="kpi"><small>На линии</small><div class="v">${T.mn>=60?Math.round(T.mn/60)+' ч':T.mn+' мин'}</div><div class="d mut">${T.mn>=60?hm(T.mn)+', ':''}исходящие и входящие</div></div>
+      <div class="kpi ${T.mi?'hot':''}"><small>Пропущено входящих</small><div class="v">${fmt(T.mi)}</div><div class="d mut">из ${fmt(T.i)} входящих</div></div>
+    </div>
+    ${stackChart(days,ser,{label:'Исходящие наборы по дням',h:220})}${legend(ser)}
+    <div class="tablewrap" style="border:0;margin-top:10px"><table class="mtable"><thead><tr><th>Сотрудник</th><th>Исходящих</th><th>Дозвонились</th><th>Разговоров от ${M.min} с</th><th>Входящих</th><th>Пропущено</th><th>На линии</th><th>Разобрано</th></tr></thead><tbody>
+    ${E.map(e=>`<tr><td class="nowrap"><i class="mdot" style="background:${ECLR(e.n)}"></i>${esc(e.n)}${e.x?` <span class="meta">доб. ${esc(e.x)}</span>`:''}</td><td class="num">${fmt(e.o)}</td><td class="num">${fmt(e.a)} <span class="meta">${pct(e.a,e.o)}</span></td><td class="num">${fmt(e.t)}</td><td class="num">${fmt(e.i)}</td><td class="num">${e.mi?'<b>'+e.mi+'</b>':0}</td><td class="num nowrap">${hm(e.mn)}</td><td class="num">${fmt(e.rv)}</td></tr>`).join('')}
+    </tbody></table></div>
+    <div class="mcards">${E.map(e=>`<div class="mcard"><div class="mch"><i class="mdot" style="background:${ECLR(e.n)}"></i><b>${esc(e.n)}</b><span class="spacer"></span><span class="num">${pct(e.a,e.o)}</span></div><div class="mcg"><span><b class="num">${fmt(e.o)}</b>наборов</span><span><b class="num">${fmt(e.a)}</b>дозвонов</span><span><b class="num">${fmt(e.t)}</b>от ${M.min} с</span><span><b class="num">${hm(e.mn)}</b>на линии</span></div>${e.mi?`<div class="meta">Пропущено входящих: ${e.mi}</div>`:''}</div>`).join('')}</div>
+    <p class="sub" style="margin:8px 0 0">«Дозвонились» значит, что трубку сняли, включая автоответчики. «Разобрано ботом» показывает, сколько звонков бот разобрал; часть звонков он не разбирает, например короткие.</p>`
+    :'<p class="mut">Нет звонков за период</p>'}</section>`}
+
+/* база лидов */
+let leadF={c:'all'};
+const LB_KEYS=['n','called','reached','int','no','cb','dead','wait','sum'];
+function lbAgg(gs){const s={n:0,called:0,reached:0,int:0,no:0,cb:0,dead:0,wait:0,sum:0,att:[0,0,0],rs:{}};
+  gs.forEach(g=>{LB_KEYS.forEach(k=>s[k]+=g[k]);g.att.forEach((v,i)=>s.att[i]+=v);for(const k in g.rs)s.rs[k]=(s.rs[k]||0)+g.rs[k]});
+  s.noreq=s.rs['Не интересовались']||0;return s}
+const rub=v=>v?fmt(Math.round(v))+' ₽':'—';
+const perInt=s=>s.int?rub(s.sum/s.int):'—';
+function lbGroups(){const C=(DATA.olga&&DATA.olga.clients)||[];return C.filter(c=>leadF.c==='all'||c.name===leadF.c).flatMap(c=>(c.lb||[]).map(g=>({...g,cl:c.name})))}
+function groupBy(gs,key){const m={};gs.forEach(g=>{const k=key(g);(m[k]=m[k]||[]).push(g)});return Object.entries(m).map(([k,l])=>({k,l,s:lbAgg(l)}))}
+function lbRow(label,s,extra=''){return `<td class="num">${fmt(s.n)}${s.n>s.called?`<div class="meta">не звонили ${s.n-s.called}</div>`:''}</td><td class="num">${fmt(s.reached)} <span class="meta">${pct(s.reached,s.called)}</span></td><td class="num">${s.noreq} <span class="meta">${pct(s.noreq,s.reached)}</span></td><td class="num">${s.cb}</td><td class="num">${s.int?'<b>'+s.int+'</b>':0} <span class="meta">${pct(s.int,s.reached)}</span></td><td class="num nowrap">${rub(s.sum)}</td><td class="num nowrap">${perInt(s)}</td>${extra}`}
+const LB_HEAD='<th>Лидов</th><th>Дозвонились</th><th>Не интересовались</th><th>Перезвон</th><th>Заинтересованы</th><th>Сумма</th><th>₽ за заинтересованного</th>';
+const cShort=n=>n.replace(/^Недвижимость /,'').replace(/ услуги$/,'');
+Object.assign(VIEWS,{
+leads(){
+  const C=(DATA.olga&&DATA.olga.clients)||[];const has=C.some(c=>c.lb&&c.lb.length);
+  const head=`<div class="head"><div><h1>База лидов</h1><p class="lead">Уровень дозвона по лидам, которых колл-центр уже обзвонил. Сколько номеров было в исходной базе, CRM не знает: база у менеджеров, а в таблице «Прозвон лидов» только те, кому звонили.</p>${liveNote()}</div></div>`;
+  if(!has)return head+`<section class="panel"><p class="mut" style="margin:0">Уровень дозвона считается по строкам листов клиентов. Он появится после первой загрузки из Google Таблиц.</p></section>`;
+  const gs=lbGroups().filter(g=>g.called);const s=lbAgg(gs);
+  const filt=`<div class="filters"><button class="fbtn" data-lf="all" aria-pressed="${leadF.c==='all'}">Все клиенты</button>${C.map(c=>`<button class="fbtn" data-lf="${esc(c.name)}" aria-pressed="${leadF.c===c.name}">${esc(c.name)}</button>`).join('')}</div>`;
+  const all=leadF.c==='all';
+  const byC=groupBy(gs,g=>g.cl);
+  const byB=groupBy(gs,g=>g.cl+'|'+g.b).sort((a,b)=>a.l[0].b<b.l[0].b?1:a.l[0].b>b.l[0].b?-1:a.k<b.k?-1:1);
+  const bySrc=groupBy(gs,g=>g.cl+'|'+g.src).sort((a,b)=>b.s.called-a.s.called);
+  const bySeg=groupBy(gs,g=>g.seg||'без сегмента').sort((a,b)=>a.k<b.k?-1:1);
+  const att=s.att;const late=att[1]+att[2];
+  const srcName=x=>{const g=x.l[0];return /^\d{10,11}$/.test(g.src)?esc(fmtPhone(g.src)):esc(g.src)};
+  const srcTip=x=>{const ph=[...new Set(x.l.flatMap(g=>g.ph))];return ph.length&&!/^\d{10,11}$/.test(x.l[0].src)?`<div class="meta">${ph.slice(0,4).map(p=>esc(fmtPhone(p))).join(', ')}${ph.length>4?' и ещё '+(ph.length-4):''}</div>`:''};
+  const bar=(a,b)=>{const p=b?Math.round(a/b*100):0;return `<span class="rbar"><i style="width:${p}%"></i></span><b class="num">${b?p+'%':'—'}</b>`};
+  const H='<th>Обзвонено</th><th>Дозвонились</th><th>Уровень дозвона</th><th>С первой попытки</th><th>Нет ответа за 3 попытки</th>';
+  const row=x=>`<td class="num">${fmt(x.s.called)}</td><td class="num">${fmt(x.s.reached)}</td><td class="nowrap">${bar(x.s.reached,x.s.called)}</td><td class="num">${x.s.att[0]}</td><td class="num">${x.s.dead}${x.s.wait?`<div class="meta">ждут попытки ${x.s.wait}</div>`:''}</td>`;
+  const tbl=(title,sub,list,name)=>`<section class="panel"><h2>${title}</h2><p class="sub">${sub}</p><div class="tablewrap" style="border:0"><table class="ctable"><thead><tr><th>${name}</th>${H}</tr></thead><tbody>${list}</tbody></table></div></section>`;
+  return head+filt+`
+  <div class="kpis">
+    <div class="kpi"><small>Обзвонено лидов</small><div class="v">${fmt(s.called)}</div><div class="d mut">хотя бы один звонок</div></div>
+    <div class="kpi"><small>Уровень дозвона</small><div class="v">${pct(s.reached,s.called)}</div><div class="d mut">${fmt(s.reached)} ответили хотя бы раз</div></div>
+    <div class="kpi"><small>С первой попытки</small><div class="v">${pct(att[0],s.called)}</div><div class="d mut">${fmt(att[0])} из ${fmt(s.called)}</div></div>
+    <div class="kpi"><small>Нет ответа за 3 попытки</small><div class="v">${fmt(s.dead)}</div><div class="d mut">${s.wait?'ещё ждут попытки '+s.wait:'все попытки сделаны'}</div></div>
+  </div>
+  <div class="grid2 even">
+    <section class="panel"><h2>С какой попытки дозвонились</h2><p class="sub">${s.reached} ${plural(s.reached,'лид ответил','лида ответили','лидов ответили')} хотя бы раз</p>${hbars([['С первой',att[0],pct(att[0],s.reached)],['Со второй',att[1],pct(att[1],s.reached)],['С третьей',att[2],pct(att[2],s.reached)]])}
+      <p class="sub" style="margin:10px 0 0">${late?`Повторные звонки подняли дозвон с ${pct(att[0],s.called)} до ${pct(s.reached,s.called)}.`:'Пока все дозвоны пришлись на первую попытку.'}</p></section>
+    ${all?`<section class="panel"><h2>По клиентам</h2><p class="sub">Уровень дозвона по каждой базе клиента</p>${hbars(byC.map(x=>[x.k,Math.round(x.s.reached/Math.max(1,x.s.called)*100),x.s.reached+' из '+x.s.called]),{unit:'%'})}</section>`
+      :`<section class="panel"><h2>${esc(leadF.c)}</h2><p class="sub">Дозвон по дням базы</p>${hbars(byB.map(x=>[x.l[0].b?dShort(x.l[0].b):'без даты',Math.round(x.s.reached/Math.max(1,x.s.called)*100),x.s.reached+' из '+x.s.called]),{unit:'%'})}</section>`}
+  </div>
+  ${tbl('По датам базы','Каждая выгрузка номеров отдельно',byB.map(x=>`<tr><td class="nowrap"><b>${x.l[0].b?dLong(x.l[0].b):'без даты'}</b>${all?`<div class="meta">${esc(cShort(x.l[0].cl))}</div>`:''}</td>${row(x)}</tr>`).join(''),'База от')}
+  ${tbl('По источникам','Конкурент или его номер из названия проекта',bySrc.map(x=>`<tr><td><b class="nowrap">${srcName(x)}</b>${all?`<div class="meta">${esc(cShort(x.l[0].cl))}</div>`:''}${srcTip(x)}</td>${row(x)}</tr>`).join(''),'Источник')}
+  ${tbl('По сегментам','Сегмент B1–B6 из названия проекта',bySeg.map(x=>`<tr><td><b>${esc(x.k)}</b></td>${row(x)}</tr>`).join(''),'Сегмент')}
+  <p class="foot">Дозвон значит, что хотя бы один звонок закончился не «НДЗ»: «Неактуально», «Перезвон» или «Заинтересованный». Лиды без единого звонка в расчёт не входят.</p>`}
+});
+document.addEventListener('click',e=>{const b=e.target.closest&&e.target.closest('[data-lf]');if(b){leadF.c=b.dataset.lf;render()}});
+/* ---------- вкладки менеджеров ---------- */
+let mgrF={m:'',per:'7'};
+function mgrCbRow(c){const late=c.st==='просрочен'||c.d<TODAY;return `<div class="cbrow ${late?'late':''}"><div class="cbd"><b>${dShort(c.d)}</b><span class="meta">${late?'просрочен':c.tm==='примерно'?'примерно':esc(c.tm)}</span></div><div class="cbm"><div class="nr1"><span class="st ${c.what==='Встреча'?'st-hot':'st-work'}">${esc(c.what)}</span>${c.co?`<span class="meta">${esc(c.co)}</span>`:''}</div>${c.txt?`<div class="cbq">«${esc(c.txt)}»</div>`:''}</div><a class="btn sm" href="${telHref(c.ph)}">${esc(fmtPhone(c.ph))}</a></div>`}
+Object.assign(VIEWS,{
+mgr(){
+  const ms=MGR.filter(m=>DATA.calls.some(c=>c.m===m&&c.r));if(!ms.includes(mgrF.m))mgrF.m=ms[0]||'';const m=mgrF.m;
+  const head=`<div class="head"><div><h1>Менеджеры</h1><p class="lead">Личная страница каждого менеджера: звонки из Манго, разговоры и их итоги, перезвоны и клиенты в воронке.</p>${liveNote()}</div></div>`;
+  if(!m)return head+'<p class="mut">Пока нет менеджеров с разговорами</p>';
+  const tabs=`<div class="filters mtabs">${ms.map(x=>`<button class="fbtn" data-mt="${esc(x)}" aria-pressed="${x===m}">${mdot(x)}${esc(x)}</button>`).join('')}</div>
+    <div class="filters">${PERIODS.map(([k,n])=>`<button class="fbtn" data-mp="${k}" aria-pressed="${mgrF.per===k}">${n}</button>`).join('')}</div>`;
+  const per=PERIODS.find(p=>p[0]===mgrF.per)[1];
+  const list=DATA.calls.filter(c=>c.r&&c.m===m&&inPeriod(c.t,mgrF.per));const s=teamStats(list);
+  const mr=DATA.mango?DATA.mango.rows.filter(r=>r[1]===m&&inPeriod(r[0],mgrF.per)):[];
+  const T=mr.reduce((a,r)=>{a.o+=r[3];a.a+=r[4];a.t+=r[5];a.i+=r[6];a.mi+=r[7];a.mn+=r[8];if(r[3])a.d++;return a},{o:0,a:0,t:0,i:0,mi:0,mn:0,d:0});
+  const cbs=(DATA.callbacks||[]).filter(c=>c.m===m&&!c.st.startsWith('закрыт')).sort((a,b)=>a.d<b.d?-1:a.d>b.d?1:0);
+  const late=cbs.filter(c=>c.st==='просрочен'||c.d<TODAY),today=cbs.filter(c=>c.d===TODAY&&!late.includes(c));
+  const cl=pipeClients().filter(c=>c.m===m&&!c.lost);const inWork=cl.filter(c=>c.st>=1).sort((a,b)=>a.last<b.last?1:-1);
+  const stc=PSTAGES.map((p,i)=>[p.n,cl.filter(c=>c.st===i).length]);
+  const loss=topLoss(list);
+  let chart;
+  if(DATA.mango){const ds=[...new Set(mr.map(r=>r[0]))].sort();const rows=[];
+    if(ds.length){let d=ds[0];while(d<=ds[ds.length-1]){const wd=new Date(d+'T12:00:00Z').getUTCDay();const r=mr.find(x=>x[0]===d);
+      if(r||(wd!==0&&wd!==6))rows.push({d,v:r?{a:r[4],n:r[3]-r[4]}:{},label:WD[wd]+', '+dShort(d),extra:r?`<div class="tt">Разговоров от ${DATA.mango.min} с: ${r[5]} · на линии ${hm(r[8])}</div>`:''});d=addDays(d,1)}}
+    const ser=[{name:'Дозвонились',color:'var(--s3)',key:'a'},{name:'Без ответа',color:'var(--surface-3,#c9ced4)',key:'n'}];
+    chart=`<h2>Наборы по дням</h2><p class="sub">Все исходящие из Манго</p>${stackChart(rows,ser,{label:'Наборы по дням',h:220})}${legend(ser)}`}
+  else{const ser=[{name:m,color:MCLR(m),key:m}];chart=`<h2>Разговоры по дням</h2><p class="sub">Разобранные ботом разговоры. Все наборы из Манго появятся после обновления бота</p>${stackChart(dayRows(list),ser,{label:'Разговоры по дням',h:220})}`}
+  const recent=list.slice().sort((a,b)=>a.t<b.t?1:-1).slice(0,12);
+  const what=c=>c.r==='ok'?esc(c.g.join(', ')||'результат'):esc(c.l||'');
+  return head+tabs+`
+  <div class="kpis k5">
+    <div class="kpi"><small>Наборов</small><div class="v">${DATA.mango?fmt(T.o):'—'}</div><div class="d mut">${DATA.mango?(T.d?'≈ '+Math.round(T.o/T.d)+' в день':'нет за период'):'после обновления бота'}</div></div>
+    <div class="kpi"><small>Дозвонились</small><div class="v">${DATA.mango?pct(T.a,T.o):'—'}</div><div class="d mut">${DATA.mango?fmt(T.a)+' · на линии '+hm(T.mn):'после обновления бота'}</div></div>
+    <div class="kpi"><small>Разговоров разобрано</small><div class="v">${fmt(s.talks)}</div><div class="d mut">${per.toLowerCase()}</div></div>
+    <div class="kpi"><small>С результатом</small><div class="v">${fmt(s.ok)}</div><div class="d">${pct(s.ok,s.talks)} · встреч ${s.meet}, КП ${s.kp}</div></div>
+    <div class="kpi ${late.length?'hot':''}"><small>Перезвоны</small><div class="v">${late.length} · ${today.length}</div><div class="d mut">просрочено · на сегодня</div></div>
+  </div>
+  <div class="grid2 even">
+    <section class="panel"><h2>Перезвоны <span class="meta">${cbs.length}</span></h2><p class="sub">Открытые договорённости, сначала самые ранние</p><div class="cblist">${cbs.slice(0,8).map(mgrCbRow).join('')||'<p class="mut">Открытых перезвонов нет</p>'}</div>${cbs.length>8?`<p class="meta">и ещё ${cbs.length-8} в разделе «Перезвоны»</p>`:''}</section>
+    <section class="panel"><h2>Клиенты в воронке <span class="meta">${inWork.length}</span></h2><p class="sub">${stc.slice(1).map(([n,v])=>`${esc(n)}: <b>${v}</b>`).join(' · ')}</p><div class="mpcards">${inWork.slice(0,6).map(pcard).join('')||'<p class="mut">Пока нет клиентов дальше разговора</p>'}</div>${inWork.length>6?`<p class="meta">и ещё ${inWork.length-6} в разделе «Воронка продаж»</p>`:''}</section>
+  </div>
+  <div class="grid2 even">
+    <section class="panel">${chart}</section>
+    <section class="panel"><h2>Где теряет разговоры</h2><p class="sub">${per}. ${s.hot+s.lost} ${plural(s.hot+s.lost,'разговор','разговора','разговоров')} с шансом без результата</p>${hbars(loss)}</section>
+  </div>
+  <section class="panel"><h2>Последние разговоры</h2><p class="sub">Нажмите, чтобы открыть разбор</p><div class="mlist">${recent.map(c=>`<div class="ncard" data-call="${c.id}" tabindex="0"><div class="nmain"><div class="nr1"><span>${dLong(c.t)}</span>${resChip(c.r)}</div><div class="nr2"><span>${TYN[c.ty]||''}</span>${c.co?`<span class="what">${esc(c.co)}</span>`:''}</div><div class="nr3">${what(c)}</div></div><a class="callbtn" href="${telHref(c.ph)}" aria-label="Позвонить"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg></a></div>`).join('')||'<p class="mut">Нет разговоров за период</p>'}</div></section>`}
+});
+document.addEventListener('click',e=>{const t=e.target.closest&&e.target.closest('[data-mt],[data-mp]');if(!t)return;if(t.dataset.mt)mgrF.m=t.dataset.mt;if(t.dataset.mp)mgrF.per=t.dataset.mp;render()});
+/* tooltip */
+(()=>{const tp=document.createElement('div');tp.id='tip';tp.setAttribute('role','tooltip');document.body.appendChild(tp);let cur=null;
+const show=(el,x,y)=>{if(el!==cur){tp.innerHTML=el.getAttribute('data-tip');cur=el}tp.classList.add('show');const r=tp.getBoundingClientRect();let L=x+14,T=y+14;if(L+r.width>innerWidth-8)L=x-r.width-14;if(L<8)L=8;if(T+r.height>innerHeight-8)T=y-r.height-14;tp.style.left=L+'px';tp.style.top=T+'px'};
+const hide=()=>{tp.classList.remove('show');cur=null};
+document.addEventListener('pointermove',e=>{const el=e.target.closest&&e.target.closest('[data-tip]');if(el)show(el,e.clientX,e.clientY);else if(cur)hide()});
+document.addEventListener('scroll',hide,true);})();
+async function boot(){
+  const saved=lsGet('avr-page','team');if(VIEWS[saved])current=saved;
+  render();
+  const c=window.claude;
+  if(!c||!c.use){S.nodb=true;return render()}
+  [db,user,dl]=await Promise.all([c.use('db'),c.use('user'),c.use('downloads')]);
+  if(!db){S.nodb=true;liveBoot();return render()}
+  if(user){myId=await user.id();const can=await user.can('data.write');if(can===false)S.readonly=true}
+  liveBoot();pipeBoot();
+  const fail=e=>{if(e&&(e.code==='revoked'))S.nodb=true;render()};
+  let got=0;const done=()=>{if(++got>=4&&!S.ready){S.ready=true}render();if(current==='chat')paintNames()};
+  db.doc('app/settings').onSnapshot(s=>{S.settings=s.exists?s.data():null;done()},fail);
+  db.collection('batches').onSnapshot(q=>{S.batches=q.docs.map(d=>({id:d.id,...d.data()}));done()},fail);
+  db.collection('sources').onSnapshot(q=>{S.sources=q.docs.map(d=>({id:d.id,...d.data()}));done()},fail);
+  db.collection('deals').onSnapshot(q=>{S.deals=q.docs.map(d=>({id:d.id,...d.data()}));done()},fail);
+  db.collection('chat').orderBy('ts','desc').limit(200).onSnapshot(q=>{S.chat=q.docs.map(d=>({id:d.id,...d.data()})).reverse();if(S.ready)done()},fail);
+}
+boot();
+</script>
+
+</body>
+</html>
