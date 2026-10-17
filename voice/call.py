@@ -83,6 +83,8 @@ class CallSession:
         self.filler_said_at = 0.0
         self.filler_last_any = 0.0
         self.quick_said = ""      # быстрый ответ, который ещё звучит: перебили — убрать из истории
+        self.extra: dict = {}  # что ещё записать в итог звонка (id звонка, кампания, запись разговора)
+        self.tts_usage: dict = {"chars": 0}
         self.tts_chain: list[str] = []  # id синтезов ElevenLabs этого звонка: следующая фраза продолжает их
         self.said_before = ""     # прошлая фраза робота: по ней ElevenLabs держит ту же интонацию
         self.reply_spoke = False  # робот уже начал озвучивать текущий ответ (для поиска пауз посреди ответа)
@@ -125,7 +127,8 @@ class CallSession:
                 await asyncio.wait_for(self.tts_task, timeout=30)
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 self.tts_task.cancel()
-        self.saved = await self.save(self.dialog, phone=self.phone, mode=self.mode)
+        extra = {**self.extra, "tts_chars": self.tts_usage.get("chars", 0)} if self.extra else {}
+        self.saved = await self.save(self.dialog, phone=self.phone, mode=self.mode, **({"extra": extra} if extra else {}))
         await self.send_event({"type": "result", "reason": reason, **{k: self.saved[k] for k in (
             "outcome", "transfer", "comment", "facts", "duration_s", "cost", "cost_unit")},
             "labels": {key: text.split(":")[0] for key, text in self.dialog.op.fields.items()}})
@@ -303,6 +306,7 @@ class CallSession:
         started = time.monotonic()
         speech.previous_phrase.set(self.said_before)
         speech.tts_chain.set(self.tts_chain)
+        speech.tts_usage.set(self.tts_usage)
         self.said_before = "" if phrase in FILLERS else phrase
         first = True
 

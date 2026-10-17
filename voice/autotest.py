@@ -100,7 +100,7 @@ class VirtualClient:
         self.run.dialog = Dialog(op, self.robot_backend)
         return self.run.dialog
 
-    async def _save(self, dialog, *, phone="", mode=""):
+    async def _save(self, dialog, *, phone="", mode="", extra=None):
         self.run.record = results.record(dialog, phone=phone, mode="автотест")
         return self.run.record
 
@@ -108,6 +108,7 @@ class VirtualClient:
         try:
             call = sip.PhoneCall(reader, writer, make_dialog=self._make_dialog, make_asr=self.make_asr,
                                  synthesize=self.synthesize, save=self._save)
+            call.recording = False  # автотест не пишем в записи разговоров
             original = call.send_event
 
             async def send_event(event: dict) -> None:  # сколько думала модель на каждой реплике

@@ -293,6 +293,8 @@ ELEVEN_SETTINGS = {
 previous_phrase: contextvars.ContextVar[str] = contextvars.ContextVar("previous_phrase", default="")
 # id прошлых синтезов этого звонка (request stitching ElevenLabs): список на звонок, None вне звонка
 tts_chain: contextvars.ContextVar[list | None] = contextvars.ContextVar("tts_chain", default=None)
+# сколько символов этого звонка ушло в платный синтез (из кэша не считаем): для себестоимости в CRM
+tts_usage: contextvars.ContextVar[dict | None] = contextvars.ContextVar("tts_usage", default=None)
 ELEVEN_SEED = int(os.getenv("VOICE_ELEVEN_SEED", "4242"))
 
 
@@ -400,6 +402,9 @@ async def _eleven_direct_tts(text: str, voice: Voice, on_pcm=None) -> bytes:
     if on_pcm is not None:
         url += "/stream"
     headers = {"xi-api-key": os.environ["ELEVENLABS_API_KEY"]}
+    usage = tts_usage.get()
+    if usage is not None:
+        usage["chars"] = usage.get("chars", 0) + len(text)
     out = bytearray()
     for attempt in ({**body, **continuity}, body) if continuity else (body,):
         async with _client().stream("POST", url, params=params, headers=headers, json=attempt) as r:

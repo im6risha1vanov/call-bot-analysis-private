@@ -8,11 +8,17 @@
 
 from __future__ import annotations
 
+import json
+import os
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
 OPERATORS_DIR = Path(__file__).parent / "operators"
+# Операторы, заведённые в CRM: лежат рядом с данными робота, CRM пишет, робот читает перед каждым звонком
+EXTRA_DIR = Path(os.getenv("VOICE_OPERATORS_EXTRA") or "/opt/callbot-voice-data/operators")
+ID_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,39}")
 MAX_ITEMS = 10  # как у Соловья: план, правила и факты до 10 пунктов
 
 OUTCOMES = {
@@ -48,6 +54,7 @@ class Operator:
     transfer_to: str = ""
     # быстрые ответы без модели: после вопроса робота (after) на ожидаемый короткий ответ (answers) — reply
     quick: list[dict] = field(default_factory=list)
+    owner: str = ""  # чей оператор в CRM: "" — наш (директор), иначе лист клиента
 
     def validate(self) -> None:
         for key in ("name", "company", "greeting", "farewell", "goal"):
@@ -76,24 +83,77 @@ class Operator:
         return compile_prompt(self)
 
 
-def load(operator_id: str, directory: Path = OPERATORS_DIR) -> Operator:
-    path = directory / f"{operator_id}.toml"
+def find(operator_id: str) -> Path | None:
+    """Файл анкеты: сначала заведённые в CRM, потом встроенные."""
+    if not ID_RE.fullmatch(operator_id or ""):
+        return None
+    for directory in (EXTRA_DIR, OPERATORS_DIR):
+        path = directory / f"{operator_id}.toml"
+        if path.is_file():
+            return path
+    return None
+
+
+def all_ids() -> list[str]:
+    ids = {p.stem for d in (OPERATORS_DIR, EXTRA_DIR) if d.is_dir() for p in d.glob("*.toml")}
+    return sorted(i for i in ids if ID_RE.fullmatch(i))
+
+
+def builtin(operator_id: str) -> bool:
+    return (OPERATORS_DIR / f"{operator_id}.toml").is_file() and not (EXTRA_DIR / f"{operator_id}.toml").is_file()
+
+
+def _toml_value(value) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return repr(value)
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)  # строка JSON — это и строка TOML
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_value(v) for v in value) + "]"
+    raise TypeError(f"нельзя записать {type(value).__name__} в анкету")
+
+
+def dump(data: dict) -> str:
+    """Анкета в TOML. Поддерживаем то, что есть в анкете: строки, числа, списки строк, fields и quick."""
+    lines, tables = [], []
+    for key, value in data.items():
+        if key == "fields":
+            tables.append("[fields]\n" + "".join(f"{k} = {_toml_value(str(v))}\n" for k, v in value.items()))
+        elif key == "quick":
+            for item in value:
+                tables.append("[[quick]]\n" + "".join(f"{k} = {_toml_value(v)}\n" for k, v in item.items()))
+        else:
+            lines.append(f"{key} = {_toml_value(value)}")
+    return "\n".join(lines) + "\n\n" + "\n".join(tables)
+
+
+def from_dict(operator_id: str, data: dict) -> Operator:
+    known = set(Operator.__dataclass_fields__) - {"id"}
+    unknown = set(data) - known
+    if unknown:
+        raise OperatorError(f"{operator_id}: неизвестные поля {sorted(unknown)}")
+    try:
+        operator = Operator(id=operator_id, **data)
+    except TypeError as e:
+        raise OperatorError(f"{operator_id}: {e}") from None
+    operator.validate()
+    return operator
+
+
+def load(operator_id: str, directory: Path | None = None) -> Operator:
+    if directory is None:
+        path = find(operator_id) or OPERATORS_DIR / f"{operator_id}.toml"
+    else:
+        path = directory / f"{operator_id}.toml"
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         raise OperatorError(f"нет анкеты {path}") from None
     except tomllib.TOMLDecodeError as e:
         raise OperatorError(f"{path.name}: ошибка в TOML: {e}") from None
-    known = set(Operator.__dataclass_fields__) - {"id"}
-    unknown = set(data) - known
-    if unknown:
-        raise OperatorError(f"{path.name}: неизвестные поля {sorted(unknown)}")
-    try:
-        operator = Operator(id=operator_id, **data)
-    except TypeError as e:
-        raise OperatorError(f"{path.name}: {e}") from None
-    operator.validate()
-    return operator
+    return from_dict(operator_id, data)
 
 
 def _numbered(items: list[str]) -> str:

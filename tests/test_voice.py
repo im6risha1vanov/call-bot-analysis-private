@@ -967,13 +967,20 @@ class PhoneTest(unittest.IsolatedAsyncioTestCase):
         async def synth(text, voice):
             return b"\x10\x00" * (speech.TTS_RATE // 50)  # 20 мс
 
-        async def save(dialog, **kw):
-            saved.append(results.record(dialog, **kw))
+        async def save(dialog, extra=None, **kw):
+            saved.append({**results.record(dialog, **kw), **(extra or {})})
             return saved[-1]
 
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+        tmp = Path(tempfile.mkdtemp())
+        patch = mock.patch.object(sip, "RECORDINGS", tmp)
+        patch.start()
+        self.addCleanup(patch.stop)
         client = FakeClient([finish({"outcome": "not_relevant", "comment": "Шаг 1: неактуально"}, "Поняла, всего доброго!")])
         call_id = str(uuidlib.uuid4())
-        sip.PENDING[call_id] = sip.Pending("79990001122", "kitchen")
+        sip.PENDING[call_id] = sip.Pending("79990001122", "kitchen", {"campaign_id": 7, "owner": ""})
 
         async def on_socket(reader, writer):
             await sip.PhoneCall(reader, writer, make_dialog=lambda op: Dialog(op, AnthropicBackend(client=client)),
@@ -998,6 +1005,28 @@ class PhoneTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(audio_frames, 2)  # приветствие и прощание, по 20 мс в 8 кГц
         self.assertEqual((saved[0]["outcome"], saved[0]["phone"], saved[0]["mode"]), ("not_relevant", "79990001122", "телефон"))
         self.assertTrue(sip.PENDING.get(call_id) is None)
+        self.assertEqual((saved[0]["call_id"], saved[0]["campaign_id"], saved[0]["recording"]), (call_id, 7, call_id + ".wav"))
+        for _ in range(50):  # запись пишется, когда звонок закрылся
+            if (tmp / (call_id + ".wav")).is_file():
+                break
+            await asyncio.sleep(0.02)
+        import wave
+        with wave.open(str(tmp / (call_id + ".wav"))) as w:
+            self.assertEqual((w.getframerate(), w.getnchannels()), (8000, 1))
+            self.assertGreater(w.getnframes(), 0)
+
+    def test_recording_mix_and_cleanup(self):
+        import array, os, tempfile, time
+        from pathlib import Path
+        from voice import sip
+        a = array.array("h", [30000, 100]).tobytes()
+        b = array.array("h", [30000, 100, 5]).tobytes()
+        self.assertEqual(array.array("h", sip.mix(a, b)).tolist(), [32767, 200, 5])
+        tmp = Path(tempfile.mkdtemp())
+        old, new = sip.save_recording("old.wav", a, b, tmp), sip.save_recording("new.wav", a, b, tmp)
+        os.utime(old, (time.time() - 11 * 86400,) * 2)
+        self.assertEqual(sip.clean_recordings(tmp, days=10), 1)
+        self.assertEqual([p.name for p in tmp.iterdir()], ["new.wav"])
 
     async def test_dial_validates_and_registers(self):
         from voice import sip

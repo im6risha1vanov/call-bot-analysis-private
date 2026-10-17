@@ -115,8 +115,9 @@ async def append_rows(spreadsheet: str, title: str, header: list[str], rows: lis
         r.raise_for_status()
 
 
-async def save(dialog: Dialog, *, phone: str = "", mode: str = "браузер") -> dict:
+async def save(dialog: Dialog, *, phone: str = "", mode: str = "браузер", extra: dict | None = None) -> dict:
     rec = record(dialog, phone=phone, mode=mode)
+    rec.update(extra or {})
     save_jsonl(rec)
     if os.getenv("VOICE_SHEET_ID", "").strip():
         fields = list(dialog.op.fields)

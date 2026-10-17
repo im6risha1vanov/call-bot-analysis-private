@@ -25,7 +25,9 @@ import os
 import sys
 import time
 import uuid as uuidlib
+import wave
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import httpx
 
@@ -48,6 +50,9 @@ ARI_USER = os.getenv("VOICE_ARI_USER", "voicebot")
 TRUNK = os.getenv("VOICE_SIP_TRUNK", "mango")
 RING_TIMEOUT_S = int(os.getenv("VOICE_RING_TIMEOUT", "40"))
 FIRST_WORDS_WAIT_S = 2.5     # сколько ждать «Алло», прежде чем поздороваться самому
+# Записи разговоров: WAV 8 кГц моно (робот и клиент вместе), хранятся RECORDING_DAYS дней
+RECORDINGS = Path(os.getenv("VOICE_RECORDINGS") or Path(os.getenv("VOICE_LOG", "voice_calls.jsonl")).resolve().parent / "recordings")
+RECORDING_DAYS = float(os.getenv("VOICE_RECORDING_DAYS", "10"))
 
 
 # ------------------------------------------------------------------ звук
@@ -63,6 +68,48 @@ def downsample(pcm: bytes, src: int, dst: int) -> bytes:
     x = array.array("h", pcm[: len(pcm) // (2 * k) * 2 * k])
     out = array.array("h", (sum(x[i:i + k]) // k for i in range(0, len(x), k)))
     return out.tobytes()
+
+
+def mix(a: bytes, b: bytes) -> bytes:
+    """Две дорожки PCM 16 бит в одну: сумма с ограничением, короткая дополняется тишиной."""
+    x, y = array.array("h", a[: len(a) // 2 * 2]), array.array("h", b[: len(b) // 2 * 2])
+    if len(x) < len(y):
+        x, y = y, x
+    out = array.array("h", x)
+    for i, v in enumerate(y):
+        out[i] = max(-32768, min(32767, out[i] + v))
+    return out.tobytes()
+
+
+def save_recording(name: str, robot: bytes, client: bytes, directory: Path | None = None) -> Path | None:
+    directory = directory or RECORDINGS
+    pcm = mix(robot, client)
+    if not pcm:
+        return None
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / name
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(RATE)
+        w.writeframes(pcm)
+    return path
+
+
+def clean_recordings(directory: Path | None = None, days: float | None = None, now: float | None = None) -> int:
+    """Удаляет записи старше срока хранения. Возвращает, сколько удалено."""
+    directory = directory or RECORDINGS
+    limit = (now or time.time()) - (RECORDING_DAYS if days is None else days) * 86400
+    removed = 0
+    if directory.is_dir():
+        for path in directory.glob("*.wav"):
+            try:
+                if path.stat().st_mtime < limit:
+                    path.unlink()
+                    removed += 1
+            except OSError:
+                pass
+    return removed
 
 
 def frame(kind: int, payload: bytes = b"") -> bytes:
@@ -82,11 +129,13 @@ async def read_frame(reader: asyncio.StreamReader) -> tuple[int, bytes]:
 class Pending:
     phone: str
     operator: str
+    meta: dict = field(default_factory=dict)  # от CRM: кампания, чей звонок; попадает в итог звонка
     created: float = field(default_factory=time.monotonic)
     connected: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 PENDING: dict[str, Pending] = {}
+ACTIVE = [0]  # звонков на линии сейчас
 
 
 async def ari_originate(call_id: str, phone: str, *, http: httpx.AsyncClient | None = None) -> dict:
@@ -106,14 +155,14 @@ async def ari_originate(call_id: str, phone: str, *, http: httpx.AsyncClient | N
     return r.json()
 
 
-async def dial(phone: str, operator: str = "kitchen", *, originate=ari_originate) -> str:
+async def dial(phone: str, operator: str = "kitchen", *, meta: dict | None = None, originate=ari_originate) -> str:
     phone = "".join(ch for ch in phone if ch.isdigit())
     if len(phone) < 10:
         raise ValueError("номер слишком короткий")
     op = load(operator)  # анкета должна читаться до звонка
     asyncio.create_task(_warm_up_greeting(op))
     call_id = str(uuidlib.uuid4())
-    pending = PENDING[call_id] = Pending(phone, operator)
+    pending = PENDING[call_id] = Pending(phone, operator, dict(meta or {}))
     await originate(call_id, phone)
     asyncio.create_task(_no_answer_watch(call_id, pending))
     log.info("звоню %s, id %s", phone, call_id)
@@ -141,7 +190,7 @@ async def _no_answer_watch(call_id: str, pending: Pending) -> None:
         PENDING.pop(call_id, None)
         dialog = Dialog(load(pending.operator), backend=_NoModel())
         dialog.result = CallResult("ndz", "Не взял трубку")
-        await results.save(dialog, phone=pending.phone, mode="телефон")
+        await results.save(dialog, phone=pending.phone, mode="телефон", extra={"call_id": call_id, **pending.meta})
         log.info("%s не ответил", pending.phone)
 
 
@@ -168,6 +217,9 @@ class PhoneCall:
         self.first_words: asyncio.Future | None = None
         self.session: CallSession | None = None
         self.closed = False
+        self.rec_robot = bytearray()      # запись: что сказал робот, по кадрам (тишина, когда молчит)
+        self.rec_client = bytearray()     # запись: что пришло от клиента
+        self.recording = True
 
     async def send_audio(self, pcm: bytes) -> None:
         self.out += downsample(pcm, speech.TTS_RATE, RATE)
@@ -191,10 +243,13 @@ class PhoneCall:
         start = time.monotonic()
         n = 0
         while not self.closed:
+            chunk_sent = bool(self.out)
             if self.out:
                 chunk = bytes(self.out[:FRAME_BYTES]).ljust(FRAME_BYTES, b"\0")
                 del self.out[:FRAME_BYTES]
                 await self.write(frame(KIND_AUDIO, chunk))
+                if self.recording:
+                    self.rec_robot += chunk
                 if not self.out:
                     self.ran_dry = time.monotonic()
             elif self.ran_dry and self.session is not None and self.session.reply_spoke and (
@@ -202,6 +257,8 @@ class PhoneCall:
                 # звук кончился, а следующая фраза ещё не готова (модель пишет или синтез): пауза посреди ответа
                 log.warning("AUDIO_GAP: пауза посреди ответа робота, следующая фраза не готова")
                 self.ran_dry = 0.0
+            if not chunk_sent and self.recording:
+                self.rec_robot += bytes(FRAME_BYTES)
             n += 1
             delay = start + n * 0.02 - time.monotonic()
             if delay < -0.06 and self.out:  # кадр ушёл позже срока: клиент слышит запинку
@@ -228,7 +285,8 @@ class PhoneCall:
         pending = PENDING.pop(call_id, None)
         if pending:
             pending.connected.set()
-        phone, operator = (pending.phone, pending.operator) if pending else ("", "kitchen")
+        phone, operator, meta = (pending.phone, pending.operator, pending.meta) if pending else ("", "kitchen", {})
+        record_name = f"{call_id}.wav"
         self.session = None
         self.first_words = asyncio.get_running_loop().create_future()
         asr = self.make_asr(self) if self.make_asr else None
@@ -237,6 +295,7 @@ class PhoneCall:
             tasks.append(asyncio.create_task(asr.run()))
         session = CallSession(self.make_dialog(load(operator)), self.send_audio, self.send_event,
                               mode="телефон", phone=phone, synthesize=self.synthesize, save=self.save)
+        session.extra = {"call_id": call_id, **meta, **({"recording": record_name} if self.recording else {})}
         reader_task = asyncio.create_task(self._read_audio(asr))
         try:
             try:
@@ -260,6 +319,11 @@ class PhoneCall:
             if asr is not None:
                 await asr.close()
             self.writer.close()
+            if self.recording:
+                try:
+                    save_recording(record_name, bytes(self.rec_robot), bytes(self.rec_client))
+                except Exception:
+                    log.exception("запись разговора не сохранилась")
 
     async def _read_audio(self, asr) -> None:
         while True:
@@ -268,6 +332,8 @@ class PhoneCall:
             except (asyncio.IncompleteReadError, ConnectionError):
                 return
             if kind == KIND_AUDIO:
+                if self.recording:
+                    self.rec_client += payload
                 if asr is not None:
                     await asr.send(payload)
             elif kind in (KIND_HANGUP, KIND_ERROR):
@@ -323,22 +389,39 @@ async def serve() -> None:
     from aiohttp import web
 
     async def on_socket(reader, writer):
+        ACTIVE[0] += 1
         try:
             await PhoneCall(reader, writer, make_asr=PhoneASR).run()
         except Exception:
             log.exception("сбой звонка")
+        finally:
+            ACTIVE[0] -= 1
 
     async def api_dial(request: web.Request) -> web.Response:
         data = await request.json()
+        meta = {k: data[k] for k in ("campaign_id", "owner", "target_id") if data.get(k) not in (None, "")}
         try:
-            call_id = await dial(str(data.get("phone", "")), str(data.get("operator") or "kitchen"))
+            call_id = await dial(str(data.get("phone", "")), str(data.get("operator") or "kitchen"), meta=meta)
         except Exception as e:
             return web.json_response({"error": str(e)}, status=400)
         return web.json_response({"id": call_id})
 
+    async def api_status(request: web.Request) -> web.Response:
+        """Сколько звонков идёт: CRM не заказывает следующий, пока робот занят."""
+        return web.json_response({"active": ACTIVE[0], "pending": len(PENDING)})
+
+    async def cleaner() -> None:
+        while True:
+            removed = clean_recordings()
+            if removed:
+                log.info("удалено старых записей: %d", removed)
+            await asyncio.sleep(3600)
+
     server = await asyncio.start_server(on_socket, AUDIOSOCKET_HOST, AUDIOSOCKET_PORT)
     app = web.Application()
     app.router.add_post("/dial", api_dial)
+    app.router.add_get("/status", api_status)
+    cleaning = asyncio.create_task(cleaner())  # noqa: F841 (держим ссылку, чтобы задачу не собрал сборщик)
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "127.0.0.1", API_PORT).start()
