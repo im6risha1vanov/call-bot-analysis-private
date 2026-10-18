@@ -376,36 +376,26 @@ class AnthropicBackend:
     def __init__(self, model: str | None = None, *, client=None) -> None:
         if client is None:
             from anthropic import AsyncAnthropic
-            client = AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])  # ANTHROPIC_BASE_URL SDK берёт сам
+            client = AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
         self.client = client
         self.model = model or os.getenv("VOICE_MODEL", "claude-haiku-5-5")
         self.effort = os.getenv("VOICE_EFFORT", "low")
-        # Не Claude (например gpt-6.1-sol у провайдера с API в формате Anthropic, ANTHROPIC_BASE_URL):
-        # без кэша, effort и потоковых аргументов инструментов, стоимость в токенах
-        self.claude = self.model.startswith("claude")
-        if not self.claude:
-            self.unit = "ток."
 
     def _cost(self, usage) -> float:
         if usage is None:
             return 0.0
-        if not self.claude:
-            return float((usage.input_tokens or 0) + (usage.output_tokens or 0))
         tokens_in = (usage.input_tokens or 0) + (getattr(usage, "cache_creation_input_tokens", 0) or 0) * 1.25 \
             + (getattr(usage, "cache_read_input_tokens", 0) or 0) * 0.1
         return tokens_in / 1e6 * self.PRICE_IN_MTOK + (usage.output_tokens or 0) / 1e6 * self.PRICE_OUT_MTOK
 
     async def complete(self, system: str, messages: list[dict], tools: list[dict], on_text: TextSink) -> ModelReply:
-        if self.claude:
-            kwargs = dict(
-                model=self.model, max_tokens=600, messages=messages,
-                system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-                thinking={"type": "disabled"}, output_config={"effort": self.effort},
-            )
-        else:
-            kwargs = dict(model=self.model, max_tokens=600, messages=messages, system=system, thinking={"type": "disabled"})
+        kwargs = dict(
+            model=self.model, max_tokens=600, messages=messages,
+            system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+            thinking={"type": "disabled"}, output_config={"effort": self.effort},
+        )
         if tools:
-            kwargs["tools"] = [{**t, "eager_input_streaming": True} for t in tools] if self.claude else tools
+            kwargs["tools"] = [{**t, "eager_input_streaming": True} for t in tools]
         try:
             async with self.client.messages.stream(**kwargs) as stream:
                 async for chunk in stream.text_stream:
