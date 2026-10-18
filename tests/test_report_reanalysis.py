@@ -145,5 +145,6 @@ class ExplicitReanalysisTests(unittest.IsolatedAsyncioTestCase):
             overview = await store.overview(self.pool, self.actor, rid)
             self.assertEqual(overview, await store.overview(self.pool, self.actor, rid))
         paid.assert_not_awaited()
-        self.assertIn('Основная шкала', overview)
-        self.assertIn('Дополнительная методика', overview)
+        self.assertIn('1. Итог звонка', overview)
+        self.assertIn('7. Оценка и достоверность', overview)
+        self.assertNotIn('Дополнительная методика', overview)

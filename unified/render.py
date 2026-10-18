@@ -207,6 +207,9 @@ def verdict(row):
 
 def summary(row):
     """Use the combined report's sections; keep the active score and pinned sources."""
+    from .legacy_display import selected, display
+    if selected(row):
+        return display(row)
     from methodology.profiles import PRODUCT_LABELS, STAGE_LABELS, ROLE_LABELS
     good, weak, conflicts = observations(row)
     combined = (row.get('auxiliary') or {}).get('combined') or {}
@@ -312,123 +315,26 @@ def summary(row):
 
 
 def expanded(row):
-    """Generate from immutable evidence already saved, without another paid request."""
-    primary = row['primary_analysis']; analysis = primary.get('analysis') or {}
-    aux = row.get('auxiliary') or {}
-    lines = [header(row), '', 'Расширенный обзор', '', 'Основная шкала', quality(row),
-             'Коммерческий результат и качество разговора — разные показатели.', '', 'Критерии и подтверждения:']
-    statuses = {True: 'Выполнено', False: 'Не выполнено'}
-    for r in analysis.get('rows') or []:
-        status = statuses[bool(r.get('passed'))] if r.get('applicable', True) else 'Неприменимо'
-        lines.append('• ' + (clean(r.get('title')) or TITLES.get(r.get('key'), 'Критерий')) + ': ' + status + '.')
-        evidence = quote(r.get('evidence'), row['transcript'])
-        if evidence:
-            lines.append('  «' + evidence + '»')
-            explanation = observation_text(r.get('evidence'), evidence)
-            if explanation and explanation != evidence:
-                lines.append('  Сохранённое пояснение: ' + explanation)
-        elif r.get('applicable', True):
-            lines.append('  Дословное подтверждение этого вывода не найдено; вывод требует проверки по записи.')
-    # Explicitly distinguish the independent scales; no invented common score.
-    for key, label in (('course', 'Методика курса: применимость по роли и этапу'),
-                       ('combined', 'Дополнительная методика: этапы разговора и рекомендации')):
-        data = aux.get(key)
-        if not data:
-            continue
-        from methodology.profiles import ROLE_LABELS, PRODUCT_LABELS, STAGE_LABELS
-        classification = data.get('classification') or {}
-        lines += ['', label, 'Числовой балл этой методики не откалиброван. Это самостоятельная проверка.',
-                  ROLE_LABELS.get(classification.get('sales_role'), 'Роль не определена') + ' · ' +
-                  PRODUCT_LABELS.get(classification.get('product'), 'Продукт не определён') + ' · ' +
-                  STAGE_LABELS.get(classification.get('stage'), 'Этап не определён')]
-        for r in data.get('rows') or []:
-            status = {'passed': 'выполнено', 'failed': 'не выполнено', 'not_applicable': 'неприменимо',
-                      'insufficient_data': 'недостаточно данных'}.get(r.get('status'), 'недостаточно данных')
-            lines += [clean(r.get('title')) + ': ' + status + '.', clean(r.get('reason'), 650)]
-            evidence = quote(r.get('evidence'), row['transcript'])
-            if evidence:
-                lines.append('«' + evidence + '»')
-        step = data.get('next_step') or {}
-        if (data.get('outcome') or {}).get('confirmed'):
-            lines.append('Следующий шаг подтверждён репликой клиента.')
-            for field, title in (('action', 'Действие'), ('responsible', 'Ответственный'), ('deadline', 'Срок'), ('channel', 'Канал')):
-                if clean(step.get(field)):
-                    lines.append(title + ': ' + clean(step[field]))
-        else:
-            lines.append('Полный следующий шаг этой проверкой не подтверждён.')
-        for field, title in (('say_instead', 'Пример улучшенной реплики'), ('repeat_scenario', 'Что потренировать')):
-            value = clean((data.get('coaching') or {}).get(field), 650)
-            if value:
-                lines.append(title + ': ' + value)
-    combined = aux.get('combined') or {}
-    readable = combined.get('readable_report') or {}
-    if readable:
-        lines += ['', 'Ключевые моменты разговора:']
-        for item in readable.get('moments') or []:
-            actual = quote(item.get('quote'), row['transcript'])
-            if actual:
-                lines += ['«' + actual + '»', clean(item.get('what')), clean(item.get('why'))]
-                reaction = quote(item.get('reaction_quote'), row['transcript'])
-                if reaction:
-                    lines.append('Ответ клиента: «' + reaction + '»')
-                if clean(item.get('say_instead')):
-                    lines.append('Пример другой реплики: «' + clean(item['say_instead']) + '»')
-    detailed = primary.get('detailed_report') or {}
-    manager = detailed.get('for_manager') or {}
-    if manager:
-        lines += ['', 'Сохранённые подробности основного разбора:']
-        for item in manager.get('did_well') or []:
-            actual = quote(item.get('quote'), row['transcript'])
-            if actual:
-                lines += [clean(item.get('what')), '«' + actual + '»', clean(item.get('why'))]
-        for item in manager.get('moments') or []:
-            actual = quote(item.get('quote'), row['transcript'])
-            if actual:
-                lines += ['«' + actual + '»', clean(item.get('why'))]
-                if clean(item.get('say_instead')):
-                    lines.append('Пример другой реплики: «' + clean(item['say_instead']) + '»')
-        for key, title in (('practice', 'Предложенная тренировка'), ('next_call_focus', 'Фокус следующего разговора')):
-            if clean(manager.get(key), 650):
-                lines.append(title + ': ' + clean(manager[key], 650))
-    head = detailed.get('for_head') or {}
-    if clean(head.get('narrative'), 2400):
-        lines += ['', 'Сохранённое объяснение ключевых этапов:', clean(head['narrative'], 2400)]
-    point = head.get('turning_point') or {}
-    actual = quote(point.get('quote'), row['transcript'])
-    if actual:
-        lines += ['', 'Ключевой момент: «' + actual + '»', clean(point.get('what_happened'), 650)]
-        if clean(point.get('alternative'), 650):
-            lines.append('Пример другого ответа: ' + clean(point['alternative'], 650))
-    for item in head.get('skill_gaps') or []:
-        actual = quote(item.get('evidence'), row['transcript'])
-        if actual:
-            lines += ['', clean(item.get('skill')), '«' + actual + '»', clean(item.get('recurring_risk'))]
-    lines += ['', 'Договорённости и возражения:']
-    result, confirmed = outcome(row)
-    lines.append(result)
-    if not confirmed:
-        lines.append('Описание результата основной моделью не равно подтверждению полного следующего шага дополнительной методикой.')
-    for item in combined.get('objections') or analysis.get('objections') or []:
-        actual = quote(item.get('evidence') or item.get('text'), row['transcript'])
-        if actual:
-            lines.append('Возражение: «' + actual + '»')
-            response = quote(item.get('response'), row['transcript'])
-            if response:
-                lines.append('Ответ: «' + response + '»')
-    _, _, conflicts = observations(row)
-    if conflicts:
-        lines += ['', 'Ограничение: основная и дополнительная проверки расходятся по части действий. Спорные выводы не объединены.']
-    lines += ['', 'Ограничения:'] + (aux.get('limitations') or [])
-    lines.append('Показаны доступные сохранённые данные именно этого запуска. Отсутствующие объяснения и таймкоды не придуманы.')
-    return redact_phone('\n'.join(line for line in lines if isinstance(line, str)), row)
+    """One source-backed narrative; saved analyses remain diagnostic data."""
+    from .legacy_display import selected, display
+    if selected(row):
+        return display(row, detailed=True)
+    from .extended_review import render as render_extended
+    return render_extended(row)
 
 
 def keyboard(run_id):
     return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text='Расширенный обзор', callback_data=f'uv:e:{run_id}')]])
+        InlineKeyboardButton(text='🔎 Расширенный обзор', callback_data=f'uv:e:{run_id}')]])
 
 
 def back_keyboard(run_id):
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text='К краткому разбору', callback_data=f'uv:s:{run_id}'),
         InlineKeyboardButton(text='Закрыть обзор', callback_data=f'uv:x:{run_id}')]])
+
+
+def reopen_keyboard(run_id, generation):
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text='Показать обзор здесь', callback_data=f'uv:r:{run_id}:{generation}')], [
+        InlineKeyboardButton(text='К краткому разбору', callback_data=f'uv:s:{run_id}')]])

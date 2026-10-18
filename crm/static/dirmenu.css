@@ -1,0 +1,36 @@
+/* Одно меню директора (dirmenu.js) на странице аналитики и на страницах работы отдела. */
+.dm-side{display:flex;flex-direction:column;gap:1px;min-height:0;overflow-y:auto;scrollbar-width:thin}
+.dm-item{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:7px;border:0;background:none;width:100%;
+  color:var(--fg);font:inherit;font-size:14px;text-align:left;text-decoration:none;cursor:pointer}
+.dm-item:hover{background:var(--surface-2)}
+.dm-item svg{width:16px;height:16px;flex:none;opacity:.7}
+.dm-item[aria-current="page"]{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.dm-item[aria-current="page"] svg{opacity:1}
+.dm-more{color:var(--muted)}
+.dm-more[aria-expanded="true"]{color:var(--fg)}
+.dm-box{display:flex;flex-direction:column;gap:1px;flex:none}
+.dm-side > .dm-item{flex:none}
+.dm-box[hidden],.dm-sheet[hidden]{display:none}
+.dm-label{font-size:11px;color:var(--muted);padding:10px 10px 4px}
+.dm-foot{margin-top:auto;padding:0 10px;font-size:12px;color:var(--muted);display:flex;justify-content:space-between;gap:8px}
+.dm-foot a{color:inherit;text-underline-offset:2px}
+.dm-foot a:hover{color:var(--fg)}
+.dm-bar{display:none}
+.dm-sheet{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.35);display:flex;align-items:flex-end}
+.dm-sheet-in{background:var(--surface);width:100%;max-height:85vh;overflow:auto;border-radius:14px 14px 0 0;
+  padding:10px 12px calc(14px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:1px}
+.dm-sheet-in .dm-item{padding:11px 10px;font-size:15px}
+.dm-sheet-head{display:flex;align-items:center;justify-content:space-between;padding:4px 10px 8px}
+.dm-x{border:0;background:none;font-size:24px;line-height:1;color:var(--muted);cursor:pointer;padding:4px 8px}
+.dm-sheet-foot{padding:12px 10px 0;font-size:14px}
+.dm-sheet-foot a{color:var(--muted)}
+@media (max-width:860px){
+  body.dm .app{grid-template-columns:minmax(0,1fr)}
+  body.dm .side,body.dm .mobnav,body.dm .crm-switch{display:none !important}
+  body.dm .main{padding-bottom:64px}
+  .dm-bar{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));position:fixed;left:0;right:0;bottom:0;z-index:50;
+    background:var(--surface);border-top:1px solid var(--line);padding:4px 2px calc(4px + env(safe-area-inset-bottom,0px))}
+  .dm-bar .dm-item{flex-direction:column;gap:2px;font-size:10.5px;padding:6px 2px;text-align:center;justify-content:center}
+  .dm-bar .dm-item span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+  .dm-bar .dm-item svg{width:20px;height:20px}
+}

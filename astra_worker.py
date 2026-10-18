@@ -33,6 +33,8 @@ import mango_client
 from crypto_util import decrypt
 from reports import esc, send_long
 from tools import owner_chat_ids, report_chat_ids
+from crm import journal as crm_journal
+from review import callbacks as review_callbacks, engine as review_engine, kitchen as review_kitchen, render as review_render, sheets as review_sheets, store as review_store
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("callbot-astra-worker")
@@ -94,14 +96,8 @@ async def _enqueue_analyze_call(pool: asyncpg.Pool, client_id: int, call_row_id:
     """Ключ дедупликации — идентификатор звонка в Манго: при пересечении окон
     опроса (POLL_OVERLAP_MIN) один и тот же звонок может встретиться повторно,
     но задача для него будет поставлена только один раз."""
-    await pool.execute(
-        """
-        INSERT INTO tasks (type, client_id, input, dedup_key)
-        VALUES ('analyze_call', $1, $2::jsonb, $3)
-        ON CONFLICT (type, dedup_key) DO NOTHING
-        """,
-        client_id, json.dumps({"call_id": call_row_id}), mango_entry_id,
-    )
+    from unified.analysis_policy import enqueue
+    await enqueue(pool, client_id, call_row_id, mango_entry_id)
 
 
 async def poll_client_calls(pool: asyncpg.Pool, client: asyncpg.Record) -> tuple[int, int]:
@@ -134,11 +130,15 @@ async def poll_client_calls(pool: asyncpg.Pool, client: asyncpg.Record) -> tuple
         started_raw = c.get("context_start_time")
         call_started_at = datetime.fromtimestamp(started_raw, tz=timezone.utc) if started_raw else None
 
-        passes = (
-            direction == 2
-            and duration >= client["min_call_seconds"]
-            and extension in (client["sales_extensions"] or [])
-        )
+        if review_kitchen.handles(extension):
+            # Оператор прозвона: любой разговор — попытка; недозвон пишет review_kitchen.record_missed.
+            passes = direction == 2 and duration > 0
+        else:
+            passes = (
+                direction == 2
+                and duration >= client["min_call_seconds"]
+                and extension in (client["sales_extensions"] or [])
+            )
         if not passes:
             new_status = "skipped"
         elif recording_id:
@@ -188,6 +188,9 @@ async def poll_client_calls(pool: asyncpg.Pool, client: asyncpg.Record) -> tuple
 # опрос виден в логе (journalctl -u callbot-astra-worker), а не в чате.
 ERROR_NOTICE_COOLDOWN_SEC = 3600
 _last_error_notice: dict[int, float] = {}
+_rate_limited_since: dict[int, float] = {}
+RATE_LIMIT_RETRY_SEC = 120
+RATE_LIMIT_NOTICE_AFTER_SEC = 45 * 60
 
 
 async def _send_poll_error(pool: asyncpg.Pool, client: asyncpg.Record, error: str) -> None:
@@ -229,7 +232,19 @@ async def poll_all_clients(pool: asyncpg.Pool, next_poll_at: dict[int, float]) -
             found, to_analyze = await poll_client_calls(pool, client)
             log.info("client id=%s опрос завершён: найдено=%s, в разбор=%s", client["id"], found, to_analyze)
             _last_error_notice.pop(client["id"], None)
+            _rate_limited_since.pop(client["id"], None)
         except Exception as exc:
+            if " 429:" in str(exc):
+                # Общий лимит запросов ВАТС: его расходуют и другие интеграции Mango.
+                # Звонки не теряются (окно опроса начинается с прошлого успешного),
+                # поэтому владельцу пишем, только если лимит не отпускает долго.
+                since = _rate_limited_since.setdefault(client["id"], now)
+                log.warning("Mango: лимит запросов, client id=%s, повтор через %s сек", client["id"], RATE_LIMIT_RETRY_SEC)
+                next_poll_at[client["id"]] = now + RATE_LIMIT_RETRY_SEC
+                if now - since >= RATE_LIMIT_NOTICE_AFTER_SEC:
+                    await _send_poll_error(pool, client, f"лимит запросов Mango не отпускает больше "
+                                                         f"{int((now - since) // 60)} минут: {exc}")
+                continue
             log.exception("ошибка опроса Mango, client id=%s", client["id"])
             await _send_poll_error(pool, client, str(exc))
 
@@ -448,7 +463,12 @@ async def maybe_send_digest_for_client(pool: asyncpg.Pool, client: asyncpg.Recor
     by_ext = {e["extension"]: e for e in employees if e["role"] == "manager"}
     heads = await report_chat_ids(pool, client["id"])
 
-    for ext in sorted({p["extension"] for p in pending if p["extension"]}):
+    if review_engine.enabled():
+        await send_review_digests(pool, client, by_ext, heads, today_start, today_end, now_local.date())
+
+    # Сводки разбора по результату заменяют прежние персональные дайджесты.
+    legacy_exts = set() if review_engine.enabled() else {p["extension"] for p in pending if p["extension"]}
+    for ext in sorted(legacy_exts):
         emp = by_ext.get(ext)
         if not emp:
             continue
@@ -472,7 +492,7 @@ async def maybe_send_digest_for_client(pool: asyncpg.Pool, client: asyncpg.Recor
     # точные числа считает код, а недочёты и что с ними делать — рассуждение.
     # Здесь только ставим задачу в очередь: планировщик и исполнитель не
     # общаются напрямую, только через таблицу tasks.
-    if heads:
+    if heads and not review_engine.enabled():
         await pool.execute(
             """
             INSERT INTO tasks (type, client_id, input, dedup_key)
@@ -496,6 +516,38 @@ async def maybe_send_digest_for_client(pool: asyncpg.Pool, client: asyncpg.Recor
         client["id"], now_local.date(),
     )
     log.info("client id=%s дайджест за день отправлен, звонков=%s", client["id"], len(pending))
+
+
+async def send_review_digests(pool, client, by_ext, heads, start, end, today) -> None:
+    """Вечер: менеджеру итог дня с удачными моментами, РОПу цифры и потери с шансом."""
+    rows = await review_store.day_rows(pool, client["id"], start, end)
+    tomorrow = (today + timedelta(days=1)).isoformat()
+    for ext in sorted({r["extension"] for r in rows if r["extension"]}):
+        emp = by_ext.get(ext)
+        if not emp:
+            continue
+        text = review_render.manager_summary(emp["full_name"] or ext, [r for r in rows if r["extension"] == ext], tomorrow)
+        if text:
+            # Копия в CRM: там итог дня видит и менеджер без Telegram.
+            await crm_journal.save(pool, client["id"], "day_manager", text, extension=ext)
+        if text and emp["telegram_user_id"]:
+            try:
+                await send_long(bot, emp["telegram_user_id"], text)
+            except Exception:
+                log.exception("не удалось отправить итог дня доб.=%s", ext)
+    summary = review_render.rop_summary(rows)
+    if not summary:
+        return
+    text, buttons = summary
+    await crm_journal.save(pool, client["id"], "day_rop", text, calls=buttons)
+    for chat_id in heads:
+        try:
+            await send_long(bot, chat_id, text)
+            keyboard = review_render.list_keyboard(buttons)
+            if keyboard:
+                await bot.send_message(chat_id, "Открыть разбор:", reply_markup=keyboard)
+        except Exception:
+            log.exception("не удалось отправить итог дня РОПу, chat_id=%s", chat_id)
 
 
 async def maybe_send_digests(pool: asyncpg.Pool) -> None:
@@ -552,6 +604,7 @@ async def main() -> None:
     log.info("astra worker started (poll + enqueue only; разбор — в queue_runner)")
     last_sweep = 0.0
     last_employee_sync = 0.0
+    last_sheets_sync = 0.0
     next_poll_at: dict[int, float] = {}
     try:
         while True:
@@ -563,9 +616,23 @@ async def main() -> None:
             if now - last_sweep > SWEEP_INTERVAL_SEC:
                 await sweep_timeouts(pool)
                 await maybe_send_digests(pool)
+                if review_engine.enabled():
+                    await review_callbacks.maybe_send(pool, bot)
                 await maybe_enqueue_rop_digests(pool)
                 await maybe_enqueue_oversight_report(pool)
                 last_sweep = now
+            if review_engine.enabled() and review_sheets.enabled() and (
+                    last_sheets_sync == 0.0 or now - last_sheets_sync > review_sheets.SYNC_MINUTES * 60):
+                last_sheets_sync = now
+                try:
+                    await review_sheets.sync(pool)
+                except Exception:
+                    log.exception("не удалось обновить Google-таблицу")
+            if review_kitchen.extensions():
+                try:
+                    await review_kitchen.tick(pool)
+                except Exception:
+                    log.exception("не удалось обновить таблицу прозвона лидов")
             await asyncio.sleep(POLL_INTERVAL_SEC)
     finally:
         await pool.close()

@@ -17,6 +17,14 @@ from tools import Forbidden, get_call, resolve_actor
 from . import render, store
 
 
+def generation_stages(configuration):
+    """Keep old requests pinned; new legacy requests contain only the old score."""
+    stages = configuration.get('generation_stages', ['score', 'combined'])
+    if stages not in (['score'], ['score', 'combined']):
+        raise ValueError('Invalid pinned analysis stages')
+    return stages
+
+
 async def create(pool, actor, call_id, request_key):
     if actor is None or actor.role not in {'owner', 'head'}:
         raise Forbidden('Новый разбор доступен руководителю.')
@@ -37,12 +45,17 @@ async def create(pool, actor, call_id, request_key):
         run_id = await store.capture(conn, call_id, actor.client_id, source, fresh=True)
         row = store.unpack(await conn.fetchrow('SELECT * FROM call_report_runs WHERE id=$1 FOR UPDATE', run_id))
         cfg = row['configuration']
+        from automatic.jobs import enabled
+        stages = ['score', 'combined'] if enabled() and not cfg.get('isolate_primary') else ['score']
         cfg.update(explicit_generation=True, initiator=actor.telegram_user_id,
                    generation_config=runtime.settings(), generation_catalog=runtime.approved_catalog(),
-                   combined_package_sha256=evaluation.verify()['sha256'], expect_course=False)
+                   generation_stages=stages, expect_course=False, expect_combined='combined' in stages)
+        if 'combined' in stages:
+            cfg['combined_package_sha256'] = evaluation.verify()['sha256']
         await conn.execute('UPDATE call_report_runs SET configuration=$2::jsonb WHERE id=$1', run_id, json.dumps(cfg))
         params = transport.settings()
-        for stage, prompt, tokens in (('score', analysis.SCORE_PROMPT, 6000), ('combined', evaluation.prompt(), 8000)):
+        for stage in stages:
+            prompt, tokens = (analysis.SCORE_PROMPT, 6000) if stage == 'score' else (evaluation.prompt(), 8000)
             await conn.execute('INSERT INTO call_report_generation(run_id,stage,prompt,settings) VALUES($1,$2,$3,$4::jsonb)',
                                run_id, stage, prompt, json.dumps({**params, 'max_output_tokens': tokens}))
         return run_id
@@ -62,10 +75,11 @@ async def run(pool, actor, run_id):
                 raise Forbidden('Это другой запрос разбора.')
             if row['status'] == 'ready':
                 return {'status': 'ready', 'run_id': run_id, 'cached': True}
-            if evaluation.verify()['sha256'] != cfg['combined_package_sha256']:
+            stages = generation_stages(cfg)
+            if 'combined' in stages and evaluation.verify()['sha256'] != cfg['combined_package_sha256']:
                 raise ValueError('Pinned combined package changed')
             client = await conn.fetchrow('SELECT * FROM clients WHERE id=$1', current.client_id)
-            for stage in ('score', 'combined'):
+            for stage in stages:
                 item = await conn.fetchrow('SELECT * FROM call_report_generation WHERE run_id=$1 AND stage=$2', run_id, stage)
                 if item['status'] == 'complete':
                     continue
@@ -75,6 +89,9 @@ async def run(pool, actor, run_id):
                     return {'status': 'needs_review', 'run_id': run_id, 'stage': stage}
                 response = item['response_text']
                 if response is None:
+                    from automatic.jobs import enabled
+                    if stage == 'combined' and not enabled():
+                        return {'status': 'methodology_disabled', 'run_id': run_id, 'stage': stage}
                     if not client['processing_enabled'] or await over_budget(conn, client):
                         return {'status': 'blocked', 'run_id': run_id, 'stage': stage}
                     await conn.execute("UPDATE call_report_generation SET status='processing',updated_at=now() WHERE run_id=$1 AND stage=$2", run_id, stage)
@@ -109,9 +126,11 @@ async def run(pool, actor, run_id):
                     return {'status': 'failed', 'run_id': run_id, 'stage': stage, 'reason': type(exc).__name__}
                 await conn.execute("UPDATE call_report_generation SET status='complete',result=$3::jsonb,error=NULL,updated_at=now() WHERE run_id=$1 AND stage=$2", run_id, stage, json.dumps(result, ensure_ascii=False))
             primary = decode(await conn.fetchval("SELECT result FROM call_report_generation WHERE run_id=$1 AND stage='score'", run_id))
-            combined = decode(await conn.fetchval("SELECT result FROM call_report_generation WHERE run_id=$1 AND stage='combined'", run_id))
-            auxiliary = {'combined': combined, 'limitations': [], 'sources': {'combined': {
-                'version': evaluation.VERSION, 'transcript_sha256': row['transcript_sha256'], 'origin': 'explicit_fresh_analysis'}}}
+            auxiliary = {'limitations': [], 'sources': {}}
+            if 'combined' in stages:
+                combined = decode(await conn.fetchval("SELECT result FROM call_report_generation WHERE run_id=$1 AND stage='combined'", run_id))
+                auxiliary.update(combined=combined, sources={'combined': {
+                    'version': evaluation.VERSION, 'transcript_sha256': row['transcript_sha256'], 'origin': 'explicit_fresh_analysis'}})
             row.update(primary_analysis=primary, auxiliary=auxiliary)
             summary = render.summary(row)
             await conn.execute("UPDATE call_report_runs SET primary_analysis=$2::jsonb,auxiliary=$3::jsonb,summary=$4,status='ready',ready_at=now() WHERE id=$1 AND status='pending'", run_id,

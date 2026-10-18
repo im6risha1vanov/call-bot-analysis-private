@@ -1,0 +1,1 @@
+const DATA={"asof":"","calls":[],"callbacks":[],"olga":{"tariff":{"first":10,"repeat":5,"interested":150},"days":[],"clients":[],"sources":[],"interested":[],"bot":{"updated":"","leads":0,"first":0,"repeat":0,"sum":0,"attempts":{"НДЗ":0,"Перезвон":0,"Неактуально":0,"Заинтересованный":0},"days":[],"combos":[],"callbacks":[]}},"excluded":{"debt":0}};
