@@ -396,7 +396,7 @@ RB_VIEW.settings = async el => {
       <div class="op-grid">
         <label class="field">Минута Mango, ₽<input data-p="mango_min" value="${p.mango_min}" inputmode="decimal"${rbRO()}></label>
         <label class="field">Синтез ElevenLabs, ₽ за 1000 символов<input data-p="eleven_1k_chars" value="${p.eleven_1k_chars}" inputmode="decimal"${rbRO()}></label>
-        <label class="field">Модель YandexGPT, ₽ за 1000 токенов<input data-p="llm_1k_tokens" value="${p.llm_1k_tokens}" inputmode="decimal"${rbRO()}></label>
+        <label class="field">Модель разговора, ₽ за 1000 токенов<input data-p="llm_1k_tokens" value="${p.llm_1k_tokens}" inputmode="decimal"${rbRO()}></label>
         <label class="field">Коэффициент для клиента<input data-p="multiplier" value="${p.multiplier}" inputmode="decimal"${rbRO()}></label>
       </div><div class="row"><button class="btn primary" id="pr-save"${rbRO()}>Сохранить цены</button></div>
       <p class="muted">Минуты считаются по длительности разговора, синтез по символам, которые робот озвучил (повторяющиеся фразы берутся из запаса и не оплачиваются), модель по токенам.</p></div>

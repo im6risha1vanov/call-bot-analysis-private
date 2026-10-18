@@ -109,13 +109,28 @@ class OperatorTest(unittest.TestCase):
 
 
 class DialogTest(unittest.IsolatedAsyncioTestCase):
+    async def test_gpt_model_through_anthropic_format(self):
+        """gpt-6.1-sol у провайдера с API Anthropic: без кэша и effort, итог даже при stop_reason end_turn."""
+        reply = finish({"outcome": "not_relevant", "comment": "неактуально"}, "Поняла, всего доброго!")
+        client = FakeClient([(reply[0], reply[1], "end_turn")])
+        backend = AnthropicBackend("gpt-6.1-sol", client=client)
+        dialog = Dialog(load("kitchen"), backend)
+        dialog.greet()
+        turn = await dialog.reply("Нет, не актуально")
+        self.assertEqual(turn.result.outcome, "not_relevant")
+        request = client.requests[0]
+        self.assertIsInstance(request["system"], str)
+        self.assertNotIn("output_config", request)
+        self.assertTrue(all("eager_input_streaming" not in t for t in request["tools"]))
+        self.assertEqual((backend.unit, dialog.cost), ("ток.", 1050.0))
+
     async def test_conversation_to_interested(self):
         client = FakeClient([
             say("Отлично! ", "В каком городе будет стоять кухня?"),
             finish({"outcome": "interested", "comment": "Казань, плёнка", "facts": {"city": "Казань"}},
                    "Записала, специалист позвонит завтра после шести. ", "Хорошего дня!"),
         ])
-        dialog = Dialog(load("kitchen"), AnthropicBackend("test-model", client=client))
+        dialog = Dialog(load("kitchen"), AnthropicBackend("claude-test-model", client=client))
         self.assertIn("Мария", dialog.greet())
         heard = []
 
@@ -131,7 +146,7 @@ class DialogTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(dialog.finished)
 
         request = client.requests[0]
-        self.assertEqual(request["model"], "test-model")
+        self.assertEqual(request["model"], "claude-test-model")
         self.assertEqual(request["thinking"], {"type": "disabled"})
         self.assertEqual(request["system"][0]["cache_control"], {"type": "ephemeral"})
         self.assertEqual([m["role"] for m in request["messages"]], ["user", "assistant", "user"])
