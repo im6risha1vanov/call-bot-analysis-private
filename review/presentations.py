@@ -42,11 +42,17 @@ SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly', 'https://www.
 MAX_ATTEMPTS = 3
 PER_RUN = int(os.getenv('PRESENTATIONS_PER_RUN', '3'))
 SYNC_MINUTES = 10
+REGISTRY_TZ = os.getenv('PRESENTATIONS_TZ', 'UTC')  # в каком поясе время в реестре
 DURATION_SLACK = 3  # секунд: mp3 из реестра и запись Mango одной длины
 LOOK_BACK_DAYS = 2  # без времени: файл могут отправить в чат на день-два позже звонка
 TIME_WINDOW = timedelta(minutes=10)  # время в реестре и начало звонка в Mango
 TIME_EXACT = timedelta(minutes=2)  # так близко по времени — тот самый звонок, даже если длина не сверилась
 MIN_WORDS_SHARED = 0.3  # доля общих слов, чтобы считать тексты одним разговором
+MATCH_PROMPT = (Path(__file__).with_name('presentation_match_prompt.md').read_text(encoding='utf-8')
+                .split('\n---\n', 1)[-1].strip())
+CONTEXT_DAYS = 60  # холодные звонки менеджера за столько дней до презентации
+CONTEXT_CANDIDATES = 30
+CONTEXT_CHARS = 4000  # начало расшифровки презентации: там обычно имена и компания
 
 STAGES = ('paid', 'contract', 'decision_date', 'materials', 'dmp_meeting', 'none')
 TEMPERATURES = {'hot', 'warm', 'cold', 'lost'}
@@ -183,11 +189,13 @@ def shared_words(a: str, b: str) -> float:
     return len(left & right) / min(len(left), len(right))
 
 
-def registry_time(day: date | None, time_text: str | None, tz) -> datetime | None:
+def registry_time(day: date | None, time_text: str | None) -> datetime | None:
+    """Дата и время из реестра. Агент, который заполняет реестр, пишет их по UTC (Mango на 3 часа позже)."""
+    from zoneinfo import ZoneInfo
     m = re.fullmatch(r'(\d{1,2})[:.](\d{2})', (time_text or '').strip())
     if not (day and m) or int(m[1]) > 23:
         return None
-    return datetime.combine(day, datetime.min.time(), tz).replace(hour=int(m[1]), minute=int(m[2]))
+    return datetime.combine(day, datetime.min.time(), ZoneInfo(REGISTRY_TZ)).replace(hour=int(m[1]), minute=int(m[2]))
 
 
 async def find_call(pool, client_id: int, ext: str | None, day: date | None, seconds: int | None, transcript: str, tz,
@@ -195,7 +203,7 @@ async def find_call(pool, client_id: int, ext: str | None, day: date | None, sec
     """Звонок Mango того же менеджера: сначала по времени из реестра, потом по дню и длине.
 
     Возвращает {'call_id', 'by', 'candidates', ...}. Иначе запись ждёт ручного выбора в CRM."""
-    at = registry_time(day, time_text, tz)
+    at = registry_time(day, time_text)
     if ext and at:
         rows = await pool.fetch(
             """SELECT id, client_number, call_started_at, duration_seconds FROM calls
@@ -292,6 +300,51 @@ def build_input(meta: dict, transcript: str) -> str:
     return '\n'.join(head) + '\n\nРАСШИФРОВКА:\n' + transcript
 
 
+def describe_cold_call(r, tz) -> str:
+    client = (json.loads(r['data']) if isinstance(r['data'], str) else r['data'] or {}).get('client') or {}
+    step = client.get('next_step') or {}
+    facts = [('компания', client.get('company')), ('отрасль', client.get('industry')),
+             ('контакт', ' '.join(filter(None, [client.get('contact_name'), client.get('contact_role')]))),
+             ('ЛПР', client.get('dmp_name')), ('нужно', client.get('need')),
+             ('договорились', step.get('raw') or step.get('date')), ('итог', r['rop_line'])]
+    head = '; '.join(f'{k}: {v}' for k, v in facts if v)
+    snippet = re.sub(r'\s+', ' ', re.sub(r'\[[^\]]*\]', ' ', r['transcript'] or ''))[:500]
+    return f"{r['call_started_at'].astimezone(tz):%d.%m.%Y %H:%M} · {head or 'фактов нет'} · начало разговора: {snippet}"
+
+
+async def find_by_context(pool, row, transcript: str, tz, call) -> tuple[dict, float]:
+    """Холодный звонок того же менеджера с тем же клиентом — по содержанию, если по длине звонок не нашёлся.
+
+    Возвращает (match, стоимость). Модель выбирает номер из списка; принимаем только уверенный ответ."""
+    if not (row['extension'] and row['day'] and (transcript or '').strip()):
+        return {'reason': 'нет менеджера, дня или расшифровки'}, 0.0
+    end = datetime.combine(row['day'] + timedelta(days=1), datetime.min.time(), tz)
+    rows = await pool.fetch(
+        """SELECT DISTINCT ON (c.client_number) c.id, c.client_number, c.call_started_at, c.transcript,
+                  r.data, r.data->>'rop_line' AS rop_line, r.success
+           FROM call_reviews r JOIN calls c ON c.id=r.call_id
+           WHERE r.client_id=$1 AND c.extension=$2 AND r.kind = ANY($3::text[])
+             AND c.call_started_at >= $4 AND c.call_started_at < $5 AND c.client_number IS NOT NULL
+           ORDER BY c.client_number, c.call_started_at DESC""",
+        row['client_id'], row['extension'], sorted(engine.REVIEWED), end - timedelta(days=CONTEXT_DAYS), end)
+    rows = sorted(rows, key=lambda r: (not r['success'], -r['call_started_at'].timestamp()))[:CONTEXT_CANDIDATES]
+    if not rows:
+        return {'reason': 'нет холодных звонков менеджера'}, 0.0
+    listing = '\n'.join(f'[{i}] {describe_cold_call(r, tz)}' for i, r in enumerate(rows, 1))
+    user = (f"Презентация {row['day']:%d.%m.%Y}, менеджер {row['manager_name'] or ''}.\n"
+            f"НАЧАЛО РАСШИФРОВКИ ПРЕЗЕНТАЦИИ:\n{transcript[:CONTEXT_CHARS]}\n\nХОЛОДНЫЕ ЗВОНКИ:\n{listing}")
+    raw, cost = await call(MATCH_PROMPT, user, 2000)
+    raw = raw if isinstance(raw, dict) else {}
+    pick = raw.get('call')
+    result = {'confidence': raw.get('confidence'), 'evidence': raw.get('evidence'), 'candidates': len(rows)}
+    if isinstance(pick, int) and not isinstance(pick, bool) and 1 <= pick <= len(rows) and raw.get('confidence') == 'high':
+        chosen = rows[pick - 1]
+        result.update(call_id=chosen['id'], number=chosen['client_number'], at=chosen['call_started_at'].isoformat())
+    else:
+        result['reason'] = 'по смыслу уверенно не нашёлся'
+    return result, cost
+
+
 async def review_one(pool, row, http, access_token, *, transcribe=None, call=None) -> None:
     """Одна запись: скачать, распознать, найти звонок Mango, разобрать, сохранить."""
     from zoneinfo import ZoneInfo
@@ -310,6 +363,13 @@ async def review_one(pool, row, http, access_token, *, transcribe=None, call=Non
     match = await find_call(pool, row['client_id'], row['extension'], row['day'], seconds, transcript, tz, row['time_text'])
     number = (next((c['number'] for c in match['candidates'] if c['call_id'] == match['call_id']), None)
               if match['call_id'] else None)
+    match_cost = 0.0
+    if not match['call_id'] and (transcript or '').strip():
+        # Презентация шла не через Mango: ищем холодный звонок с тем же клиентом по содержанию.
+        match['context'], match_cost = await find_by_context(pool, row, transcript, tz, call)
+        if match['context'].get('call_id'):
+            match.update(call_id=match['context']['call_id'], by='context')
+            number = match['context']['number']
     if not (transcript or '').strip():
         data, cost = validate({'kind': 'not_presentation'}, ''), 0.0
     else:
@@ -318,6 +378,7 @@ async def review_one(pool, row, http, access_token, *, transcribe=None, call=Non
                 'history': await previous(pool, row['client_id'], number)}
         raw, cost = await call(PROMPT, build_input(meta, transcript), MAX_TOKENS)
         data = validate(raw, transcript)
+    cost += match_cost
     await pool.execute(
         """UPDATE presentations SET status=$2, call_id=$3, match=$4::jsonb, data=$5::jsonb, prompt_version=$6,
              cost_units=$7, error=NULL, updated_at=now() WHERE id=$1""",
@@ -330,7 +391,11 @@ async def review_one(pool, row, http, access_token, *, transcribe=None, call=Non
 
 async def process(pool, http, access_token, limit: int = PER_RUN, **kw) -> int:
     rows = await pool.fetch(
-        "SELECT * FROM presentations WHERE status IN ('new','error') AND attempts < $1 ORDER BY day NULLS LAST, row_no LIMIT $2",
+        # Разобранные до поиска по смыслу и не привязанные к звонку разбираем ещё раз (расшифровка уже есть).
+        """SELECT * FROM presentations
+           WHERE attempts < $1 AND (status IN ('new','error')
+                 OR status='reviewed' AND call_id IS NULL AND transcript IS NOT NULL AND NOT coalesce(match ? 'context', false))
+           ORDER BY status='reviewed', day NULLS LAST, row_no LIMIT $2""",
         MAX_ATTEMPTS, limit)
     done = 0
     for row in rows:

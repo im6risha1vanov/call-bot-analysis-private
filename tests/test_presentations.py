@@ -124,7 +124,7 @@ class StoreTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_sync_match_and_review(self):
         values = [['1', '14.10.2026', '09:13', 'Илья Козлов', LINK.format('fileAAAAAAAAAA')],
-                  ['2', '14.10.2026', '11:05', 'Илья Козлов', LINK.format('fileBBBBBBBBBB')],
+                  ['2', '14.10.2026', '08:05', 'Илья Козлов', LINK.format('fileBBBBBBBBBB')],  # время по UTC = 11:05 МСК
                   ['3', '14.10.2026', '', 'Кто-то', LINK.format('fileCCCCCCCCCC')],
                   ['4', '16.10.2026', '', 'Илья Козлов', LINK.format('fileDDDDDDDDDD')]]
         self.assertEqual(await P.sync(self.pool, 1, values), 4)
@@ -136,7 +136,7 @@ class StoreTests(unittest.IsolatedAsyncioTestCase):
         await self.call('12', datetime(2026, 10, 13, 16, 0, tzinfo=MSK), 247, '79990002222', '[00:01 Спикер 0] Совсем другой разговор про погоду и рыбалку.')
         await self.call('12', datetime(2026, 10, 9, 15, 0, tzinfo=MSK), 245, '79990003333')  # слишком давно
         await self.call('11', datetime(2026, 10, 14, 15, 0, tzinfo=MSK), 245, '79990004444')  # другой менеджер
-        # запись 2 (11:05): звонок в 11:04 той же длины; соседний в 11:12 другой длины, в 12:00 вне окна
+        # запись 2 (11:05 МСК): звонок в 11:04 той же длины; соседний в 11:12 другой длины, в 12:00 вне окна
         by_time = await self.call('12', datetime(2026, 10, 14, 11, 4, tzinfo=MSK), 100, '79990005555')
         await self.call('12', datetime(2026, 10, 14, 11, 12, tzinfo=MSK), 300, '79990007777')
         await self.call('12', datetime(2026, 10, 14, 12, 0, tzinfo=MSK), 101, '79990006666')
@@ -161,6 +161,8 @@ class StoreTests(unittest.IsolatedAsyncioTestCase):
         seen = []
 
         async def fake_call(system, user, max_tokens):
+            if system == P.MATCH_PROMPT:  # поиск по смыслу для записи 4: модель не уверена — не привязываем
+                return {'call': 1, 'confidence': 'medium'}, 0.1
             seen.append(user)
             return json.loads(json.dumps(ANSWER)), 0.7
 
@@ -175,8 +177,9 @@ class StoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((rows[2]['call_id'], json.loads(rows[2]['match'])['by']), (by_time, 'time+duration'))
         fourth = json.loads(rows[4]['match'])
         self.assertEqual((rows[4]['call_id'], fourth['reason'], len(fourth['candidates'])), (None, 'несколько похожих звонков', 2))
+        self.assertEqual(fourth['context']['reason'], 'по смыслу уверенно не нашёлся')
         self.assertEqual(json.loads(rows[3]['match'])['reason'], 'нет менеджера, дня или длительности')
-        self.assertAlmostEqual(float(await self.pool.fetchval('SELECT sum(spent_units) FROM astra_daily_spend')), 2.8)
+        self.assertAlmostEqual(float(await self.pool.fetchval('SELECT sum(spent_units) FROM astra_daily_spend')), 2.9)
 
         # лист «Презентации» в таблице бота: только разобранные, с телефоном из найденного звонка Mango
         from review import sheets
@@ -190,7 +193,7 @@ class StoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row[9], 'ИНН, кто подписывает')
         self.assertEqual((row[11], row[12]), ('13.10 15:00', 'https://drive.google.com/file/d/fileAAAAAAAAAA/view'))
         self.assertEqual(table.rows[2][11], '14.10 11:04')
-        self.assertEqual(table.rows[4][11], 'не найден: несколько похожих звонков')
+        self.assertEqual(table.rows[4][11], 'не найден: несколько похожих звонков; по смыслу тоже не нашёлся')
 
         # ошибка доступа к Диску: запись помечается, после трёх попыток бот её больше не трогает
         await self.pool.execute("UPDATE presentations SET status='new', transcript=NULL WHERE row_no=3")
@@ -205,7 +208,7 @@ class StoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((row['status'], row['attempts'], row['error']), ('error', 3, 'Диск 404'))
 
         # в реестре появилось время у записи 4: разбираем заново (расшифровка сохранена), остальные не трогаем
-        values[3][2] = '11:00'
+        values[3][2] = '08:00'  # UTC = 11:00 МСК
         await P.sync(self.pool, 1, values)
         states = {r['row_no']: (r['status'], r['attempts']) for r in await self.pool.fetch('SELECT * FROM presentations')}
         self.assertEqual((states[4], states[1][0]), (('new', 0), 'reviewed'))
@@ -213,3 +216,61 @@ class StoreTests(unittest.IsolatedAsyncioTestCase):
             await P.process(self.pool, None, 't', limit=1, transcribe=transcribe, call=fake_call)
         fourth = await self.pool.fetchrow('SELECT status, call_id, match FROM presentations WHERE row_no=4')
         self.assertEqual((fourth['status'], json.loads(fourth['match'])['by']), ('reviewed', 'time+duration'))
+
+
+@unittest.skipUnless(DSN, 'METHODOLOGY_TEST_DATABASE_URL не задан')
+class ContextTests(StoreTests):
+    test_sync_match_and_review = None
+
+    async def test_presentation_outside_mango_found_by_meaning(self):
+        """Презентация в мессенджере: звонка той же длины нет, клиента находим по холодному звонку."""
+        romka = await self.call('12', datetime(2026, 10, 15, 11, 0, tzinfo=MSK), 140, '79991112233',
+                                '[00:01 Спикер 0] Добрый день, детский центр Ромка? Марина, удобно?')
+        other = await self.call('12', datetime(2026, 10, 16, 12, 0, tzinfo=MSK), 120, '79994445566',
+                                '[00:01 Спикер 0] Турагентство Круиз? Юлия, добрый день.')
+        old = await self.call('12', datetime(2026, 7, 1, 12, 0, tzinfo=MSK), 120, '79997778899')  # за 60 дней
+        for call_id, company in ((romka, 'Детский центр «Ромка»'), (other, 'Круиз'), (old, 'Старый')):
+            await self.pool.execute(
+                """INSERT INTO call_reviews(call_id,client_id,extension,prompt_version,kind,success,chance,category,data)
+                   VALUES($1,1,'12','v','cold_first',true,null,null,$2::jsonb)""", call_id,
+                json.dumps({'rop_line': 'Холодный. Презентация 20.10.', 'client': {
+                    'company': company, 'contact_name': 'Марина' if call_id == romka else 'Юлия',
+                    'next_step': {'raw': 'презентация 20.10 в MAX'}}}, ensure_ascii=False))
+        await P.sync(self.pool, 1, [['44', '20.10.2026', '12:00', 'Илья Козлов', LINK.format('fileRomkaAAAA')]])
+        asked = []
+
+        async def fake_call(system, user, max_tokens):
+            if system == P.MATCH_PROMPT:
+                asked.append(user)
+                number = next(int(m[1]) for line in user.splitlines()
+                              if 'Ромка' in line and (m := __import__('re').match(r'\[(\d+)\] ', line)))
+                return {'call': number, 'confidence': 'high', 'evidence': 'Ромка и Марина'}, 0.1
+            return json.loads(json.dumps(ANSWER)), 0.7
+
+        async def transcribe(audio):
+            return '[00:01 Спикер 0] Марина, здравствуйте, это Илья из Аверон, по детскому центру Ромка.', 548.0
+
+        async def fake_download(http, token, file_id):
+            return b'x'
+
+        with patch.object(P, 'download', fake_download):
+            await P.process(self.pool, None, 't', transcribe=transcribe, call=fake_call)
+        row = await self.pool.fetchrow('SELECT * FROM presentations')
+        match = json.loads(row['match'])
+        self.assertEqual((row['call_id'], match['by'], match['context']['evidence']), (romka, 'context', 'Ромка и Марина'))
+        self.assertIn('Круиз', asked[0])
+        self.assertNotIn('Старый', asked[0])
+
+        from review import sheets
+        table = sheets.presentations_table(await self.pool.fetch(
+            """SELECT p.*, c.client_number, c.call_started_at, 'Козлов Илья' AS manager FROM presentations p
+               LEFT JOIN calls c ON c.id=p.call_id"""), MSK)
+        self.assertEqual(table.rows[1][11], 'по смыслу: холодный 15.10 11:00')
+        self.assertIn('9991112233', table.rows[1][2].replace(' ', '').replace('-', '').replace('(', '').replace(')', ''))
+
+        # уже разобранную до поиска по смыслу запись бот один раз разбирает заново
+        await self.pool.execute("UPDATE presentations SET call_id=NULL, match='{}'::jsonb")
+        with patch.object(P, 'download', fake_download):
+            self.assertEqual(await P.process(self.pool, None, 't', transcribe=transcribe, call=fake_call), 1)
+            self.assertEqual(await P.process(self.pool, None, 't', transcribe=transcribe, call=fake_call), 0)
+        self.assertEqual(await self.pool.fetchval('SELECT call_id FROM presentations'), romka)

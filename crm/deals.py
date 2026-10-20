@@ -67,6 +67,13 @@ def iso(value: datetime | None, tz) -> str | None:
     return value.astimezone(tz).strftime('%Y-%m-%dT%H:%M') if value else None
 
 
+def show_time(day: date, time_text: str | None, tz) -> str:
+    """Время презентации по реестру (там UTC) в поясе клиента; без времени — середина дня."""
+    from review.presentations import registry_time
+    at = registry_time(day, time_text)
+    return iso(at, tz) if at else f'{day:%Y-%m-%d}T12:00'
+
+
 async def has_table(pool, name: str) -> bool:
     return bool(await pool.fetchval('SELECT to_regclass($1) IS NOT NULL', name))
 
@@ -81,7 +88,8 @@ async def load(pool, client_id: int, ext: str | None = None) -> dict:
              AND ($2::text IS NULL OR c.extension=$2)
            ORDER BY c.call_started_at""", client_id, ext, sorted(engine.REVIEWED))
     shows = await pool.fetch(
-        """SELECT p.id, p.day, p.file_id, p.extension, p.data, c.client_number, c.call_started_at
+        """SELECT p.id, p.day, p.time_text, p.file_id, p.extension, p.data, c.client_number, c.call_started_at,
+                  p.match->>'by' AS match_by
            FROM presentations p JOIN calls c ON c.id=p.call_id
            WHERE p.client_id=$1 AND p.status='reviewed' ORDER BY c.call_started_at""", client_id) \
         if await has_table(pool, 'presentations') else []
@@ -181,7 +189,10 @@ def deal(k: str, src: dict, task, in_base: bool, names: dict, tz, now: datetime)
         reached = 'presentation'
         last_show = data
         moment = data.get('key_moment') or {}
-        timeline.append({'at': iso(r['call_started_at'], tz), 'type': 'presentation', 'id': r['id'],
+        # Привязана по смыслу к холодному звонку: время презентации — из реестра, а не время того звонка.
+        at = (show_time(r['day'], r['time_text'], tz) if r['match_by'] == 'context' and r['day']
+              else iso(r['call_started_at'], tz))
+        timeline.append({'at': at, 'type': 'presentation', 'id': r['id'],
                          'title': 'Презентация', 'text': data.get('rop_line'), 'temperature': data.get('temperature'),
                          'lost': PRESENTATION_LOSS.get(moment.get('category')) if moment else None,
                          'say': moment.get('say_instead'), 'file_id': r['file_id']})

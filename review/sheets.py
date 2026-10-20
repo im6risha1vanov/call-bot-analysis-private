@@ -347,10 +347,17 @@ def presentations_table(rows, tz) -> Table:
         data = loads(r['data']) or {}
         moment = data.get('key_moment') or {}
         contract = data.get('contract') or {}
-        if r['call_id']:
+        match = loads(r['match']) or {}
+        if r['call_id'] and match.get('by') == 'context':
+            # презентация не через Mango: привязана по содержанию к холодному звонку с этим клиентом
+            when = r['call_started_at'].astimezone(tz).strftime('%d.%m %H:%M') if r['call_started_at'] else ''
+            mango = f'по смыслу: холодный {when}'.strip()
+        elif r['call_id']:
             mango = r['call_started_at'].astimezone(tz).strftime('%d.%m %H:%M') if r['call_started_at'] else str(r['call_id'])
         else:
-            mango = 'не найден: ' + ((loads(r['match']) or {}).get('reason') or 'проверить')
+            mango = 'не найден: ' + (match.get('reason') or 'проверить')
+            if match.get('context'):
+                mango += '; по смыслу тоже не нашёлся'
         when = r['day'].strftime('%d.%m.%Y') if r['day'] else ''
         table.add([when, r['manager'] or r['manager_name'] or '', fmt_phone(r['client_number']) if r['client_number'] else '',
                    contract.get('company') or '', STAGE_LABELS.get(data.get('stage_after'), ''),
