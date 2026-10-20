@@ -357,7 +357,7 @@ def presentations_table(rows, tz) -> Table:
         else:
             mango = 'не найден: ' + (match.get('reason') or 'проверить')
             if match.get('context'):
-                mango += '; по смыслу тоже не нашёлся'
+                mango += '; по смыслу: ' + (match['context'].get('reason') or 'не нашёлся')
         when = r['day'].strftime('%d.%m.%Y') if r['day'] else ''
         table.add([when, r['manager'] or r['manager_name'] or '', fmt_phone(r['client_number']) if r['client_number'] else '',
                    contract.get('company') or '', STAGE_LABELS.get(data.get('stage_after'), ''),

@@ -177,7 +177,7 @@ class StoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((rows[2]['call_id'], json.loads(rows[2]['match'])['by']), (by_time, 'time+duration'))
         fourth = json.loads(rows[4]['match'])
         self.assertEqual((rows[4]['call_id'], fourth['reason'], len(fourth['candidates'])), (None, 'несколько похожих звонков', 2))
-        self.assertEqual(fourth['context']['reason'], 'по смыслу уверенно не нашёлся')
+        self.assertEqual(fourth['context']['reason'], 'модель не уверена')
         self.assertEqual(json.loads(rows[3]['match'])['reason'], 'нет менеджера, дня или длительности')
         self.assertAlmostEqual(float(await self.pool.fetchval('SELECT sum(spent_units) FROM astra_daily_spend')), 2.9)
 
@@ -193,7 +193,7 @@ class StoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row[9], 'ИНН, кто подписывает')
         self.assertEqual((row[11], row[12]), ('13.10 15:00', 'https://drive.google.com/file/d/fileAAAAAAAAAA/view'))
         self.assertEqual(table.rows[2][11], '14.10 11:04')
-        self.assertEqual(table.rows[4][11], 'не найден: несколько похожих звонков; по смыслу тоже не нашёлся')
+        self.assertEqual(table.rows[4][11], 'не найден: несколько похожих звонков; по смыслу: модель не уверена')
 
         # ошибка доступа к Диску: запись помечается, после трёх попыток бот её больше не трогает
         await self.pool.execute("UPDATE presentations SET status='new', transcript=NULL WHERE row_no=3")
@@ -229,6 +229,8 @@ class ContextTests(StoreTests):
         other = await self.call('12', datetime(2026, 10, 16, 12, 0, tzinfo=MSK), 120, '79994445566',
                                 '[00:01 Спикер 0] Турагентство Круиз? Юлия, добрый день.')
         old = await self.call('12', datetime(2026, 7, 1, 12, 0, tzinfo=MSK), 120, '79997778899')  # за 60 дней
+        await self.call('12', datetime(2026, 10, 14, 12, 0, tzinfo=MSK), 90, '79990001212',
+                        '[00:01 Спикер 0] Салон Лаванда? Без разбора, только расшифровка.')
         for call_id, company in ((romka, 'Детский центр «Ромка»'), (other, 'Круиз'), (old, 'Старый')):
             await self.pool.execute(
                 """INSERT INTO call_reviews(call_id,client_id,extension,prompt_version,kind,success,chance,category,data)
@@ -259,6 +261,7 @@ class ContextTests(StoreTests):
         match = json.loads(row['match'])
         self.assertEqual((row['call_id'], match['by'], match['context']['evidence']), (romka, 'context', 'Ромка и Марина'))
         self.assertIn('Круиз', asked[0])
+        self.assertIn('Лаванда', asked[0])  # звонок без разбора тоже кандидат
         self.assertNotIn('Старый', asked[0])
 
         from review import sheets

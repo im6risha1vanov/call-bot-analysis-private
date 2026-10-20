@@ -18,6 +18,7 @@
 """
 from __future__ import annotations
 
+import collections
 import json
 import logging
 import os
@@ -312,27 +313,51 @@ def describe_cold_call(r, tz) -> str:
     return f"{r['call_started_at'].astimezone(tz):%d.%m.%Y %H:%M} · {head or 'фактов нет'} · начало разговора: {snippet}"
 
 
+def text_words(text: str) -> set[str]:
+    return {w for w in engine.norm(re.sub(r'\[[^\]]*\]', ' ', text or '')).split() if len(w) > 3}
+
+
+def rank_by_words(presentation: str, docs: list[set[str]]) -> list[float]:
+    """Сколько редких слов (имена, названия, ниша) у презентации общих с каждым звонком: частые слова весят мало."""
+    import math
+    df = collections.Counter(w for d in docs for w in d)
+    n = len(docs)
+    words = text_words(presentation)
+    return [sum(math.log((n + 1) / (df[w] + 0.5)) for w in words & d) for d in docs]
+
+
 async def find_by_context(pool, row, transcript: str, tz, call) -> tuple[dict, float]:
     """Холодный звонок того же менеджера с тем же клиентом — по содержанию, если по длине звонок не нашёлся.
 
-    Возвращает (match, стоимость). Модель выбирает номер из списка; принимаем только уверенный ответ."""
+    Берём разговоры менеджера за CONTEXT_DAYS дней (с разбором или хотя бы расшифровкой), отбираем
+    CONTEXT_CANDIDATES самых похожих по редким словам, из них модель выбирает номер; принимаем только уверенный ответ."""
     if not (row['extension'] and row['day'] and (transcript or '').strip()):
         return {'reason': 'нет менеджера, дня или расшифровки'}, 0.0
     end = datetime.combine(row['day'] + timedelta(days=1), datetime.min.time(), tz)
-    rows = await pool.fetch(
-        """SELECT DISTINCT ON (c.client_number) c.id, c.client_number, c.call_started_at, c.transcript,
-                  r.data, r.data->>'rop_line' AS rop_line, r.success
-           FROM call_reviews r JOIN calls c ON c.id=r.call_id
-           WHERE r.client_id=$1 AND c.extension=$2 AND r.kind = ANY($3::text[])
-             AND c.call_started_at >= $4 AND c.call_started_at < $5 AND c.client_number IS NOT NULL
-           ORDER BY c.client_number, c.call_started_at DESC""",
+    found = await pool.fetch(
+        """SELECT c.id, c.client_number, c.call_started_at, c.transcript, r.data, r.data->>'rop_line' AS rop_line,
+                  coalesce(r.success, false) AS success
+           FROM calls c LEFT JOIN call_reviews r ON r.call_id=c.id AND r.kind = ANY($3::text[])
+           WHERE c.client_id=$1 AND c.extension=$2 AND c.call_started_at >= $4 AND c.call_started_at < $5
+             AND c.client_number IS NOT NULL AND coalesce(c.duration_seconds, 0) >= 20
+             AND (c.transcript IS NOT NULL OR r.data IS NOT NULL)""",
         row['client_id'], row['extension'], sorted(engine.REVIEWED), end - timedelta(days=CONTEXT_DAYS), end)
-    rows = sorted(rows, key=lambda r: (not r['success'], -r['call_started_at'].timestamp()))[:CONTEXT_CANDIDATES]
-    if not rows:
-        return {'reason': 'нет холодных звонков менеджера'}, 0.0
+    if not found:
+        return {'reason': 'нет разговоров менеджера с расшифровкой за 60 дней'}, 0.0
+    head = transcript[:CONTEXT_CHARS]
+    docs = [text_words((r['transcript'] or '') + ' ' + describe_cold_call(r, tz)) for r in found]
+    scored = sorted(zip(rank_by_words(head, docs), found), key=lambda x: (-x[0], not x[1]['success'],
+                                                                          -x[1]['call_started_at'].timestamp()))
+    rows, numbers = [], set()
+    for _, r in scored:  # один номер — один кандидат, самый похожий его разговор
+        if r['client_number'] not in numbers:
+            numbers.add(r['client_number'])
+            rows.append(r)
+        if len(rows) == CONTEXT_CANDIDATES:
+            break
     listing = '\n'.join(f'[{i}] {describe_cold_call(r, tz)}' for i, r in enumerate(rows, 1))
     user = (f"Презентация {row['day']:%d.%m.%Y}, менеджер {row['manager_name'] or ''}.\n"
-            f"НАЧАЛО РАСШИФРОВКИ ПРЕЗЕНТАЦИИ:\n{transcript[:CONTEXT_CHARS]}\n\nХОЛОДНЫЕ ЗВОНКИ:\n{listing}")
+            f"НАЧАЛО РАСШИФРОВКИ ПРЕЗЕНТАЦИИ:\n{head}\n\nХОЛОДНЫЕ ЗВОНКИ:\n{listing}")
     raw, cost = await call(MATCH_PROMPT, user, 2000)
     raw = raw if isinstance(raw, dict) else {}
     pick = raw.get('call')
@@ -341,7 +366,7 @@ async def find_by_context(pool, row, transcript: str, tz, call) -> tuple[dict, f
         chosen = rows[pick - 1]
         result.update(call_id=chosen['id'], number=chosen['client_number'], at=chosen['call_started_at'].isoformat())
     else:
-        result['reason'] = 'по смыслу уверенно не нашёлся'
+        result['reason'] = 'модель не уверена'
     return result, cost
 
 
@@ -467,6 +492,10 @@ if __name__ == '__main__':
                 match = json.loads(r['match']) if r['match'] else {}
                 print(f"\n№{r['row_no']} {r['day']} {r['time_text']} доб.{r['extension']} mp3 {r['duration_seconds']} с → "
                       f"{match.get('by') or 'не найден: ' + str(match.get('reason'))}")
+                if match.get('context'):
+                    ctx = match['context']
+                    print(f"   по смыслу: {ctx.get('reason') or 'привязан'} · кандидатов {ctx.get('candidates')} · "
+                          f"{ctx.get('confidence')} · {ctx.get('evidence')}")
                 if not (r['day'] and r['extension']):
                     continue
                 start = datetime.combine(r['day'] - timedelta(days=1), datetime.min.time(), tz)
