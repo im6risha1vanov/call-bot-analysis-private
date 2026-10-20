@@ -413,6 +413,14 @@ if __name__ == '__main__':
                 print('   разговоры от минуты за этот и прошлый день:',
                       ', '.join(f"{c['call_started_at'].astimezone(tz):%d.%m %H:%M} {c['duration_seconds']}с"
                                 f"{'' if c['direction'] == 2 else ' вх'}" for c in calls) or 'нет')
+                same = await pool.fetch(
+                    """SELECT call_started_at, duration_seconds, extension, client_number FROM calls
+                       WHERE client_id=$1 AND call_started_at >= $2 AND call_started_at < $3
+                         AND abs(coalesce(duration_seconds, 0) - $4) <= 5 ORDER BY call_started_at""",
+                    r['client_id'], start - timedelta(days=2), start + timedelta(days=3), r['duration_seconds'])
+                print('   той же длины ±5 с у любого добавочного (±2 дня):',
+                      ', '.join(f"{c['call_started_at'].astimezone(tz):%d.%m %H:%M} {c['duration_seconds']}с "
+                                f"доб.{c['extension']} …{(c['client_number'] or '')[-4:]}" for c in same) or 'нет')
         finally:
             await pool.close()
 
