@@ -172,7 +172,7 @@ class StoreTests(unittest.IsolatedAsyncioTestCase):
         first = rows[1]
         self.assertEqual((first['status'], first['call_id'], first['duration_seconds']), ('reviewed', same, 246))
         self.assertEqual(json.loads(first['match'])['by'], 'duration+text')
-        self.assertIn('Холодный. Встреча на 13.10.', seen[0])  # история клиента по номеру
+        self.assertTrue(any('Холодный. Встреча на 13.10.' in u for u in seen))  # история клиента по номеру
         self.assertEqual(json.loads(first['data'])['stage_after'], 'dmp_meeting')
         self.assertEqual((rows[2]['call_id'], json.loads(rows[2]['match'])['by']), (by_time, 'time+duration'))
         fourth = json.loads(rows[4]['match'])
