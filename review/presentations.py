@@ -8,9 +8,10 @@
 2. process: скачиваем mp3, распознаём (Deepgram, как записи Mango), ищем тот же звонок
    в Mango и разбираем по промту презентации (presentation_prompt.md).
 
-Время в реестре не всегда время звонка (часто это время отправки файла), поэтому
-звонок Mango ищется по менеджеру, дню (и двум дням до него) и длительности, а текст
-только подтверждает совпадение. Совпадение даёт номер клиента, по нему сделка.
+Время в реестре — время звонка (подтвердил Григорий 20.10), поэтому звонок Mango
+сначала ищется по менеджеру и времени, длительность подтверждает. Если по времени не
+нашлось (время пустое, как в строке 40), ищем по дню (и двум дням до него) и
+длительности, а текст подтверждает. Совпадение даёт номер клиента, по нему сделка.
 
 Включается PRESENTATIONS=on; реестр — PRESENTATIONS_SHEET_ID. Сервисному аккаунту
 бота нужен доступ на чтение к таблице и к файлам на Диске.
@@ -42,7 +43,9 @@ MAX_ATTEMPTS = 3
 PER_RUN = int(os.getenv('PRESENTATIONS_PER_RUN', '3'))
 SYNC_MINUTES = 10
 DURATION_SLACK = 3  # секунд: mp3 из реестра и запись Mango одной длины
-LOOK_BACK_DAYS = 2  # файл могут отправить в чат на день-два позже звонка
+LOOK_BACK_DAYS = 2  # без времени: файл могут отправить в чат на день-два позже звонка
+TIME_WINDOW = timedelta(minutes=10)  # время в реестре и начало звонка в Mango
+TIME_EXACT = timedelta(minutes=2)  # так близко по времени — тот самый звонок, даже если длина не сверилась
 MIN_WORDS_SHARED = 0.3  # доля общих слов, чтобы считать тексты одним разговором
 
 STAGES = ('paid', 'contract', 'decision_date', 'materials', 'dmp_meeting', 'none')
@@ -146,11 +149,34 @@ def shared_words(a: str, b: str) -> float:
     return len(left & right) / min(len(left), len(right))
 
 
-async def find_call(pool, client_id: int, ext: str | None, day: date | None, seconds: int | None, transcript: str, tz) -> dict:
-    """Звонок Mango того же менеджера за день записи и два дня до него, той же длины.
+def registry_time(day: date | None, time_text: str | None, tz) -> datetime | None:
+    m = re.fullmatch(r'(\d{1,2})[:.](\d{2})', (time_text or '').strip())
+    if not (day and m) or int(m[1]) > 23:
+        return None
+    return datetime.combine(day, datetime.min.time(), tz).replace(hour=int(m[1]), minute=int(m[2]))
 
-    Возвращает {'call_id', 'by', 'candidates', ...}. call_id ставится, только если кандидат один
-    и (если у звонка Mango есть расшифровка) тексты похожи. Иначе запись ждёт ручного выбора в CRM."""
+
+async def find_call(pool, client_id: int, ext: str | None, day: date | None, seconds: int | None, transcript: str, tz,
+                    time_text: str | None = None) -> dict:
+    """Звонок Mango того же менеджера: сначала по времени из реестра, потом по дню и длине.
+
+    Возвращает {'call_id', 'by', 'candidates', ...}. Иначе запись ждёт ручного выбора в CRM."""
+    at = registry_time(day, time_text, tz)
+    if ext and at:
+        rows = await pool.fetch(
+            """SELECT id, client_number, call_started_at, duration_seconds FROM calls
+               WHERE client_id=$1 AND extension=$2 AND call_started_at BETWEEN $3 AND $4
+               ORDER BY abs(extract(epoch FROM call_started_at - $5))""",
+            client_id, ext, at - TIME_WINDOW, at + TIME_WINDOW + timedelta(minutes=1), at)
+        near = [{'call_id': r['id'], 'number': r['client_number'], 'at': r['call_started_at'].isoformat(),
+                 'seconds': r['duration_seconds'], 'minutes_off': round(abs((r['call_started_at'] - at).total_seconds()) / 60, 1)}
+                for r in rows]
+        sized = [c for c in near if seconds and c['seconds'] is not None and abs(c['seconds'] - seconds) <= DURATION_SLACK]
+        if len(sized) >= 1:
+            return {'call_id': sized[0]['call_id'], 'by': 'time+duration', 'candidates': near}
+        exact = [c for c in near if c['minutes_off'] * 60 <= TIME_EXACT.total_seconds()]
+        if len(exact) == 1:
+            return {'call_id': exact[0]['call_id'], 'by': 'time', 'candidates': near}
     if not (ext and day and seconds):
         return {'call_id': None, 'by': None, 'candidates': [], 'reason': 'нет менеджера, дня или длительности'}
     start = datetime.combine(day - timedelta(days=LOOK_BACK_DAYS), datetime.min.time(), tz)
@@ -246,7 +272,7 @@ async def review_one(pool, row, http, access_token, *, transcribe=None, call=Non
         seconds = int(round(seconds or 0))
         await pool.execute('UPDATE presentations SET transcript=$2, duration_seconds=$3, updated_at=now() WHERE id=$1',
                            row['id'], transcript, seconds)
-    match = await find_call(pool, row['client_id'], row['extension'], row['day'], seconds, transcript, tz)
+    match = await find_call(pool, row['client_id'], row['extension'], row['day'], seconds, transcript, tz, row['time_text'])
     number = (next((c['number'] for c in match['candidates'] if c['call_id'] == match['call_id']), None)
               if match['call_id'] else None)
     if not (transcript or '').strip():
