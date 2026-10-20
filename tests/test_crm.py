@@ -116,10 +116,10 @@ class DBCase(unittest.IsolatedAsyncioTestCase):
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS assigned_by_telegram_user_id BIGINT;""")
         for name in ('008_call_reviews.sql', '009_callback_tasks.sql', '012_prompt_versions.sql', '013_employee_invites.sql',
                      '014_crm.sql', '015_crm_roles.sql', '016_crm_access.sql', '017_crm_reports.sql', '018_crm_questions.sql',
-                     '019_crm_staff.sql', '021_manager_memory.sql', '022_presentations.sql', '024_deals.sql'):
+                     '019_crm_staff.sql', '021_manager_memory.sql', '022_presentations.sql', '024_deals.sql', '025_contracts.sql'):
             await self.pool.execute((root / 'migrations' / name).read_text())
         await self.pool.execute('TRUNCATE clients, crm_login_tokens, crm_sessions, crm_docs, crm_invites, crm_reports, crm_questions, '
-                                'employee_invites, manager_memory, deal_events, prompt_active, prompt_versions, prompt_drafts, astra_daily_spend CASCADE')
+                                'employee_invites, manager_memory, deal_events, contracts, prompt_active, prompt_versions, prompt_drafts, astra_daily_spend CASCADE')
         from crypto_util import encrypt
         await self.pool.execute("INSERT INTO clients(id,timezone,processing_enabled,vpbx_api_key_enc,vpbx_api_salt_enc) "
                                 "VALUES(1,'Europe/Moscow',true,$1,$2)", encrypt('key'), encrypt('salt'))
@@ -725,6 +725,58 @@ class WebTests(DBCase):
         self.assertEqual((await post('79990000002', kind='paid', amount='1000')).status, 403)
         self.assertEqual((await post('79990000004', kind='note', note='x')).status, 403)
         self.assertEqual((await post('79990000002', kind='materials', note='КП в Telegram')).status, 200)
+
+    async def test_contracts(self):
+        import asyncio
+        from crm import contracts
+        await self.add_review('101', WON, '2 days', number='79990000001')
+        await self.add_review('102', WON, '2 days', number='79990000002')
+        h = {'X-CRM': '1'}
+        reg = lambda **b: self.http.post('/api/contracts/register', json=b, headers=h)
+
+        await self.director()
+        cfg = await (await self.http.get('/api/contracts/config')).json()
+        self.assertEqual(sorted(cfg['templates']), ['ds', 'gck', 'kc', 'ops'])
+        self.assertFalse(cfg['innLookup'])  # без DADATA_KEY поиска по ИНН нет
+        self.assertEqual((await (await self.http.get('/api/contracts/next-number')).json())['num'], 1)
+        r = await reg(type='ops', date='2026-10-20', client='ООО «Ромашка»', inn='7707083893', sum=37000, tariff='Старт')
+        self.assertEqual((r.status, (await r.json())['num']), (200, 1))
+        self.assertEqual((await (await reg(type='ds', client='ООО «Ромашка»', sum='25 000', baseNum='1')).json())['num'], '')
+        self.assertEqual((await reg(type='xx')).status, 400)
+        # номера не повторяются, даже если оформляют одновременно
+        got = await asyncio.gather(*(reg(type='gck', sum=70000) for _ in range(5)))
+        self.assertEqual(sorted([(await g.json())['num'] for g in got]), [2, 3, 4, 5, 6])
+        self.assertEqual((await (await self.http.get('/api/contracts/next-number')).json())['num'], 7)
+        log = (await (await self.http.get('/api/contracts')).json())['items']
+        self.assertEqual(len(log), 7)
+        ds = next(c for c in log if c['type'] == 'ds')
+        self.assertEqual((ds['num'], ds['amount'], ds['base_num'], ds['by']), (None, 25000.0, '1', 'Директор'))
+
+        # из карточки сделки: договор виден в сделке, чужую сделку менеджер не трогает
+        self.http.session.cookie_jar.clear()
+        await self.login(123)
+        r = await reg(type='kc', client='ИП Иванов', sum=25000, deal='+7 999 000-00-01')
+        self.assertEqual((r.status, (await r.json())['num']), (200, 7))
+        self.assertEqual((await reg(type='kc', deal='79990000002')).status, 403)
+        deal = await (await self.http.get('/api/deals/79990000001')).json()
+        self.assertEqual([(c['num'], c['type'], c['by']) for c in deal['contracts']], [(7, 'kc', 'Первый')])
+        self.assertEqual([c['num'] for c in (await (await self.http.get('/api/contracts')).json())['items']], [7])
+
+        self.assertEqual((await self.http.get('/api/contracts/lookup/inn/123')).status, 400)
+        self.assertEqual((await self.http.get('/api/contracts/lookup/inn/7707083893')).status, 403)  # ключа нет
+        answer = type('R', (), {'status_code': 200, 'json': lambda self: {'suggestions': [{'value': 'ПАО СБЕРБАНК'}]}})()
+        with patch.dict(os.environ, {'DADATA_KEY': 'k1'}), patch('httpx.AsyncClient.post', AsyncMock(return_value=answer)) as post:
+            self.assertTrue((await (await self.http.get('/api/contracts/config')).json())['innLookup'])
+            got = await (await self.http.get('/api/contracts/lookup/inn/7707083893')).json()
+            self.assertEqual(got, {'ok': True, 'raw': {'value': 'ПАО СБЕРБАНК'}})
+            self.assertEqual(post.call_args.args[0], contracts.DADATA_URL + 'party')
+            self.assertEqual(post.call_args.kwargs['headers']['Authorization'], 'Token k1')
+
+        # тестовый вход только смотрит
+        self.http.session.cookie_jar.clear()
+        with patch.dict(os.environ, {'CRM_TEST_KEY': TEST_KEY}):
+            await self.enter('manager', ext='101')
+        self.assertEqual((await reg(type='ops')).status, 403)
 
     async def test_staff_invite_unlink_and_copies(self):
         import invites
