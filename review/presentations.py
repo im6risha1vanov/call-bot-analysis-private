@@ -384,5 +384,39 @@ if __name__ == '__main__':
                 except Exception as exc:
                     print(row['row_no'], row['day'], row['manager_name'], 'НЕ скачан:', exc)
 
+    async def _matches():
+        # python -m review.presentations matches — только чтение: почему запись не привязалась к звонку.
+        # По каждой расшифрованной записи: время из реестра, длина mp3 и разговоры менеджера в тот день.
+        import asyncpg
+        from zoneinfo import ZoneInfo
+        from scripts.kitchen_backfill import load_env
+        load_env(Path(__file__).resolve().parents[1] / '.env')
+        pool = await asyncpg.create_pool(os.environ['DATABASE_URL'], min_size=1, max_size=2)
+        try:
+            rows = await pool.fetch(
+                """SELECT p.*, cl.timezone FROM presentations p JOIN clients cl ON cl.id=p.client_id
+                   WHERE p.duration_seconds IS NOT NULL ORDER BY p.day NULLS LAST, p.row_no""")
+            print('расшифровано записей:', len(rows), '· привязано:', sum(1 for r in rows if r['call_id']))
+            for r in rows:
+                tz = ZoneInfo(r['timezone'] or 'Europe/Moscow')
+                match = json.loads(r['match']) if r['match'] else {}
+                print(f"\n№{r['row_no']} {r['day']} {r['time_text']} доб.{r['extension']} mp3 {r['duration_seconds']} с → "
+                      f"{match.get('by') or 'не найден: ' + str(match.get('reason'))}")
+                if not (r['day'] and r['extension']):
+                    continue
+                start = datetime.combine(r['day'] - timedelta(days=1), datetime.min.time(), tz)
+                calls = await pool.fetch(
+                    """SELECT id, call_started_at, duration_seconds, direction FROM calls
+                       WHERE client_id=$1 AND extension=$2 AND call_started_at >= $3 AND call_started_at < $4
+                         AND duration_seconds >= 60 ORDER BY call_started_at""",
+                    r['client_id'], r['extension'], start, start + timedelta(days=2))
+                print('   разговоры от минуты за этот и прошлый день:',
+                      ', '.join(f"{c['call_started_at'].astimezone(tz):%d.%m %H:%M} {c['duration_seconds']}с"
+                                f"{'' if c['direction'] == 2 else ' вх'}" for c in calls) or 'нет')
+        finally:
+            await pool.close()
+
     if sys.argv[1:] == ['check']:
         asyncio.run(_check())
+    elif sys.argv[1:] == ['matches']:
+        asyncio.run(_matches())
