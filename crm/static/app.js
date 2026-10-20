@@ -106,6 +106,7 @@ const PAGES = [
   {id: 'ask', name: 'Вопрос по отделу', icon: 'ask', roles: STAFF},
   {id: 'clients', name: 'Клиенты', icon: 'client', roles: ['director']},
   {id: 'staff', name: 'Сотрудники', icon: 'people', roles: ['director']},
+  {id: 'me', name: 'Моя карточка', icon: 'people', roles: ['manager']},
   {id: 'robot', name: 'Робот', icon: 'robot', roles: ['director', 'client']},
   {id: 'prompts', name: 'Промты', icon: 'pen', roles: ['director']},
   {id: 'access', name: 'Доступы', icon: 'key', roles: ['director']},
@@ -149,12 +150,15 @@ function shell() {
       <header class="top"><h1 id="title"></h1><span class="sp"></span>${people}</header>
       <main class="content" id="view"></main>
     </div></div>`;
-  $$('.nav button').forEach(b => b.addEventListener('click', () => go(b.dataset.page)));
-  if (director) DirMenu.mount({side: '.side', here: 'w', name: S.me.name, test: S.me.test, onOpen: go});
+  $$('.nav button').forEach(b => b.addEventListener('click', () => openPage(b.dataset.page)));
+  if (director) DirMenu.mount({side: '.side', here: 'w', name: S.me.name, test: S.me.test, onOpen: openPage});
   if ($('#logout')) $('#logout').addEventListener('click', async () => { await api('/api/logout', {method: 'POST', body: {}}).catch(() => {}); showLogin(); });
   const pick = $('#pick-ext');
   if (pick) pick.addEventListener('change', () => { S.ext = pick.value; S.queue = null; S.pos = 0; S.dial = null; save(); go(S.page); });
 }
+
+// Переход из меню: раздел открывается с начала (список сотрудников, а не последняя карточка).
+function openPage(page) { S.person = null; S.personTab = null; go(page); }
 
 function save() { try { localStorage.setItem('crm', JSON.stringify({page: S.page, ext: S.ext})); } catch (e) { /* без хранилища */ } }
 function load() { try { return JSON.parse(localStorage.getItem('crm') || '{}'); } catch (e) { return {}; } }
@@ -791,24 +795,40 @@ function linkBox(out, link, note) {
   });
 }
 
+// ---------- сотрудники: список и карточка человека ----------
+const pctN = (a, b) => b ? Math.round(a / b * 100) : null;
+const pctTxt = (a, b) => b ? pctN(a, b) + '%' : '—';
+// Стрелка к прошлой неделе: доля с результатом выросла или упала.
+function trend(now, before) {
+  const a = pctN(now.success, now.talks), b = pctN(before.success, before.talks);
+  if (a === null || b === null || a === b) return '';
+  return a > b ? `<span class="trend up" title="Прошлая неделя: ${b}%">▲ ${a - b}</span>` : `<span class="trend down" title="Прошлая неделя: ${b}%">▼ ${b - a}</span>`;
+}
+const botChip = p => p.linked ? `<span class="chip good">в боте</span>` : p.invite_until ? '<span class="chip warn">ждёт по ссылке</span>' : '<span class="chip">не подключён</span>';
+
 VIEWS.staff = async view => {
+  if (S.person) return personView(view, S.person);
   const d = await api('/api/staff', {scoped: false});
-  const tgCell = p => p.linked ? `<span class="chip good">подключён</span>${p.username ? ' @' + esc(p.username) : ''}`
-    : p.invite_until ? `<span class="chip warn">ждёт по ссылке</span> до ${fmtWhen(p.invite_until)}` : '<span class="chip">не подключён</span>';
-  const reviewed = p => p.reviewed === null ? '' : p.reviewed ? 'да' : 'нет';
-  view.innerHTML = `<div class="panel"><h2>Сотрудники в боте <span class="muted">· ${d.items.length}</span></h2>
-      <p class="muted">Менеджеров из Mango бот добавляет сам. Человек подключается к боту по одноразовой ссылке-приглашению: открывает её и жмёт «Старт».
-        Отключённый от бота перестаёт получать сообщения, а на его место можно пригласить другого.</p>
-      <div class="scroll"><table class="tbl"><thead><tr><th>Кто</th><th>Роль</th><th class="n">Доб.</th><th>Бот</th><th class="hide-m">Звонки разбираются</th><th>Копии всех разборов</th><th></th></tr></thead><tbody>
-      ${d.items.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.role_title)}</td><td class="n">${/^\d+$/.test(p.ext) ? esc(p.ext) : '—'}</td>
-        <td>${tgCell(p)}</td><td class="hide-m">${reviewed(p)}</td>
-        <td>${p.can_copy ? `<label class="row"><input type="checkbox" data-copies="${esc(p.ext)}"${p.copies ? ' checked' : ''}> ${p.copies ? 'получает' : 'нет'}</label>` : (p.copies ? 'получает' : '')}</td>
-        <td><div class="row">${p.linked ? '' : `<button class="btn small" data-inv="${esc(p.ext)}">Ссылка в бота</button>`}
-          ${p.can_unlink ? `<button class="btn small" data-unlink="${esc(p.ext)}" data-name="${esc(p.name)}">Отключить</button>` : ''}</div></td></tr>
-        <tr hidden data-out="${esc(p.ext)}"><td colspan="7"></td></tr>`).join('')}</tbody></table></div>
-      <p class="muted">Копии всех разборов приходят в Telegram целиком, по каждому звонку, поэтому включаются только руководителям.
-        ${d.copies_source === 'env' ? 'Сейчас список копий взят из настроек сервера; после первого изменения здесь он хранится в CRM и меняется без перезапуска бота.' : ''}
-        ${d.copies_other ? `Ещё получателей не из списка сотрудников: ${d.copies_other}, они остаются.` : ''}</p></div>
+  const managers = d.items.filter(p => p.role === 'manager');
+  const others = d.items.filter(p => p.role !== 'manager');
+  const mRow = p => {
+    const s = p.stats || {week: {talks: 0, success: 0}, prev: {talks: 0, success: 0}, dials: {dials: 0}, top: null};
+    const head = `<tr class="click" data-person="${esc(p.ext)}"><td><b>${esc(p.name)}</b> <span class="muted">· ${esc(p.ext)}</span></td>
+      <td class="n">${s.dials.dials}</td>`;
+    if (p.kitchen) return `${head}<td colspan="3" class="muted">разбирается по своему скрипту (кухни)</td><td>${botChip(p)}</td></tr>`;
+    return `${head}<td class="n">${s.week.talks}</td>
+      <td class="n">${s.week.success} <span class="muted">${pctTxt(s.week.success, s.week.talks)}</span> ${trend(s.week, s.prev)}</td>
+      <td class="hide-m">${s.top ? `${esc(s.top.label)} <span class="muted">· ${s.top.n}</span>` : '<span class="muted">—</span>'}</td>
+      <td>${botChip(p)}</td></tr>`;
+  };
+  view.innerHTML = `<div class="panel"><h2>Менеджеры <span class="muted">· ${managers.length}</span></h2>
+      <div class="scroll"><table class="tbl"><thead><tr><th>Кто</th><th class="n">Наборов за 7 дн.</th><th class="n">Разговоров разобрано</th>
+        <th class="n">С результатом</th><th class="hide-m">Частая ошибка за 30 дн.</th><th>Бот</th></tr></thead><tbody>
+      ${managers.map(mRow).join('') || '<tr><td colspan="6" class="muted">Менеджеров нет.</td></tr>'}</tbody></table></div>
+      <p class="muted">Нажмите на человека, чтобы открыть его карточку: цифры, ошибки, звонки, тренировки, перезвоны, доступы. Стрелка показывает, как изменилась доля разговоров с результатом к прошлой неделе.</p></div>
+    <div class="panel"><h2>Руководители <span class="muted">· ${others.length}</span></h2><div class="scroll"><table class="tbl"><tbody>
+      ${others.map(p => `<tr class="click" data-person="${esc(p.ext)}"><td><b>${esc(p.name)}</b></td><td>${esc(p.role_title)}</td>
+        <td>${botChip(p)}${p.username ? ' @' + esc(p.username) : ''}</td><td class="hide-m">${p.copies ? 'получает копии разборов' : ''}</td></tr>`).join('')}</tbody></table></div></div>
     <div class="panel"><h2>Добавить человека</h2>
       <div class="outform">
         <label class="field">Кто<select id="s-role"><option value="manager">Менеджер</option><option value="head">Руководитель</option></select></label>
@@ -817,8 +837,9 @@ VIEWS.staff = async view => {
         <label class="field">Ник в Telegram, если знаете<input id="s-user" maxlength="33" placeholder="@nick"></label>
         <button class="btn primary" id="s-go">Добавить и дать ссылку</button></div>
       <div id="s-out"></div>
-      <p class="muted">С ником хватит простого /start в боте, ссылка нужна на случай, если ника нет. Ссылка одноразовая и действует 7 дней.
-        Руководитель получает отчёты по отделу и горячие потери; копии всех разборов включаются отдельно в таблице выше.</p></div>`;
+      <p class="muted">Менеджеров из Mango бот добавляет сам. С ником хватит простого /start в боте, ссылка нужна на случай, если ника нет. Ссылка одноразовая и действует 7 дней.
+        Руководитель получает отчёты по отделу и горячие потери; копии всех разборов включаются в его карточке.</p></div>`;
+  $$('[data-person]', view).forEach(tr => tr.addEventListener('click', () => { S.person = tr.dataset.person; S.personTab = null; go('staff'); }));
   const role = $('#s-role', view);
   role.addEventListener('change', () => { $('#s-ext-f', view).hidden = role.value !== 'manager'; });
   $('#s-go', view).addEventListener('click', async () => {
@@ -826,26 +847,147 @@ VIEWS.staff = async view => {
     try {
       const r = await api('/api/staff', {method: 'POST', scoped: false, body: {role: role.value, person_ext: $('#s-ext', view).value,
         name: $('#s-name', view).value, username: $('#s-user', view).value}});
-      linkBox(out, r.link, 'Отправьте ссылку человеку лично. Он появится в таблице после обновления страницы.');
+      linkBox(out, r.link, 'Отправьте ссылку человеку лично. Он появится в списке после обновления страницы.');
     } catch (e) { out.innerHTML = `<p class="muted">${esc(e.message)}</p>`; }
   });
-  $$('[data-inv]', view).forEach(b => b.addEventListener('click', async () => {
-    const row = $(`[data-out="${CSS.escape(b.dataset.inv)}"]`, view);
-    row.hidden = false;
-    try {
-      const r = await api('/api/staff/invite', {method: 'POST', scoped: false, body: {person_ext: b.dataset.inv}});
-      linkBox($('td', row), r.link, 'Ссылка одноразовая, действует 7 дней.');
-    } catch (e) { $('td', row).textContent = e.message; }
-  }));
-  $$('[data-unlink]', view).forEach(b => b.addEventListener('click', async () => {
-    if (!confirm(`Отключить ${b.dataset.name} от бота? Сообщения бота ему больше не придут. Вход в CRM по его личной ссылке закрывается в «Доступах».`)) return;
-    try { await api('/api/staff/unlink', {method: 'POST', scoped: false, body: {person_ext: b.dataset.unlink}}); go('staff'); }
-    catch (e) { alert(e.message); }
-  }));
-  $$('[data-copies]', view).forEach(c => c.addEventListener('change', async () => {
-    try { await api('/api/staff/copies', {method: 'POST', scoped: false, body: {person_ext: c.dataset.copies, on: c.checked}}); go('staff'); }
-    catch (e) { alert(e.message); c.checked = !c.checked; }
-  }));
+};
+
+// Своя карточка менеджера: то же, что видит руководитель, кроме доступов.
+VIEWS.me = async view => personView(view, null);
+
+const PERSON_TABS = [['over', 'Обзор'], ['calls', 'Звонки и разборы'], ['train', 'Тренировки'], ['tasks', 'Перезвоны'], ['access', 'Доступ и бот']];
+
+async function personView(view, ext) {
+  const p = await api('/api/person' + (ext ? '?person=' + encodeURIComponent(ext) : ''), {scoped: false});
+  const tabs = PERSON_TABS.filter(([k]) => k === 'access' ? !!p.access : p.manager);
+  const tab = tabs.some(([k]) => k === S.personTab) ? S.personTab : tabs[0][0];
+  const back = ext ? '<button class="btn small" id="p-back">← Все сотрудники</button>' : '';
+  view.innerHTML = `<div class="row gapb">${back}<b class="p-name">${esc(p.name)}</b><span class="muted">${esc(p.role_title)}${/^\d+$/.test(p.ext) ? ' · доб. ' + esc(p.ext) : ''}</span>
+      ${p.access ? botChip(p.access) : ''}</div>
+    ${tabs.length > 1 ? `<div class="filters">${tabs.map(([k, t]) => `<button data-ptab="${k}" aria-pressed="${tab === k}">${t}</button>`).join('')}</div>` : ''}
+    <div id="p-body"></div>`;
+  if (back) $('#p-back', view).addEventListener('click', () => { S.person = null; go('staff'); });
+  $$('[data-ptab]', view).forEach(b => b.addEventListener('click', () => { S.personTab = b.dataset.ptab; personView(view, ext); }));
+  const body = $('#p-body', view);
+  PERSON_TAB[tab](body, p, () => personView(view, ext));
+}
+
+const kitchenNote = p => p.kitchen ? '<div class="panel muted">Звонки этого сотрудника бот разбирает по отдельному скрипту (кухни), поэтому разговоров, результатов и ошибок здесь нет. Наборы, перезвоны и тренировки показываются как у всех.</div>' : '';
+
+const PERSON_TAB = {
+  over(el, p) {
+    if (p.kitchen) {
+      const d = p.dials;
+      el.innerHTML = `${kitchenNote(p)}<div class="kpis">${[['week', '7 дней'], ['month', '30 дней']].map(([k, t]) =>
+        `<div class="kpi"><b>${d[k].dials}</b><span>наборов за ${t} · дозвон ${pctTxt(d[k].answered, d[k].dials)}</span></div>`).join('')}</div>`;
+      return;
+    }
+    const w = p.periods.week, pr = p.periods.prev, m = p.periods.month, dw = p.dials.week;
+    const max = Math.max(1, ...p.days.map(d => d.talks));
+    const outs = Object.entries(m.outcomes).sort((a, b) => b[1] - a[1]);
+    el.innerHTML = `${kitchenNote(p)}<div class="kpis">
+        <div class="kpi"><b>${dw.dials}</b><span>наборов за 7 дней · дозвон ${pctTxt(dw.answered, dw.dials)}</span></div>
+        <div class="kpi"><b>${w.talks}</b><span>разговоров разобрано · прошлая неделя ${pr.talks}</span></div>
+        <div class="kpi"><b>${w.success} <small>${pctTxt(w.success, w.talks)}</small></b><span>с результатом ${trend(w, pr) || ''} · прошлая неделя ${pr.success} (${pctTxt(pr.success, pr.talks)})</span></div>
+        <div class="kpi"><b>${w.hot}</b><span>горячих потерь за 7 дней</span></div></div>
+      <div class="grid2"><div class="stack">
+        <div class="panel"><h2>Частые ошибки за 30 дней <span class="muted">· потеряно ${m.lost} из ${m.talks} разговоров</span></h2>
+          ${p.mistakes.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Где терялся результат</th><th class="n">30 дн.</th><th class="n">7 дн.</th><th class="n hide-m">Пред. 7 дн.</th></tr></thead><tbody>
+          ${p.mistakes.map(x => `<tr><td>${esc(x.label)}${x.examples.length ? `<div class="p-ex">${x.examples.map(c =>
+              `<button class="btn small" data-review="${c.id}" title="${esc(c.what || '')}">${esc(when(c.at))}</button>`).join('')}</div>` : ''}</td>
+            <td class="n">${x.month}</td><td class="n">${x.week}</td><td class="n hide-m">${x.prev}</td></tr>`).join('')}</tbody></table></div>
+          <p class="muted">Кнопки с датой открывают пример: разбор и запись звонка.</p>` : '<div class="empty">Потерь с понятной причиной за 30 дней нет.</div>'}</div>
+        <div class="panel"><h2>Разговоры по дням</h2>${m.talks ? `<div class="bars p-days">${p.days.map(d =>
+            `<div class="bar" title="${ddmm(d.day)}: разговоров ${d.talks}, с результатом ${d.success}, наборов ${d.dials}"><div class="stackbar"><i data-h="${d.success / max * 100}"></i><i class="b2" data-h="${(d.talks - d.success) / max * 100}"></i></div><span>${ddmm(d.day).slice(0, 2)}</span></div>`).join('')}</div>
+          <p class="muted">Зелёным разговоры с результатом, серым без результата, за 30 дней.</p>` : '<div class="empty">Разобранных разговоров за 30 дней нет.</div>'}</div></div>
+      <div class="stack">
+        <div class="panel"><h2>Результаты за 30 дней <span class="muted">· ${m.success} из ${m.talks}</span></h2>${outs.length ? `<table class="tbl"><tbody>${outs.map(([k, n]) =>
+            `<tr><td>${esc(p.outcome_labels[k] || k)}</td><td class="n">${n}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Пока нет.</div>'}</div>
+        <div class="panel"><h2>Что получается</h2>${p.positives.length ? `<div class="list">${p.positives.map(x =>
+            `<div class="p-pos"><span>${esc(x.why)}</span> <button class="btn small" data-review="${x.id}">${esc(when(x.at))}</button></div>`).join('')}</div>` : '<div class="empty">Пока нет отмеченных удачных мест.</div>'}</div>
+      </div></div>`;
+    heights(el);
+  },
+  calls(el, p) {
+    const f = S.personCalls || 'all';
+    const shown = p.calls.filter(c => f === 'all' || (f === 'good' ? c.success : f === 'lost' ? !c.success && c.chance !== 'none' : c.category === f));
+    const cats = p.mistakes.map(x => [x.key, x.label]);
+    el.innerHTML = `${kitchenNote(p)}<div class="panel"><h2>Разобранные разговоры за 30 дней <span class="muted">· ${p.calls.length}${p.calls.length >= 60 ? ', последние' : ''}</span></h2>
+      <div class="row gapb"><div class="filters">${[['all', 'Все'], ['good', 'С результатом'], ['lost', 'Потеряны']].map(([k, t]) =>
+        `<button data-cf="${k}" aria-pressed="${f === k}">${t}</button>`).join('')}</div>
+        ${cats.length ? `<label class="field"><select id="p-cat" aria-label="Ошибка"><option value="">Любая ошибка</option>${cats.map(([k, t]) =>
+          `<option value="${esc(k)}"${f === k ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select></label>` : ''}</div>
+      ${shown.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Когда</th><th>Номер</th><th class="n">Длит.</th><th>Итог</th><th></th></tr></thead><tbody>
+      ${shown.map(c => `<tr><td>${esc(when(c.at))}</td><td class="num">${esc(phone(c.number))}</td><td class="n">${dur(c.seconds)}</td>
+        <td><span class="chip ${c.success ? 'good' : c.chance === 'hot' ? 'bad' : c.chance === 'normal' ? 'warn' : ''}">${c.success ? 'результат' : c.chance === 'hot' ? 'горячий, потерян' : c.chance === 'normal' ? 'потерян' : 'без шанса'}</span>
+          ${c.verdict ? esc(c.verdict) : ''}${c.rop_line ? `<div class="muted">${esc(c.rop_line)}</div>` : ''}</td>
+        <td><button class="btn small" data-review="${c.id}">Разбор${c.rec ? ' и запись' : ''}</button></td></tr>`).join('')}</tbody></table></div>`
+        : '<div class="empty">Таких разговоров нет.</div>'}</div>`;
+    $$('[data-cf]', el).forEach(b => b.addEventListener('click', () => { S.personCalls = b.dataset.cf; PERSON_TAB.calls(el, p); }));
+    $('#p-cat', el)?.addEventListener('change', e => { S.personCalls = e.target.value || 'all'; PERSON_TAB.calls(el, p); });
+  },
+  train(el, p, reload) {
+    const t = p.trainings, top = p.mistakes[0];
+    const canAssign = S.me.role === 'director' && !S.me.test;
+    el.innerHTML = `<div class="stack">
+      ${canAssign ? `<div class="panel"><h2>Назначить тренировку</h2>
+        <p class="muted">Менеджеру придёт сообщение в боте с кнопкой старта. ${top ? `Самая частая ошибка за 30 дней: «${esc(top.label)}».` : ''}</p>
+        <div class="row">${top ? `<button class="btn primary" id="p-train-top">Отработать «${esc(top.label)}»</button>` : ''}
+          <button class="btn" id="p-train-dialog">Разговор целиком</button></div><div class="muted" id="p-train-out"></div></div>` : ''}
+      ${t.pending.length ? `<div class="panel"><h2>Назначено, ещё не начато <span class="muted">· ${t.pending.length}</span></h2><div class="list">
+        ${t.pending.map(x => `<div class="row gapb"><span>${esc(x.mode)}${x.topic ? ' · ' + esc(x.topic) : ''}</span>
+          ${x.link ? `<a class="btn small primary" href="${esc(x.link)}" target="_blank" rel="noopener">Начать в тренажёре</a>` : ''}</div>`).join('')}</div></div>` : ''}
+      <div class="panel"><h2>Пройденные тренировки <span class="muted">· ${t.items.length}</span></h2>${t.items.length ? `<div class="scroll"><table class="tbl">
+        <thead><tr><th>Когда</th><th>Режим</th><th>Тема</th><th>Итог</th></tr></thead><tbody>
+        ${t.items.map(x => `<tr class="click" data-tid="${x.id}"><td>${fmtWhen(x.at)}</td><td>${esc(x.mode)}</td><td>${esc(x.topic || '')}</td><td>${esc(x.result)}${x.test ? ' <span class="muted">· пробная</span>' : ''}</td></tr>`).join('')}
+        </tbody></table></div>` : '<div class="empty">Тренировок пока не было.</div>'}</div></div>`;
+    $$('tr[data-tid]', el).forEach(tr => tr.addEventListener('click', () => trainingDetail(tr.dataset.tid)));
+    const assign = async (mode, topic) => {
+      const out = $('#p-train-out', el);
+      try {
+        await api('/api/trainings', {method: 'POST', scoped: false, body: {person_ext: p.ext, mode, topic}});
+        out.textContent = 'Назначено.'; setTimeout(reload, 700);
+      } catch (e) { out.textContent = e.message; }
+    };
+    $('#p-train-top', el)?.addEventListener('click', () => assign('drill', top.label));
+    $('#p-train-dialog', el)?.addEventListener('click', () => assign('dialog', ''));
+  },
+  tasks(el, p) {
+    const late = p.tasks.filter(t => t.late).length;
+    el.innerHTML = `<div class="panel"><h2>Открытые перезвоны и встречи <span class="muted">· ${p.tasks.length}${late ? `, просрочено ${late}` : ''}</span></h2>
+      ${p.tasks.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Когда</th><th>Что</th><th>Номер</th><th>Клиент</th><th class="hide-m">Договорённость</th></tr></thead><tbody>
+      ${p.tasks.map(t => `<tr><td><span class="chip ${t.late ? 'late' : t.due_date === p.today ? 'today' : ''}">${esc(ddmm(t.due_date))}${t.due_time ? ' ' + esc(t.due_time) : ''}${t.late ? ' · просрочен' : ''}</span></td>
+        <td>${esc(t.label)}</td><td class="num">${esc(phone(t.number))}</td><td>${esc(t.title)}</td><td class="hide-m">${esc(t.note)}</td></tr>`).join('')}</tbody></table></div>`
+        : '<div class="empty">Открытых перезвонов нет.</div>'}</div>`;
+  },
+  access(el, p, reload) {
+    const a = p.access;
+    el.innerHTML = `<div class="panel"><h2>Telegram-бот</h2>
+        <p>${a.linked ? `Подключён${a.username ? ' как @' + esc(a.username) : ''}. Получает разборы и уведомления.` : a.invite_until ? `Ждёт подключения по ссылке до ${fmtWhen(a.invite_until)}.` : 'Не подключён.'}</p>
+        ${a.reviewed === null ? '' : `<p class="muted">Звонки ${a.reviewed ? 'разбираются ботом' : 'не разбираются ботом'}.</p>`}
+        <div class="row">${a.linked ? '' : '<button class="btn" id="p-inv">Ссылка в бота</button>'}
+          ${a.can_unlink ? '<button class="btn" id="p-unlink">Отключить от бота</button>' : ''}</div><div id="p-inv-out"></div></div>
+      ${a.can_copy ? `<div class="panel"><h2>Копии всех разборов</h2>
+        <label class="row"><input type="checkbox" id="p-copies"${a.copies ? ' checked' : ''}> Присылать полные разборы всех менеджеров в Telegram</label>
+        <p class="muted">Включается только руководителям: там звонки всех менеджеров.</p></div>` : ''}
+      <div class="panel"><h2>Вход в CRM</h2><p>${a.crm_links ? `Личных ссылок: ${a.crm_links}. Последний вход: ${a.crm_used ? fmtWhen(a.crm_used) : 'ещё не входил'}.` : 'Личной ссылки нет.'}</p>
+        <button class="btn" id="p-access">Открыть «Доступы»</button></div>`;
+    $('#p-access', el).addEventListener('click', () => go('access'));
+    $('#p-inv', el)?.addEventListener('click', async () => {
+      const out = $('#p-inv-out', el);
+      try { const r = await api('/api/staff/invite', {method: 'POST', scoped: false, body: {person_ext: p.ext}}); linkBox(out, r.link, 'Ссылка одноразовая, действует 7 дней.'); }
+      catch (e) { out.textContent = e.message; }
+    });
+    $('#p-unlink', el)?.addEventListener('click', async () => {
+      if (!confirm(`Отключить ${p.name} от бота? Сообщения бота ему больше не придут. Вход в CRM по его личной ссылке закрывается в «Доступах».`)) return;
+      try { await api('/api/staff/unlink', {method: 'POST', scoped: false, body: {person_ext: p.ext}}); reload(); }
+      catch (e) { alert(e.message); }
+    });
+    $('#p-copies', el)?.addEventListener('change', async e => {
+      try { await api('/api/staff/copies', {method: 'POST', scoped: false, body: {person_ext: p.ext, on: e.target.checked}}); reload(); }
+      catch (err) { alert(err.message); e.target.checked = !e.target.checked; }
+    });
+  },
 };
 
 // Режим промта: черновик живёт на странице, сохраняется только текст, по которому собран пример.

@@ -552,6 +552,65 @@ class WebTests(DBCase):
             self.assertEqual(cab['name'], 'Кухни')
             self.assertEqual((await self.http.get('/api/queue')).status, 403)
 
+    async def add_review(self, ext, data, ago, number='79990001122'):
+        call_id = await self.pool.fetchval(
+            """INSERT INTO calls(client_id,extension,call_started_at,client_number,duration_seconds,direction)
+               VALUES(1,$1,now()-$2::text::interval,$3,95,2) RETURNING id""", ext, ago, number)
+        category = (data.get('key_moment') or {}).get('category')
+        await self.pool.execute(
+            """INSERT INTO call_reviews(call_id,client_id,extension,prompt_version,kind,success,chance,category,data)
+               VALUES($1,1,$2,'call_review_v2',$3,$4,$5,$6,$7::jsonb)""",
+            call_id, ext, data['kind'], data['success'], data['chance'], category, json.dumps(data))
+        return call_id
+
+    async def test_person_card(self):
+        other = {**LOST, 'key_moment': {**LOST['key_moment'], 'category': 'lost_dmp'}}
+        hot = {**LOST, 'chance': 'hot'}
+        won = {**WON, 'positives': [{'timecode': '00:01', 'speaker': 'manager', 'quote': 'x', 'why': 'Сразу назвал повод звонка.'}]}
+        lost_now = await self.add_review('101', LOST, '1 hour')
+        await self.add_review('101', hot, '2 hours')
+        await self.add_review('101', won, '3 hours')
+        await self.add_review('101', other, '9 days')
+        await self.add_review('101', WON, '10 days')
+        await self.add_review('101', LOST, '20 days')
+        await self.add_review('101', LOST, '40 days')  # старше 30 дней: не считается
+        await self.add_review('102', other, '1 hour')
+        await self.pool.execute("INSERT INTO calls(client_id,extension,call_started_at,duration_seconds,direction) "
+                                "VALUES(1,'101',now()-'1 hour'::interval,0,2)")  # недозвон
+        with patch.dict(os.environ, {'CRM_TEST_KEY': TEST_KEY, 'KITCHEN_EXTENSIONS': '102'}):
+            await self.director()
+            d = await (await self.http.get('/api/staff')).json()
+            s = next(p for p in d['items'] if p['ext'] == '101')['stats']
+            self.assertEqual((s['week']['talks'], s['week']['success'], s['week']['hot']), (3, 1, 1))
+            self.assertEqual((s['prev']['talks'], s['prev']['success']), (2, 1))
+            self.assertEqual((s['dials']['dials'], s['dials']['answered']), (4, 3))
+            self.assertEqual(s['top'], {'key': 'no_callback_date', 'label': 'не закреплён день перезвона', 'n': 3})
+            self.assertIsNone(next(p for p in d['items'] if p['ext'] == 'head')['stats'])
+
+            p = await (await self.http.get('/api/person?person=101')).json()
+            self.assertEqual((p['name'], p['manager'], p['kitchen']), ('Первый', True, False))
+            self.assertEqual(p['periods']['month']['talks'], 6)
+            self.assertEqual(p['periods']['month']['outcomes'], {'callback_date': 2})
+            first = p['mistakes'][0]
+            self.assertEqual((first['key'], first['month'], first['week'], first['prev']), ('no_callback_date', 3, 2, 0))
+            self.assertEqual(first['examples'][0]['id'], lost_now)
+            self.assertEqual(p['mistakes'][1]['key'], 'lost_dmp')
+            self.assertEqual(p['positives'][0]['why'], 'Сразу назвал повод звонка.')
+            self.assertEqual(len(p['calls']), 6)
+            self.assertEqual(len(p['days']), 30)
+            self.assertEqual(sum(x['talks'] for x in p['days']), 6)
+            self.assertIn('access', p)
+            self.assertTrue((await (await self.http.get('/api/person?person=102')).json())['kitchen'])
+            head = await (await self.http.get('/api/person?person=head')).json()
+            self.assertEqual((head['manager'], 'periods' in head, head['access']['can_copy']), (False, False, True))
+            self.assertEqual((await self.http.get('/api/person?person=nobody')).status, 400)
+
+            # менеджер видит только свою карточку и без доступов
+            await self.http.get('/test-exit')
+            await self.enter('manager', ext='102')
+            p = await (await self.http.get('/api/person?person=101')).json()
+            self.assertEqual((p['ext'], 'access' in p), ('102', False))
+
     async def test_staff_invite_unlink_and_copies(self):
         import invites
         h = {'X-CRM': '1'}

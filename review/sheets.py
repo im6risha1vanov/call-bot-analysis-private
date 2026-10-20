@@ -1,4 +1,4 @@
-"""Зеркало в Google-таблицу: «Сводка», «По дням», «Звонки», «Перезвоны», «Все звонки».
+"""Зеркало в Google-таблицу: «Сводка», «По дням», «Звонки», «Перезвоны», «Все звонки», «Память менеджеров».
 
 Оформление в стиле таблицы владельца «Прозвон лидов»: Arial 10, тёмно-синяя
 шапка с белым жирным текстом, строки-разделители по датам, итоговая строка
@@ -24,6 +24,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from reports import fmt_phone
+from . import kitchen, memory
 from .callbacks import KIND_LABELS, STATUS_LABELS
 from .render import CATEGORY_LABELS, OUTCOME_LABELS
 
@@ -32,6 +33,7 @@ log = logging.getLogger(__name__)
 API = 'https://sheets.googleapis.com/v4/spreadsheets/'
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 SUMMARY_SHEET, DAYS_SHEET, CALLS_SHEET, TASKS_SHEET, ALL_SHEET = 'Сводка', 'По дням', 'Звонки', 'Перезвоны', 'Все звонки'
+MEMORY_SHEET = 'Память менеджеров'
 STALE_SHEETS = ('Клиенты',)  # лист неудачной версии от 07.10, бот убирает его сам
 HISTORY_DAYS = int(os.getenv('SHEETS_HISTORY_DAYS', '60'))
 SUMMARY_DAYS = 30
@@ -47,6 +49,7 @@ DAYS_HEADER = ['Дата', 'Разговоров', 'С результатом', 
 DAYS_WIDTHS = [110, 105, 115, 80, 140, 70, 140]
 SUMMARY_WIDTHS = [260, 110, 115, 100, 80, 140, 70, 110, 140, 120]
 ALL_WIDTHS = [95, 170, 95, 95, 105, 120, 85, 105, 120, 120]
+MEMORY_WIDTHS = [170, 60, 110, 110, 90, 110, 110, 300]
 INCOMING, OUTGOING = 1, 2  # context_type в Mango; 3 — внутренний, в статистику не идёт
 
 # Цвета как в образце: шапка #1F4E78, разделитель #D1D8E0, итог #CCCCCC.
@@ -263,6 +266,37 @@ def all_calls_table(rows, tz, min_seconds: int) -> Table:
     return table
 
 
+def memory_table(stats: dict, managers: list, tz, now: datetime) -> Table:
+    """Память по менеджерам: неделя к прошлой неделе и где теряется результат за 30 дней."""
+    table = Table(MEMORY_SHEET, MEMORY_WIDTHS, bold_column=0)
+    pct = lambda acc: f'{memory.share(acc)}%' if acc['talks'] else '—'  # noqa: E731
+    table.add(['Память менеджеров · последние 7 дней к предыдущим 7 дням'], 'title')
+    table.add(['Менеджер', 'Доб.', 'Разговоров за 7 дн.', 'С результатом', 'Доля', 'Доля пред. 7 дн.', 'Горячих потерь',
+               'Частая ошибка за 30 дн.'], 'header')
+    empty = {'week': memory.blank(), 'prev': memory.blank(), 'month': memory.blank(), 'example': {}}
+    for m in managers:
+        acc = stats.get(m['extension']) or empty
+        top = memory.top_category(acc['month']['categories'])
+        table.add([m['name'], m['extension'], acc['week']['talks'], acc['week']['success'], pct(acc['week']), pct(acc['prev']),
+                   acc['week']['hot'], f"{top['label']} · {top['n']}" if top else ''])
+    table.add([])
+    table.add([f'Где терялся результат за {memory.MONTH} дней, по менеджерам'], 'title')
+    table.add(['Менеджер', 'Доб.', 'За 30 дн.', 'За 7 дн.', 'За пред. 7 дн.', 'Пример: ID звонка', '', 'Где терялся результат'], 'header')
+    for m in managers:
+        acc = stats.get(m['extension']) or empty
+        ranked = memory.ranked(acc['month']['categories'])
+        if not ranked:
+            continue
+        table.add([f"{m['name']} · потеряно с шансом {acc['month']['lost']} из {acc['month']['talks']}"], 'section')
+        for key, n in ranked:
+            table.add([m['name'], m['extension'], n, acc['week']['categories'].get(key, 0), acc['prev']['categories'].get(key, 0),
+                       acc['example'].get(key, ''), '', CATEGORY_LABELS.get(key, key)])
+    table.add([])
+    table.add([f"Обновлено ботом {now.astimezone(tz).strftime('%d.%m.%Y %H:%M')} из разборов звонков. "
+               'Ольга идёт по своему скрипту и сюда не входит. Карточка бота и заметки РОПа появятся позже.'], 'note')
+    return table
+
+
 async def collect(pool, now: datetime | None = None) -> list[Table]:
     now = now or datetime.now(timezone.utc)
     since = now - timedelta(days=HISTORY_DAYS)
@@ -288,8 +322,14 @@ async def collect(pool, now: datetime | None = None) -> list[Table]:
                    ORDER BY (e.role='manager') DESC LIMIT 1) AS employee
            FROM calls c WHERE c.call_started_at >= $1 AND ($2::int IS NULL OR c.client_id=$2)""",
         since, client['id'] if client else None)
-    return [summary_table(calls, tasks, tz, today), days_table(calls, tz), calls_table(calls, tz), tasks_table(tasks, today),
-            all_calls_table(everything, tz, min_seconds)]
+    tables = [summary_table(calls, tasks, tz, today), days_table(calls, tz), calls_table(calls, tz), tasks_table(tasks, today),
+              all_calls_table(everything, tz, min_seconds)]
+    if client:
+        managers = [{'extension': r['extension'], 'name': r['full_name'] or f"Доб. {r['extension']}"} for r in await pool.fetch(
+            """SELECT extension, full_name FROM employees WHERE client_id=$1 AND role='manager' AND extension ~ '^[0-9]+$'
+               ORDER BY extension::int""", client['id']) if not kitchen.handles(r['extension'])]
+        tables.append(memory_table(await memory.periods(pool, client['id'], now), managers, tz, now))
+    return tables
 
 
 def token() -> str:

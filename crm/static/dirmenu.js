@@ -26,6 +26,7 @@
   const ITEMS = [
     {id: 'a:team', name: 'Сводка', icon: 'team', bar: true},
     {id: 'a:mgr', name: 'Менеджеры', icon: 'mgr', bar: true},
+    {id: 'w:staff', name: 'Сотрудники', icon: 'people'},
     {id: 'a:pipe', name: 'Воронка', icon: 'pipe'},
     {id: 'a:calls', name: 'Звонки', icon: 'calls', bar: true},
     {id: 'a:callbacks', name: 'Перезвоны', icon: 'callbacks', bar: true},
@@ -37,8 +38,7 @@
     {id: 'w:ask', name: 'Вопрос по отделу', icon: 'ask', more: true},
     {id: 'w:team', name: 'Очереди', icon: 'queue', more: true, label: 'Работа менеджеров'},
     {id: 'w:tasks', name: 'Перезвоны в CRM', icon: 'tasks', more: true},
-    {id: 'w:staff', name: 'Сотрудники', icon: 'people', more: true, label: 'Настройки'},
-    {id: 'w:robot', name: 'Робот', icon: 'robot', more: true},
+    {id: 'w:robot', name: 'Робот', icon: 'robot', more: true, label: 'Настройки'},
     {id: 'w:prompts', name: 'Промты', icon: 'pen', more: true},
     {id: 'w:access', name: 'Доступы', icon: 'key', more: true},
   ];

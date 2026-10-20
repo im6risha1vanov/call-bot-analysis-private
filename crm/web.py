@@ -22,7 +22,7 @@ from aiohttp import web  # noqa: E402
 
 import mango_client  # noqa: E402
 from tools import Forbidden, is_privileged  # noqa: E402
-from . import ask as asking, auth, cabinet, gsheets, journal, recording, reviews, staff, store, training  # noqa: E402
+from . import ask as asking, auth, cabinet, gsheets, journal, people, recording, reviews, staff, store, training  # noqa: E402
 from . import prompts as prompt_mode, robot, robot_api, robot_runner  # noqa: E402
 from review import store as review_store  # noqa: E402
 from .dial import dial  # noqa: E402
@@ -445,7 +445,19 @@ async def api_access_revoke(request):
 
 async def api_staff(request):
     who = await director(request)
-    return web.json_response(await staff.listing(request.app[POOL], who.actor))
+    pool = request.app[POOL]
+    data = await staff.listing(pool, who.actor)
+    stats = await people.summary(pool, who.actor.client_id)
+    for item in data['items']:
+        item['stats'] = stats.get(item['ext']) if item['role'] == 'manager' else None
+        item['kitchen'] = people.review_kitchen.handles(item['ext'])
+    return web.json_response(data)
+
+
+async def api_person(request):
+    """Карточка сотрудника. Директор выбирает человека (?person=), менеджер видит только себя."""
+    who = await actor(request)
+    return web.json_response(await people.card(request.app[POOL], who, request.query.get('person')))
 
 
 async def api_staff_add(request):
@@ -662,6 +674,7 @@ def build(pool) -> web.Application:
     app.router.add_post('/api/access', api_access_create)
     app.router.add_post('/api/access/{id}/revoke', api_access_revoke)
     app.router.add_get('/api/staff', api_staff)
+    app.router.add_get('/api/person', api_person)
     app.router.add_post('/api/staff', api_staff_add)
     app.router.add_post('/api/staff/{action}', api_staff_action)
     app.router.add_get('/api/prompts', api_prompts)
