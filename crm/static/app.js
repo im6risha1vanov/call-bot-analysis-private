@@ -90,6 +90,7 @@ const ICON = {
   robot: '<rect x="5" y="8" width="14" height="11" rx="3"/><path d="M12 4v4M9 13h.01M15 13h.01M9.5 16.5h5"/>',
   pen: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>',
   deal: '<path d="M3 4h18l-7 8v6l-4 2v-8z"/>',
+  doc: '<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 12h7M9 16h7M9 20h3"/>',
   star: '<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/>',
   source: '<circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5M11 8v6M8 11h6"/>',
 };
@@ -103,6 +104,7 @@ const PAGES = [
   {id: 'leads', name: 'База', icon: 'leads', roles: STAFF},
   {id: 'sources', name: 'Источники', icon: 'source', roles: STAFF},
   {id: 'deals', name: 'Сделки', icon: 'deal', roles: STAFF},
+  {id: 'contracts', name: 'Договоры', icon: 'doc', roles: STAFF},
   {id: 'calls', name: 'Звонки', icon: 'calls', roles: STAFF},
   {id: 'stats', name: 'Итоги', icon: 'stats', roles: STAFF},
   {id: 'reports', name: 'Отчёты', icon: 'report', roles: STAFF},
@@ -1346,12 +1348,59 @@ async function dealCard(ph) {
         <div class="rvm-q">${d.lost.auto ? 'CRM поставила сама по последнему разговору. Если это не так, нажмите «Снова в работе».' : 'Отмечено ' + esc(when(d.lost.at))}</div></div>` : ''}
       ${d.advice ? `<div><h3>Что дальше</h3><div class="rvm-say">${esc(d.advice)}</div></div>` : ''}
       ${d.missing.length && d.status === 'active' ? `<div><h3>Для договора не хватает</h3><div>${d.missing.map(m => `<span class="chip warn">${esc(m)}</span>`).join(' ')}</div></div>` : ''}
+      ${d.contracts.length ? `<div><h3>Договоры</h3>${d.contracts.map(c => `<div>${esc(contractTitle(c))}${c.by ? ` <span class="rvm-mut">· ${esc(c.by)}</span>` : ''}</div>`).join('')}</div>` : ''}
       ${ro ? '' : `<div><h3>Отметить</h3><div class="row chips">${acts.map(([k, t]) => `<button class="btn small${k === 'lost' ? ' danger' : ''}" data-ev="${k}">${t}</button>`).join('')}
-        <button class="btn small" data-ev="note">Заметка</button></div><div id="deal-form"></div></div>`}
+        <button class="btn small" data-ev="note">Заметка</button><button class="btn small" data-contract>Составить договор</button></div><div id="deal-form"></div></div>`}
       <div><h3>История</h3>${dealTimeline([...d.timeline].reverse()) || '<div class="rvm-mut">Пусто.</div>'}</div>
     </div>`;
   $$('[data-ev]', box).forEach(b => b.addEventListener('click', () => dealForm(box, d, b.dataset.ev)));
+  $('[data-contract]', box)?.addEventListener('click', () => {
+    S.contractDeal = {phone: d.phone, number: d.number, title: dealName(d) + (d.company ? ' · ' + phone(d.number) : ''), missing: d.missing};
+    $('.rvm-x', box).click();
+    openPage('contracts');
+  });
 }
+
+// ---------- договоры: генератор .docx (static/contracts/) и журнал ----------
+const CONTRACT_JS = ['pizzip.min.js', 'docxtemplater.min.js', 'logic.js', 'generator.js'];
+let contractJs = null;
+function contractScripts() {
+  // Библиотеки весят ~200 КБ, поэтому грузим их только при открытии раздела.
+  contractJs = contractJs || CONTRACT_JS.reduce((p, name) => p.then(() => new Promise((ok, fail) => {
+    const el = document.createElement('script');
+    el.src = '/static/contracts/' + name;
+    el.onload = ok;
+    el.onerror = () => { contractJs = null; fail(new Error('Генератор договоров не загрузился. Обновите страницу.')); };
+    document.head.appendChild(el);
+  })), Promise.resolve());
+  return contractJs;
+}
+const contractTitle = c => `${c.type_title}${c.num ? ' № ' + c.num : c.base_num ? ' к № ' + c.base_num : ''}${c.date ? ' от ' + ddmm(c.date) + '.' + c.date.slice(0, 4) : ''}${c.amount ? ' · ' + rub(c.amount) : ''}`;
+
+VIEWS.contracts = async view => {
+  await contractScripts();
+  const deal = S.contractDeal || null;
+  S.contractDeal = null;
+  view.innerHTML = `<div id="ct-gen"></div><div class="panel" id="ct-log"><p class="muted">Загружаю журнал…</p></div>`;
+  const journal = async () => {
+    const d = await api('/api/contracts', {scoped: false});
+    const box = $('#ct-log', view);
+    if (!box) return;
+    box.innerHTML = `<h2>Журнал договоров <span class="muted">· ${d.items.length}</span></h2>
+      ${d.items.length ? `<div class="scroll"><table class="tbl"><thead><tr><th class="n">№</th><th>Договор</th><th>Клиент</th><th class="hide-m">ИНН</th><th class="n">Сумма</th><th class="hide-m">Оформил</th></tr></thead><tbody>
+      ${d.items.map(c => `<tr${c.phone ? ` class="click" data-deal="${esc(c.phone)}"` : ''}><td class="n">${c.num ?? '—'}</td>
+        <td>${esc(c.type_title)}${c.base_num ? ` к № ${esc(c.base_num)}` : ''}<div class="muted">${c.date ? esc(ddmm(c.date) + '.' + c.date.slice(0, 4)) : ''}${c.tariff ? ' · ' + esc(c.tariff) : ''}</div></td>
+        <td>${esc(c.company || '')}${c.phone ? '<div class="muted">сделка →</div>' : ''}</td><td class="hide-m num">${esc(c.inn || '')}</td>
+        <td class="n">${c.amount ? rub(c.amount) : ''}</td><td class="hide-m">${esc(c.by || '')}<div class="muted">${esc(when(c.created_at))}</div></td></tr>`).join('')}
+      </tbody></table></div>` : '<p class="muted">Договоров пока нет. Оформленный здесь договор попадёт в журнал с номером.</p>'}`;
+    $$('[data-deal]', box).forEach(tr => tr.addEventListener('click', () => dealCard(tr.dataset.deal)));
+  };
+  await window.ContractGenerator.mount($('#ct-gen', view), {
+    api: (path, o = {}) => api(path, {...o, scoped: false}), deal, readonly: S.me.readonly,
+    onDone: () => journal().catch(e => toast(e.message, true)),
+  });
+  await journal();
+};
 
 function dealForm(box, d, kind) {
   const form = $('#deal-form', box);
