@@ -25,8 +25,7 @@
   // bar — пункт нижней полоски на телефоне; more — под «Ещё»; label — подпись группы внутри «Ещё».
   const ITEMS = [
     {id: 'a:team', name: 'Сводка', icon: 'team', bar: true},
-    {id: 'a:mgr', name: 'Менеджеры', icon: 'mgr', bar: true},
-    {id: 'w:staff', name: 'Сотрудники', icon: 'people'},
+    {id: 'w:staff', name: 'Сотрудники', icon: 'people', bar: true},
     {id: 'a:pipe', name: 'Воронка', icon: 'pipe'},
     {id: 'a:calls', name: 'Звонки', icon: 'calls', bar: true},
     {id: 'a:callbacks', name: 'Перезвоны', icon: 'callbacks', bar: true},
@@ -43,7 +42,8 @@
     {id: 'w:access', name: 'Доступы', icon: 'key', more: true},
   ];
   // Разделы работы отдела, которые открываются из меню не напрямую (очередь менеджера из «Очередей»).
-  const ALIAS = {'w:queue': 'w:team', 'w:leads': 'w:team', 'w:calls': 'w:team', 'w:stats': 'w:team'};
+  // «Менеджеры» аналитики объединены с «Сотрудниками»: старая ссылка ведёт в карточки сотрудников.
+  const ALIAS = {'w:queue': 'w:team', 'w:leads': 'w:team', 'w:calls': 'w:team', 'w:stats': 'w:team', 'a:mgr': 'w:staff', 'w:me': 'w:staff'};
   const svg = k => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[k]}</svg>`;
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
   const store = {

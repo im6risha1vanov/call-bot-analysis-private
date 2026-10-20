@@ -101,9 +101,20 @@
 
   // ---- одно меню директора (static/dirmenu.js) вместо меню страницы ----
   // /director#раздел — ссылка из меню на страницах работы отдела: страница откроет этот раздел.
-  const asked = decodeURIComponent(location.hash.slice(1));
-  if (asked) {
-    try { localStorage.setItem('avr-page', asked); } catch (e) { /* без хранилища */ }
+  const [asked, hashQuery] = decodeURIComponent(location.hash.slice(1)).split('?');
+  let saved = null;
+  try { saved = localStorage.getItem('avr-page'); } catch (e) { /* без хранилища */ }
+  // Раздел «Менеджеры» объединён с «Сотрудниками» в работе отдела.
+  if (asked === 'mgr' || (!asked && saved === 'mgr')) {
+    try { localStorage.setItem('avr-page', 'team'); } catch (e) { /* без хранилища */ }
+    location.replace('/?work#staff');
+  } else if (asked) {
+    try {
+      localStorage.setItem('avr-page', asked);
+      // #pipe?m=Имя — воронка одного менеджера (кнопка из карточки сотрудника).
+      const m = new URLSearchParams(hashQuery || '').get('m');
+      if (m) sessionStorage.setItem('avr-pipe-m', m);
+    } catch (e) { /* без хранилища */ }
     history.replaceState(null, '', location.pathname);
   }
   meReady.then(m => {

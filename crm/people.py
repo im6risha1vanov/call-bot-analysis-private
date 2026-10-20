@@ -33,13 +33,14 @@ async def dial_rows(pool, client_id: int, since: datetime, ext: str | None = Non
 
 
 def dials(rows, min_seconds: int, since: datetime, until: datetime | None = None) -> dict:
-    out = {'dials': 0, 'answered': 0, 'talks': 0}
+    out = {'dials': 0, 'answered': 0, 'talks': 0, 'seconds': 0}
     for r in rows:
         if r['call_started_at'] < since or (until and r['call_started_at'] >= until):
             continue
         out['dials'] += 1
         out['answered'] += r['seconds'] > 0
         out['talks'] += r['seconds'] >= min_seconds
+        out['seconds'] += r['seconds']
     return out
 
 

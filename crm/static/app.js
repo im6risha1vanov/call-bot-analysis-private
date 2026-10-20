@@ -814,15 +814,15 @@ VIEWS.staff = async view => {
   const mRow = p => {
     const s = p.stats || {week: {talks: 0, success: 0}, prev: {talks: 0, success: 0}, dials: {dials: 0}, top: null};
     const head = `<tr class="click" data-person="${esc(p.ext)}"><td><b>${esc(p.name)}</b> <span class="muted">· ${esc(p.ext)}</span></td>
-      <td class="n">${s.dials.dials}</td>`;
-    if (p.kitchen) return `${head}<td colspan="3" class="muted">разбирается по своему скрипту (кухни)</td><td>${botChip(p)}</td></tr>`;
-    return `${head}<td class="n">${s.week.talks}</td>
+      <td class="n hide-m">${s.dials.dials}</td>`;
+    if (p.kitchen) return `${head}<td class="hide-m"></td><td class="muted">свой скрипт (кухни)</td><td class="hide-m"></td><td>${botChip(p)}</td></tr>`;
+    return `${head}<td class="n hide-m">${s.week.talks}</td>
       <td class="n">${s.week.success} <span class="muted">${pctTxt(s.week.success, s.week.talks)}</span> ${trend(s.week, s.prev)}</td>
       <td class="hide-m">${s.top ? `${esc(s.top.label)} <span class="muted">· ${s.top.n}</span>` : '<span class="muted">—</span>'}</td>
       <td>${botChip(p)}</td></tr>`;
   };
   view.innerHTML = `<div class="panel"><h2>Менеджеры <span class="muted">· ${managers.length}</span></h2>
-      <div class="scroll"><table class="tbl"><thead><tr><th>Кто</th><th class="n">Наборов за 7 дн.</th><th class="n">Разговоров разобрано</th>
+      <div class="scroll"><table class="tbl"><thead><tr><th>Кто</th><th class="n hide-m">Наборов за 7 дн.</th><th class="n hide-m">Разговоров разобрано</th>
         <th class="n">С результатом</th><th class="hide-m">Частая ошибка за 30 дн.</th><th>Бот</th></tr></thead><tbody>
       ${managers.map(mRow).join('') || '<tr><td colspan="6" class="muted">Менеджеров нет.</td></tr>'}</tbody></table></div>
       <p class="muted">Нажмите на человека, чтобы открыть его карточку: цифры, ошибки, звонки, тренировки, перезвоны, доступы. Стрелка показывает, как изменилась доля разговоров с результатом к прошлой неделе.</p></div>
@@ -886,7 +886,7 @@ const PERSON_TAB = {
     const max = Math.max(1, ...p.days.map(d => d.talks));
     const outs = Object.entries(m.outcomes).sort((a, b) => b[1] - a[1]);
     el.innerHTML = `${kitchenNote(p)}<div class="kpis">
-        <div class="kpi"><b>${dw.dials}</b><span>наборов за 7 дней · дозвон ${pctTxt(dw.answered, dw.dials)}</span></div>
+        <div class="kpi"><b>${dw.dials}</b><span>наборов за 7 дней · дозвон ${pctTxt(dw.answered, dw.dials)} · на линии ${hm(dw.seconds)}</span></div>
         <div class="kpi"><b>${w.talks}</b><span>разговоров разобрано · прошлая неделя ${pr.talks}</span></div>
         <div class="kpi"><b>${w.success} <small>${pctTxt(w.success, w.talks)}</small></b><span>с результатом ${trend(w, pr) || ''} · прошлая неделя ${pr.success} (${pctTxt(pr.success, pr.talks)})</span></div>
         <div class="kpi"><b>${w.hot}</b><span>горячих потерь за 7 дней</span></div></div>
@@ -902,7 +902,8 @@ const PERSON_TAB = {
           <p class="muted">Зелёным разговоры с результатом, серым без результата, за 30 дней.</p>` : '<div class="empty">Разобранных разговоров за 30 дней нет.</div>'}</div></div>
       <div class="stack">
         <div class="panel"><h2>Результаты за 30 дней <span class="muted">· ${m.success} из ${m.talks}</span></h2>${outs.length ? `<table class="tbl"><tbody>${outs.map(([k, n]) =>
-            `<tr><td>${esc(p.outcome_labels[k] || k)}</td><td class="n">${n}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Пока нет.</div>'}</div>
+            `<tr><td>${esc(p.outcome_labels[k] || k)}</td><td class="n">${n}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Пока нет.</div>'}
+          ${S.me.role === 'director' ? `<a class="btn small" href="/director#pipe?m=${encodeURIComponent(p.name)}">Его клиенты в воронке →</a>` : ''}</div>
         <div class="panel"><h2>Что получается</h2>${p.positives.length ? `<div class="list">${p.positives.map(x =>
             `<div class="p-pos"><span>${esc(x.why)}</span> <button class="btn small" data-review="${x.id}">${esc(when(x.at))}</button></div>`).join('')}</div>` : '<div class="empty">Пока нет отмеченных удачных мест.</div>'}</div>
       </div></div>`;
