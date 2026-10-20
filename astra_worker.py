@@ -34,7 +34,7 @@ from crypto_util import decrypt
 from reports import esc, send_long
 from tools import owner_chat_ids, report_chat_ids
 from crm import journal as crm_journal
-from review import callbacks as review_callbacks, engine as review_engine, kitchen as review_kitchen, render as review_render, sheets as review_sheets, store as review_store
+from review import callbacks as review_callbacks, engine as review_engine, kitchen as review_kitchen, memory as review_memory, render as review_render, sheets as review_sheets, store as review_store
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("callbot-astra-worker")
@@ -618,6 +618,11 @@ async def main() -> None:
                 await maybe_send_digests(pool)
                 if review_engine.enabled():
                     await review_callbacks.maybe_send(pool, bot)
+                    try:
+                        # Раз в день после 19:00: карточки памяти по менеджерам (MANAGER_MEMORY=on).
+                        await review_memory.maybe_update(pool)
+                    except Exception:
+                        log.exception("не удалось обновить память по менеджерам")
                 await maybe_enqueue_rop_digests(pool)
                 await maybe_enqueue_oversight_report(pool)
                 last_sweep = now

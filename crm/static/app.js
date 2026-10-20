@@ -839,7 +839,7 @@ VIEWS.staff = async view => {
       <div id="s-out"></div>
       <p class="muted">Менеджеров из Mango бот добавляет сам. С ником хватит простого /start в боте, ссылка нужна на случай, если ника нет. Ссылка одноразовая и действует 7 дней.
         Руководитель получает отчёты по отделу и горячие потери; копии всех разборов включаются в его карточке.</p></div>`;
-  $$('[data-person]', view).forEach(tr => tr.addEventListener('click', () => { S.person = tr.dataset.person; S.personTab = null; go('staff'); }));
+  $$('[data-person]', view).forEach(tr => tr.addEventListener('click', () => { S.person = tr.dataset.person; S.personTab = null; S.memIdx = 0; go('staff'); }));
   const role = $('#s-role', view);
   role.addEventListener('change', () => { $('#s-ext-f', view).hidden = role.value !== 'manager'; });
   $('#s-go', view).addEventListener('click', async () => {
@@ -855,7 +855,7 @@ VIEWS.staff = async view => {
 // Своя карточка менеджера: то же, что видит руководитель, кроме доступов.
 VIEWS.me = async view => personView(view, null);
 
-const PERSON_TABS = [['over', 'Обзор'], ['calls', 'Звонки и разборы'], ['train', 'Тренировки'], ['tasks', 'Перезвоны'], ['access', 'Доступ и бот']];
+const PERSON_TABS = [['over', 'Обзор'], ['memory', 'Память'], ['calls', 'Звонки и разборы'], ['train', 'Тренировки'], ['tasks', 'Перезвоны'], ['access', 'Доступ и бот']];
 
 async function personView(view, ext) {
   const p = await api('/api/person' + (ext ? '?person=' + encodeURIComponent(ext) : ''), {scoped: false});
@@ -867,14 +867,48 @@ async function personView(view, ext) {
     ${tabs.length > 1 ? `<div class="filters">${tabs.map(([k, t]) => `<button data-ptab="${k}" aria-pressed="${tab === k}">${t}</button>`).join('')}</div>` : ''}
     <div id="p-body"></div>`;
   if (back) $('#p-back', view).addEventListener('click', () => { S.person = null; go('staff'); });
-  $$('[data-ptab]', view).forEach(b => b.addEventListener('click', () => { S.personTab = b.dataset.ptab; personView(view, ext); }));
-  const body = $('#p-body', view);
-  PERSON_TAB[tab](body, p, () => personView(view, ext));
+  PERSON_TAB[tab]($('#p-body', view), p, () => personView(view, ext));
+  $$('[data-ptab]', view).forEach(b => b.addEventListener('click', () => { S.personTab = b.dataset.ptab; S.memIdx = 0; personView(view, ext); }));
 }
 
 const kitchenNote = p => p.kitchen ? '<div class="panel muted">Звонки этого сотрудника бот разбирает по отдельному скрипту (кухни), поэтому разговоров, результатов и ошибок здесь нет. Наборы, перезвоны и тренировки показываются как у всех.</div>' : '';
 
+const exBtns = list => (list || []).map(c => `<button class="btn small" data-review="${c.id}">${esc(c.at ? when(c.at) : 'звонок ' + c.id)}</button>`).join('');
+const RESULT_CHIP = {'получилось': 'good', 'частично': 'warn', 'не получилось': 'bad'};
+
+function memoryCard(c, latest) {
+  const weak = c.weak_spots || [], good = c.strengths || [];
+  const counts = x => x.counts ? `<span class="muted">за 30 дн. ${x.counts.month} · за 7 дн. ${x.counts.week} · неделей раньше ${x.counts.prev}</span>` : '';
+  return `${c.focus || c.trend ? `<div class="panel mem-focus">
+      ${c.focus ? `<div class="mem-label">Фокус на ближайшие дни</div><div class="mem-big">${esc(c.focus)}</div>` : ''}
+      ${c.previous_focus ? `<p class="muted">Прошлый фокус: «${esc(c.previous_focus)}»${c.focus_result ? ` <span class="chip ${RESULT_CHIP[c.focus_result] || ''}">${esc(c.focus_result)}</span>` : ''}</p>` : ''}
+      ${c.trend ? `<p>${esc(c.trend)}</p>` : ''}</div>` : ''}
+    <div class="grid2"><div class="panel"><h2>Слабые места <span class="muted">· ${weak.length}</span></h2>
+      ${weak.length ? weak.map((x, i) => `<div class="mem-item">
+        <div class="mem-title"><b>${i + 1}. ${esc(x.title)}</b> ${counts(x)}</div>
+        ${x.pattern ? `<p>${esc(x.pattern)}</p>` : ''}
+        ${x.advice ? `<p class="mem-say">Как лучше: ${esc(x.advice)}</p>` : ''}
+        ${x.examples.length ? `<div class="p-ex">${exBtns(x.examples)}</div>` : ''}</div>`).join('') : '<div class="empty">Слабых мест бот не выделил.</div>'}</div>
+    <div class="panel"><h2>Что получается</h2>${good.length ? good.map(x => `<div class="p-pos"><span>${esc(x.title)}</span> ${exBtns(x.examples)}</div>`).join('')
+      : '<div class="empty">Пока не отмечено.</div>'}
+      <p class="muted">Карточка от ${esc(ddmm(c.day))}${latest ? '' : ' (старая версия)'} по ${c.talks} ${plural(c.talks, 'разговору', 'разговорам', 'разговорам')} за 30 дней. Кнопки с датой открывают разбор и запись звонка.</p></div></div>`;
+}
+
 const PERSON_TAB = {
+  memory(el, p) {
+    if (p.kitchen) { el.innerHTML = kitchenNote(p); return; }
+    const cards = p.memory || [];
+    const pick = Math.min(S.memIdx || 0, Math.max(cards.length - 1, 0));
+    if (!cards.length) {
+      el.innerHTML = `<div class="panel empty">${p.memory_on ? `Бот пишет карточку памяти каждый день после ${p.memory_hour}:00, если у менеджера были новые разборы. Первая появится сегодня вечером.`
+        : 'Память включится после выкладки: бот будет писать карточку каждый день после 19:00.'}<br>Пока можно смотреть частые ошибки по цифрам на вкладке «Обзор».</div>`;
+      return;
+    }
+    el.innerHTML = memoryCard(cards[pick], pick === 0) + (cards.length > 1 ? `<div class="panel"><h2>История памяти <span class="muted">· ${cards.length}</span></h2><div class="scroll"><table class="tbl"><tbody>
+      ${cards.map((c, i) => `<tr class="click${i === pick ? ' mem-cur' : ''}" data-mem="${i}"><td>${esc(ddmm(c.day))}</td><td>${esc(c.focus || c.trend || '')}</td>
+        <td>${c.focus_result ? `<span class="chip ${RESULT_CHIP[c.focus_result] || ''}">${esc(c.focus_result)}</span>` : ''}</td></tr>`).join('')}</tbody></table></div></div>` : '');
+    $$('[data-mem]', el).forEach(tr => tr.addEventListener('click', () => { S.memIdx = +tr.dataset.mem; PERSON_TAB.memory(el, p); window.scrollTo(0, 0); }));
+  },
   over(el, p) {
     if (p.kitchen) {
       const d = p.dials;
@@ -885,7 +919,9 @@ const PERSON_TAB = {
     const w = p.periods.week, pr = p.periods.prev, m = p.periods.month, dw = p.dials.week;
     const max = Math.max(1, ...p.days.map(d => d.talks));
     const outs = Object.entries(m.outcomes).sort((a, b) => b[1] - a[1]);
-    el.innerHTML = `${kitchenNote(p)}<div class="kpis">
+    const mem = (p.memory || [])[0];
+    el.innerHTML = `${mem && mem.focus ? `<div class="panel mem-focus row"><span><span class="mem-label">Фокус от бота · ${esc(ddmm(mem.day))}</span> ${esc(mem.focus)}</span>
+        <button class="btn small" data-ptab="memory">Слабые места →</button></div>` : ''}<div class="kpis">
         <div class="kpi"><b>${dw.dials}</b><span>наборов за 7 дней · дозвон ${pctTxt(dw.answered, dw.dials)} · на линии ${hm(dw.seconds)}</span></div>
         <div class="kpi"><b>${w.talks}</b><span>разговоров разобрано · прошлая неделя ${pr.talks}</span></div>
         <div class="kpi"><b>${w.success} <small>${pctTxt(w.success, w.talks)}</small></b><span>с результатом ${trend(w, pr) || ''} · прошлая неделя ${pr.success} (${pctTxt(pr.success, pr.talks)})</span></div>

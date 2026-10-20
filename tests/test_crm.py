@@ -116,10 +116,10 @@ class DBCase(unittest.IsolatedAsyncioTestCase):
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS assigned_by_telegram_user_id BIGINT;""")
         for name in ('008_call_reviews.sql', '009_callback_tasks.sql', '012_prompt_versions.sql', '013_employee_invites.sql',
                      '014_crm.sql', '015_crm_roles.sql', '016_crm_access.sql', '017_crm_reports.sql', '018_crm_questions.sql',
-                     '019_crm_staff.sql'):
+                     '019_crm_staff.sql', '021_manager_memory.sql'):
             await self.pool.execute((root / 'migrations' / name).read_text())
         await self.pool.execute('TRUNCATE clients, crm_login_tokens, crm_sessions, crm_docs, crm_invites, crm_reports, crm_questions, '
-                                'employee_invites, prompt_active, prompt_versions, prompt_drafts, astra_daily_spend CASCADE')
+                                'employee_invites, manager_memory, prompt_active, prompt_versions, prompt_drafts, astra_daily_spend CASCADE')
         from crypto_util import encrypt
         await self.pool.execute("INSERT INTO clients(id,timezone,processing_enabled,vpbx_api_key_enc,vpbx_api_salt_enc) "
                                 "VALUES(1,'Europe/Moscow',true,$1,$2)", encrypt('key'), encrypt('salt'))
@@ -610,6 +610,54 @@ class WebTests(DBCase):
             await self.enter('manager', ext='102')
             p = await (await self.http.get('/api/person?person=101')).json()
             self.assertEqual((p['ext'], 'access' in p), ('102', False))
+
+    async def test_manager_memory_card(self):
+        from review import memory
+        lost = [await self.add_review('101', LOST, f'{h} hours') for h in (1, 2, 3, 4)]
+        won = await self.add_review('101', {**WON, 'positives': [{'timecode': '00:01', 'speaker': 'manager', 'quote': 'x',
+                                                                   'why': 'Сразу назвал повод звонка.'}]}, '5 hours')
+        await self.add_review('102', LOST, '1 hour')
+        seen = []
+
+        async def fake_call(system, user, max_tokens):
+            seen.append(json.loads(user))
+            return {'weak_spots': [{'category': 'no_callback_date', 'title': 'Не закрепляет день перезвона',
+                                    'pattern': 'Соглашается на «перезвоните позже».', 'advice': 'Спросите: «Завтра в 11 удобно?»',
+                                    'examples': [lost[0], 999999, str(lost[1]), lost[2]]},
+                                   {'category': 'made_up', 'title': 'Общее', 'examples': []},
+                                   {'title': ''}],
+                    'strengths': [{'title': 'Сразу называет повод', 'examples': [won]}],
+                    'focus': 'Закреплять день и время перезвона.', 'trend': 'Сравнить не с чем.', 'focus_result': 'получилось'}, 0.5
+
+        with patch.dict(os.environ, {'MANAGER_MEMORY': 'on', 'MANAGER_MEMORY_HOUR': '19', 'KITCHEN_EXTENSIONS': '102'}):
+            evening = datetime.now(ZoneInfo('Europe/Moscow')).replace(hour=19, minute=30).astimezone(timezone.utc)
+            morning = evening.replace(hour=5)
+            self.assertEqual(await memory.maybe_update(self.pool, morning, fake_call), 0)  # до 19:00 не трогаем
+            self.assertEqual(await memory.maybe_update(self.pool, evening, fake_call), 1)  # Ольга (102) не входит
+            self.assertEqual(seen[0]['менеджер'], 'Первый')
+            self.assertEqual(seen[0]['цифры']['30 дней']['разговоров'], 5)
+            self.assertEqual(len(seen[0]['потерянные разговоры (сначала новые)']), 4)
+            self.assertEqual(await memory.maybe_update(self.pool, evening, fake_call), 0)  # на сегодня уже есть
+            card = memory.loads((await memory.latest(self.pool, 1, '101'))['card'])
+            first = card['weak_spots'][0]
+            self.assertEqual(first['examples'], [lost[0], lost[1]])  # чужие ID отброшены, не больше двух
+            self.assertEqual(first['counts'], {'month': 4, 'week': 4, 'prev': 0})  # количества считает код
+            self.assertEqual((card['weak_spots'][1]['category'], card['weak_spots'][1]['counts']), ('other', None))
+            self.assertEqual(len(card['weak_spots']), 2)
+            self.assertIsNone(card['focus_result'])  # прошлой карточки не было
+            self.assertEqual(await self.pool.fetchval('SELECT sum(spent_units) FROM astra_daily_spend'), 0.5)
+
+            # мало разговоров: модель не зовём
+            empty = await memory.update(self.pool, 1, '103', 'Новый', call=AsyncMock(side_effect=AssertionError))
+            self.assertEqual((empty['weak_spots'], empty['focus']), ([], None))
+
+            await self.director()
+            p = await (await self.http.get('/api/person?person=101')).json()
+            self.assertTrue(p['memory_on'])
+            mem = p['memory'][0]
+            self.assertEqual((mem['talks'], mem['focus']), (5, 'Закреплять день и время перезвона.'))
+            self.assertEqual(mem['weak_spots'][0]['examples'][0]['id'], lost[0])
+            self.assertTrue(mem['weak_spots'][0]['examples'][0]['at'])
 
     async def test_staff_invite_unlink_and_copies(self):
         import invites

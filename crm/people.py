@@ -136,8 +136,24 @@ async def card(pool, actor, ext, now: datetime | None = None) -> dict:
         'calls': [call_item(r, tz) for r in rows[:60]],
         'tasks': (await store.tasks(pool, actor.client_id, ext))['items'][:50],
         'trainings': await training.listing(pool, actor, ext),
+        'memory': await memory_view(pool, actor.client_id, ext, tz),
+        'memory_on': memory.enabled(),
+        'memory_hour': memory.hour(),
     })
     return out
+
+
+async def memory_view(pool, client_id: int, ext: str, tz) -> list[dict]:
+    """Карточки памяти от новой к старой; у примеров дата звонка для кнопки."""
+    cards = [{'day': r['day'].isoformat(), 'talks': r['talks'], **memory.loads(r['card'])}
+             for r in await memory.history(pool, client_id, ext)]
+    ids = {i for c in cards for x in c.get('weak_spots', []) + c.get('strengths', []) for i in x.get('examples') or []}
+    at = {r['id']: store.fmt_dt(r['call_started_at'], tz) for r in await pool.fetch(
+        'SELECT id, call_started_at FROM calls WHERE id = ANY($1::bigint[])', list(ids))} if ids else {}
+    for c in cards:
+        for x in c.get('weak_spots', []) + c.get('strengths', []):
+            x['examples'] = [{'id': i, 'at': at.get(i)} for i in x.get('examples') or []]
+    return cards
 
 
 async def access(pool, actor, person: dict) -> dict:

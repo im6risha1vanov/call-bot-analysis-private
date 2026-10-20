@@ -49,7 +49,7 @@ DAYS_HEADER = ['Дата', 'Разговоров', 'С результатом', 
 DAYS_WIDTHS = [110, 105, 115, 80, 140, 70, 140]
 SUMMARY_WIDTHS = [260, 110, 115, 100, 80, 140, 70, 110, 140, 120]
 ALL_WIDTHS = [95, 170, 95, 95, 105, 120, 85, 105, 120, 120]
-MEMORY_WIDTHS = [170, 60, 110, 110, 90, 110, 110, 300]
+MEMORY_WIDTHS = [170, 60, 110, 110, 90, 110, 110, 420, 320]
 INCOMING, OUTGOING = 1, 2  # context_type в Mango; 3 — внутренний, в статистику не идёт
 
 # Цвета как в образце: шапка #1F4E78, разделитель #D1D8E0, итог #CCCCCC.
@@ -266,19 +266,43 @@ def all_calls_table(rows, tz, min_seconds: int) -> Table:
     return table
 
 
-def memory_table(stats: dict, managers: list, tz, now: datetime) -> Table:
-    """Память по менеджерам: неделя к прошлой неделе и где теряется результат за 30 дней."""
+def memory_table(stats: dict, managers: list, tz, now: datetime, cards: dict | None = None) -> Table:
+    """Память по менеджерам: неделя к прошлой неделе, слабые места из карточки бота и где теряется результат за 30 дней."""
+    cards = cards or {}
     table = Table(MEMORY_SHEET, MEMORY_WIDTHS, bold_column=0)
     pct = lambda acc: f'{memory.share(acc)}%' if acc['talks'] else '—'  # noqa: E731
     table.add(['Память менеджеров · последние 7 дней к предыдущим 7 дням'], 'title')
     table.add(['Менеджер', 'Доб.', 'Разговоров за 7 дн.', 'С результатом', 'Доля', 'Доля пред. 7 дн.', 'Горячих потерь',
-               'Частая ошибка за 30 дн.'], 'header')
+               'Частая ошибка за 30 дн.', 'Фокус от бота'], 'header')
     empty = {'week': memory.blank(), 'prev': memory.blank(), 'month': memory.blank(), 'example': {}}
     for m in managers:
         acc = stats.get(m['extension']) or empty
         top = memory.top_category(acc['month']['categories'])
         table.add([m['name'], m['extension'], acc['week']['talks'], acc['week']['success'], pct(acc['week']), pct(acc['prev']),
-                   acc['week']['hot'], f"{top['label']} · {top['n']}" if top else ''])
+                   acc['week']['hot'], f"{top['label']} · {top['n']}" if top else '',
+                   (cards.get(m['extension']) or {}).get('focus') or ''])
+    if cards:
+        table.add([])
+        table.add(['Слабые места и сильные стороны (карточка бота)'], 'title')
+        table.add(['Менеджер', 'Доб.', 'За 30 дн.', 'За 7 дн.', 'За пред. 7 дн.', 'Пример: ID звонка', 'Карточка от',
+                   'Слабое место / что получается', 'Как лучше'], 'header')
+        for m in managers:
+            card = cards.get(m['extension'])
+            if not card:
+                continue
+            day = card['day'].strftime('%d.%m.%Y')
+            table.add([f"{m['name']} · фокус: {card.get('focus') or '—'}"
+                       + (f" · прошлый фокус: {card['focus_result']}" if card.get('focus_result') else '')], 'section')
+            for w in card.get('weak_spots') or []:
+                c = w.get('counts') or {}
+                text = w['title'] + (f". {w['pattern']}" if w.get('pattern') else '')
+                table.add([m['name'], m['extension'], c.get('month', ''), c.get('week', ''), c.get('prev', ''),
+                           ', '.join(str(x) for x in w.get('examples') or []), day, 'Слабое место: ' + text, w.get('advice') or ''])
+            for g in card.get('strengths') or []:
+                table.add([m['name'], m['extension'], '', '', '', ', '.join(str(x) for x in g.get('examples') or []), day,
+                           'Получается: ' + g['title'], ''])
+            if card.get('trend'):
+                table.add([m['name'], m['extension'], '', '', '', '', day, 'Динамика: ' + card['trend'], ''])
     table.add([])
     table.add([f'Где терялся результат за {memory.MONTH} дней, по менеджерам'], 'title')
     table.add(['Менеджер', 'Доб.', 'За 30 дн.', 'За 7 дн.', 'За пред. 7 дн.', 'Пример: ID звонка', '', 'Где терялся результат'], 'header')
@@ -293,7 +317,7 @@ def memory_table(stats: dict, managers: list, tz, now: datetime) -> Table:
                        acc['example'].get(key, ''), '', CATEGORY_LABELS.get(key, key)])
     table.add([])
     table.add([f"Обновлено ботом {now.astimezone(tz).strftime('%d.%m.%Y %H:%M')} из разборов звонков. "
-               'Ольга идёт по своему скрипту и сюда не входит. Карточка бота и заметки РОПа появятся позже.'], 'note')
+               'Карточка бота обновляется раз в день после 19:00. Ольга идёт по своему скрипту и сюда не входит.'], 'note')
     return table
 
 
@@ -328,7 +352,12 @@ async def collect(pool, now: datetime | None = None) -> list[Table]:
         managers = [{'extension': r['extension'], 'name': r['full_name'] or f"Доб. {r['extension']}"} for r in await pool.fetch(
             """SELECT extension, full_name FROM employees WHERE client_id=$1 AND role='manager' AND extension ~ '^[0-9]+$'
                ORDER BY extension::int""", client['id']) if not kitchen.handles(r['extension'])]
-        tables.append(memory_table(await memory.periods(pool, client['id'], now), managers, tz, now))
+        cards = {}
+        if await pool.fetchval("SELECT to_regclass('manager_memory') IS NOT NULL"):
+            cards = {r['extension']: {**memory.loads(r['card']), 'day': r['day']} for r in await pool.fetch(
+                """SELECT DISTINCT ON (extension) extension, day, card FROM manager_memory WHERE client_id=$1
+                   ORDER BY extension, day DESC""", client['id'])}
+        tables.append(memory_table(await memory.periods(pool, client['id'], now), managers, tz, now, cards))
     return tables
 
 

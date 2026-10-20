@@ -226,3 +226,15 @@ audio.rec{display:block;width:100%;max-width:360px;height:36px;margin-top:6px}
   .p-days{gap:2px}
   .p-days .bar:not(:nth-child(5n+1)) span{visibility:hidden}
 }
+/* память менеджера */
+.mem-focus{margin-bottom:16px;border-color:var(--accent);background:var(--accent-soft)}
+.mem-focus.row{justify-content:space-between}
+.mem-label{display:block;font-size:11.5px;color:var(--accent);font-weight:600;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px}
+.mem-focus.row .mem-label{display:inline;margin-right:6px}
+.mem-big{font-size:16px;font-weight:600;margin-bottom:6px}
+.mem-item{padding:10px 0;border-bottom:1px solid var(--line)}
+.mem-item:last-child{border-bottom:0}
+.mem-item p{margin:6px 0}
+.mem-title{display:flex;gap:8px;flex-wrap:wrap;align-items:baseline}
+.mem-say{background:var(--surface-2);border-radius:8px;padding:8px 10px}
+.mem-cur td{background:var(--surface-2)}
