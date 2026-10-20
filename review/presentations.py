@@ -106,10 +106,24 @@ def token() -> str:
 
 
 async def read_registry(http: httpx.AsyncClient, access_token: str) -> list[list]:
-    r = await http.get(SHEETS_API + os.environ['PRESENTATIONS_SHEET_ID'] + '/values/' + RANGE,
-                       params={'valueRenderOption': 'FORMULA'}, headers={'Authorization': 'Bearer ' + access_token})
-    r.raise_for_status()
-    return r.json().get('values') or []
+    """Строки реестра как их видно в таблице, а в колонке «Запись» — сама формула =HYPERLINK со ссылкой.
+
+    Всё читать формулами нельзя: дата, время и № тогда приходят числами (46316, 0.34) вместо «20.10.2026»."""
+    async def get(render: str, cells: str) -> list[list]:
+        r = await http.get(SHEETS_API + os.environ['PRESENTATIONS_SHEET_ID'] + '/values/' + cells,
+                           params={'valueRenderOption': render}, headers={'Authorization': 'Bearer ' + access_token})
+        r.raise_for_status()
+        return r.json().get('values') or []
+    sheet, cells = RANGE.split('!', 1)
+    first_row = re.match(r'[A-Z]+(\d+)', cells)[1]
+    shown, links = await get('FORMATTED_VALUE', RANGE), await get('FORMULA', f'{sheet}!E{first_row}:E')
+    rows = []
+    for i, row in enumerate(shown):
+        row = list(row) + [''] * (6 - len(row))
+        if i < len(links) and links[i]:
+            row[4] = links[i][0]
+        rows.append(row)
+    return rows
 
 
 def drive_reason(r) -> str:
@@ -147,7 +161,13 @@ async def sync(pool, client_id: int, values: list[list]) -> int:
                VALUES($1,$2,$3,$4,$5,$6,$7,$8)
                ON CONFLICT(client_id, file_id) DO UPDATE SET row_no=EXCLUDED.row_no, day=EXCLUDED.day,
                  time_text=EXCLUDED.time_text, manager_name=EXCLUDED.manager_name,
-                 extension=coalesce(presentations.extension, EXCLUDED.extension), comment=EXCLUDED.comment
+                 extension=coalesce(presentations.extension, EXCLUDED.extension), comment=EXCLUDED.comment,
+                 -- в реестре поменялись дата или время: звонок Mango ищем заново и разбираем с историей клиента
+                 -- (расшифровка сохранена, повторно файл не качаем)
+                 status=CASE WHEN (presentations.day, presentations.time_text) IS DISTINCT FROM (EXCLUDED.day, EXCLUDED.time_text)
+                             THEN 'new' ELSE presentations.status END,
+                 attempts=CASE WHEN (presentations.day, presentations.time_text) IS DISTINCT FROM (EXCLUDED.day, EXCLUDED.time_text)
+                               THEN 0 ELSE presentations.attempts END
                RETURNING (xmax = 0)""",
             client_id, row['file_id'], row['row_no'], row['day'], row['time_text'], row['manager_name'], ext, row['comment'])
         added += bool(status)
@@ -237,7 +257,8 @@ def validate(data: dict, transcript: str) -> dict:
     if moved and temperature == 'hot':
         moment = None
     contract = data.get('contract') if isinstance(data.get('contract'), dict) else {}
-    contract['missing'] = [f for f in contract.get('missing') or [] if f in CONTRACT_FIELDS]
+    # Клиент отказался: список «не хватает для договора» только шумит.
+    contract['missing'] = [] if temperature == 'lost' else [f for f in contract.get('missing') or [] if f in CONTRACT_FIELDS]
     data.update(
         stage_after=stage, stage_evidence=evidence, moved=moved, temperature=temperature, key_moment=moment,
         contract=contract, reviewed=True, text_unverified=unverified,

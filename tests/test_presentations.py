@@ -1,4 +1,5 @@
 """Разбор презентаций из реестра: строки таблицы, поиск звонка Mango, проверка ответа модели. Данные вымышленные."""
+import asyncio
 import json
 import os
 import unittest
@@ -48,6 +49,28 @@ class ParseTests(unittest.TestCase):
         self.assertEqual([r['file_id'] for r in rows], ['17MnFxr91QA2HSwpmQYpZpu3vgZKgTs1k', '1Ab2_dnZiz0RajwDdXi4D2iF8-IyVbufI'])
         self.assertEqual((rows[0]['row_no'], rows[0]['day'], rows[0]['time_text']), (1, date(2026, 9, 21), '08:11'))
         self.assertEqual((rows[1]['time_text'], rows[1]['comment']), (None, 'клиент Ильи'))
+
+    def test_registry_dates_as_shown(self):
+        """Дату, время и № берём как видно в таблице, ссылку — из формулы колонки «Запись»."""
+        class Http:
+            def __init__(self):
+                self.asked = []
+
+            async def get(self, url, params, headers):
+                self.asked.append((url.split('/values/')[1], params['valueRenderOption']))
+                body = ({'values': [['1', '21.09.2026', '08:11', 'Илья Козлов', 'Слушать'], ['2', '22.09.2026']]}
+                        if params['valueRenderOption'] == 'FORMATTED_VALUE'
+                        else {'values': [[LINK.format('17MnFxr91QA2HSwpmQYpZpu3vgZKgTs1k')]]})
+                return type('R', (), {'raise_for_status': lambda self: None, 'json': lambda self: body})()
+
+        http = Http()
+        with patch.dict(os.environ, {'PRESENTATIONS_SHEET_ID': 'S'}):
+            values = asyncio.run(P.read_registry(http, 't'))
+        self.assertEqual(http.asked, [('Звонки!A2:F', 'FORMATTED_VALUE'), ('Звонки!E2:E', 'FORMULA')])
+        rows = P.parse_rows(values)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]['row_no'], rows[0]['day'], rows[0]['time_text'], rows[0]['file_id']),
+                         (1, date(2026, 9, 21), '08:11', '17MnFxr91QA2HSwpmQYpZpu3vgZKgTs1k'))
 
     def test_employee_by_name(self):
         staff = [{'extension': '11', 'full_name': 'Марк Амирханян'}, {'extension': '12', 'full_name': 'Козлов Илья'},
@@ -180,3 +203,13 @@ class StoreTests(unittest.IsolatedAsyncioTestCase):
                 await P.process(self.pool, None, 't', transcribe=transcribe, call=fake_call)
         row = await self.pool.fetchrow('SELECT status, attempts, error FROM presentations WHERE row_no=3')
         self.assertEqual((row['status'], row['attempts'], row['error']), ('error', 3, 'Диск 404'))
+
+        # в реестре появилось время у записи 4: разбираем заново (расшифровка сохранена), остальные не трогаем
+        values[3][2] = '11:00'
+        await P.sync(self.pool, 1, values)
+        states = {r['row_no']: (r['status'], r['attempts']) for r in await self.pool.fetch('SELECT * FROM presentations')}
+        self.assertEqual((states[4], states[1][0]), (('new', 0), 'reviewed'))
+        with patch.object(P, 'download', denied):
+            await P.process(self.pool, None, 't', limit=1, transcribe=transcribe, call=fake_call)
+        fourth = await self.pool.fetchrow('SELECT status, call_id, match FROM presentations WHERE row_no=4')
+        self.assertEqual((fourth['status'], json.loads(fourth['match'])['by']), ('reviewed', 'time+duration'))
