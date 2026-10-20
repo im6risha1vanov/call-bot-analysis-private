@@ -22,7 +22,7 @@ from aiohttp import web  # noqa: E402
 
 import mango_client  # noqa: E402
 from tools import Forbidden, is_privileged  # noqa: E402
-from . import ask as asking, auth, cabinet, gsheets, journal, people, recording, reviews, staff, store, training  # noqa: E402
+from . import ask as asking, auth, cabinet, deals, gsheets, journal, people, recording, reviews, staff, store, training  # noqa: E402
 from . import prompts as prompt_mode, robot, robot_api, robot_runner  # noqa: E402
 from review import store as review_store  # noqa: E402
 from .dial import dial  # noqa: E402
@@ -460,6 +460,30 @@ async def api_person(request):
     return web.json_response(await people.card(request.app[POOL], who, request.query.get('person')))
 
 
+async def api_deals(request):
+    """Сделки: директор видит всех (?person= — одного менеджера), менеджер только свои."""
+    who = await actor(request)
+    days = request.query.get('days')
+    return web.json_response(await deals.listing(request.app[POOL], who, request.query.get('person') or None,
+                                                 int(days) if days and days.isdigit() else None))
+
+
+async def api_deal(request):
+    who = await actor(request)
+    return web.json_response(await deals.one(request.app[POOL], who, request.match_info['phone']))
+
+
+async def api_deal_event(request):
+    who = await actor(request, write=True)
+    pool = request.app[POOL]
+    data = await body(request)
+    name = await pool.fetchval('SELECT full_name FROM employees WHERE client_id=$1 AND telegram_user_id=$2 LIMIT 1',
+                               who.client_id, who.telegram_user_id) if who.telegram_user_id else None
+    return web.json_response(await deals.add_event(pool, who, request.match_info['phone'], str(data.get('kind') or ''),
+                                                   data.get('note'), data.get('reason'), data.get('amount'),
+                                                   name or ('Директор' if who.role == 'owner' else None)))
+
+
 async def api_staff_add(request):
     who = await director(request)
     data = await body(request)
@@ -675,6 +699,9 @@ def build(pool) -> web.Application:
     app.router.add_post('/api/access/{id}/revoke', api_access_revoke)
     app.router.add_get('/api/staff', api_staff)
     app.router.add_get('/api/person', api_person)
+    app.router.add_get('/api/deals', api_deals)
+    app.router.add_get('/api/deals/{phone}', api_deal)
+    app.router.add_post('/api/deals/{phone}/event', api_deal_event)
     app.router.add_post('/api/staff', api_staff_add)
     app.router.add_post('/api/staff/{action}', api_staff_action)
     app.router.add_get('/api/prompts', api_prompts)

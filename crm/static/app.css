@@ -238,3 +238,8 @@ audio.rec{display:block;width:100%;max-width:360px;height:36px;margin-top:6px}
 .mem-title{display:flex;gap:8px;flex-wrap:wrap;align-items:baseline}
 .mem-say{background:var(--surface-2);border-radius:8px;padding:8px 10px}
 .mem-cur td{background:var(--surface-2)}
+.deal-steps{display:flex;flex-wrap:wrap;gap:4px}
+.deal-steps span{flex:1 1 90px;font-size:12px;text-align:center;padding:6px 4px;border-radius:6px;background:var(--surface-2);color:var(--muted)}
+.deal-steps span.done{background:var(--good-soft);color:var(--good)}
+.deal-steps span.cur{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.deal-steps span.lost{background:var(--bad-soft);color:var(--bad);font-weight:600}

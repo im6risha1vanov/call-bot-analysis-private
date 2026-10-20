@@ -89,6 +89,7 @@ const ICON = {
   people: '<circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/><path d="M19 4v4M17 6h4"/>',
   robot: '<rect x="5" y="8" width="14" height="11" rx="3"/><path d="M12 4v4M9 13h.01M15 13h.01M9.5 16.5h5"/>',
   pen: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>',
+  deal: '<path d="M3 4h18l-7 8v6l-4 2v-8z"/>',
   star: '<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/>',
 };
 const svg = k => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[k]}</svg>`;
@@ -99,6 +100,7 @@ const PAGES = [
   {id: 'queue', name: 'Очередь', icon: 'queue', roles: STAFF},
   {id: 'tasks', name: 'Перезвоны', icon: 'tasks', roles: STAFF},
   {id: 'leads', name: 'База', icon: 'leads', roles: STAFF},
+  {id: 'deals', name: 'Сделки', icon: 'deal', roles: STAFF},
   {id: 'calls', name: 'Звонки', icon: 'calls', roles: STAFF},
   {id: 'stats', name: 'Итоги', icon: 'stats', roles: STAFF},
   {id: 'reports', name: 'Отчёты', icon: 'report', roles: STAFF},
@@ -939,7 +941,7 @@ const PERSON_TAB = {
       <div class="stack">
         <div class="panel"><h2>Результаты за 30 дней <span class="muted">· ${m.success} из ${m.talks}</span></h2>${outs.length ? `<table class="tbl"><tbody>${outs.map(([k, n]) =>
             `<tr><td>${esc(p.outcome_labels[k] || k)}</td><td class="n">${n}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Пока нет.</div>'}
-          ${S.me.role === 'director' ? `<a class="btn small" href="/director#pipe?m=${encodeURIComponent(p.name)}">Его клиенты в воронке →</a>` : ''}</div>
+          <button class="btn small" data-deals-of="${esc(p.ext)}">${S.me.role === 'director' ? 'Его сделки' : 'Мои сделки'} →</button></div>
         <div class="panel"><h2>Что получается</h2>${p.positives.length ? `<div class="list">${p.positives.map(x =>
             `<div class="p-pos"><span>${esc(x.why)}</span> <button class="btn small" data-review="${x.id}">${esc(when(x.at))}</button></div>`).join('')}</div>` : '<div class="empty">Пока нет отмеченных удачных мест.</div>'}</div>
       </div></div>`;
@@ -1246,6 +1248,128 @@ VIEWS.robot = async view => {
   $('#rb-me', view)?.addEventListener('click', () => dialNow(d.test_phones[0]));
   $$('[data-rc]', view).forEach(tr => tr.addEventListener('click', () => robotCall(log.items[+tr.dataset.rc])));
 };
+
+// ---------- сделки: клиент от холодного звонка до оплаты ----------
+const DEAL_SHOW = [['active', 'В работе'], ['stalled', 'Зависшие'], ['lost', 'Отказ'], ['paid', 'Оплачено'], ['all', 'Все']];
+const DEAL_PERIODS = [['30', '30 дней'], ['90', '90 дней'], ['', 'Всё время']];
+const TEMP = {hot: ['горячий', 'good'], warm: ['тёплый', 'warn'], cold: ['холодный', ''], lost: ['отказ', 'bad']};
+const dealName = d => d.company || phone(d.number);
+function dealStatus(d) {
+  if (d.status === 'paid') return `<span class="chip good">оплачено${d.amount ? ' · ' + rub(d.amount) : ''}</span>`;
+  if (d.status === 'lost') return `<span class="chip bad">отказ${d.lost.auto ? '' : ' · отмечен'}</span>`;
+  if (d.stalled_days != null) return `<span class="chip late">стоит ${d.stalled_days} дн.</span>`;
+  return '<span class="chip acc">в работе</span>';
+}
+function dealSteps(d) {
+  return `<div class="deal-steps">${(S.dealStages || []).slice(1).map((st, i) => {
+    const n = i + 2;
+    const cls = d.stage_no > n || (d.stage_no === n && d.status === 'paid') ? 'done' : d.stage_no === n ? (d.status === 'lost' ? 'lost' : 'cur') : '';
+    return `<span class="${cls}">${esc(st.name)}</span>`;
+  }).join('')}</div>`;
+}
+
+VIEWS.deals = async view => {
+  const director = S.me.role === 'director';
+  const f = S.dealF || (S.dealF = {show: 'active', days: '90', person: ''});
+  const q = new URLSearchParams({days: f.days, person: director ? f.person : ''});
+  const d = await api('/api/deals?' + q, {scoped: false});
+  S.dealStages = d.stages; S.dealReasons = d.reasons; S.canPay = d.can_pay;
+  const list = d.deals.filter(x => f.show === 'all' || (f.show === 'stalled' ? x.stalled_days != null : x.status === f.show));
+  const fn = d.funnel;
+  const stageRows = fn.stages.map((st, i) => {
+    const prev = i ? fn.stages[i - 1].reached : 0;
+    const conv = i > 1 && prev ? Math.round(st.reached * 100 / prev) + '%' : '';
+    return `<tr><td><b>${i + 1}. ${esc(st.name)}</b></td><td class="n">${st.reached}</td><td class="n muted hide-m">${conv}</td>
+      <td>${st.lost ? `<span class="chip bad">${st.lost}</span> ${st.reasons.map(([r, n]) => `<span class="muted">${esc(r)} · ${n}</span>`).join('; ')}` : '<span class="muted">—</span>'}</td></tr>`;
+  }).join('');
+  view.innerHTML = `
+    <div class="filters">${DEAL_SHOW.map(([k, t]) => `<button data-ds="${k}" aria-pressed="${f.show === k}">${t}${k === 'stalled' && fn.stalled ? ' · ' + fn.stalled : ''}</button>`).join('')}</div>
+    <div class="filters">${DEAL_PERIODS.map(([k, t]) => `<button data-dd="${k}" aria-pressed="${f.days === k}">${t}</button>`).join('')}
+      ${director ? `<label class="field"><select id="deal-person" aria-label="Менеджер"><option value="">Все менеджеры</option>${d.managers.map(m => `<option value="${esc(m.ext)}"${m.ext === f.person ? ' selected' : ''}>${esc(m.name)}</option>`).join('')}</select></label>` : ''}</div>
+    <div class="kpis">
+      <div class="kpi"><b>${fn.active}</b><span>в работе${fn.stalled ? `, из них ${fn.stalled} без движения` : ''}</span></div>
+      <div class="kpi"><b>${fn.cold_results}</b><span>с результатом на холодном звонке из ${fn.stages[1].reached}</span></div>
+      <div class="kpi"><b>${fn.paid}</b><span>оплачено${fn.paid_sum ? ' на ' + rub(fn.paid_sum) : ''}</span></div>
+    </div>
+    <div class="panel"><h2>Где отваливаются клиенты</h2><div class="scroll"><table class="tbl"><thead><tr><th>Этап</th><th class="n">Дошли</th><th class="n hide-m">Переход</th><th>Отказ на этапе и почему</th></tr></thead><tbody>${stageRows}</tbody></table></div>
+      <p class="muted">Клиент — номер телефона. Звонки и презентации CRM разбирает сама; Telegram или почту, договор и отказ отмечает менеджер в сделке, оплату — директор. Отказ на холодном звонке CRM ставит сама, если последний разговор без результата и перезвона нет; причина берётся из разбора.</p></div>
+    <div class="panel"><h2>${esc(DEAL_SHOW.find(x => x[0] === f.show)[1])} <span class="muted">· ${list.length}</span></h2>
+      ${list.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Клиент</th>${director ? '<th class="hide-m">Менеджер</th>' : ''}<th>Этап</th><th class="hide-m">Последнее</th><th>Что дальше</th></tr></thead><tbody>
+      ${list.slice(0, 300).map(x => `<tr class="click" data-deal="${esc(x.phone)}"><td><b>${esc(dealName(x))}</b>${x.company ? `<div class="muted">${esc(phone(x.number))}</div>` : ''}</td>
+        ${director ? `<td class="hide-m">${esc(x.manager)}</td>` : ''}<td>${esc(x.stage_name)}<div>${dealStatus(x)}</div></td><td class="hide-m">${esc(when(x.last_at))}</td>
+        <td>${x.status === 'lost' ? `<span class="muted">${esc(x.lost.reason)}</span>` : esc(x.advice || '')}</td></tr>`).join('')}</tbody></table></div>`
+      : '<p class="muted">Таких сделок нет.</p>'}</div>`;
+  $$('[data-ds]', view).forEach(b => b.addEventListener('click', () => { f.show = b.dataset.ds; go('deals'); }));
+  $$('[data-dd]', view).forEach(b => b.addEventListener('click', () => { f.days = b.dataset.dd; go('deals'); }));
+  $('#deal-person', view)?.addEventListener('change', e => { f.person = e.target.value; go('deals'); });
+  $$('[data-deal]', view).forEach(tr => tr.addEventListener('click', () => dealCard(tr.dataset.deal)));
+};
+
+// Кнопка «Его сделки» в карточке сотрудника.
+document.addEventListener('click', e => {
+  const b = e.target.closest && e.target.closest('[data-deals-of]');
+  if (b) { S.dealF = {show: 'active', days: '90', person: b.dataset.dealsOf}; openPage('deals'); }
+});
+
+function dealTimeline(items) {
+  return items.map(t => {
+    const head = `<div class="rvm-ih"><b>${esc(t.title)}</b><span class="rvm-mut">${esc(when(t.at))}${t.by ? ' · ' + esc(t.by) : ''}</span>
+      ${t.type === 'presentation' && TEMP[t.temperature] ? `<span class="rvm-chip ${TEMP[t.temperature][1]}">клиент ${TEMP[t.temperature][0]}</span>` : ''}
+      ${t.amount ? `<span class="rvm-chip good">${rub(t.amount)}</span>` : ''}</div>`;
+    const cls = t.type === 'event' ? '' : t.ok || (t.type === 'presentation' && !t.lost) ? 'good' : t.lost ? 'miss' : '';
+    return `<div class="rvm-item ${cls}">${head}
+      ${t.text ? `<div>${esc(t.text)}</div>` : ''}
+      ${t.lost ? `<div class="rvm-q">Где остыл: ${esc(t.lost)}</div>` : ''}
+      ${t.say ? `<div class="rvm-say">Как можно было: ${esc(t.say)}</div>` : ''}
+      ${t.type === 'call' ? `<div><button class="btn small" data-review="${t.id}">Разбор и запись</button></div>` : ''}
+      ${t.file_id ? `<div><a class="btn small" href="https://drive.google.com/file/d/${encodeURIComponent(t.file_id)}/view" target="_blank" rel="noopener">Запись презентации</a></div>` : ''}</div>`;
+  }).join('');
+}
+
+async function dealCard(ph) {
+  const box = modal('<header class="rvm-head"><div class="rvm-mut">Загружаю…</div><button class="rvm-x" aria-label="Закрыть">×</button></header>');
+  let d;
+  try { d = await api('/api/deals/' + encodeURIComponent(ph), {scoped: false}); } catch (e) { $('.rvm-mut', box).textContent = e.message; return; }
+  const ro = S.me.readonly;
+  const acts = d.status === 'active' ? [
+    ['presentation', 'Презентация проведена'], ['materials', 'Отправил материалы'], ['contract_sent', 'Договор отправлен'],
+    ['contract_edits', 'Правки по договору'], ['contract_signed', 'Договор подписан'],
+    ...(d.can_pay ? [['paid', 'Оплата получена']] : []), ['lost', 'Отказ']] : [['reopen', 'Снова в работе']];
+  box.innerHTML = `<header class="rvm-head"><div><div>${dealStatus(d)}</div><h2>${esc(dealName(d))}</h2>
+      <div class="rvm-mut">${d.company ? `<a href="tel:+${esc(d.number)}">${esc(phone(d.number))}</a> · ` : ''}${esc(d.manager)} · этап: ${esc(d.stage_name)}</div></div>
+      <button class="rvm-x" aria-label="Закрыть">×</button></header>
+    <div class="rvm-body">
+      ${dealSteps(d)}
+      ${d.status === 'lost' ? `<div class="rvm-item miss"><b>Отказ: ${esc(d.lost.reason)}</b>${d.lost.note ? `<div>${esc(d.lost.note)}</div>` : ''}
+        <div class="rvm-q">${d.lost.auto ? 'CRM поставила сама по последнему разговору. Если это не так, нажмите «Снова в работе».' : 'Отмечено ' + esc(when(d.lost.at))}</div></div>` : ''}
+      ${d.advice ? `<div><h3>Что дальше</h3><div class="rvm-say">${esc(d.advice)}</div></div>` : ''}
+      ${d.missing.length && d.status === 'active' ? `<div><h3>Для договора не хватает</h3><div>${d.missing.map(m => `<span class="chip warn">${esc(m)}</span>`).join(' ')}</div></div>` : ''}
+      ${ro ? '' : `<div><h3>Отметить</h3><div class="row chips">${acts.map(([k, t]) => `<button class="btn small${k === 'lost' ? ' danger' : ''}" data-ev="${k}">${t}</button>`).join('')}
+        <button class="btn small" data-ev="note">Заметка</button></div><div id="deal-form"></div></div>`}
+      <div><h3>История</h3>${dealTimeline([...d.timeline].reverse()) || '<div class="rvm-mut">Пусто.</div>'}</div>
+    </div>`;
+  $$('[data-ev]', box).forEach(b => b.addEventListener('click', () => dealForm(box, d, b.dataset.ev)));
+}
+
+function dealForm(box, d, kind) {
+  const form = $('#deal-form', box);
+  const label = {contract_edits: 'Какие правки попросил клиент', note: 'Заметка', lost: 'Что сказал клиент'}[kind];
+  form.innerHTML = `<div class="outform">
+    ${kind === 'lost' ? `<label class="field">Причина<select id="dv-reason"><option value="">Выберите</option>${Object.entries(d.reasons).map(([k, t]) => `<option value="${k}">${esc(t)}</option>`).join('')}</select></label>` : ''}
+    ${kind === 'paid' ? '<label class="field">Сумма, ₽<input id="dv-amount" inputmode="decimal" placeholder="165 000"></label>' : ''}
+    <label class="field">${esc(label || 'Комментарий, если нужно')}<textarea id="dv-note" rows="2" maxlength="2000"></textarea></label>
+    <button class="btn primary" id="dv-go">Сохранить</button></div>`;
+  $('#dv-go', form).addEventListener('click', async () => {
+    try {
+      await api(`/api/deals/${encodeURIComponent(d.phone)}/event`, {method: 'POST', scoped: false, body: {
+        kind, note: $('#dv-note', form).value, reason: $('#dv-reason', form)?.value, amount: $('#dv-amount', form)?.value}});
+      toast('Сохранено');
+      $('.rvm-x', box).click();
+      if (S.page === 'deals') go('deals');
+      dealCard(d.phone);
+    } catch (e) { toast(e.message, true); }
+  });
+}
 
 // ---------- start ----------
 (async () => {

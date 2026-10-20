@@ -26,7 +26,7 @@
   const ITEMS = [
     {id: 'a:team', name: 'Сводка', icon: 'team', bar: true},
     {id: 'w:staff', name: 'Сотрудники', icon: 'people', bar: true},
-    {id: 'a:pipe', name: 'Воронка', icon: 'pipe'},
+    {id: 'w:deals', name: 'Сделки', icon: 'pipe'},
     {id: 'a:calls', name: 'Звонки', icon: 'calls', bar: true},
     {id: 'a:callbacks', name: 'Перезвоны', icon: 'callbacks', bar: true},
     {id: 'w:reports', name: 'Отчёты', icon: 'report'},
@@ -43,7 +43,7 @@
   ];
   // Разделы работы отдела, которые открываются из меню не напрямую (очередь менеджера из «Очередей»).
   // «Менеджеры» аналитики объединены с «Сотрудниками»: старая ссылка ведёт в карточки сотрудников.
-  const ALIAS = {'w:queue': 'w:team', 'w:leads': 'w:team', 'w:calls': 'w:team', 'w:stats': 'w:team', 'a:mgr': 'w:staff', 'w:me': 'w:staff'};
+  const ALIAS = {'w:queue': 'w:team', 'w:leads': 'w:team', 'w:calls': 'w:team', 'w:stats': 'w:team', 'a:mgr': 'w:staff', 'w:me': 'w:staff', 'a:pipe': 'w:deals'};
   const svg = k => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[k]}</svg>`;
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
   const store = {

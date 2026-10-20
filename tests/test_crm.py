@@ -116,10 +116,10 @@ class DBCase(unittest.IsolatedAsyncioTestCase):
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS assigned_by_telegram_user_id BIGINT;""")
         for name in ('008_call_reviews.sql', '009_callback_tasks.sql', '012_prompt_versions.sql', '013_employee_invites.sql',
                      '014_crm.sql', '015_crm_roles.sql', '016_crm_access.sql', '017_crm_reports.sql', '018_crm_questions.sql',
-                     '019_crm_staff.sql', '021_manager_memory.sql'):
+                     '019_crm_staff.sql', '021_manager_memory.sql', '022_presentations.sql', '024_deals.sql'):
             await self.pool.execute((root / 'migrations' / name).read_text())
         await self.pool.execute('TRUNCATE clients, crm_login_tokens, crm_sessions, crm_docs, crm_invites, crm_reports, crm_questions, '
-                                'employee_invites, manager_memory, prompt_active, prompt_versions, prompt_drafts, astra_daily_spend CASCADE')
+                                'employee_invites, manager_memory, deal_events, prompt_active, prompt_versions, prompt_drafts, astra_daily_spend CASCADE')
         from crypto_util import encrypt
         await self.pool.execute("INSERT INTO clients(id,timezone,processing_enabled,vpbx_api_key_enc,vpbx_api_salt_enc) "
                                 "VALUES(1,'Europe/Moscow',true,$1,$2)", encrypt('key'), encrypt('salt'))
@@ -658,6 +658,73 @@ class WebTests(DBCase):
             self.assertEqual((mem['talks'], mem['focus']), (5, 'Закреплять день и время перезвона.'))
             self.assertEqual(mem['weak_spots'][0]['examples'][0]['id'], lost[0])
             self.assertTrue(mem['weak_spots'][0]['examples'][0]['at'])
+
+    async def test_deals(self):
+        lost = await self.add_review('101', LOST, '3 days', number='79990000001')  # холодный без результата
+        await self.add_review('101', WON, '5 days', number='79990000002')  # перезвон на дату
+        shown = await self.add_review('101', WON, '9 days', number='79990000003')
+        await self.add_review('102', LOST, '1 day', number='79990000004')
+        await self.add_review('102', LOST, '2 days', number='79990000005')
+        await self.pool.execute("INSERT INTO callback_tasks(client_id,extension,call_id,client_number,kind,due_date,raw) "
+                                "VALUES(1,'102',$1,'79990000005','callback',current_date+1,'завтра в 11')",
+                                await self.pool.fetchval("SELECT id FROM calls WHERE client_number='79990000005'"))
+        pres = {'kind': 'presentation', 'stage_after': 'decision_date', 'temperature': 'warm', 'reviewed': True,
+                'key_moment': {'category': 'price_no_value', 'what_happened': 'Цена без расчёта.'},
+                'contract': {'company': 'ООО Ромашка', 'missing': ['inn', 'signer']},
+                'next_step_advice': 'В пятницу узнать решение и запросить ИНН.', 'rop_line': 'Презентация. Тёплый.'}
+        await self.pool.execute(
+            """INSERT INTO presentations(client_id,file_id,day,extension,status,call_id,data)
+               VALUES(1,'f1',current_date-8,'101','reviewed',$1,$2::jsonb)""",
+            await self.pool.fetchval("INSERT INTO calls(client_id,extension,call_started_at,client_number,duration_seconds) "
+                                     "VALUES(1,'101',now()-'8 days'::interval,'79990000003',900) RETURNING id"), json.dumps(pres))
+        await self.pool.execute("INSERT INTO crm_leads(client_id,extension,number) VALUES(1,'101','79990000001'),(1,'101','79990000009')")
+
+        await self.director()
+        d = await (await self.http.get('/api/deals')).json()
+        by = {x['phone']: x for x in d['deals']}
+        self.assertEqual(set(by), {'9990000001', '9990000002', '9990000003', '9990000004', '9990000005'})
+        self.assertEqual((by['9990000001']['status'], by['9990000001']['lost']['reason'], by['9990000001']['lost']['auto']),
+                         ('lost', 'не закреплён день перезвона', True))
+        self.assertEqual(by['9990000005']['status'], 'active')  # есть открытый перезвон
+        self.assertIn('Перезвон', by['9990000005']['advice'])
+        p = by['9990000003']
+        self.assertEqual((p['stage'], p['company'], p['temperature']), ('presentation', 'ООО Ромашка', 'warm'))
+        self.assertEqual((p['advice'], p['missing']), ('В пятницу узнать решение и запросить ИНН.', ['ИНН', 'кто подписывает']))
+        self.assertEqual(p['stalled_days'], 8)  # больше 5 дней после презентации
+        stages = {s['key']: s for s in d['funnel']['stages']}
+        self.assertEqual([stages[k]['reached'] for k in ('base', 'cold', 'presentation', 'contract')], [2, 5, 1, 0])
+        self.assertEqual(stages['cold']['lost'], 2)
+        self.assertTrue(d['can_pay'])
+        one = await (await self.http.get('/api/deals/79990000003')).json()
+        self.assertEqual([t['type'] for t in one['timeline']], ['call', 'presentation'])
+        self.assertEqual(len((await (await self.http.get('/api/deals?person=102')).json())['deals']), 2)
+
+        post = lambda phone, **b: self.http.post(f'/api/deals/{phone}/event', json=b, headers={'X-CRM': '1'})
+        r = await post('79990000003', kind='contract_sent', note='Отправил на почту')
+        self.assertEqual(r.status, 200, await r.text())
+        self.assertEqual((await r.json())['stage'], 'contract')
+        self.assertEqual((await post('79990000003', kind='paid', amount='')).status, 400)
+        paid = await (await post('79990000003', kind='paid', amount='165 000')).json()
+        self.assertEqual((paid['status'], paid['stage'], paid['amount']), ('paid', 'paid', 165000.0))
+        self.assertEqual((await post('79990000003', kind='lost', reason='other')).status, 400)  # «другое» без пояснения
+        self.assertEqual((await post('79990000002', kind='lost', reason='expensive')).status, 200)
+        d = await (await self.http.get('/api/deals')).json()
+        by = {x['phone']: x for x in d['deals']}
+        self.assertEqual((by['9990000002']['lost']['reason'], by['9990000002']['lost']['auto']), ('дорого', False))
+        self.assertEqual((d['funnel']['paid'], d['funnel']['paid_sum']), (1, 165000.0))
+        reopened = await (await post('79990000002', kind='reopen')).json()
+        self.assertEqual(reopened['status'], 'active')  # после «снова в работе» авто-отказ не возвращается
+
+        # менеджер: только свои сделки, без оплаты
+        self.http.session.cookie_jar.clear()
+        await self.login(123)
+        mine = await (await self.http.get('/api/deals')).json()
+        self.assertEqual({x['ext'] for x in mine['deals']}, {'101'})
+        self.assertFalse(mine['can_pay'])
+        self.assertEqual((await self.http.get('/api/deals/79990000004')).status, 403)
+        self.assertEqual((await post('79990000002', kind='paid', amount='1000')).status, 403)
+        self.assertEqual((await post('79990000004', kind='note', note='x')).status, 403)
+        self.assertEqual((await post('79990000002', kind='materials', note='КП в Telegram')).status, 200)
 
     async def test_staff_invite_unlink_and_copies(self):
         import invites

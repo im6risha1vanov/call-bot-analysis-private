@@ -108,6 +108,10 @@
   if (asked === 'mgr' || (!asked && saved === 'mgr')) {
     try { localStorage.setItem('avr-page', 'team'); } catch (e) { /* без хранилища */ }
     location.replace('/?work#staff');
+  } else if (asked === 'pipe' || (!asked && saved === 'pipe')) {
+    // «Воронка продаж» стала разделом «Сделки» в работе отдела.
+    try { localStorage.setItem('avr-page', 'team'); } catch (e) { /* без хранилища */ }
+    location.replace('/?work#deals');
   } else if (asked) {
     try {
       localStorage.setItem('avr-page', asked);
