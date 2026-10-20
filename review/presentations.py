@@ -112,12 +112,26 @@ async def read_registry(http: httpx.AsyncClient, access_token: str) -> list[list
     return r.json().get('values') or []
 
 
+def drive_reason(r) -> str:
+    """Понятная причина отказа Диска: выключен Drive API, нет доступа к файлу или файла нет."""
+    try:
+        error = r.json().get('error') or {}
+    except ValueError:
+        error = {}
+    reasons = {e.get('reason') for e in error.get('errors') or []}
+    detail = (error.get('message') or '')[:200]
+    if reasons & {'accessNotConfigured', 'SERVICE_DISABLED'} or 'has not been used' in detail:
+        return 'в Google-проекте бота выключен Google Drive API (включить в Cloud Console) · ' + detail
+    if r.status_code == 404 or 'notFound' in reasons:
+        return 'файл не найден: у бота нет доступа (откройте папку с записями сервисному аккаунту) или файл удалён'
+    return f'нет доступа к файлу ({", ".join(sorted(filter(None, reasons))) or "403"}) · {detail}'
+
+
 async def download(http: httpx.AsyncClient, access_token: str, file_id: str) -> bytes:
     r = await http.get(DRIVE_API + file_id, params={'alt': 'media', 'supportsAllDrives': 'true'},
                        headers={'Authorization': 'Bearer ' + access_token}, follow_redirects=True)
     if r.status_code in (403, 404):
-        raise PermissionError(f'Диск {r.status_code}: у бота нет доступа к файлу (нужно открыть папку с записями '
-                              f'сервисному аккаунту) или файл удалён')
+        raise PermissionError(f'Диск {r.status_code}: {drive_reason(r)}')
     r.raise_for_status()
     return r.content
 
