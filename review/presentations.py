@@ -41,8 +41,9 @@ SHEETS_API = 'https://sheets.googleapis.com/v4/spreadsheets/'
 DRIVE_API = 'https://www.googleapis.com/drive/v3/files/'
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly', 'https://www.googleapis.com/auth/drive.readonly']
 MAX_ATTEMPTS = 3
-PER_RUN = int(os.getenv('PRESENTATIONS_PER_RUN', '3'))
-SYNC_MINUTES = 10
+PER_RUN = int(os.getenv('PRESENTATIONS_PER_RUN', '12'))
+CONCURRENCY = int(os.getenv('PRESENTATIONS_CONCURRENCY', '3'))  # записей разбираем одновременно
+SYNC_MINUTES = int(os.getenv('PRESENTATIONS_SYNC_MINUTES', '3'))
 REGISTRY_TZ = os.getenv('PRESENTATIONS_TZ', 'UTC')  # в каком поясе время в реестре
 DURATION_SLACK = 3  # секунд: mp3 из реестра и запись Mango одной длины
 LOOK_BACK_DAYS = 2  # без времени: файл могут отправить в чат на день-два позже звонка
@@ -425,17 +426,21 @@ async def process(pool, http, access_token, limit: int = PER_RUN, **kw) -> int:
                     AND coalesce(match->'context'->>'v', '') <> $3)
            ORDER BY status='reviewed', day NULLS LAST, row_no LIMIT $2""",
         MAX_ATTEMPTS, limit, CONTEXT_VERSION)
-    done = 0
-    for row in rows:
-        await pool.execute('UPDATE presentations SET attempts=attempts+1 WHERE id=$1', row['id'])
-        try:
-            await review_one(pool, row, http, access_token, **kw)
-            done += 1
-        except Exception as exc:
-            log.exception('презентация %s не разобрана', row['file_id'])
-            await pool.execute("UPDATE presentations SET status='error', error=$2, updated_at=now() WHERE id=$1",
-                               row['id'], str(exc)[:500])
-    return done
+    import asyncio
+    gate = asyncio.Semaphore(CONCURRENCY)
+
+    async def one(row) -> int:
+        async with gate:
+            await pool.execute('UPDATE presentations SET attempts=attempts+1 WHERE id=$1', row['id'])
+            try:
+                await review_one(pool, row, http, access_token, **kw)
+                return 1
+            except Exception as exc:
+                log.exception('презентация %s не разобрана', row['file_id'])
+                await pool.execute("UPDATE presentations SET status='error', error=$2, updated_at=now() WHERE id=$1",
+                                   row['id'], str(exc)[:500])
+                return 0
+    return sum(await asyncio.gather(*(one(row) for row in rows)))
 
 
 async def maybe_run(pool, now: datetime | None = None) -> int:
