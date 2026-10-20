@@ -149,6 +149,19 @@ class StoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json.loads(rows[3]['match'])['reason'], 'нет менеджера, дня или длительности')
         self.assertAlmostEqual(float(await self.pool.fetchval('SELECT sum(spent_units) FROM astra_daily_spend')), 2.1)
 
+        # лист «Презентации» в таблице бота: только разобранные, с телефоном из найденного звонка Mango
+        from review import sheets
+        table = sheets.presentations_table(await self.pool.fetch(
+            """SELECT p.*, c.client_number, c.call_started_at, 'Козлов Илья' AS manager FROM presentations p
+               LEFT JOIN calls c ON c.id=p.call_id WHERE p.status='reviewed' ORDER BY p.row_no"""), MSK)
+        self.assertEqual(table.rows[0], sheets.PRESENTATIONS_HEADER)
+        row = table.rows[1]
+        self.assertEqual(row[:7], ['14.10.2026', 'Козлов Илья', row[2], 'Ромашка', 'разговор с ЛПР', 'тёплый', 'цена без расчёта пользы'])
+        self.assertIn('9990001111', row[2].replace(' ', '').replace('-', '').replace('(', '').replace(')', ''))
+        self.assertEqual(row[9], 'ИНН, кто подписывает')
+        self.assertEqual((row[11], row[12]), ('13.10 15:00', 'https://drive.google.com/file/d/fileAAAAAAAAAA/view'))
+        self.assertEqual(table.rows[2][11], 'не найден: несколько похожих звонков')
+
         # ошибка доступа к Диску: запись помечается, после трёх попыток бот её больше не трогает
         await self.pool.execute("UPDATE presentations SET status='new', transcript=NULL WHERE row_no=3")
 

@@ -34,6 +34,7 @@ API = 'https://sheets.googleapis.com/v4/spreadsheets/'
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 SUMMARY_SHEET, DAYS_SHEET, CALLS_SHEET, TASKS_SHEET, ALL_SHEET = 'Сводка', 'По дням', 'Звонки', 'Перезвоны', 'Все звонки'
 MEMORY_SHEET = 'Память менеджеров'
+PRESENTATIONS_SHEET = 'Презентации'
 STALE_SHEETS = ('Клиенты',)  # лист неудачной версии от 07.10, бот убирает его сам
 HISTORY_DAYS = int(os.getenv('SHEETS_HISTORY_DAYS', '60'))
 SUMMARY_DAYS = 30
@@ -50,6 +51,22 @@ DAYS_WIDTHS = [110, 105, 115, 80, 140, 70, 140]
 SUMMARY_WIDTHS = [260, 110, 115, 100, 80, 140, 70, 110, 140, 120]
 ALL_WIDTHS = [95, 170, 95, 95, 105, 120, 85, 105, 120, 120]
 MEMORY_WIDTHS = [170, 60, 110, 110, 90, 110, 110, 420, 320]
+PRESENTATIONS_HEADER = ['Дата', 'Менеджер', 'Телефон', 'Компания', 'Дошли до', 'Клиент', 'Где остыл', 'Ключевой момент',
+                        'Как можно было', 'Не хватает для договора', 'Что дальше', 'Звонок Mango', 'Запись']
+PRESENTATIONS_WIDTHS = [95, 140, 120, 160, 120, 95, 180, 300, 300, 200, 300, 150, 260]
+STAGE_LABELS = {'paid': 'оплата', 'contract': 'договор', 'decision_date': 'день решения', 'materials': 'материалы',
+                'dmp_meeting': 'разговор с ЛПР', 'none': 'без шага'}
+TEMPERATURE_LABELS = {'hot': 'горячий', 'warm': 'тёплый', 'cold': 'холодный', 'lost': 'отказ'}
+PRESENTATION_CATEGORIES = {
+    'no_discovery': 'не выяснил ситуацию клиента', 'generic_pitch': 'рассказ не про бизнес клиента',
+    'price_no_value': 'цена без расчёта пользы', 'objection_unhandled': 'не снято возражение',
+    'no_trust': 'не дал доказательств', 'no_dmp': 'не вышел на ЛПР', 'no_next_step': 'нет шага с днём',
+    'pushy': 'давил на клиента', 'unanswered_question': 'не ответил на вопрос', 'other': 'другое'}
+CONTRACT_LABELS = {'legal_name': 'юрлицо', 'inn': 'ИНН', 'signer': 'кто подписывает', 'service': 'услуга',
+                   'package': 'пакет', 'competitors': 'конкуренты', 'region': 'регион', 'start': 'старт',
+                   'delivery': 'куда отдавать номера'}
+PRESENTATION_CHIPS = {'горячий': ('#D9EAD3', '#274E13'), 'тёплый': ('#FFF2CC', '#7F6000'),
+                      'холодный': ('#E1E6EE', '#434343'), 'отказ': ('#F4CCCC', '#990000')}
 INCOMING, OUTGOING = 1, 2  # context_type в Mango; 3 — внутренний, в статистику не идёт
 
 # Цвета как в образце: шапка #1F4E78, разделитель #D1D8E0, итог #CCCCCC.
@@ -321,6 +338,31 @@ def memory_table(stats: dict, managers: list, tz, now: datetime, cards: dict | N
     return table
 
 
+def presentations_table(rows, tz) -> Table:
+    """Разборы презентаций (review/presentations.py), новые сверху; без привязки к Mango телефон пустой."""
+    table = Table(PRESENTATIONS_SHEET, PRESENTATIONS_WIDTHS, frozen=1, filter_from=0, chip_column=5, bold_column=2,
+                  chips=PRESENTATION_CHIPS)
+    table.add(PRESENTATIONS_HEADER, 'header')
+    for r in rows:
+        data = loads(r['data']) or {}
+        moment = data.get('key_moment') or {}
+        contract = data.get('contract') or {}
+        if r['call_id']:
+            mango = r['call_started_at'].astimezone(tz).strftime('%d.%m %H:%M') if r['call_started_at'] else str(r['call_id'])
+        else:
+            mango = 'не найден: ' + ((loads(r['match']) or {}).get('reason') or 'проверить')
+        when = r['day'].strftime('%d.%m.%Y') if r['day'] else ''
+        table.add([when, r['manager'] or r['manager_name'] or '', fmt_phone(r['client_number']) if r['client_number'] else '',
+                   contract.get('company') or '', STAGE_LABELS.get(data.get('stage_after'), ''),
+                   TEMPERATURE_LABELS.get(data.get('temperature'), ''),
+                   PRESENTATION_CATEGORIES.get(moment.get('category'), '') if moment else '',
+                   moment.get('what_happened') or '', moment.get('say_instead') or '',
+                   ', '.join(CONTRACT_LABELS.get(f, f) for f in contract.get('missing') or []),
+                   data.get('next_step_advice') or '', mango,
+                   f'https://drive.google.com/file/d/{r["file_id"]}/view'])
+    return table
+
+
 async def collect(pool, now: datetime | None = None) -> list[Table]:
     now = now or datetime.now(timezone.utc)
     since = now - timedelta(days=HISTORY_DAYS)
@@ -358,6 +400,15 @@ async def collect(pool, now: datetime | None = None) -> list[Table]:
                 """SELECT DISTINCT ON (extension) extension, day, card FROM manager_memory WHERE client_id=$1
                    ORDER BY extension, day DESC""", client['id'])}
         tables.append(memory_table(await memory.periods(pool, client['id'], now), managers, tz, now, cards))
+        if await pool.fetchval("SELECT to_regclass('presentations') IS NOT NULL"):
+            done = await pool.fetch(
+                """SELECT p.*, c.client_number, c.call_started_at,
+                          (SELECT full_name FROM employees e WHERE e.client_id=p.client_id AND e.extension=p.extension
+                             AND e.role='manager' LIMIT 1) AS manager
+                   FROM presentations p LEFT JOIN calls c ON c.id=p.call_id
+                   WHERE p.client_id=$1 AND p.status='reviewed' ORDER BY p.day DESC NULLS LAST, p.row_no DESC""", client['id'])
+            if done:
+                tables.append(presentations_table(done, tz))
     return tables
 
 
