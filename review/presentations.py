@@ -36,7 +36,7 @@ PROMPT_VERSION = 'presentation_review_v1'
 PROMPT = (Path(__file__).with_name('presentation_prompt.md').read_text(encoding='utf-8')
           .split('\n---\n', 1)[-1].strip())
 MAX_TOKENS = int(os.getenv('PRESENTATION_MAX_TOKENS', '9000'))
-RANGE = os.getenv('PRESENTATIONS_RANGE', 'Звонки!A2:F')
+RANGE = os.getenv('PRESENTATIONS_RANGE', 'Звонки!A1:Z')  # с заголовком: по нему ищем колонку «Телефон клиента»
 SHEETS_API = 'https://sheets.googleapis.com/v4/spreadsheets/'
 DRIVE_API = 'https://www.googleapis.com/drive/v3/files/'
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly', 'https://www.googleapis.com/auth/drive.readonly']
@@ -76,14 +76,30 @@ def norm_name(text) -> set[str]:
     return set(re.findall(r'\w+', str(text or '').lower().replace('ё', 'е')))
 
 
+def phone_digits(text) -> str | None:
+    """Номер из реестра или CRM: «+7 (999) 123-45-67», «89991234567» → 79991234567. Ник и мусор → None."""
+    digits = re.sub(r'\D', '', str(text or ''))
+    if len(digits) == 10:
+        digits = '7' + digits
+    elif len(digits) == 11 and digits[0] == '8':
+        digits = '7' + digits[1:]
+    return digits if 11 <= len(digits) <= 15 else None
+
+
 def parse_rows(values: list[list]) -> list[dict]:
-    """Строки реестра (значения с формулами): №, дата, время, менеджер, =HYPERLINK(...), комментарий."""
-    out = []
+    """Строки реестра: №, дата, время, менеджер, =HYPERLINK(...), комментарий и, если есть, «Телефон клиента».
+
+    Колонку телефона ищем по заголовку (строка без ссылки, где есть слово «телефон»)."""
+    out, contact_col = [], None
     for row in values:
         row = list(row) + [''] * (6 - len(row))
         found = FILE_ID.search(str(row[4]))
         if not found:
+            if contact_col is None:
+                contact_col = next((i for i, cell in enumerate(row) if i > 4 and 'телефон' in str(cell).lower()), None)
             continue
+        contact = str(row[contact_col]).strip() if contact_col is not None and contact_col < len(row) else ''
+
         try:
             day = datetime.strptime(str(row[1]).strip(), '%d.%m.%Y').date()
         except ValueError:
@@ -93,7 +109,8 @@ def parse_rows(values: list[list]) -> list[dict]:
         except ValueError:
             number = None
         out.append({'file_id': found[1], 'row_no': number, 'day': day, 'time_text': str(row[2]).strip() or None,
-                    'manager_name': str(row[3]).strip() or None, 'comment': str(row[5]).strip() or None})
+                    'manager_name': str(row[3]).strip() or None, 'comment': str(row[5]).strip() or None,
+                    'contact': contact or None})
     return out
 
 
@@ -160,27 +177,46 @@ async def download(http: httpx.AsyncClient, access_token: str, file_id: str) -> 
 
 
 async def sync(pool, client_id: int, values: list[list]) -> int:
-    """Новые строки реестра в presentations. Уже заведённые файлы не трогаем, кроме полей самой строки."""
+    """Новые строки реестра в presentations. Уже заведённые файлы не трогаем, кроме полей самой строки.
+
+    Поменялись дата, время или телефон клиента — запись разбирается заново (звонок и история клиента
+    ищутся по-новому; расшифровка сохранена, файл повторно не качаем). Телефон, указанный вручную в CRM,
+    реестр не перетирает."""
     employees = await pool.fetch("SELECT extension, full_name FROM employees WHERE client_id=$1 AND role='manager'", client_id)
     added = 0
     for row in parse_rows(values):
         ext = match_employee(row['manager_name'], employees)
         status = await pool.fetchval(
-            """INSERT INTO presentations(client_id, file_id, row_no, day, time_text, manager_name, extension, comment)
-               VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+            """INSERT INTO presentations(client_id, file_id, row_no, day, time_text, manager_name, extension, comment,
+                                         client_contact, phone)
+               VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
                ON CONFLICT(client_id, file_id) DO UPDATE SET row_no=EXCLUDED.row_no, day=EXCLUDED.day,
                  time_text=EXCLUDED.time_text, manager_name=EXCLUDED.manager_name,
                  extension=coalesce(presentations.extension, EXCLUDED.extension), comment=EXCLUDED.comment,
-                 -- в реестре поменялись дата или время: звонок Mango ищем заново и разбираем с историей клиента
-                 -- (расшифровка сохранена, повторно файл не качаем)
+                 client_contact=EXCLUDED.client_contact,
+                 phone=CASE WHEN presentations.linked_by IS NULL THEN coalesce(EXCLUDED.phone, presentations.phone)
+                            ELSE presentations.phone END,
                  status=CASE WHEN (presentations.day, presentations.time_text) IS DISTINCT FROM (EXCLUDED.day, EXCLUDED.time_text)
+                               OR presentations.linked_by IS NULL AND EXCLUDED.phone IS NOT NULL
+                                  AND EXCLUDED.phone IS DISTINCT FROM presentations.phone
                              THEN 'new' ELSE presentations.status END,
                  attempts=CASE WHEN (presentations.day, presentations.time_text) IS DISTINCT FROM (EXCLUDED.day, EXCLUDED.time_text)
+                                 OR presentations.linked_by IS NULL AND EXCLUDED.phone IS NOT NULL
+                                    AND EXCLUDED.phone IS DISTINCT FROM presentations.phone
                                THEN 0 ELSE presentations.attempts END
                RETURNING (xmax = 0)""",
-            client_id, row['file_id'], row['row_no'], row['day'], row['time_text'], row['manager_name'], ext, row['comment'])
+            client_id, row['file_id'], row['row_no'], row['day'], row['time_text'], row['manager_name'], ext, row['comment'],
+            row['contact'], phone_digits(row['contact']))
         added += bool(status)
     return added
+
+
+async def call_by_phone(pool, client_id: int, phone: str, day: date | None, tz) -> int | None:
+    """Последний звонок Mango с этим номером не позже дня презентации: даёт историю клиента и сделку."""
+    end = datetime.combine((day or date.today()) + timedelta(days=1), datetime.min.time(), tz)
+    return await pool.fetchval(
+        """SELECT id FROM calls WHERE client_id=$1 AND right(regexp_replace(client_number, '\\D', '', 'g'), 10) = right($2, 10)
+             AND call_started_at < $3 ORDER BY call_started_at DESC LIMIT 1""", client_id, phone, end)
 
 
 def shared_words(a: str, b: str) -> float:
@@ -280,17 +316,20 @@ def validate(data: dict, transcript: str) -> dict:
     return data
 
 
-async def previous(pool, client_id: int, number: str | None) -> list[str]:
+async def previous(pool, client_id: int, number: str | None, exclude: int | None = None) -> list[str]:
     """Что известно о клиенте: итоги прошлых разборов по этому номеру (звонки и презентации)."""
     if not number:
         return []
     rows = await pool.fetch(
         """SELECT c.call_started_at AS at, r.data->>'rop_line' AS line FROM call_reviews r JOIN calls c ON c.id=r.call_id
-           WHERE r.client_id=$1 AND c.client_number=$2 AND r.data->>'rop_line' IS NOT NULL
+           WHERE r.client_id=$1 AND right(regexp_replace(c.client_number, '\\D', '', 'g'), 10) = right($2, 10)
+             AND r.data->>'rop_line' IS NOT NULL
            UNION ALL
-           SELECT c.call_started_at, p.data->>'rop_line' FROM presentations p JOIN calls c ON c.id=p.call_id
-           WHERE p.client_id=$1 AND c.client_number=$2 AND p.status='reviewed'
-           ORDER BY 1 DESC LIMIT 6""", client_id, number)
+           SELECT coalesce(c.call_started_at, p.day::timestamptz), p.data->>'rop_line'
+           FROM presentations p LEFT JOIN calls c ON c.id=p.call_id
+           WHERE p.client_id=$1 AND p.status='reviewed' AND p.id IS DISTINCT FROM $3
+             AND right(regexp_replace(coalesce(c.client_number, p.phone), '\\D', '', 'g'), 10) = right($2, 10)
+           ORDER BY 1 DESC LIMIT 6""", client_id, number, exclude)
     return [f"{r['at']:%d.%m}: {r['line']}" for r in rows if r['line']]
 
 
@@ -388,11 +427,18 @@ async def review_one(pool, row, http, access_token, *, transcribe=None, call=Non
         seconds = int(round(seconds or 0))
         await pool.execute('UPDATE presentations SET transcript=$2, duration_seconds=$3, updated_at=now() WHERE id=$1',
                            row['id'], transcript, seconds)
-    match = await find_call(pool, row['client_id'], row['extension'], row['day'], seconds, transcript, tz, row['time_text'])
-    number = (next((c['number'] for c in match['candidates'] if c['call_id'] == match['call_id']), None)
-              if match['call_id'] else None)
     match_cost = 0.0
-    if not match['call_id'] and (transcript or '').strip():
+    if row['phone']:
+        # Телефон клиента известен (колонка реестра или «Привязать к клиенту» в CRM): угадывать не нужно.
+        by = 'manual' if row['linked_by'] else 'registry'
+        match = {'call_id': await call_by_phone(pool, row['client_id'], row['phone'], row['day'], tz), 'by': by,
+                 'candidates': [], 'phone': row['phone']}
+        number = row['phone']
+    else:
+        match = await find_call(pool, row['client_id'], row['extension'], row['day'], seconds, transcript, tz, row['time_text'])
+        number = (next((c['number'] for c in match['candidates'] if c['call_id'] == match['call_id']), None)
+                  if match['call_id'] else None)
+    if not match['call_id'] and not row['phone'] and (transcript or '').strip():
         # Презентация шла не через Mango: ищем холодный звонок с тем же клиентом по содержанию.
         match['context'], match_cost = await find_by_context(pool, row, transcript, tz, call)
         if match['context'].get('call_id'):
@@ -403,7 +449,7 @@ async def review_one(pool, row, http, access_token, *, transcribe=None, call=Non
     else:
         meta = {'manager': row['manager_name'], 'date': row['day'].strftime('%d.%m.%Y') if row['day'] else None,
                 'duration': f'{seconds // 60} мин {seconds % 60} с' if seconds else None,
-                'history': await previous(pool, row['client_id'], number)}
+                'history': await previous(pool, row['client_id'], number, row['id'])}
         raw, cost = await call(PROMPT, build_input(meta, transcript), MAX_TOKENS)
         data = validate(raw, transcript)
     cost += match_cost
@@ -422,7 +468,7 @@ async def process(pool, http, access_token, limit: int = PER_RUN, **kw) -> int:
         # Разобранные до поиска по смыслу и не привязанные к звонку разбираем ещё раз (расшифровка уже есть).
         """SELECT * FROM presentations
            WHERE attempts < $1 AND (status IN ('new','error')
-                 OR status='reviewed' AND call_id IS NULL AND transcript IS NOT NULL
+                 OR status='reviewed' AND call_id IS NULL AND phone IS NULL AND transcript IS NOT NULL
                     AND coalesce(match->'context'->>'v', '') <> $3)
            ORDER BY status='reviewed', day NULLS LAST, row_no LIMIT $2""",
         MAX_ATTEMPTS, limit, CONTEXT_VERSION)

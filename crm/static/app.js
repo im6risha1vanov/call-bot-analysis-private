@@ -1297,6 +1297,13 @@ VIEWS.deals = async view => {
     </div>
     <div class="panel"><h2>Где отваливаются клиенты</h2><div class="scroll"><table class="tbl"><thead><tr><th>Этап</th><th class="n">Дошли</th><th class="n hide-m">Переход</th><th>Отказ на этапе и почему</th></tr></thead><tbody>${stageRows}</tbody></table></div>
       <p class="muted">Клиент — номер телефона. Звонки и презентации CRM разбирает сама; Telegram или почту, договор и отказ отмечает менеджер в сделке, оплату — директор. Отказ на холодном звонке CRM ставит сама, если последний разговор без результата и перезвона нет; причина берётся из разбора.</p></div>
+    ${d.unlinked && d.unlinked.length ? `<div class="panel"><h2>Презентации без клиента <span class="muted">· ${d.unlinked.length}</span></h2>
+      <p class="muted">Эти презентации шли не через Mango (мессенджер, Zoom), и бот не знает номер клиента. Укажите номер, и презентация попадёт в сделку клиента.</p>
+      <div class="scroll"><table class="tbl"><thead><tr><th>Когда</th>${director ? '<th class="hide-m">Менеджер</th>' : ''}<th>О чём</th><th></th></tr></thead><tbody>
+      ${d.unlinked.map(u => `<tr><td>${esc(when(u.at))}</td>${director ? `<td class="hide-m">${esc(u.manager || '')}</td>` : ''}
+        <td>${u.company ? `<b>${esc(u.company)}</b> · ` : ''}${esc(u.summary || '')}${u.contact ? `<div class="muted">В реестре: ${esc(u.contact)}</div>` : ''}
+          <div><a class="btn small" href="https://drive.google.com/file/d/${encodeURIComponent(u.file_id)}/view" target="_blank" rel="noopener">Запись</a></div></td>
+        <td>${S.me.readonly ? '' : `<button class="btn small" data-plink="${u.id}">Привязать к клиенту</button>`}</td></tr>`).join('')}</tbody></table></div></div>` : ''}
     <div class="panel"><h2>${esc(DEAL_SHOW.find(x => x[0] === f.show)[1])} <span class="muted">· ${list.length}</span></h2>
       ${list.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Клиент</th>${director ? '<th class="hide-m">Менеджер</th>' : ''}<th>Этап</th><th class="hide-m">Последнее</th><th>Что дальше</th></tr></thead><tbody>
       ${list.slice(0, 300).map(x => `<tr class="click" data-deal="${esc(x.phone)}"><td><b>${esc(dealName(x))}</b>${x.company ? `<div class="muted">${esc(phone(x.number))}</div>` : ''}</td>
@@ -1307,7 +1314,26 @@ VIEWS.deals = async view => {
   $$('[data-dd]', view).forEach(b => b.addEventListener('click', () => { f.days = b.dataset.dd; go('deals'); }));
   $('#deal-person', view)?.addEventListener('change', e => { f.person = e.target.value; go('deals'); });
   $$('[data-deal]', view).forEach(tr => tr.addEventListener('click', () => dealCard(tr.dataset.deal)));
+  $$('[data-plink]', view).forEach(b => b.addEventListener('click', () => linkPresentation(d.unlinked.find(u => String(u.id) === b.dataset.plink))));
 };
+
+function linkPresentation(u) {
+  const box = modal(`<header class="rvm-head"><div><h2>Привязать к клиенту</h2>
+      <div class="rvm-mut">Презентация ${esc(when(u.at))}${u.company ? ' · ' + esc(u.company) : ''}</div></div><button class="rvm-x" aria-label="Закрыть">×</button></header>
+    <div class="rvm-body"><div class="outform">
+      <label class="field">Номер клиента<input id="pl-phone" inputmode="tel" placeholder="+7 999 123-45-67" autocomplete="off"></label>
+      <button class="btn primary" id="pl-go">Привязать</button></div>
+      <p class="muted">Номер, по которому менеджер звонил клиенту или с которого клиент писал в мессенджер. Если с этим номером был холодный звонок, презентация встанет в ту же сделку.</p></div>`);
+  $('#pl-phone', box).focus();
+  $('#pl-go', box).addEventListener('click', async () => {
+    try {
+      const r = await api(`/api/presentations/${u.id}/link`, {method: 'POST', scoped: false, body: {phone: $('#pl-phone', box).value}});
+      toast(r.call_found ? 'Привязано к сделке клиента' : 'Привязано. Звонков с этим номером в Mango нет, сделка создана по презентации');
+      $('.rvm-x', box).click();
+      go('deals');
+    } catch (e) { toast(e.message, true); }
+  });
+}
 
 // Кнопка «Его сделки» в карточке сотрудника.
 document.addEventListener('click', e => {
