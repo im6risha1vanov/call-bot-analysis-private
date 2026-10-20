@@ -54,6 +54,7 @@ MATCH_PROMPT = (Path(__file__).with_name('presentation_match_prompt.md').read_te
 CONTEXT_DAYS = 60  # холодные звонки менеджера за столько дней до презентации
 CONTEXT_CANDIDATES = 30
 CONTEXT_CHARS = 4000  # начало расшифровки презентации: там обычно имена и компания
+CONTEXT_VERSION = '2'  # поменяли поиск по смыслу — непривязанные записи ищутся заново
 
 STAGES = ('paid', 'contract', 'decision_date', 'materials', 'dmp_meeting', 'none')
 TEMPERATURES = {'hot', 'warm', 'cold', 'lost'}
@@ -332,7 +333,7 @@ async def find_by_context(pool, row, transcript: str, tz, call) -> tuple[dict, f
     Берём разговоры менеджера за CONTEXT_DAYS дней (с разбором или хотя бы расшифровкой), отбираем
     CONTEXT_CANDIDATES самых похожих по редким словам, из них модель выбирает номер; принимаем только уверенный ответ."""
     if not (row['extension'] and row['day'] and (transcript or '').strip()):
-        return {'reason': 'нет менеджера, дня или расшифровки'}, 0.0
+        return {'reason': 'нет менеджера, дня или расшифровки', 'v': CONTEXT_VERSION}, 0.0
     end = datetime.combine(row['day'] + timedelta(days=1), datetime.min.time(), tz)
     found = await pool.fetch(
         """SELECT c.id, c.client_number, c.call_started_at, c.transcript, r.data, r.data->>'rop_line' AS rop_line,
@@ -343,7 +344,7 @@ async def find_by_context(pool, row, transcript: str, tz, call) -> tuple[dict, f
              AND (c.transcript IS NOT NULL OR r.data IS NOT NULL)""",
         row['client_id'], row['extension'], sorted(engine.REVIEWED), end - timedelta(days=CONTEXT_DAYS), end)
     if not found:
-        return {'reason': 'нет разговоров менеджера с расшифровкой за 60 дней'}, 0.0
+        return {'reason': 'нет разговоров менеджера с расшифровкой за 60 дней', 'v': CONTEXT_VERSION}, 0.0
     head = transcript[:CONTEXT_CHARS]
     docs = [text_words((r['transcript'] or '') + ' ' + describe_cold_call(r, tz)) for r in found]
     scored = sorted(zip(rank_by_words(head, docs), found), key=lambda x: (-x[0], not x[1]['success'],
@@ -361,7 +362,8 @@ async def find_by_context(pool, row, transcript: str, tz, call) -> tuple[dict, f
     raw, cost = await call(MATCH_PROMPT, user, 2000)
     raw = raw if isinstance(raw, dict) else {}
     pick = raw.get('call')
-    result = {'confidence': raw.get('confidence'), 'evidence': raw.get('evidence'), 'candidates': len(rows)}
+    result = {'confidence': raw.get('confidence'), 'evidence': raw.get('evidence'), 'candidates': len(rows),
+              'v': CONTEXT_VERSION}
     if isinstance(pick, int) and not isinstance(pick, bool) and 1 <= pick <= len(rows) and raw.get('confidence') == 'high':
         chosen = rows[pick - 1]
         result.update(call_id=chosen['id'], number=chosen['client_number'], at=chosen['call_started_at'].isoformat())
@@ -419,9 +421,10 @@ async def process(pool, http, access_token, limit: int = PER_RUN, **kw) -> int:
         # Разобранные до поиска по смыслу и не привязанные к звонку разбираем ещё раз (расшифровка уже есть).
         """SELECT * FROM presentations
            WHERE attempts < $1 AND (status IN ('new','error')
-                 OR status='reviewed' AND call_id IS NULL AND transcript IS NOT NULL AND NOT coalesce(match ? 'context', false))
+                 OR status='reviewed' AND call_id IS NULL AND transcript IS NOT NULL
+                    AND coalesce(match->'context'->>'v', '') <> $3)
            ORDER BY status='reviewed', day NULLS LAST, row_no LIMIT $2""",
-        MAX_ATTEMPTS, limit)
+        MAX_ATTEMPTS, limit, CONTEXT_VERSION)
     done = 0
     for row in rows:
         await pool.execute('UPDATE presentations SET attempts=attempts+1 WHERE id=$1', row['id'])
