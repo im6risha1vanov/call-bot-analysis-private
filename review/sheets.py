@@ -348,7 +348,9 @@ def presentations_table(rows, tz) -> Table:
         moment = data.get('key_moment') or {}
         contract = data.get('contract') or {}
         match = loads(r['match']) or {}
-        if r['call_id'] and match.get('by') == 'context':
+        if match.get('by') in ('manual', 'registry'):
+            mango = 'телефон указан вручную' if match['by'] == 'manual' else 'телефон из реестра'
+        elif r['call_id'] and match.get('by') == 'context':
             # презентация не через Mango: привязана по содержанию к холодному звонку с этим клиентом
             when = r['call_started_at'].astimezone(tz).strftime('%d.%m %H:%M') if r['call_started_at'] else ''
             mango = f'по смыслу: холодный {when}'.strip()
@@ -359,7 +361,7 @@ def presentations_table(rows, tz) -> Table:
             if match.get('context'):
                 mango += '; по смыслу: ' + (match['context'].get('reason') or 'не нашёлся')
         when = r['day'].strftime('%d.%m.%Y') if r['day'] else ''
-        table.add([when, r['manager'] or r['manager_name'] or '', fmt_phone(r['client_number']) if r['client_number'] else '',
+        table.add([when, r['manager'] or r['manager_name'] or '', fmt_phone(r['client_number']) if r['client_number'] else (r['client_contact'] or ''),
                    contract.get('company') or '', STAGE_LABELS.get(data.get('stage_after'), ''),
                    TEMPERATURE_LABELS.get(data.get('temperature'), ''),
                    PRESENTATION_CATEGORIES.get(moment.get('category'), '') if moment else '',
@@ -409,7 +411,7 @@ async def collect(pool, now: datetime | None = None) -> list[Table]:
         tables.append(memory_table(await memory.periods(pool, client['id'], now), managers, tz, now, cards))
         if await pool.fetchval("SELECT to_regclass('presentations') IS NOT NULL"):
             done = await pool.fetch(
-                """SELECT p.*, c.client_number, c.call_started_at,
+                """SELECT p.*, coalesce(c.client_number, p.phone) AS client_number, c.call_started_at,
                           (SELECT full_name FROM employees e WHERE e.client_id=p.client_id AND e.extension=p.extension
                              AND e.role='manager' LIMIT 1) AS manager
                    FROM presentations p LEFT JOIN calls c ON c.id=p.call_id

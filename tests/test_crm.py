@@ -116,7 +116,7 @@ class DBCase(unittest.IsolatedAsyncioTestCase):
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS assigned_by_telegram_user_id BIGINT;""")
         for name in ('008_call_reviews.sql', '009_callback_tasks.sql', '012_prompt_versions.sql', '013_employee_invites.sql',
                      '014_crm.sql', '015_crm_roles.sql', '016_crm_access.sql', '017_crm_reports.sql', '018_crm_questions.sql',
-                     '019_crm_staff.sql', '021_manager_memory.sql', '022_presentations.sql', '024_deals.sql', '025_contracts.sql'):
+                     '019_crm_staff.sql', '021_manager_memory.sql', '022_presentations.sql', '024_deals.sql', '025_contracts.sql', '026_presentation_client.sql'):
             await self.pool.execute((root / 'migrations' / name).read_text())
         await self.pool.execute('TRUNCATE clients, crm_login_tokens, crm_sessions, crm_docs, crm_invites, crm_reports, crm_questions, '
                                 'employee_invites, manager_memory, deal_events, contracts, prompt_active, prompt_versions, prompt_drafts, astra_daily_spend CASCADE')
@@ -715,6 +715,30 @@ class WebTests(DBCase):
         reopened = await (await post('79990000002', kind='reopen')).json()
         self.assertEqual(reopened['status'], 'active')  # после «снова в работе» авто-отказ не возвращается
 
+        # презентации не через Mango: без клиента, пока номер не укажут вручную
+        for file_id, ext in (('m1', '101'), ('m2', '101'), ('m3', '102')):
+            await self.pool.execute(
+                """INSERT INTO presentations(client_id,file_id,day,time_text,extension,status,data)
+                   VALUES(1,$1,current_date-1,'09:30',$2,'reviewed',$3::jsonb)""", file_id, ext, json.dumps(pres))
+        ids = {r['file_id']: r['id'] for r in await self.pool.fetch("SELECT id, file_id FROM presentations WHERE file_id LIKE 'm%'")}
+        d = await (await self.http.get('/api/deals')).json()
+        self.assertEqual({u['file_id'] for u in d['unlinked']}, {'m1', 'm2', 'm3'})
+        self.assertTrue(d['unlinked'][0]['at'].endswith('12:30'))  # время реестра по UTC, показываем по Москве
+        link = lambda pid, phone: self.http.post(f'/api/presentations/{pid}/link', json={'phone': phone}, headers={'X-CRM': '1'})
+        self.assertEqual((await link(ids['m1'], '@nick')).status, 400)
+        r = await link(ids['m1'], '+7 (999) 000-00-01')  # был холодный звонок с этим номером
+        self.assertEqual((r.status, await r.json()), (200, {'phone': '9990000001', 'call_found': True}))
+        r = await link(ids['m2'], '8 912 345-67-89')  # номера в Mango нет: сделка по самой презентации
+        self.assertEqual(await r.json(), {'phone': '9123456789', 'call_found': False})
+        d = await (await self.http.get('/api/deals')).json()
+        by = {x['phone']: x for x in d['deals']}
+        self.assertEqual({u['file_id'] for u in d['unlinked']}, {'m3'})
+        self.assertEqual((by['9990000001']['stage'], by['9990000001']['status']), ('presentation', 'active'))
+        self.assertEqual((by['9123456789']['stage'], by['9123456789']['ext']), ('presentation', '101'))
+        timeline = (await (await self.http.get('/api/deals/79990000001')).json())['timeline']
+        self.assertEqual([t['type'] for t in timeline][-1], 'presentation')
+        self.assertEqual(await self.pool.fetchval("SELECT linked_by FROM presentations WHERE file_id='m1'"), 'Директор')
+
         # менеджер: только свои сделки, без оплаты
         self.http.session.cookie_jar.clear()
         await self.login(123)
@@ -725,6 +749,8 @@ class WebTests(DBCase):
         self.assertEqual((await post('79990000002', kind='paid', amount='1000')).status, 403)
         self.assertEqual((await post('79990000004', kind='note', note='x')).status, 403)
         self.assertEqual((await post('79990000002', kind='materials', note='КП в Telegram')).status, 200)
+        self.assertEqual([u['file_id'] for u in mine['unlinked']], [])  # m3 — презентация другого менеджера
+        self.assertEqual((await link(ids['m3'], '+7 999 111-22-33')).status, 403)
 
     async def test_contracts(self):
         import asyncio

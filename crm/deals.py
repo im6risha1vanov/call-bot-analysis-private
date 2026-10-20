@@ -88,10 +88,11 @@ async def load(pool, client_id: int, ext: str | None = None) -> dict:
              AND ($2::text IS NULL OR c.extension=$2)
            ORDER BY c.call_started_at""", client_id, ext, sorted(engine.REVIEWED))
     shows = await pool.fetch(
-        """SELECT p.id, p.day, p.time_text, p.file_id, p.extension, p.data, c.client_number, c.call_started_at,
-                  p.match->>'by' AS match_by
-           FROM presentations p JOIN calls c ON c.id=p.call_id
-           WHERE p.client_id=$1 AND p.status='reviewed' ORDER BY c.call_started_at""", client_id) \
+        """SELECT p.id, p.day, p.time_text, p.file_id, p.extension, p.data, c.call_started_at,
+                  coalesce(c.client_number, p.phone) AS client_number, p.match->>'by' AS match_by
+           FROM presentations p LEFT JOIN calls c ON c.id=p.call_id
+           WHERE p.client_id=$1 AND p.status='reviewed' AND coalesce(c.client_number, p.phone) IS NOT NULL
+           ORDER BY p.day, p.time_text""", client_id) \
         if await has_table(pool, 'presentations') else []
     events = await pool.fetch('SELECT * FROM deal_events WHERE client_id=$1 ORDER BY created_at, id', client_id) \
         if await has_table(pool, 'deal_events') else []
@@ -189,8 +190,9 @@ def deal(k: str, src: dict, task, in_base: bool, names: dict, tz, now: datetime)
         reached = 'presentation'
         last_show = data
         moment = data.get('key_moment') or {}
-        # Привязана по смыслу к холодному звонку: время презентации — из реестра, а не время того звонка.
-        at = (show_time(r['day'], r['time_text'], tz) if r['match_by'] == 'context' and r['day']
+        # Звонок Mango — сама презентация; иначе (по смыслу, по телефону) время берём из реестра.
+        at = (show_time(r['day'], r['time_text'], tz) if r['day'] and (r['match_by'] in ('context', 'manual', 'registry')
+                                                                      or not r['call_started_at'])
               else iso(r['call_started_at'], tz))
         timeline.append({'at': at, 'type': 'presentation', 'id': r['id'],
                          'title': 'Презентация', 'text': data.get('rop_line'), 'temperature': data.get('temperature'),
@@ -329,6 +331,7 @@ async def listing(pool, actor, ext: str | None = None, days: int | None = None, 
                 and (not days or r['created_at'] >= now - timedelta(days=days))} - {None})
     managers = sorted({(d['ext'], d['manager']) for d in build(raw, tz, now) if d['ext']}, key=lambda x: x[1])
     return {'deals': [{**d, 'timeline': None} for d in deals], 'funnel': funnel(deals, base),
+            'unlinked': await unlinked(pool, actor, ext),
             'stages': [{'key': k, 'name': n} for k, n in STAGES], 'reasons': LOST_REASONS,
             'managers': [{'ext': e, 'name': n} for e, n in managers],
             'can_pay': can_pay(actor), 'today': now.astimezone(tz).date().isoformat()}
@@ -346,6 +349,53 @@ async def one(pool, actor, phone: str, now: datetime | None = None) -> dict:
     if not is_privileged(actor) and found['ext'] != actor.extension:
         raise Forbidden('Это сделка другого менеджера.')
     return {**found, 'reasons': LOST_REASONS, 'events': EVENT_LABELS, 'can_pay': can_pay(actor)}
+
+
+async def unlinked(pool, actor, ext: str | None = None) -> list[dict]:
+    """Разобранные презентации без клиента: звонка в Mango нет, телефона в реестре нет. Их привязывают вручную."""
+    if not await has_table(pool, 'presentations'):
+        return []
+    if not is_privileged(actor):
+        ext = actor.extension
+    tz = await store.zone(pool, actor.client_id)
+    rows = await pool.fetch(
+        """SELECT p.id, p.day, p.time_text, p.extension, p.manager_name, p.file_id, p.client_contact, p.data,
+                  (SELECT full_name FROM employees e WHERE e.client_id=p.client_id AND e.extension=p.extension
+                     AND e.role='manager' LIMIT 1) AS manager
+           FROM presentations p
+           WHERE p.client_id=$1 AND p.status='reviewed' AND p.call_id IS NULL AND p.phone IS NULL
+             AND ($2::text IS NULL OR p.extension=$2)
+           ORDER BY p.day DESC NULLS LAST, p.time_text DESC""", actor.client_id, ext)
+    out = []
+    for r in rows:
+        data = loads(r['data'])
+        moment = data.get('key_moment') or {}
+        out.append({'id': r['id'], 'at': show_time(r['day'], r['time_text'], tz) if r['day'] else None,
+                    'manager': r['manager'] or r['manager_name'], 'company': (data.get('contract') or {}).get('company'),
+                    'contact': r['client_contact'], 'summary': data.get('rop_line') or moment.get('what_happened'),
+                    'next': data.get('next_step_advice'), 'file_id': r['file_id']})
+    return out
+
+
+async def link_presentation(pool, actor, presentation_id: int, phone: str, name: str | None) -> dict:
+    """«Привязать к клиенту»: номер клиента для презентации, которая шла не через Mango."""
+    from review.presentations import call_by_phone, phone_digits
+    digits = phone_digits(phone)
+    if not digits:
+        raise ValueError('Введите номер клиента, например +7 999 123-45-67.')
+    row = await pool.fetchrow('SELECT id, extension, day FROM presentations WHERE id=$1 AND client_id=$2',
+                              presentation_id, actor.client_id)
+    if not row:
+        raise ValueError('Такой презентации нет.')
+    if not is_privileged(actor) and row['extension'] != actor.extension:
+        raise Forbidden('Это презентация другого менеджера.')
+    tz = await store.zone(pool, actor.client_id)
+    call_id = await call_by_phone(pool, actor.client_id, digits, row['day'], tz)
+    await pool.execute(
+        """UPDATE presentations SET phone=$2, call_id=$3, linked_by=$4, linked_at=now(), updated_at=now(),
+             match=coalesce(match, '{}'::jsonb) || jsonb_build_object('by', 'manual', 'phone', $2::text)
+           WHERE id=$1""", presentation_id, digits, call_id, name or 'CRM')
+    return {'phone': key(digits), 'call_found': call_id is not None}
 
 
 def can_pay(actor) -> bool:

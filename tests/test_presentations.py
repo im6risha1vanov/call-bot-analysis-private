@@ -58,19 +58,24 @@ class ParseTests(unittest.TestCase):
 
             async def get(self, url, params, headers):
                 self.asked.append((url.split('/values/')[1], params['valueRenderOption']))
-                body = ({'values': [['1', '21.09.2026', '08:11', 'Илья Козлов', 'Слушать'], ['2', '22.09.2026']]}
+                body = ({'values': [['№', 'Дата', 'Время', 'Менеджер', 'Запись', 'Комментарий', 'Телефон клиента'],
+                                    ['1', '21.09.2026', '08:11', 'Илья Козлов', 'Слушать', '', '+7 (912) 345-67-89'],
+                                    ['2', '22.09.2026']]}
                         if params['valueRenderOption'] == 'FORMATTED_VALUE'
-                        else {'values': [[LINK.format('17MnFxr91QA2HSwpmQYpZpu3vgZKgTs1k')]]})
+                        else {'values': [['Запись'], [LINK.format('17MnFxr91QA2HSwpmQYpZpu3vgZKgTs1k')]]})
                 return type('R', (), {'raise_for_status': lambda self: None, 'json': lambda self: body})()
 
         http = Http()
         with patch.dict(os.environ, {'PRESENTATIONS_SHEET_ID': 'S'}):
             values = asyncio.run(P.read_registry(http, 't'))
-        self.assertEqual(http.asked, [('Звонки!A2:F', 'FORMATTED_VALUE'), ('Звонки!E2:E', 'FORMULA')])
+        self.assertEqual(http.asked, [('Звонки!A1:Z', 'FORMATTED_VALUE'), ('Звонки!E1:E', 'FORMULA')])
         rows = P.parse_rows(values)
         self.assertEqual(len(rows), 1)
         self.assertEqual((rows[0]['row_no'], rows[0]['day'], rows[0]['time_text'], rows[0]['file_id']),
                          (1, date(2026, 9, 21), '08:11', '17MnFxr91QA2HSwpmQYpZpu3vgZKgTs1k'))
+        self.assertEqual(rows[0]['contact'], '+7 (912) 345-67-89')
+        self.assertEqual([P.phone_digits(x) for x in ('+7 (912) 345-67-89', '89123456789', '9123456789', '@ivan', '')],
+                         ['79123456789', '79123456789', '79123456789', None, None])
 
     def test_employee_by_name(self):
         staff = [{'extension': '11', 'full_name': 'Марк Амирханян'}, {'extension': '12', 'full_name': 'Козлов Илья'},
@@ -108,7 +113,7 @@ class StoreTests(unittest.IsolatedAsyncioTestCase):
             ALTER TABLE calls ADD COLUMN IF NOT EXISTS client_number TEXT;
             ALTER TABLE calls ADD COLUMN IF NOT EXISTS direction INTEGER DEFAULT 2;
             ALTER TABLE employees ADD COLUMN IF NOT EXISTS id BIGSERIAL;""")
-        for name in ('008_call_reviews.sql', '022_presentations.sql'):
+        for name in ('008_call_reviews.sql', '022_presentations.sql', '026_presentation_client.sql'):
             await self.pool.execute((root / 'migrations' / name).read_text())
         await self.pool.execute('TRUNCATE clients, astra_daily_spend CASCADE')
         await self.pool.execute("INSERT INTO clients VALUES(1,'Europe/Moscow',true)")
@@ -277,3 +282,56 @@ class ContextTests(StoreTests):
             self.assertEqual(await P.process(self.pool, None, 't', transcribe=transcribe, call=fake_call), 1)
             self.assertEqual(await P.process(self.pool, None, 't', transcribe=transcribe, call=fake_call), 0)
         self.assertEqual(await self.pool.fetchval('SELECT call_id FROM presentations'), romka)
+
+
+@unittest.skipUnless(DSN, 'METHODOLOGY_TEST_DATABASE_URL не задан')
+class PhoneTests(StoreTests):
+    test_sync_match_and_review = None
+
+    async def test_phone_from_registry(self):
+        """Телефон клиента в реестре: ни Mango по длине, ни поиск по смыслу не нужны."""
+        cold = await self.call('12', datetime(2026, 10, 15, 11, 0, tzinfo=MSK), 140, '79123456789')
+        await self.pool.execute(
+            """INSERT INTO call_reviews(call_id,client_id,extension,prompt_version,kind,success,chance,category,data)
+               VALUES($1,1,'12','v','cold_first',true,null,null,'{"rop_line":"Холодный. Презентация 20.10."}'::jsonb)""", cold)
+        header = ['№', 'Дата', 'Время', 'Менеджер', 'Запись', 'Комментарий', 'Телефон клиента']
+        values = [header, ['44', '20.10.2026', '12:00', 'Илья Козлов', LINK.format('fileTelAAAAAA'), '', '8 912 345-67-89'],
+                  ['45', '20.10.2026', '13:00', 'Илья Козлов', LINK.format('fileTelBBBBBB'), '', '']]
+        await P.sync(self.pool, 1, values)
+        seen = []
+
+        async def fake_call(system, user, max_tokens):
+            self.assertNotEqual(system, P.MATCH_PROMPT)  # по смыслу не ищем
+            seen.append(user)
+            return json.loads(json.dumps(ANSWER)), 0.7
+
+        async def transcribe(audio):
+            return TRANSCRIPT, 548.0
+
+        async def fake_download(http, token, file_id):
+            return b'x'
+
+        with patch.object(P, 'download', fake_download), patch.object(P, 'find_by_context', AsyncMock(return_value=({'reason': 'x'}, 0.0))):
+            await P.process(self.pool, None, 't', transcribe=transcribe, call=fake_call)
+        rows = {r['row_no']: r for r in await self.pool.fetch('SELECT * FROM presentations')}
+        self.assertEqual((rows[44]['phone'], rows[44]['call_id'], json.loads(rows[44]['match'])['by']),
+                         ('79123456789', cold, 'registry'))
+        self.assertTrue(any('Холодный. Презентация 20.10.' in u for u in seen))  # история клиента по номеру
+        self.assertIsNone(rows[45]['phone'])
+
+        # номер дописали в реестр позже: запись разбирается заново уже с клиентом
+        values[2][6] = '+7 999 000-11-22'
+        await P.sync(self.pool, 1, values)
+        self.assertEqual(await self.pool.fetchval('SELECT status FROM presentations WHERE row_no=45'), 'new')
+        # указанный вручную номер реестр не перетирает
+        await self.pool.execute("UPDATE presentations SET phone='79995554433', linked_by='Директор', status='reviewed' WHERE row_no=44")
+        values[1][6] = '+7 912 000-00-00'
+        await P.sync(self.pool, 1, values)
+        row = await self.pool.fetchrow('SELECT phone, status, client_contact FROM presentations WHERE row_no=44')
+        self.assertEqual(tuple(row), ('79995554433', 'reviewed', '+7 912 000-00-00'))
+
+        from review import sheets
+        table = sheets.presentations_table(await self.pool.fetch(
+            """SELECT p.*, coalesce(c.client_number, p.phone) AS client_number, c.call_started_at, 'Козлов Илья' AS manager
+               FROM presentations p LEFT JOIN calls c ON c.id=p.call_id WHERE p.row_no=44"""), MSK)
+        self.assertEqual(table.rows[1][11], 'телефон из реестра')

@@ -490,6 +490,19 @@ async def api_deal_event(request):
                                                    await author_name(pool, who)))
 
 
+async def api_presentation_link(request):
+    """«Привязать к клиенту»: номер клиента для презентации, которая шла не через Mango."""
+    who = await actor(request, write=True)
+    pool = request.app[POOL]
+    data = await body(request)
+    try:
+        presentation_id = int(request.match_info['id'])
+    except ValueError:
+        raise web.HTTPNotFound()
+    return web.json_response(await deals.link_presentation(pool, who, presentation_id, str(data.get('phone') or ''),
+                                                           await author_name(pool, who)))
+
+
 # Генератор договоров (static/contracts/): пути — те, что ждёт страница генератора.
 async def api_contracts_config(request):
     await actor(request)
@@ -739,6 +752,7 @@ def build(pool) -> web.Application:
     app.router.add_get('/api/deals', api_deals)
     app.router.add_get('/api/deals/{phone}', api_deal)
     app.router.add_post('/api/deals/{phone}/event', api_deal_event)
+    app.router.add_post('/api/presentations/{id}/link', api_presentation_link)
     app.router.add_get('/api/contracts', api_contracts)
     app.router.add_get('/api/contracts/config', api_contracts_config)
     app.router.add_get('/api/contracts/next-number', api_contracts_next)
