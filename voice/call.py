@@ -46,6 +46,9 @@ BACKCHANNEL_EVERY_S = 6.0
 # Прощание: Ольга не бросает трубку посреди «до свидания» клиента, а отвечает «всего доброго».
 GOODBYE_WAIT_S = 2.5
 GOODBYE_WORDS = {"свидания", "доброго", "спасибо", "благодарю", "хорошо", "ладно", "ага", "угу", "давайте", "да", "пока"}
+# Клиент снова заговорил меньше чем через столько секунд после конца своей реплики: это не новая реплика,
+# а продолжение той же фразы, которую закрыли слишком рано. Ответ робота на её начало отменяется.
+CONTINUE_S = 1.0
 PARTING = {"thanks": "Вам спасибо, всего доброго.", "bye": "Всего доброго."}
 # Реплика озвучивается целиком, когда модель её дописала: ElevenLabs ведёт одну интонацию через всю реплику.
 # По предложениям быстрее на 0,3–0,6 с, но интонация начинается заново после каждой точки.
@@ -102,6 +105,7 @@ class CallSession:
         self.done = asyncio.Event()    # итог сохранён и отправлен
         self.saved: dict | None = None
         self.heard_at = 0.0      # когда клиент закончил реплику: для замера, как быстро робот ответил
+        self.client_done_at = 0.0  # то же, но не сбрасывается с первым звуком ответа: для склейки продолжения
         self.last_filler = ""
         self.filler_said_at = 0.0
         self.filler_last_any = 0.0
@@ -113,6 +117,7 @@ class CallSession:
         self.reply_spoke = False  # робот уже начал озвучивать текущий ответ (для поиска пауз посреди ответа)
         self.noting = False       # клиент назвал данные: «так, записываю…» вместо «угу…»
         self.utterance_at = 0.0   # когда клиент начал текущую реплику (по первому промежуточному тексту)
+        self.utterance_over_robot = False
         self.backchannel_at = 0.0
         self.after_end: asyncio.Queue[str] = asyncio.Queue()  # что клиент сказал после прощания робота
 
@@ -171,8 +176,13 @@ class CallSession:
             if final:
                 self.after_end.put_nowait(text)
             return
+        started = self.utterance_at or time.monotonic()
+        # робот ещё говорил или думал, когда клиент снова заговорил: его ответ клиент толком не услышал
+        over_robot = self.utterance_over_robot if self.utterance_at else self.is_speaking()
         if final:
             self.utterance_at = 0.0  # реплика клиента закончилась: следующая считается заново
+        elif not self.utterance_at:
+            self.utterance_at, self.utterance_over_robot = started, over_robot
         # «алло» клиента, пока приветствие ещё не прозвучало или звучит, это не ответ: не перебиваем
         if final and not self.client_spoke and self.is_speaking() and text.strip(" .,!?…").lower() in HELLO_WORDS:
             log.info("клиент сказал «%s» поверх приветствия, продолжаем", text)
@@ -186,13 +196,15 @@ class CallSession:
             if self.audio_sent and self.is_speaking() and len(text.split()) >= BARGE_IN_WORDS:
                 await self._barge_in(text)
                 return
-            self.utterance_at = self.utterance_at or time.monotonic()
             await self._backchannel(text)
             return
         if self.audio_sent and self.is_speaking():  # приветствие, которое ещё не прозвучало, не сбрасываем
             await self._barge_in(text)
+        if self.client_spoke and over_robot and self.client_done_at and started - self.client_done_at < CONTINUE_S \
+                and self.dialog.undo_robot():
+            log.info("клиент договаривает прошлую фразу: «%s», ответ на её начало отменён", text)
         self.client_spoke = True
-        self.heard_at = time.monotonic()
+        self.heard_at = self.client_done_at = time.monotonic()
         await self.send_event({"type": "transcript", "role": "client", "text": text})
         self.reply_task = asyncio.create_task(self._respond(text))
 

@@ -172,6 +172,17 @@ class Dialog:
             return True
         return False
 
+    def undo_robot(self) -> bool:
+        """Клиент договаривал свою фразу, а робот уже ответил на её начало: ответ убираем из истории,
+        продолжение клиента приклеится к началу, и модель ответит на фразу целиком."""
+        if self.finished or len(self.messages) < 2 or self.messages[-1]["role"] != "assistant" \
+                or self.messages[-2]["role"] != "user":
+            return False
+        text = self.messages.pop()["content"]
+        if self.transcript and self.transcript[-1] == ("robot", text):
+            self.transcript.pop()
+        return True
+
     async def reply(self, client_text: str, on_text: TextSink | None = None) -> Turn:
         """Ответ робота на реплику клиента. on_text получает куски текста по мере генерации."""
         if self.finished:
