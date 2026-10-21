@@ -39,7 +39,7 @@ TIMEZONES = [('Europe/Kaliningrad', 'Калининград, МСК−1'), ('Eur
 MAX_CONTACTS = 20000
 RECORDING_DAYS = 10
 # Поля анкеты, которые правятся в CRM. Остальное (голос, быстрые ответы) берётся из оператора, с которого сделана копия.
-TEXT_FIELDS = ('name', 'gender', 'company', 'lead_source', 'goal', 'greeting', 'farewell', 'transfer_to')
+TEXT_FIELDS = ('name', 'gender', 'company', 'lead_source', 'goal', 'greeting', 'farewell', 'transfer_to', 'example')
 LIST_FIELDS = ('plan', 'rules', 'facts')
 
 
@@ -172,7 +172,7 @@ def save_operator(owner: str, data: dict, op_id: str | None = None, copy_from: s
     new = {k: v for k, v in base.items() if k not in ('owner', 'fields')}
     for key in TEXT_FIELDS:
         if key in data:
-            new[key] = str(data.get(key) or '').strip()[:1000]
+            new[key] = str(data.get(key) or '').strip()[:4000 if key == 'example' else 1000]
     new['gender'] = new.get('gender') or 'female'
     for key in LIST_FIELDS:
         if key in data:
@@ -209,7 +209,7 @@ def save_operator(owner: str, data: dict, op_id: str | None = None, copy_from: s
     return operator(owner, op_id)
 
 
-NAMES = {'name': 'имя', 'company': 'компания', 'greeting': 'приветствие', 'farewell': 'прощание', 'goal': 'цель',
+NAMES = {'name': 'имя', 'company': 'компания', 'greeting': 'приветствие', 'farewell': 'прощание', 'goal': 'цель', 'example': 'образец разговора',
          'plan': 'план разговора', 'rules': 'правила', 'facts': 'аргументы'}
 
 
