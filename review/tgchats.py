@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import logging
 import os
+import re
+import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -36,6 +38,22 @@ def enabled() -> bool:
 
 def session_path() -> str:
     return os.getenv('TG_SESSION') or str(Path(__file__).resolve().parents[1] / 'tg-work.session')
+
+
+def save_keys(env_path: Path, api_id: str, api_hash: str, backup_dir: Path = Path('/root/backups')) -> None:
+    """Ключи приложения my.telegram.org в .env (прежние TG_API_* заменяются), до этого копия .env в backup_dir."""
+    if not api_id.isdigit():
+        raise ValueError('api_id — это число из my.telegram.org')
+    if not re.fullmatch(r'[0-9a-f]{32}', api_hash):
+        raise ValueError('api_hash — 32 символа 0-9 и a-f из my.telegram.org')
+    text = env_path.read_text(encoding='utf-8') if env_path.exists() else ''
+    if env_path.exists():
+        backup = backup_dir / 'env.before-tg' if backup_dir.is_dir() else env_path.with_name('.env.before-tg')
+        shutil.copy2(env_path, backup)
+    lines = [line for line in text.splitlines() if line.split('=', 1)[0].strip() not in ('TG_API_ID', 'TG_API_HASH')]
+    # Запись в тот же файл: владелец и права .env не меняются.
+    env_path.write_text('\n'.join(lines + [f'TG_API_ID={api_id}', f'TG_API_HASH={api_hash}']) + '\n', encoding='utf-8')
+    os.environ.update(TG_API_ID=api_id, TG_API_HASH=api_hash)
 
 
 def make_client():
@@ -180,18 +198,32 @@ async def maybe_run(pool, now: datetime | None = None) -> dict | None:
 if __name__ == '__main__':
     # python -m review.tgchats login — один раз: вход в рабочий аккаунт (номер, код из Telegram, пароль).
     # python -m review.tgchats folders — только чтение: какие папки видит бот и сколько в них чатов.
+    # python -m review.tgchats setup — спросить api_id и api_hash, записать их в .env и сразу войти (login).
     import asyncio
     import sys
 
     async def _main(command):
         from scripts.kitchen_backfill import load_env
-        load_env(Path(__file__).resolve().parents[1] / '.env')
+        env = Path(__file__).resolve().parents[1] / '.env'
+        load_env(env)
+        if command == 'setup':
+            if os.getenv('TG_API_ID') and os.getenv('TG_API_HASH'):
+                print('Ключи уже есть в .env, сразу вход.')
+            else:
+                import getpass
+                save_keys(env, input('api_id: ').strip(), getpass.getpass('api_hash (при вводе не видно): ').strip())
+                print('Ключи записаны в .env.')
+            command = 'login'
         client = make_client()
         if command == 'login':
             await client.start()
             me = await client.get_me()
             print('Вход выполнен:', me.first_name, me.phone, '· сессия', session_path())
             os.chmod(session_path(), 0o600)
+            if os.geteuid() == 0:
+                # Запуск от root: сессию отдаём владельцу папки приложения (пользователь сервиса).
+                owner = env.parent.stat()
+                os.chown(session_path(), owner.st_uid, owner.st_gid)
         else:
             await client.connect()
             if not await client.is_user_authorized():
@@ -209,5 +241,5 @@ if __name__ == '__main__':
                 print('папок нет')
         await client.disconnect()
 
-    if sys.argv[1:2] in (['login'], ['folders']):
+    if sys.argv[1:2] in (['login'], ['folders'], ['setup']):
         asyncio.run(_main(sys.argv[1]))

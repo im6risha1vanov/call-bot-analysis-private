@@ -66,6 +66,24 @@ class FolderTests(unittest.TestCase):
 
 
 @unittest.skipUnless(DSN, 'METHODOLOGY_TEST_DATABASE_URL не задан')
+class KeysTests(unittest.TestCase):
+    def test_save_keys(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {}):
+            env, backups = Path(tmp) / '.env', Path(tmp) / 'backups'
+            backups.mkdir()
+            env.write_text('DATABASE_URL=x\nTG_API_ID=1\nTG_API_HASH=old\n', encoding='utf-8')
+            with self.assertRaises(ValueError):
+                T.save_keys(env, '12a', 'f' * 32, backups)
+            with self.assertRaises(ValueError):
+                T.save_keys(env, '123', 'xyz', backups)
+            T.save_keys(env, '123', 'ab' * 16, backups)
+            self.assertEqual(env.read_text(encoding='utf-8'),
+                             'DATABASE_URL=x\nTG_API_ID=123\nTG_API_HASH=' + 'ab' * 16 + '\n')
+            self.assertIn('TG_API_HASH=old', (backups / 'env.before-tg').read_text(encoding='utf-8'))
+            self.assertEqual(os.environ['TG_API_ID'], '123')
+
+
 class SyncTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.pool = await asyncpg.create_pool(DSN, min_size=1, max_size=4)
