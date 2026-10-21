@@ -29,6 +29,7 @@ DIAL_GAP_S = 20  # не чаще одного звонка в 20 секунд: �
 OUTCOMES = {'interested': 'Заинтересованный', 'callback': 'Перезвон', 'not_relevant': 'Неактуально', 'ndz': 'Не взял трубку',
             'do_not_call': 'Просил не звонить'}
 _last_dial = {'at': 0.0}
+_tasks: set = set()  # фоновые пересчёты цен: ссылка, чтобы задачу не собрал сборщик мусора
 
 
 def check(who, write: bool = False) -> None:
@@ -69,10 +70,19 @@ def operators() -> list[dict]:
     return out
 
 
-async def overview(who) -> dict:
+def preset_list(costs: dict) -> list[dict]:
+    """Наборы робота для выбора в CRM: что внутри, оценка минуты и чем отличаются."""
+    from voice import presets
+    return [{'key': key, 'name': ps['name'], 'llm': presets.LLM[ps['llm']]['name'], 'tts': presets.TTS[ps['tts']]['name'],
+             'llm_price': presets.LLM[ps['llm']]['price'], 'cost_min': costs.get(key), 'quality': ps['quality']}
+            for key, ps in presets.PRESETS.items()]
+
+
+async def overview(who, pool=None) -> dict:
     check(who)
-    from voice import speech
+    from voice import presets, speech
     from voice.web import _current_voice
+    from . import robot_store
     if os.getenv('ELEVENLABS_API_KEY') and not speech._eleven_direct:
         try:
             await speech.load_eleven_voices()
@@ -80,17 +90,26 @@ async def overview(who) -> dict:
             pass
     return {'up': await robot_up(), 'operators': operators(), 'test_phones': test_phones(),
             'settings': _current_voice(), 'voices': speech._eleven_direct,
-            'can_save': bool(speech.SETTINGS_FILE) and DATA.is_dir(), 'readonly': who.test}
+            'can_save': bool(speech.SETTINGS_FILE) and DATA.is_dir(), 'readonly': who.test,
+            'presets': preset_list((await robot_store.economics(pool))['presets'] if pool is not None else {}),
+            'preset': presets.current() or presets.DEFAULT}
 
 
-async def save_settings(who, data) -> dict:
+async def save_settings(who, data, pool=None) -> dict:
     check(who, write=True)
     from voice import speech
     if not isinstance(data, dict):
         raise ValueError('Неверные настройки.')
     if not DATA.is_dir():
         raise ValueError('Робот не установлен на этом сервере.')
-    return {'saved': speech.save_settings(data)}
+    before = speech.live_settings().get('preset')
+    saved = speech.save_settings(data)
+    if pool is not None and saved.get('preset') != before:  # другой набор: цены модели и синтеза пересчитать сразу
+        from . import robot_prices
+        task = asyncio.get_running_loop().create_task(robot_prices.refresh(pool))
+        _tasks.add(task)
+        task.add_done_callback(_tasks.discard)
+    return {'saved': saved}
 
 
 async def preview(who, data) -> tuple[bytes, int]:

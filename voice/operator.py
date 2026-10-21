@@ -166,7 +166,7 @@ def compile_prompt(op: Operator) -> str:
     me = "в женском роде («поняла», «записала»)" if op.gender == "female" else "в мужском роде («понял», «записал»)"
     said = "произнесла" if op.gender == "female" else "произнёс"
     outcomes = "\n".join(f"- {key}: {text}" for key, text in OUTCOMES.items())
-    fields = "\n".join(f"- {key}: {text}" for key, text in op.fields.items()) or "- нет"
+    fields = ", ".join(op.fields) or "нет"
     # Промт переписан 21.10 с нуля: вместо длинного списка правил — кто ты, как звучит живой менеджер и образец разговора.
     # По образцу модель лучше держит тон и длину реплики, чем по запретам.
     parts = [
@@ -199,11 +199,9 @@ def compile_prompt(op: Operator) -> str:
         + ("- transfer_to_specialist: клиент подходит и хочет поговорить с человеком прямо сейчас. "
            "Перед вызовом скажи, что сейчас соединишь со специалистом.\n" if op.transfer_to else "")
         + f"Итоги:\n{outcomes}\n"
-        f"Поля, которые нужно собрать (что клиент не сказал, оставь пустым, не придумывай):\n{fields}"
+        f"Поля для facts (описания в инструменте finish_call; чего клиент не сказал, не пиши): {fields}"
     )
     parts.append(
-        f"Первую реплику ты уже {said}: «{op.greeting}». Дальше продолжай разговор с ответа клиента.\n"
-        "When you use a tool, you may say a brief sentence first. If no tool can express what the user asked for, "
-        "say so instead of guessing. Do not include internal or system XML tags in your response."
+        f"Первую реплику ты уже {said}: «{op.greeting}». Без служебных тегов и XML в ответе."
     )
     return "\n\n".join(parts)

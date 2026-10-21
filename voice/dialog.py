@@ -15,6 +15,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 
+from voice import presets
 from voice.llm import BadToolJSON, TextSink, make_backend
 from voice.operator import OUTCOMES, Operator
 
@@ -71,7 +72,8 @@ def build_tools(op: Operator) -> list[dict]:
             "description": "Перевести клиента на живого специалиста прямо сейчас. Только если клиент подходит и сам хочет говорить с человеком.",
                 "input_schema": {
                 "type": "object",
-                "properties": {"comment": comment, "facts": facts},
+                # описания полей уже есть в finish_call: здесь только имена, инструменты уходят модели в каждом запросе
+                "properties": {"comment": comment, "facts": {**facts, "properties": {key: {"type": "string"} for key in op.fields}}},
                 "required": ["comment"],
                 "additionalProperties": False,
             },
@@ -107,7 +109,7 @@ def _norm(text: str) -> str:
 class Dialog:
     def __init__(self, operator: Operator, backend=None):
         self.op = operator
-        self.backend = backend or make_backend()
+        self.backend = backend or make_backend(model=presets.llm_model())  # модель выбранного набора, иначе из .env
         self.model = self.backend.model
         self.system = operator.system_prompt()
         self.tools = build_tools(operator)

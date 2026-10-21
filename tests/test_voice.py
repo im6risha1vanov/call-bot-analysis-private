@@ -1514,3 +1514,40 @@ class PacerTest(unittest.IsolatedAsyncioTestCase):
             bot.close()
         self.assertEqual(len(times), 10)
         self.assertGreater(times[-1] - times[0], 0.15)  # пачка растянута во времени, а не вывалена разом
+
+
+class PresetTest(unittest.TestCase):
+    def test_preset_picks_models_and_unknown_is_dropped(self):
+        from voice import presets
+        from voice.operator import load
+        with tempfile.TemporaryDirectory() as tmp:
+            old, env = speech.SETTINGS_FILE, {k: os.environ.get(k) for k in ("VOICE_LLM", "VOICE_PRESET", "YANDEX_FOLDER_ID", "YANDEX_GPT_API_KEY")}
+            speech.SETTINGS_FILE = str(Path(tmp) / "voice.json")
+            os.environ.update(VOICE_LLM="yandex", YANDEX_FOLDER_ID="b1gtest", YANDEX_GPT_API_KEY="k")
+            os.environ.pop("VOICE_PRESET", None)
+            try:
+                self.assertNotIn("preset", speech.save_settings({"preset": "дешевле"}))
+                self.assertEqual((presets.current(), presets.llm_model()), (None, None))
+                speech.save_settings({"preset": "economy", "model": "eleven_v4"})
+                self.assertEqual(speech.eleven_params()[0], "eleven_v4_turbo")  # модель синтеза задаёт набор
+                dialog = Dialog(load("kitchen"))
+                self.assertEqual(dialog.backend.model, "gpt://b1gtest/aliceai-llm-flash")  # без /latest
+                os.environ["VOICE_PRESET"] = "quality"  # автотест сравнивает наборы через переменную
+                self.assertEqual(Dialog(load("kitchen")).backend.model, "gpt://b1gtest/yandexgpt-5.1/latest")
+            finally:
+                speech.SETTINGS_FILE = old
+                speech._live_cache.update(mtime=None, data={})
+                for k, v in env.items():
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
+
+    def test_prompt_is_shorter_but_keeps_fields(self):
+        from voice.operator import load
+        op = load("kitchen")
+        prompt = op.system_prompt()
+        self.assertNotIn("When you use a tool", prompt)
+        self.assertIn("callback_time", prompt)
+        transfer = build_tools(op)[1]["input_schema"]["properties"]["facts"]["properties"]
+        self.assertEqual(transfer["city"], {"type": "string"})  # описания полей только в finish_call
