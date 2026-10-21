@@ -1,4 +1,4 @@
-"""Готовые наборы робота: модель ответов (Яндекс AI Studio) и модель синтеза ElevenLabs.
+"""Готовые наборы робота: модель ответов (Яндекс AI Studio) и синтез (ElevenLabs или Яндекс).
 
 Директор выбирает набор в CRM («Робот → Голос»), выбор лежит в файле настроек голоса (ключ preset)
 и действует со следующего звонка. Без выбора робот работает как раньше: модель из VOICE_MODEL,
@@ -15,22 +15,25 @@ import os
 
 LLM = {
     'yandexgpt-5.1': {'name': 'YandexGPT Pro 5.1', 'price': (0.8, 0.8, 0.8)},
-    'aliceai-llm': {'name': 'Alice AI LLM', 'price': (0.5, 0.5, 1.2)},
-    'aliceai-llm-flash': {'name': 'Alice AI LLM Flash', 'price': (0.1, 0.025, 0.2)},
 }
+# Синтез: у ElevenLabs цена считается от v4 (factor), у Яндекса — своя цена (rub_1k).
+# SpeechKit v3 берёт 0,1626 ₽ за фразу до 250 символов; фраза робота в среднем ~60 символов,
+# поэтому ≈ 2,7 ₽ за 1000 символов. https://aistudio.yandex.ru/ru/docs/speechkit/pricing
+YANDEX_PHRASE_RUB, YANDEX_PHRASE_CHARS = 0.1626, 60
 TTS = {
     'eleven_v4': {'name': 'ElevenLabs v4', 'factor': 1.0},
     'eleven_v4_turbo': {'name': 'ElevenLabs v4 Turbo', 'factor': 0.5},
+    'yandex': {'name': 'Яндекс SpeechKit', 'rub_1k': round(YANDEX_PHRASE_RUB / YANDEX_PHRASE_CHARS * 1000, 2)},
 }
+# 21.10 Григорий: модель ответов везде YandexGPT (дешёвые модели в автотесте выдумывали данные),
+# наборы отличаются только голосом.
 PRESETS = {
     'quality': {'name': 'Качество', 'llm': 'yandexgpt-5.1', 'tts': 'eleven_v4',
-                'quality': 'Как сейчас: самая точная модель Яндекса и самый живой голос.'},
-    'balance': {'name': 'Баланс', 'llm': 'aliceai-llm', 'tts': 'eleven_v4_turbo',
-                'quality': 'Новая большая модель Яндекса, держит анкету почти как Pro. Голос тот же, '
-                           'интонация чуть проще.'},
-    'economy': {'name': 'Эконом', 'llm': 'aliceai-llm-flash', 'tts': 'eleven_v4_turbo',
-                'quality': 'Быстрая маленькая модель: может чаще сбиваться с анкеты и путать итог звонка. '
-                           'Голос как в «Балансе».'},
+                'quality': 'Как сейчас: самый живой голос, интонация держится через всю реплику.'},
+    'balance': {'name': 'Баланс', 'llm': 'yandexgpt-5.1', 'tts': 'eleven_v4_turbo',
+                'quality': 'Тот же голос, синтез вдвое дешевле. Интонация чуть проще, на телефоне разница небольшая.'},
+    'economy': {'name': 'Эконом', 'llm': 'yandexgpt-5.1', 'tts': 'yandex',
+                'quality': 'Голос Яндекса (Даша): синтез в разы дешевле, но звучит заметно роботизированнее.'},
 }
 DEFAULT = 'quality'
 
@@ -51,5 +54,12 @@ def llm_model() -> str | None:
 
 
 def tts_model() -> str | None:
+    """Синтез выбранного набора: модель ElevenLabs или 'yandex'; None — как в настройках голоса."""
     name = current()
     return PRESETS[name]['tts'] if name else None
+
+
+def tts_rub_1k(tts: str, v4_price: float) -> float:
+    """Цена 1000 символов синтеза: от цены ElevenLabs v4 или своя у Яндекса."""
+    t = TTS.get(tts) or {'factor': 1.0}
+    return t['rub_1k'] if 'rub_1k' in t else v4_price * t['factor']

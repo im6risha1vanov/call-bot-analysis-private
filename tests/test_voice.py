@@ -1528,12 +1528,15 @@ class PresetTest(unittest.TestCase):
             try:
                 self.assertNotIn("preset", speech.save_settings({"preset": "дешевле"}))
                 self.assertEqual((presets.current(), presets.llm_model()), (None, None))
-                speech.save_settings({"preset": "economy", "model": "eleven_v4"})
+                speech.save_settings({"preset": "balance", "model": "eleven_v4", "voice_id": "tj9wwIq7s2HekkDfg1KH"})
                 self.assertEqual(speech.eleven_params()[0], "eleven_v4_turbo")  # модель синтеза задаёт набор
-                dialog = Dialog(load("kitchen"))
-                self.assertEqual(dialog.backend.model, "gpt://b1gtest/aliceai-llm-flash")  # без /latest
-                os.environ["VOICE_PRESET"] = "quality"  # автотест сравнивает наборы через переменную
                 self.assertEqual(Dialog(load("kitchen")).backend.model, "gpt://b1gtest/yandexgpt-5.1/latest")
+                speech.save_settings({"preset": "economy", "model": "eleven_v4", "voice_id": "tj9wwIq7s2HekkDfg1KH"})
+                voice = speech.effective_voice(speech.Voice("11:tj9wwIq7s2HekkDfg1KH", "", 1.0), "Краснодар, поняла.")
+                self.assertEqual((voice.name, voice.role), ("dasha", "friendly"))  # «Эконом»: голос Яндекса
+                self.assertEqual(speech.eleven_params()[0], "eleven_v4")  # ElevenLabs не получает модель «yandex»
+                os.environ["VOICE_PRESET"] = "quality"  # автотест может задать набор переменной
+                self.assertEqual(presets.tts_model(), "eleven_v4")
             finally:
                 speech.SETTINGS_FILE = old
                 speech._live_cache.update(mtime=None, data={})
