@@ -30,6 +30,21 @@ STOP_WORDS = {"стоп", "нет", "подождите", "погодите", "�
 FILLERS = [w.strip() for w in os.getenv("VOICE_FILLERS", "Так…|Угу…|Ага…|Так-так…").split("|") if w.strip()]
 FILLER_AFTER_S = int(os.getenv("VOICE_FILLER_AFTER_MS", "400")) / 1000
 FILLER_COOLDOWN_S = 6.0
+# Ольга, когда клиент называет данные (город, сумму, имя), говорит «так, записываю…» и пишет: пауза
+# на раздумье звучит как работа, а не как зависание. Ответ «да»/«нет» записывать нечего: обычное «угу…».
+NOTE_FILLERS = [w.strip() for w in os.getenv("VOICE_NOTE_FILLERS", "Так, записываю…|Секундочку…|Так, сейчас…").split("|")
+                if w.strip()]
+SHORT_ANSWERS = {"да", "нет", "ага", "угу", "конечно", "не", "неа", "ну", "давайте", "хорошо", "ладно", "можно",
+                 "алло", "слушаю", "да-да", "так"}
+# Поддакивание: пока клиент долго рассказывает, Ольга вставляет «угу», «ага», «да-да». Робот молчал.
+BACKCHANNELS = [w.strip() for w in os.getenv("VOICE_BACKCHANNELS", "Угу.|Ага.|Да-да.").split("|") if w.strip()]
+BACKCHANNEL_AFTER_S = 3.5   # клиент говорит дольше, без конца реплики
+BACKCHANNEL_WORDS = 8
+BACKCHANNEL_EVERY_S = 6.0
+# Прощание: Ольга не бросает трубку посреди «до свидания» клиента, а отвечает «всего доброго».
+GOODBYE_WAIT_S = 2.5
+GOODBYE_WORDS = {"свидания", "доброго", "спасибо", "благодарю", "хорошо", "ладно", "ага", "угу", "давайте", "да", "пока"}
+PARTING = {"thanks": "Вам спасибо, всего доброго.", "bye": "Всего доброго."}
 # Реплика озвучивается целиком, когда модель её дописала: ElevenLabs ведёт одну интонацию через всю реплику.
 # По предложениям быстрее на 0,3–0,6 с, но интонация начинается заново после каждой точки.
 WHOLE_REPLY = os.getenv("VOICE_WHOLE_REPLY", "1") != "0"
@@ -39,6 +54,12 @@ _REACTION = re.compile(r"^(Угу|Ага|Так|Поняла|Понял|Поня
 def _strip_reaction(phrase: str) -> str:
     rest = _REACTION.sub("", phrase, count=1)
     return rest[:1].upper() + rest[1:] if rest else phrase
+
+
+def _names_data(text: str) -> bool:
+    """Клиент назвал что-то, что менеджер записывает (город, сумму, имя, время), а не просто «да» или «нет»."""
+    words = speech._words(text)
+    return bool(words) and not all(w in SHORT_ANSWERS for w in words)
 
 
 FILLER_CHANCE = float(os.getenv("VOICE_FILLER_CHANCE", "0.8"))  # не на каждой реплике, чтобы не звучало заученно
@@ -88,6 +109,10 @@ class CallSession:
         self.tts_chain: list[str] = []  # id синтезов ElevenLabs этого звонка: следующая фраза продолжает их
         self.said_before = ""     # прошлая фраза робота: по ней ElevenLabs держит ту же интонацию
         self.reply_spoke = False  # робот уже начал озвучивать текущий ответ (для поиска пауз посреди ответа)
+        self.noting = False       # клиент назвал данные: «так, записываю…» вместо «угу…»
+        self.utterance_at = 0.0   # когда клиент начал текущую реплику (по первому промежуточному тексту)
+        self.backchannel_at = 0.0
+        self.after_end: asyncio.Queue[str] = asyncio.Queue()  # что клиент сказал после прощания робота
 
     # ------------------------------------------------------------------ жизненный цикл
 
@@ -138,8 +163,14 @@ class CallSession:
 
     async def heard(self, text: str, final: bool) -> None:
         """Распознанная речь клиента: промежуточная (final=False) или законченная реплика."""
-        if self.ended.is_set() or not text.strip():
+        if not text.strip():
             return
+        if self.ended.is_set():
+            if final:
+                self.after_end.put_nowait(text)
+            return
+        if final:
+            self.utterance_at = 0.0  # реплика клиента закончилась: следующая считается заново
         # «алло» клиента, пока приветствие ещё не прозвучало или звучит, это не ответ: не перебиваем
         if final and not self.client_spoke and self.is_speaking() and text.strip(" .,!?…").lower() in HELLO_WORDS:
             log.info("клиент сказал «%s» поверх приветствия, продолжаем", text)
@@ -152,6 +183,9 @@ class CallSession:
             await self.send_event({"type": "interim", "text": text})
             if self.audio_sent and self.is_speaking() and len(text.split()) >= BARGE_IN_WORDS:
                 await self._barge_in(text)
+                return
+            self.utterance_at = self.utterance_at or time.monotonic()
+            await self._backchannel(text)
             return
         if self.audio_sent and self.is_speaking():  # приветствие, которое ещё не прозвучало, не сбрасываем
             await self._barge_in(text)
@@ -211,6 +245,7 @@ class CallSession:
         held: list[str] = []
         self.reply_spoke = False
         started = asyncio.Event()  # модель уже дала первую фразу: «так…» не нужно
+        self.noting = _names_data(text)
         filler = asyncio.create_task(self._filler(generation, started)) if text != SILENCE else None
 
         async def on_text(chunk: str) -> None:
@@ -268,16 +303,55 @@ class CallSession:
             return
         if time.monotonic() - self.filler_last_any < FILLER_COOLDOWN_S:
             return  # не чаще раза в несколько секунд, даже если реплика клиента пришла кусками
-        word = random.choice([w for w in FILLERS if w != self.last_filler] or FILLERS)
+        pool = NOTE_FILLERS if self.noting and NOTE_FILLERS else FILLERS
+        word = random.choice([w for w in pool if w != self.last_filler] or pool)
         self.last_filler = word
         self.filler_said_at = self.filler_last_any = time.monotonic()
         log.info("модель думает дольше %d мс: «%s»", after * 1000, word)
         await self._say(word, generation)
 
+    async def _backchannel(self, text: str) -> None:
+        """«Угу» посреди длинного рассказа клиента: звук сразу в линию, мимо очереди фраз, реплику не завершает."""
+        now = time.monotonic()
+        if (not self.voice_enabled or not BACKCHANNELS or not speech.setting("backchannel", True) or self.is_speaking()
+                or now - self.utterance_at < BACKCHANNEL_AFTER_S or len(text.split()) < BACKCHANNEL_WORDS
+                or now - self.backchannel_at < BACKCHANNEL_EVERY_S):
+            return
+        self.backchannel_at = now
+        word = random.choice(BACKCHANNELS)
+        log.info("поддакивание по ходу речи клиента: «%s»", word)
+        try:
+            pcm = await self.synthesize(word, self.voice)
+        except Exception as e:
+            log.info("поддакивание не синтезировано: %s", e)
+            return
+        if not self.ended.is_set() and not self.is_speaking():
+            await self.send_audio(pcm)
+
+    async def parting_words(self) -> bytes:
+        """Робот попрощался: ждём, не скажет ли клиент «до свидания», и отвечаем, как Ольга. Звук или b""."""
+        if not self.voice_enabled or not speech.setting("goodbye_wait", True) or self.saved is None \
+                or self.saved.get("outcome") == "ndz":
+            return b""
+        try:
+            text = await asyncio.wait_for(self.after_end.get(), GOODBYE_WAIT_S)
+        except asyncio.TimeoutError:
+            return b""
+        words = set(speech._words(text))
+        if not words & GOODBYE_WORDS or len(words) > 6:
+            return b""
+        phrase = PARTING["thanks"] if words & {"спасибо", "благодарю"} else PARTING["bye"]
+        log.info("клиент на прощание: «%s», робот: «%s»", text, phrase)
+        try:
+            return await self.synthesize(phrase, self.voice)
+        except Exception as e:
+            log.info("прощание не синтезировано: %s", e)
+            return b""
+
     async def _warm_up_voice(self) -> None:
         """Соединение с синтезом и «так…», «угу…» в кэше заранее: в разговоре они звучат без задержки."""
         await speech.warm_up_tts(self.voice)
-        for word in FILLERS + [item["reply"] for item in self.dialog.op.quick]:
+        for word in FILLERS + NOTE_FILLERS + BACKCHANNELS + list(PARTING.values()) + [item["reply"] for item in self.dialog.op.quick]:
             try:
                 await self.synthesize(word, self.voice)
             except Exception as e:

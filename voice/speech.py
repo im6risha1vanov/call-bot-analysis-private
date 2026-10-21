@@ -402,7 +402,7 @@ SETTING_KEYS = {"voice_id": str, "model": str, "stability": float, "similarity":
                 "speed": float, "speaker_boost": bool, "calm": bool, "tail_ms": int, "filler_after_ms": int,
                 "fillers": bool, "casual": float, "pause_ms": int, "fewer_commas": bool,
                 "inner_pause_ms": int, "whole_reply": bool, "bg_noise": float, "tempo_vary": float,
-                "one_breath": bool}
+                "one_breath": bool, "backchannel": bool, "goodbye_wait": bool}
 
 
 def clean_settings(data: dict) -> dict:

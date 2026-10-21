@@ -69,6 +69,8 @@
     <div class="row"><label for="tempo_vary">Разный темп</label><input type="range" id="tempo_vary" min="0" max="0.3" step="0.01"><output id="tempo_vary_v"></output>
       <div class="hint">вопрос медленнее, длинное утверждение быстрее, как у живого менеджера; 0.1 — на 10 %, 0 выключает</div></div>
     <label class="check"><input type="checkbox" id="whole_reply"> Реплика на одном дыхании: озвучивать ответ целиком, а не по предложениям (ровнее интонация, ответ на 0,3–0,6 с позже)</label>
+    <label class="check"><input type="checkbox" id="backchannel"> «Угу» по ходу долгого рассказа клиента, как живой собеседник</label>
+    <label class="check"><input type="checkbox" id="goodbye_wait"> Ответить «Всего доброго» на прощание клиента, а не класть трубку сразу</label>
     <label class="check"><input type="checkbox" id="one_breath"> Фраза на одном дыхании: без пауз на запятых, двоеточиях и тире внутри предложения</label>
     <label class="check"><input type="checkbox" id="fewer_commas"> Меньше пауз на запятых: «Хорошо, подскажите, …» читать слитно</label>
     <div class="row"><label for="tail_ms">Конец реплики клиента, мс</label><input type="range" id="tail_ms" min="300" max="2000" step="50"><output id="tail_ms_v"></output>
@@ -94,7 +96,7 @@
 <script>
 const $ = id => document.getElementById(id);
 const SLIDERS = ['speed', 'stability', 'similarity', 'style', 'casual', 'pause_ms', 'inner_pause_ms', 'tail_ms', 'filler_after_ms', 'bg_noise', 'tempo_vary'];
-const CHECKS = ['speaker_boost', 'calm', 'whole_reply', 'one_breath', 'fewer_commas', 'fillers'];
+const CHECKS = ['speaker_boost', 'calm', 'whole_reply', 'one_breath', 'backchannel', 'goodbye_wait', 'fewer_commas', 'fillers'];
 let state = {}, ctx = null, source = null;
 
 function msg(text, cls) { $('msg').textContent = text; $('msg').className = cls || ''; }
