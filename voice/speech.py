@@ -405,6 +405,11 @@ SETTING_KEYS = {"voice_id": str, "model": str, "stability": float, "similarity":
                 "one_breath": bool, "backchannel": bool, "goodbye_wait": bool}
 
 
+# Яндекс присылает промежуточный текст раз в 0,25–0,4 с, пока клиент говорит. При 300 мс реплика закрывалась
+# между двумя кусками одной фразы, и робот отвечал на обрывки («пожалуйста», «я передам»; звонок 21.10 14:42)
+TAIL_MIN_MS = 600
+
+
 def clean_settings(data: dict) -> dict:
     """Только известные поля нужного типа, в допустимых пределах."""
     out = {}
@@ -418,7 +423,7 @@ def clean_settings(data: dict) -> dict:
             continue
         out[key] = value
     for key, low, high in (("casual", 0, 1), ("stability", 0, 1), ("similarity", 0, 1), ("style", 0, 1), ("speed", 0.7, 1.2),
-                           ("tail_ms", 300, 2000), ("filler_after_ms", 100, 3000), ("pause_ms", 0, 600), ("inner_pause_ms", 40, 600),
+                           ("tail_ms", TAIL_MIN_MS, 2000), ("filler_after_ms", 100, 3000), ("pause_ms", 0, 600), ("inner_pause_ms", 40, 600),
                            ("bg_noise", 0, 1), ("tempo_vary", 0, 0.3)):
         if key in out:
             out[key] = min(max(out[key], low), high)

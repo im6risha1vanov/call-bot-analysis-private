@@ -683,6 +683,7 @@ class ElevenTest(unittest.IsolatedAsyncioTestCase):
             try:
                 saved = speech.save_settings({"voice_id": "tj9wwIq7s2HekkDfg1KH", "model": "eleven_v4", "speed": 1.5,
                                               "stability": 0.8, "tail_ms": 700, "junk": 1, "calm": False})
+                self.assertEqual(speech.clean_settings({"tail_ms": 300})["tail_ms"], speech.TAIL_MIN_MS)
                 self.assertEqual((saved["speed"], saved["tail_ms"], "junk" in saved), (1.2, 700, False))
                 await speech.synthesize_pcm("Отлично!", speech.Voice("11:old", "", 1.0))
                 body = seen[-1]
@@ -882,6 +883,51 @@ class CallSessionTest(unittest.IsolatedAsyncioTestCase):
         await session.reply_task
         sent = client.requests[0]["messages"]
         self.assertEqual(sent[-1], {"role": "user", "content": "Да, актуально. но я за рулём"})
+        await session.hangup()
+
+    async def test_client_continuing_same_phrase_undoes_answer_to_its_start(self):
+        # звонок 21.10 14:42: реплику закрыли посреди фразы, робот отвечал на обрывки «пожалуйста», «я передам»
+        client = FakeClient([say("Ещё раз, простите?"), say("Это Мария, кухни на заказ. Перезвоню позже.")])
+
+        async def nothing(_):
+            pass
+
+        async def synth(text, voice):
+            return b"\x00\x00" * speech.TTS_RATE * 2
+
+        async def save(dialog, **kw):
+            return results.record(dialog, **kw)
+
+        session = CallSession(Dialog(load("kitchen"), AnthropicBackend(client=client)), nothing, nothing,
+                              synthesize=synth, save=save)
+        await session.start()
+        session.speaking_until = 0.0
+        await session.heard("сообщите детали", True)
+        await session.reply_task
+        await session.heard("пожалуйста я передам их абоненту", True)
+        await session.reply_task
+        sent = client.requests[1]["messages"]
+        self.assertEqual(sent[-1], {"role": "user", "content": "сообщите детали пожалуйста я передам их абоненту"})
+        self.assertNotIn("Ещё раз, простите?", [m["content"] for m in sent])
+        await session.hangup()
+
+    async def test_new_phrase_after_pause_keeps_robot_answer(self):
+        client = FakeClient([say("В каком городе будет кухня?"), say("Сочи, поняла.")])
+
+        async def nothing(_):
+            pass
+
+        async def save(dialog, **kw):
+            return results.record(dialog, **kw)
+
+        session = CallSession(Dialog(load("kitchen"), AnthropicBackend(client=client)), nothing, nothing, save=save)
+        await session.start()
+        await session.heard("Да, планирую в этом месяце", True)
+        await session.reply_task
+        session.client_done_at -= 3  # клиент ответил через три секунды: это новая реплика
+        await session.heard("Сочи", True)
+        await session.reply_task
+        self.assertEqual(client.requests[1]["messages"][-2]["content"], "В каком городе будет кухня?")
         await session.hangup()
 
     async def test_broken_voice_falls_back_to_operator_voice(self):
