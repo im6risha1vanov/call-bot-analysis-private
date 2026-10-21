@@ -66,7 +66,7 @@ RB_VIEW.operators = async el => {
 
 async function operatorForm(id, copyFrom) {
   const src = id || copyFrom ? await rbGet('/operators/' + encodeURIComponent(id || copyFrom)) : {
-    name: '', gender: 'female', company: '', lead_source: '', goal: '', greeting: 'Здравствуйте, ', farewell: 'Спасибо, хорошего дня.',
+    name: '', gender: 'female', company: '', lead_source: '', goal: '', greeting: 'Здравствуйте, ', farewell: 'Спасибо, хорошего дня.', example: '',
     transfer_to: '', plan: [''], rules: [], facts: [], fields: [], max_items: 10};
   const locked = id && src.builtin;
   const ro = locked || RB.st.readonly ? ' disabled' : '';
@@ -88,6 +88,8 @@ async function operatorForm(id, copyFrom) {
       <label class="field">Цель звонка<textarea data-f="goal" rows="2"${ro}>${esc(src.goal)}</textarea></label>
       <label class="field">Приветствие<textarea data-f="greeting" rows="2"${ro}>${esc(src.greeting)}</textarea></label>
       <label class="field">Прощание<input data-f="farewell" value="${esc(src.farewell)}"${ro}></label>
+      <label class="field">Образец живого разговора<textarea data-f="example" rows="8" placeholder="Клиент: Да, актуален.&#10;Мария: Покупку в ближайшие пару месяцев планируете?"${ro}>${esc(src.example || '')}</textarea></label>
+      <p class="muted">Как звучит хороший звонок: короткие реплики «Клиент: …» и «${esc(src.name || 'Робот')}: …». Робот берёт из него тон и длину фраз, а не текст слово в слово.</p>
       ${list('plan', 'План разговора', 'Шаги по порядку: что выяснить и когда завершить.')}
       ${list('rules', 'Правила', 'Как вести себя в особых случаях: занят, просит не звонить, спрашивает цену.')}
       ${list('facts', 'Аргументы и факты', 'Что робот может говорить о компании и предложении.')}
