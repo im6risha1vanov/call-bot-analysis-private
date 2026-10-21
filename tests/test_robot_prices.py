@@ -182,7 +182,8 @@ class RefreshTest(DBCase):
             if 'billing' in request.url.host:
                 return httpx.Response(200, json={'skus': SKUS})
             return httpx.Response(200, text=YANDEX_PAGE)
-        with patch.dict(os.environ, {'ELEVENLABS_API_KEY': 'k', 'VOICE_MODEL': 'yandexgpt-5.1/latest', 'YANDEX_TTS_API_KEY': 'y'}), \
+        with patch.dict(os.environ, {'ELEVENLABS_API_KEY': 'k', 'VOICE_MODEL': 'yandexgpt-5.1/latest', 'YANDEX_TTS_API_KEY': 'y',
+                                     'YANDEX_SA_KEY_FILE': '/nonexistent.json'}), \
                 patch('mango_client.call', AsyncMock(return_value={'result': 1000, 'balance': 512.3})):
             lines = await rp.probe(self.pool, httpx.AsyncClient(transport=httpx.MockTransport(answer)))
         text = '\n'.join(lines)
@@ -196,7 +197,7 @@ class RefreshTest(DBCase):
 
     async def test_yandex_billing_then_page(self):
         import httpx
-        env = {'VOICE_LLM': 'yandex', 'VOICE_MODEL': 'yandexgpt-5.1/latest', 'YANDEX_GPT_API_KEY': 'y'}
+        env = {'VOICE_LLM': 'yandex', 'VOICE_MODEL': 'yandexgpt-5.1/latest', 'YANDEX_GPT_API_KEY': 'y', 'YANDEX_SA_KEY_FILE': '/nonexistent.json'}
         seen = []
 
         def billing_ok(request):
@@ -213,13 +214,43 @@ class RefreshTest(DBCase):
             return httpx.Response(200, text='<title>Верификация</title>')
         with patch.dict(os.environ, env):
             async with httpx.AsyncClient(transport=httpx.MockTransport(captcha)) as http:
-                with self.assertRaisesRegex(rp.PriceError, r'не пускает к прайсу Billing API \(код 403\); страница прайса'):
+                with self.assertRaisesRegex(rp.PriceError, r'не пускает ключ робота \(нужен ключ сервисного аккаунта\), код 403; страница прайса'):
                     await rp.yandex(http)
 
             def page_ok(request):
                 return httpx.Response(401) if 'billing' in request.url.host else httpx.Response(200, text=YANDEX_PAGE)
             async with httpx.AsyncClient(transport=httpx.MockTransport(page_ok)) as http:
                 self.assertEqual((await rp.yandex(http))[0], 0.8)
+
+    async def test_billing_with_service_account_key(self):
+        import base64
+        import tempfile
+        import httpx
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import padding, rsa
+        private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        pem = private.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()).decode()
+        key = {'id': 'aje1', 'service_account_id': 'aje2', 'private_key': 'PLEASE DO NOT REMOVE THIS LINE! Yandex.Cloud SA Key ID <aje1>\n' + pem}
+        unb64 = lambda part: base64.urlsafe_b64decode(part + '=' * (-len(part) % 4))  # noqa: E731
+        seen = []
+
+        def answer(request):
+            if 'iam' in request.url.host:
+                head, body, sig = json.loads(request.content)['jwt'].split('.')
+                private.public_key().verify(unb64(sig), f'{head}.{body}'.encode(),
+                                            padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=32), hashes.SHA256())
+                claims = json.loads(unb64(body))
+                seen.append((json.loads(unb64(head))['kid'], claims['iss'], claims['aud']))
+                return httpx.Response(200, json={'iamToken': 't1.iam'})
+            seen.append(request.headers['authorization'])
+            return httpx.Response(200, json={'skus': SKUS})
+        with tempfile.NamedTemporaryFile('w', suffix='.json') as f:
+            json.dump(key, f)
+            f.flush()
+            with patch.dict(os.environ, {'YANDEX_SA_KEY_FILE': f.name, 'YANDEX_GPT_API_KEY': 'y'}):
+                async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as http:
+                    self.assertEqual(len(await rp.yandex_skus(http)), len(SKUS))
+        self.assertEqual(seen, [('aje1', 'aje2', rp.IAM_TOKENS), 'Bearer t1.iam'])
 
     async def test_yandex_only_when_robot_uses_it(self):
         with patch.dict(os.environ, {'VOICE_LLM': 'cvc'}):
