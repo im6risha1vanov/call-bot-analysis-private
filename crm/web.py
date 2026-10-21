@@ -78,6 +78,8 @@ async def guard(request: web.Request, handler):
     response.headers.update(HEADERS)
     if request.path.startswith('/api/'):
         response.headers['Cache-Control'] = 'no-store'
+    else:  # страница и её файлы: браузер сверяется с сервером, чтобы после выкатки не смешать старые и новые скрипты
+        response.headers.setdefault('Cache-Control', 'no-cache')
     return response
 
 

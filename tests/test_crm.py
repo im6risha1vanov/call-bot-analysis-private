@@ -493,6 +493,8 @@ class WebTests(DBCase):
             r = await self.http.get('/', allow_redirects=False)
             self.assertEqual(r.status, 200)
             self.assertNotIn("'unsafe-inline'", r.headers['Content-Security-Policy'])
+            self.assertEqual(r.headers['Cache-Control'], 'no-cache')
+            self.assertEqual((await self.http.get('/static/app.js')).headers['Cache-Control'], 'no-cache')
             for old in ('/director', '/director/shim.js'):
                 r = await self.http.get(old, allow_redirects=False)
                 self.assertEqual((r.status, r.headers['Location']), (302, '/'))
