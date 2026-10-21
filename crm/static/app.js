@@ -1208,8 +1208,14 @@ VIEWS.robot = async view => {
     <div class="panel"><h2>Манера и темп разговора</h2>
       ${ROBOT_MANNER.map(slider).join('')}
       ${ROBOT_CHECKS.map(([id, label]) => `<label class="rb-check"><input type="checkbox" data-c="${id}"${cfg[id] ? ' checked' : ''}> ${label}</label>`).join('')}</div>
+    <div class="panel"><h2>Произношение</h2>
+      <p class="muted">Если робот ставит не то ударение или читает сокращение по буквам, впишите слово и как его читать, по строке на слово.
+        «+» после ударной гласной ставит ударение, «*» после слова — все его формы: <code>замер* = заме+р</code>, <code>ПВХ = пэ-вэ-ха+</code>.
+        Проверьте кнопкой «Прослушать» ниже.</p>
+      <textarea id="rb-pron" rows="4" placeholder="столешниц* = столе+шниц">${esc(cfg.pronounce || '')}</textarea>
+      <details><summary class="muted">Уже в словаре</summary><pre class="muted">${esc(cfg.pronounce_default || '')}</pre></details></div>
     <div class="panel"><h2>Проверка</h2>
-      <textarea id="rb-text" rows="3">Здравствуйте. Меня зовут Мария, я голосовой помощник, кухни на заказ. Вы недавно интересовались кухней, подскажите, вопрос ещё актуален?</textarea>
+      <textarea id="rb-text" rows="3">Замер и дизайн-проект у нас бесплатные. По фасадам что смотрите: плёнку ПВХ, эмаль, пластик? Специалист вам перезвонит завтра.</textarea>
       <div class="row"><button class="btn" id="rb-listen">Прослушать</button>
         <button class="btn primary" id="rb-save"${d.can_save && !d.readonly ? '' : ' disabled'}>Сохранить для звонков</button>
         <button class="btn" id="rb-reset">Вернуть сохранённое</button></div>
@@ -1229,6 +1235,7 @@ VIEWS.robot = async view => {
     const out = {voice_id: voiceId.value.trim(), model: $('#rb-model', view).value};
     $$('[data-k]', view).forEach(el => { out[el.dataset.k] = Number(el.value); });
     $$('[data-c]', view).forEach(el => { out[el.dataset.c] = el.checked; });
+    out.pronounce = $('#rb-pron', view).value;
     return out;
   };
   const st = (text, err) => { const el = $('#rb-st', view); el.textContent = text; el.className = err ? 'muted bad-text' : 'muted'; };
