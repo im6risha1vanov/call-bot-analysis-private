@@ -30,8 +30,7 @@ const ROBOT_EXTRA_TOGGLES = [
   [['whole_reply'], 'Реплика целиком', 'интонация ровнее через всю реплику, ответ на 0,3–0,6 с позже'],
   [['speaker_boost'], 'Усиление сходства с голосом', ''],
 ];
-const ROBOT_MODELS = [['eleven_v4', 'eleven_v4 (самая живая)'], ['eleven_multilingual_v2', 'eleven_multilingual_v2'],
-  ['eleven_flash_v2_5', 'eleven_flash_v2_5 (самая быстрая)'], ['eleven_turbo_v2_5', 'eleven_turbo_v2_5']];
+const rbRub = v => String(v).replace('.', ',') + ' ₽';
 const rbValue = (v, kind) => kind === 'x' ? '×' + v.toFixed(2) : kind === 's' ? (v / 1000).toFixed(v < 1000 && v % 100 ? 2 : 1).replace('.', ',') + ' с'
   : Math.round(v * 100) + ' %';
 let robotAudio = null;
@@ -45,7 +44,6 @@ async function robotVoiceView(view) {
     ${left || right ? `<div class="rb-sl-ends"><span>${left}</span><span>${right}</span></div>` : ''}</div>`;
   const toggle = ([keys, label, hint]) => `<label class="rb-sw"><input type="checkbox" data-c="${keys.join(',')}"${keys.every(k => cfg[k]) ? ' checked' : ''}>
     <span class="rb-sw-ui" aria-hidden="true"></span><span><b>${label}</b>${hint ? `<span class="muted">${hint}</span>` : ''}</span></label>`;
-  const models = ROBOT_MODELS.some(([m]) => m === cfg.model) ? ROBOT_MODELS : [...ROBOT_MODELS, [cfg.model, cfg.model]];
   const voiceNames = Object.entries(d.voices || {});
   const knownVoice = voiceNames.some(([, id]) => id === cfg.voice_id);
   const ro = d.readonly ? ' disabled' : '';
@@ -58,6 +56,16 @@ async function robotVoiceView(view) {
         <div class="row wide"><button class="btn primary" type="button" id="rb-call"${ro}>Позвонить роботом</button>
         ${d.test_phones.length ? `<button class="btn" type="button" id="rb-me"${ro}>Позвонить мне</button>` : ''}</div></div>
       <p class="hint" id="rb-call-st"></p></section>
+    <section class="card blk" data-css="--i:1"><div class="card-h"><h2>Набор</h2></div>
+      <p class="lead">Модель ответов и голос подобраны заранее. Выбор действует со следующего звонка.</p>
+      <div class="rb-presets" role="radiogroup">${(d.presets || []).map(p => `<label class="rb-preset">
+        <input type="radio" name="rb-preset" value="${esc(p.key)}"${p.key === d.preset ? ' checked' : ''}${ro}>
+        <span class="rb-preset-ui"><span class="rb-preset-top"><b>${esc(p.name)}</b>
+          <span class="rb-preset-cost">${p.cost_min ? '≈ ' + money(p.cost_min) + ' / мин' : ''}</span></span>
+          <span class="muted">${esc(p.llm)} · ${esc(p.tts)}</span>
+          <span>${esc(p.quality)}</span>
+          <span class="muted">Модель: ${rbRub(p.llm_price[0])} за 1000 токенов${p.llm_price[1] < p.llm_price[0] ? `, повторная инструкция ${rbRub(p.llm_price[1])}` : ''}</span></span></label>`).join('')}</div>
+      <p class="hint">${(d.presets || []).some(p => p.cost_min) ? 'Минута — оценка по звонкам робота за 30 дней: связь, распознавание, синтез и модель.' : 'Оценка минуты появится после звонков робота.'}</p></section>
     <section class="card blk" data-css="--i:1"><div class="card-h"><h2>Голос</h2></div>
       <label class="field">Чей голос<select id="rb-voice">
         ${voiceNames.map(([name, id]) => `<option value="${esc(id)}"${id === cfg.voice_id ? ' selected' : ''}>${esc(name)}</option>`).join('')}
@@ -85,8 +93,7 @@ async function robotVoiceView(view) {
       <p class="lead" data-css="margin-bottom:10px">Слово и как его читать, по строке на слово. «+» после ударной гласной, «*» — все формы слова.</p>
       <textarea id="rb-pron" class="rb-area" rows="3" placeholder="столешниц* = столе+шниц">${esc(cfg.pronounce || '')}</textarea>
       <details class="rb-more"><summary>Уже в словаре</summary><pre class="muted">${esc(cfg.pronounce_default || '')}</pre></details></section>
-    ${moreBlock('Дополнительно', 'модель синтеза и редкие настройки', `<div class="rb-extra">
-      <label class="field">Модель синтеза<select id="rb-model">${models.map(([m, t]) => `<option value="${esc(m)}"${m === cfg.model ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select></label>
+    ${moreBlock('Дополнительно', 'редкие настройки', `<div class="rb-extra">
       ${ROBOT_EXTRA.map(slider).join('')}
       <div class="rb-sws">${ROBOT_EXTRA_TOGGLES.map(toggle).join('')}</div></div>`, 4)}
     </div>
@@ -109,7 +116,7 @@ async function robotVoiceView(view) {
     $('#rb-vid-row', view).hidden = !!voiceSel.value;
   });
   const collect = () => {
-    const out = {voice_id: voiceId.value.trim(), model: $('#rb-model', view).value};
+    const out = {voice_id: voiceId.value.trim(), model: cfg.model, preset: $('[name=rb-preset]:checked', view)?.value || ''};
     $$('[data-k]', view).forEach(el => { out[el.dataset.k] = Number(el.value); });
     $$('[data-c]', view).forEach(el => el.dataset.c.split(',').forEach(k => { out[k] = el.checked; }));
     out.pronounce = $('#rb-pron', view).value;
@@ -141,6 +148,12 @@ async function robotVoiceView(view) {
     busy(btn, false);
   });
   $('#rb-reset', view).addEventListener('click', () => reload());
+  $$('[name=rb-preset]', view).forEach(el => el.addEventListener('change', async () => {
+    try {
+      await api('/api/robot/settings', {method: 'POST', body: collect()});
+      toast(`Набор «${d.presets.find(p => p.key === el.value).name}» включён со следующего звонка. «Слушать» теперь звучит его голосом.`);
+    } catch (err) { st(err.message, true); }
+  }));
   const useVoice = (id, name, voices) => {
     if (voices) voiceSel.innerHTML = Object.entries(voices).map(([n, v]) => `<option value="${esc(v)}">${esc(n)}</option>`).join('') + '<option value="">Другой, по voice_id…</option>';
     if (![...voiceSel.options].some(o => o.value === id)) voiceSel.insertAdjacentHTML('beforeend', `<option value="${esc(id)}">${esc(name)}</option>`);

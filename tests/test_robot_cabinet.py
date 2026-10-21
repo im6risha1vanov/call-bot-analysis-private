@@ -201,15 +201,18 @@ class CabinetTests(DBCase):
         st = await (await self.http.get('/api/robot/cab')).json()
         self.assertEqual(st['options']['auto']['mango_min']['value'], 1.5)
         econ = st['options']['econ']
-        # 2 минуты разговора, 2000 символов и 3000 токенов: 1000 симв. и 1500 ток. на минуту
+        # 2 минуты разговора, 2000 символов и 3000 токенов: 1000 симв. и 1500 ток. на минуту;
+        # распознавание: два звонка по 60 с = 8 кусков по 15 с × 0,1626 ₽ на 2 минуты
         self.assertEqual((econ['cost_min'], econ['parts'], econ['chars_min'], econ['tokens_min']),
-                         (13.0, {'mango': 1.5, 'synth': 10.0, 'llm': 1.5}, 1000, 1500))
+                         (13.65, {'mango': 1.5, 'synth': 10.0, 'llm': 1.5, 'asr': 0.65}, 1000, 1500))
+        # наборы: синтез v4 Turbo вдвое дешевле, модель по цене прайса (Pro 0,8; Alice 0,5; Flash 0,1 за 1000 токенов)
+        self.assertEqual(econ['presets'], {'quality': 13.35, 'balance': 7.9, 'economy': 7.3})
         self.assertEqual(econ['typical'], {'calls': 3, 'reach': 67, 'minutes_per_talk': 1.0})
         self.assertEqual(econ['clients'], [{'name': 'Кухни', 'price': 12.5, 'calls': 0, 'minutes': 0.0, 'cost': 0, 'charge': 0.0, 'profit': 0.0}])
         a = await (await self.http.get('/api/robot/cab/analytics')).json()
         self.assertEqual((a['total'], a['reached'], a['leads'], a['dial_rate'], a['conversion']), (3, 2, 1, 66.7, 33.3))
-        self.assertEqual(a['cost'], 26.0)  # 2 мин × 1,5 + 2000 симв. × 10/1000 + 3000 ток. × 1/1000
-        self.assertEqual(a['lead_cost'], 26.0)
+        self.assertEqual(a['cost'], 27.3)  # 2 мин × 1,5 + 2000 симв. × 10/1000 + 3000 ток. × 1/1000 + 8 × 0,1626 распознавание
+        self.assertEqual(a['lead_cost'], 27.3)
         self.assertEqual({e['key']: e['count'] for e in a['ends']}['do_not_call'], 1)
 
     async def test_client_paid_option(self):

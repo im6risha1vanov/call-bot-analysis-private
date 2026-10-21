@@ -402,7 +402,7 @@ SETTING_KEYS = {"voice_id": str, "model": str, "stability": float, "similarity":
                 "speed": float, "speaker_boost": bool, "calm": bool, "tail_ms": int, "filler_after_ms": int,
                 "fillers": bool, "casual": float, "pause_ms": int, "fewer_commas": bool,
                 "inner_pause_ms": int, "whole_reply": bool, "bg_noise": float, "tempo_vary": float,
-                "one_breath": bool, "backchannel": bool, "goodbye_wait": bool, "pronounce": str}
+                "one_breath": bool, "backchannel": bool, "goodbye_wait": bool, "pronounce": str, "preset": str}
 
 
 # Яндекс присылает промежуточный текст раз в 0,25–0,4 с, пока клиент говорит. При 300 мс реплика закрывалась
@@ -433,6 +433,9 @@ def clean_settings(data: dict) -> dict:
         del out["voice_id"]
     if "model" in out and not re.fullmatch(r"eleven_[a-z0-9_]{2,40}", out["model"]):
         del out["model"]
+    from voice.presets import PRESETS
+    if "preset" in out and out["preset"] not in PRESETS:
+        del out["preset"]
     return out
 
 
@@ -469,8 +472,9 @@ def save_settings(data: dict) -> dict:
 
 
 def eleven_params() -> tuple[str, dict]:
-    """Модель и ползунки ElevenLabs с учётом страницы настроек."""
-    return setting("model", ELEVEN_DIRECT_MODEL), {
+    """Модель и ползунки ElevenLabs с учётом страницы настроек. Модель задаёт выбранный набор, если он есть."""
+    from voice import presets
+    return presets.tts_model() or setting("model", ELEVEN_DIRECT_MODEL), {
         "stability": setting("stability", ELEVEN_SETTINGS["stability"]),
         "similarity_boost": setting("similarity", ELEVEN_SETTINGS["similarity_boost"]),
         "style": setting("style", ELEVEN_SETTINGS["style"]),

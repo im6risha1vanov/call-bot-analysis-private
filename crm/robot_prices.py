@@ -367,7 +367,15 @@ def yandex_sku_rate(skus: list[dict], name: str) -> tuple[float, str]:
 async def yandex(http) -> tuple[float, str]:
     if os.getenv('VOICE_LLM', 'cvc').strip().lower() != 'yandex':
         raise PriceError('робот сейчас отвечает не через YandexGPT')
-    name = yandex_name(os.getenv('VOICE_MODEL', 'yandexgpt-lite/latest'))
+    from . import robot  # noqa: F401  пути настроек робота задаются до импорта voice
+    from voice import presets
+    model = presets.llm_model() or os.getenv('VOICE_MODEL', 'yandexgpt-lite/latest')
+    if model in presets.LLM and not model.startswith('yandexgpt'):
+        # моделей Alice AI в Billing API под понятным именем нет: цена обычного входа из прайса набора
+        price = presets.LLM[model]['price']
+        return price[0], (f'прайс AI Studio на 21.10.2026, {presets.LLM[model]["name"]}: {ru(price[0])} ₽ за 1000 токенов '
+                          f'(повторный вход {ru(price[1])} ₽, ответ {ru(price[2])} ₽)')
+    name = yandex_name(model)
     try:
         return yandex_sku_rate(await yandex_skus(http), name)
     except (PriceError, httpx.HTTPError) as e:

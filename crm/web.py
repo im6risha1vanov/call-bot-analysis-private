@@ -599,7 +599,7 @@ async def api_prompt_use(request):
 
 
 async def api_robot(request):
-    return web.json_response(await robot.overview(await director(request)))
+    return web.json_response(await robot.overview(await director(request), request.app[POOL]))
 
 
 async def api_robot_calls(request):
@@ -608,7 +608,7 @@ async def api_robot_calls(request):
 
 async def api_robot_settings(request):
     who = await director(request)
-    return web.json_response(await robot.save_settings(who, await body(request)))
+    return web.json_response(await robot.save_settings(who, await body(request), request.app[POOL]))
 
 
 async def api_robot_preview(request):

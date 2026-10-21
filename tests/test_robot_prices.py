@@ -260,3 +260,13 @@ class RefreshTest(DBCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class PresetPriceTest(unittest.IsolatedAsyncioTestCase):
+    async def test_alice_price_from_preset_list(self):
+        from unittest import mock
+        with mock.patch('voice.presets.llm_model', return_value='aliceai-llm-flash'), \
+                mock.patch.dict(os.environ, {'VOICE_LLM': 'yandex'}):
+            value, note = await rp.yandex(None)
+        self.assertEqual(value, 0.1)
+        self.assertIn('Alice AI LLM Flash', note)

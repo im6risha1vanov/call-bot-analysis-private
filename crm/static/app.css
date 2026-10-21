@@ -602,3 +602,13 @@ audio.rec{display:block;width:100%;max-width:420px;height:36px;margin-top:6px}
 @media (max-width:640px){.rb-prices th,.rb-prices td{padding-left:6px;padding-right:6px}.rb-prices .rb-sw{gap:8px}}
 .rb-total .t{font-weight:650}
 .rb-total .r b{color:var(--accent)}
+/* Набор робота: модель + голос, выбор одной карточкой */
+.rb-presets{display:grid;gap:8px;margin-top:10px}
+.rb-preset{position:relative;cursor:pointer}
+.rb-preset input{position:absolute;opacity:0;pointer-events:none}
+.rb-preset-ui{display:grid;gap:3px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;transition:border-color .2s,box-shadow .2s}
+.rb-preset:hover .rb-preset-ui{border-color:var(--muted)}
+.rb-preset input:checked+.rb-preset-ui{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.rb-preset input:focus-visible+.rb-preset-ui{outline:2px solid var(--accent);outline-offset:2px}
+.rb-preset-top{display:flex;justify-content:space-between;gap:10px;align-items:baseline}
+.rb-preset-cost{font-variant-numeric:tabular-nums;white-space:nowrap}
