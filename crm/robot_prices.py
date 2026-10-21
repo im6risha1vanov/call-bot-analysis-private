@@ -30,6 +30,7 @@ DAYS = 30
 ELEVEN_API = 'https://api.elevenlabs.io/v1'
 YANDEX_PRICING = 'https://yandex.cloud/ru/docs/ai-studio/pricing'
 CBR_DAILY = 'https://www.cbr.ru/scripts/XML_daily.asp'
+CBR_MIRROR = 'https://www.cbr-xml-daily.ru/daily_json.js'  # те же курсы ЦБ, если cbr.ru не пускает сервер из-за границы
 PERIOD_MONTHS = {'monthly_period': 1, '3_month_period': 3, '6_month_period': 6, 'annual_period': 12}
 # Как модели из VOICE_MODEL называются в прайсе Яндекса.
 YANDEX_NAMES = {'yandexgpt-5.1': 'YandexGPT Pro 5.1', 'yandexgpt': 'YandexGPT Pro 5', 'yandexgpt-lite': 'YandexGPT Lite'}
@@ -100,12 +101,26 @@ def cbr_rate(xml: str, code: str) -> float:
     return num(m.group(2)) / int(m.group(1))
 
 
+def mirror_rate(data: dict, code: str) -> float:
+    item = (data.get('Valute') or {}).get(code.upper()) or {}
+    value, nominal = num(item.get('Value')), num(item.get('Nominal')) or 1
+    if not value:
+        raise PriceError(f'в курсах ЦБ нет {code.upper()}')
+    return value / nominal
+
+
 async def rub_per(http, code: str) -> float:
     if code.upper() == 'RUB':
         return 1.0
-    r = await http.get(CBR_DAILY)
+    try:
+        r = await http.get(CBR_DAILY)
+        r.raise_for_status()
+        return cbr_rate(r.content.decode('cp1251', errors='replace'), code)
+    except (httpx.HTTPError, PriceError) as e:
+        log.info('курс ЦБ с cbr.ru не получен (%r), беру зеркало', e)
+    r = await http.get(CBR_MIRROR)
     r.raise_for_status()
-    return cbr_rate(r.content.decode('cp1251', errors='replace'), code)
+    return mirror_rate(r.json(), code)
 
 
 # ------------------------------------------------------------------ ElevenLabs

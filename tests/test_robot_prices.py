@@ -47,6 +47,11 @@ class ParseTest(unittest.TestCase):
         self.assertAlmostEqual(rp.cbr_rate(xml, 'KZT'), 0.1602)
         with self.assertRaises(rp.PriceError):
             rp.cbr_rate(xml, 'eur')
+        mirror = {'Valute': {'USD': {'CharCode': 'USD', 'Nominal': 1, 'Value': 81.5432}, 'KZT': {'Nominal': 100, 'Value': 16.02}}}
+        self.assertEqual(rp.mirror_rate(mirror, 'usd'), 81.5432)
+        self.assertAlmostEqual(rp.mirror_rate(mirror, 'kzt'), 0.1602)
+        with self.assertRaises(rp.PriceError):
+            rp.mirror_rate(mirror, 'eur')
 
     def test_eleven(self):
         value, note = rp.eleven_rate(SUBSCRIPTION, MODELS, 'eleven_flash_v2_5', 80)
@@ -107,6 +112,16 @@ class RefreshTest(DBCase):
         self.assertEqual((got['llm_1k_tokens']['value'], got['llm_1k_tokens']['error']), (0.8, 'источник не ответил (OSError)'))
         self.assertIsNone(got['mango_min']['error'])
         self.assertEqual((await robot_store.prices(self.pool))['eleven_1k_chars'], 8.8)
+
+    async def test_rate_from_mirror_when_cbr_refuses(self):
+        import httpx
+
+        def answer(request):
+            if request.url.host == 'www.cbr.ru':
+                return httpx.Response(403)
+            return httpx.Response(200, json={'Valute': {'USD': {'Nominal': 1, 'Value': 80.0}}})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as http:
+            self.assertEqual(await rp.rub_per(http, 'usd'), 80.0)
 
     async def test_yandex_only_when_robot_uses_it(self):
         with patch.dict(os.environ, {'VOICE_LLM': 'cvc'}):
