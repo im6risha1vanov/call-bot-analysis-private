@@ -208,6 +208,8 @@ audio.rec{display:block;width:100%;max-width:360px;height:36px;margin-top:6px}
 .rb-row output{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
 .rb-row select,.rb-row input:not([type=range]){grid-column:2/4}
 .rb-check{display:flex;gap:8px;align-items:flex-start;margin:8px 0}
+.rb-voice{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;padding:8px 0;border-top:1px solid var(--line)}
+.rb-voice .row{flex-shrink:0}
 #rb-text{width:100%;box-sizing:border-box;font:inherit;border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:10px;background:var(--surface);color:inherit}
 .bad-text{color:var(--bad)}
 @media (max-width:640px){.rb-row{grid-template-columns:minmax(0,1fr) 52px}.rb-row label,.rb-row>.muted,.rb-row select,.rb-row input:not([type=range]){grid-column:1/3}}

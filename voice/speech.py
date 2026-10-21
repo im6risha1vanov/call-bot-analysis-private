@@ -135,6 +135,100 @@ async def load_eleven_voices() -> dict[str, str]:
     return dict(_eleven_direct)
 
 
+# Библиотека голосов ElevenLabs (Voice Library): поиск русских голосов, добавление в аккаунт, клон по образцу.
+LIBRARY_USE_CASES = {"conversational": "разговорный", "narrative_story": "рассказчик", "characters_animation": "персонажи",
+                     "social_media": "соцсети", "entertainment_tv": "ТВ", "advertisement": "реклама",
+                     "informative_educational": "обучение"}
+
+
+class ElevenError(Exception):
+    pass
+
+
+def _eleven_key() -> str:
+    key = os.getenv("ELEVENLABS_API_KEY", "").strip()
+    if not key:
+        raise ElevenError("нет ключа ElevenLabs (ELEVENLABS_API_KEY)")
+    return key
+
+
+def _eleven_fail(r: httpx.Response, what: str) -> ElevenError:
+    try:
+        detail = r.json().get("detail")
+        detail = detail.get("message") or detail.get("status") if isinstance(detail, dict) else detail
+    except Exception:
+        detail = r.text[:200]
+    return ElevenError(f"{what}: ElevenLabs ответил {r.status_code} {str(detail or '')[:200]}".strip())
+
+
+async def search_library(query: str = "", gender: str = "", use_case: str = "", page: int = 0) -> dict:
+    """Русские голоса из библиотеки ElevenLabs, по 24 на страницу."""
+    params = {"language": "ru", "page_size": 24, "page": max(int(page), 0)}
+    if query.strip():
+        params["search"] = query.strip()[:80]
+    if gender in ("female", "male", "neutral"):
+        params["gender"] = gender
+    if use_case in LIBRARY_USE_CASES:
+        params["use_cases"] = use_case
+    r = await _client().get(ELEVEN_API + "/shared-voices", params=params, headers={"xi-api-key": _eleven_key()})
+    if r.status_code >= 300:
+        raise _eleven_fail(r, "поиск голосов")
+    data = r.json()
+    items = []
+    for v in data.get("voices", []):
+        if not v.get("voice_id") or not v.get("public_owner_id"):
+            continue
+        items.append({"voice_id": v["voice_id"], "owner": v["public_owner_id"], "name": str(v.get("name") or "").strip(),
+                      "description": str(v.get("description") or "").strip()[:300], "gender": v.get("gender") or "",
+                      "age": v.get("age") or "", "accent": v.get("accent") or "", "use_case": v.get("use_case") or "",
+                      "descriptive": v.get("descriptive") or "", "preview_url": v.get("preview_url") or "",
+                      "users": v.get("cloned_by_count") or 0})
+    return {"items": items, "more": bool(data.get("has_more"))}
+
+
+async def add_library_voice(owner: str, voice_id: str, name: str) -> str:
+    """Голос из библиотеки в «My Voices» аккаунта (без этого синтез им не работает). Возвращает voice_id в аккаунте."""
+    if not re.fullmatch(r"[A-Za-z0-9]{6,80}", owner or "") or not re.fullmatch(r"[A-Za-z0-9]{10,40}", voice_id or ""):
+        raise ElevenError("неверный голос")
+    name = (name or "Голос").strip()[:60]
+    r = await _client().post(f"{ELEVEN_API}/voices/add/{owner}/{voice_id}", json={"new_name": name},
+                             headers={"xi-api-key": _eleven_key()})
+    if r.status_code >= 300:
+        raise _eleven_fail(r, "добавление голоса")
+    new_id = r.json().get("voice_id") or voice_id
+    await load_eleven_voices()
+    return new_id
+
+
+async def clone_voice(name: str, files: list[tuple[str, bytes]], description: str = "") -> str:
+    """Мгновенный клон голоса (Instant Voice Cloning) по записям одного человека. Возвращает voice_id."""
+    if not files:
+        raise ElevenError("нет записей для клона")
+    data = {"name": (name or "Клон").strip()[:60], "remove_background_noise": "true"}
+    if description:
+        data["description"] = description[:300]
+    upload = [("files", (fname, content, "application/octet-stream")) for fname, content in files]
+    r = await _client().post(ELEVEN_API + "/voices/add", data=data, files=upload, headers={"xi-api-key": _eleven_key()},
+                             timeout=120.0)
+    if r.status_code >= 300:
+        raise _eleven_fail(r, "клон голоса")
+    await load_eleven_voices()
+    return r.json()["voice_id"]
+
+
+PREVIEW_HOSTS = ("https://storage.googleapis.com/", "https://cdn.elevenlabs.io/")
+
+
+async def library_preview(url: str) -> tuple[bytes, str]:
+    """Образец голоса из библиотеки: браузер CRM не может грузить чужие адреса, отдаём через сервер."""
+    if not url.startswith(PREVIEW_HOSTS):
+        raise ElevenError("неверный адрес образца")
+    r = await _client().get(url)
+    if r.status_code >= 300:
+        raise ElevenError(f"образец не скачался: {r.status_code}")
+    return r.content[:5_000_000], r.headers.get("content-type", "audio/mpeg")
+
+
 def voices() -> dict[str, list[str]]:
     """Доступные голоса: Яндекс, ElevenLabs через OpenRouter, ElevenLabs напрямую, смотря какие есть ключи."""
     out = dict(VOICES) if os.getenv("YANDEX_TTS_API_KEY", "").strip() else {}
@@ -307,7 +401,8 @@ settings_override: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
 SETTING_KEYS = {"voice_id": str, "model": str, "stability": float, "similarity": float, "style": float,
                 "speed": float, "speaker_boost": bool, "calm": bool, "tail_ms": int, "filler_after_ms": int,
                 "fillers": bool, "casual": float, "pause_ms": int, "fewer_commas": bool,
-                "inner_pause_ms": int, "whole_reply": bool, "bg_noise": float, "tempo_vary": float}
+                "inner_pause_ms": int, "whole_reply": bool, "bg_noise": float, "tempo_vary": float,
+                "one_breath": bool}
 
 
 def clean_settings(data: dict) -> dict:
@@ -598,7 +693,19 @@ def shorten_pauses(pcm: bytes, rate: int, max_ms: int) -> bytes:
 _INTRO_COMMA = re.compile(r"\b(Хорошо|Понятно|Поняла|Понял|Ага|Угу|Ну|Так|Подскажите|Скажите|Отлично|Да|Вот)(,)\s", re.IGNORECASE)
 
 
+# Одно дыхание: на каждой запятой синтезатор делал одинаковую паузу и подъём тона, фраза звучала как стих.
+# Ольга говорит фразу слитно, поэтому внутри предложения убираем запятые, двоеточия и тире.
+_INNER_MARKS = re.compile(r"\s*(?:,|:|;|\s[—–-])\s+")
+
+
+def one_breath(text: str) -> str:
+    if not setting("one_breath", True):
+        return text
+    return _INNER_MARKS.sub(" ", text)
+
+
 def fewer_pauses(text: str) -> str:
+    text = one_breath(text)
     if not setting("fewer_commas", True):
         return text
     text = _INTRO_COMMA.sub(lambda m: m.group(1) + " ", text)

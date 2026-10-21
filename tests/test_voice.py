@@ -462,6 +462,16 @@ class PauseTest(unittest.TestCase):
         self.assertAlmostEqual(len(out) / 2 / rate, 1.1, delta=0.02)
         self.assertEqual(speech.shorten_pauses(tone + bytes(rate // 10) + tone, rate, 150), tone + bytes(rate // 10) + tone)
 
+    def test_one_breath(self):
+        text = "Какой материал фасадов вас интересует: плёнка ПВХ, эмаль или пластик?"
+        self.assertEqual(speech.one_breath(text), "Какой материал фасадов вас интересует плёнка ПВХ эмаль или пластик?")
+        self.assertEqual(speech.one_breath("Специалист сделает замер — бесплатно. Удобно?"), "Специалист сделает замер бесплатно. Удобно?")
+        token = speech.settings_override.set({"one_breath": False})
+        try:
+            self.assertEqual(speech.one_breath(text), text)
+        finally:
+            speech.settings_override.reset(token)
+
     def test_fewer_commas(self):
         self.assertEqual(speech.fewer_pauses("Хорошо. Подскажите, когда удобно?"), "Хорошо, подскажите когда удобно?")
 

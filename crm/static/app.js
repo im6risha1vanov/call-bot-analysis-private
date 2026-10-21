@@ -1149,6 +1149,7 @@ const ROBOT_CHECKS = [
   ['speaker_boost', 'Усиление сходства с голосом'],
   ['calm', 'Спокойный тон: «!» читать как точку, «отлично» как «хорошо»'],
   ['whole_reply', 'Реплика на одном дыхании: озвучивать ответ целиком (ровнее интонация, ответ на 0,3–0,6 с позже)'],
+  ['one_breath', 'Фраза на одном дыхании: без пауз на запятых, двоеточиях и тире внутри предложения (не звучит как стих)'],
   ['fewer_commas', 'Меньше пауз на запятых'],
   ['fillers', '«Так…», «Угу…», пока модель думает'],
 ];
@@ -1189,6 +1190,19 @@ VIEWS.robot = async view => {
       <div class="rb-row"><label for="rb-voice_id">voice_id</label><input id="rb-voice_id" value="${esc(cfg.voice_id)}" autocomplete="off"></div>
       <div class="rb-row"><label for="rb-model">Модель</label><select id="rb-model">${models.map(([m, t]) => `<option value="${esc(m)}"${m === cfg.model ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select></div>
       ${ROBOT_SLIDERS.map(slider).join('')}</div>
+    <div class="panel"><h2>Подобрать голос</h2>
+      <p class="muted">Русские голоса из библиотеки ElevenLabs. «Слушать» играет образец автора голоса, «Взять» добавляет голос в аккаунт и подставляет его выше; потом «Прослушать» и «Сохранить для звонков».</p>
+      <div class="outform"><label class="field">Поиск<input id="rb-vq" placeholder="например calm, office, Анна" autocomplete="off"></label>
+        <label class="field">Пол<select id="rb-vg"><option value="female">женский</option><option value="male">мужской</option><option value="">любой</option></select></label>
+        <label class="field">Тип<select id="rb-vu"><option value="conversational">разговорный</option><option value="">любой</option></select></label>
+        <button class="btn" id="rb-vfind">Найти</button></div>
+      <div id="rb-vres"></div></div>
+    <div class="panel"><h2>Клон голоса</h2>
+      <p class="muted">Голос живого менеджера по его записям: 1–3 минуты чистой речи одного человека, без голоса клиента и музыки. Только с согласия этого человека.</p>
+      <div class="outform"><label class="field">Название<input id="rb-cname" value="Ольга" autocomplete="off"></label>
+        <label class="field">Записи (mp3, wav, m4a)<input type="file" id="rb-cfiles" accept="audio/*" multiple></label>
+        <button class="btn" id="rb-clone"${ro}>Сделать клон</button></div>
+      <div class="muted" id="rb-cst"></div></div>
     <div class="panel"><h2>Манера и темп разговора</h2>
       ${ROBOT_MANNER.map(slider).join('')}
       ${ROBOT_CHECKS.map(([id, label]) => `<label class="rb-check"><input type="checkbox" data-c="${id}"${cfg[id] ? ' checked' : ''}> ${label}</label>`).join('')}</div>
@@ -1238,6 +1252,69 @@ VIEWS.robot = async view => {
     catch (e) { st(e.message, true); }
   });
   $('#rb-reset', view).addEventListener('click', () => go('robot'));
+  const useVoice = (id, name, voices) => {
+    if (voices) voiceSel.innerHTML = '<option value="">— указать voice_id —</option>' + Object.entries(voices).map(([n, v]) => `<option value="${esc(v)}">${esc(n)}</option>`).join('');
+    if (![...voiceSel.options].some(o => o.value === id)) voiceSel.insertAdjacentHTML('beforeend', `<option value="${esc(id)}">${esc(name)}</option>`);
+    voiceSel.value = id; voiceId.value = id;
+    st(`Голос «${name}» подставлен. Нажмите «Прослушать», затем «Сохранить для звонков».`);
+  };
+  let vPage = 0, vSample = null;
+  const findVoices = async (more) => {
+    const box = $('#rb-vres', view);
+    vPage = more ? vPage + 1 : 0;
+    if (!more) box.innerHTML = '<div class="muted">Ищу…</div>';
+    try {
+      const qs = new URLSearchParams({q: $('#rb-vq', view).value, gender: $('#rb-vg', view).value, use: $('#rb-vu', view).value, page: vPage});
+      const r = await api('/api/robot/voices?' + qs, {scoped: false});
+      const rows = r.items.map(v => `<div class="rb-voice"><div><b>${esc(v.name)}</b> <span class="muted">${esc([v.gender === 'female' ? 'жен.' : v.gender === 'male' ? 'муж.' : '', v.age, v.accent, v.descriptive, v.use_case].filter(Boolean).join(' · '))}${v.users ? ` · взяли ${v.users}` : ''}</span>
+          ${v.description ? `<div class="muted">${esc(v.description)}</div>` : ''}</div>
+        <div class="row">${v.preview_url ? `<button class="btn small" data-vs="${esc(v.preview_url)}">Слушать</button>` : ''}
+          <button class="btn small primary" data-va="${esc(v.owner)}|${esc(v.voice_id)}" data-vn="${esc(v.name)}"${ro}>Взять</button></div></div>`).join('');
+      if (!more) box.innerHTML = '';
+      $('#rb-vmore', view)?.remove();
+      box.insertAdjacentHTML('beforeend', (rows || (more ? '' : '<div class="empty">Ничего не нашлось.</div>')) + (r.more ? '<button class="btn small" id="rb-vmore">Ещё</button>' : ''));
+      $('#rb-vmore', view)?.addEventListener('click', () => findVoices(true));
+    } catch (e) { box.innerHTML = `<div class="muted bad-text">${esc(e.message)}</div>`; }
+  };
+  $('#rb-vfind', view).addEventListener('click', () => findVoices(false));
+  $('#rb-vq', view).addEventListener('keydown', e => { if (e.key === 'Enter') findVoices(false); });
+  $('#rb-vres', view).addEventListener('click', async e => {
+    const play = e.target.closest('[data-vs]'), take = e.target.closest('[data-va]');
+    if (play) {
+      if (vSample) { vSample.pause(); URL.revokeObjectURL(vSample.src); }
+      play.disabled = true;
+      try {
+        const r = await fetch('/api/robot/voices/sample?' + new URLSearchParams({url: play.dataset.vs}), {credentials: 'same-origin'});
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Образец не загрузился.');
+        vSample = new Audio(URL.createObjectURL(await r.blob())); await vSample.play();
+      } catch (err) { st(err.message, true); }
+      play.disabled = false;
+    } else if (take) {
+      const [owner, id] = take.dataset.va.split('|');
+      take.disabled = true;
+      try {
+        const r = await api('/api/robot/voices/add', {method: 'POST', scoped: false, body: {owner, voice_id: id, name: take.dataset.vn}});
+        useVoice(r.voice_id, take.dataset.vn, r.voices);
+        take.textContent = 'Взят';
+      } catch (err) { st(err.message, true); take.disabled = false; }
+    }
+  });
+  $('#rb-clone', view).addEventListener('click', async () => {
+    const files = $('#rb-cfiles', view).files, out = $('#rb-cst', view), name = $('#rb-cname', view).value.trim() || 'Клон';
+    if (!files.length) return (out.textContent = 'Выберите файлы с записями голоса.');
+    const form = new FormData();
+    form.append('name', name);
+    [...files].forEach(f => form.append('files', f, f.name));
+    $('#rb-clone', view).disabled = true; out.textContent = 'Отправляю записи в ElevenLabs, это до минуты…';
+    try {
+      const r = await fetch('/api/robot/voices/clone', {method: 'POST', credentials: 'same-origin', headers: {'X-CRM': '1'}, body: form});
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error || 'Клон не получился.');
+      useVoice(data.voice_id, name, data.voices);
+      out.textContent = `Клон «${name}» готов и подставлен в «Голос». Послушайте и сохраните.`;
+    } catch (e) { out.textContent = e.message; }
+    $('#rb-clone', view).disabled = false;
+  });
   const dialNow = async number => {
     const out = $('#rb-call-st', view);
     out.textContent = 'Заказываю звонок…';
