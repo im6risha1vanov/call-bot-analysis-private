@@ -53,6 +53,10 @@ FIRST_WORDS_WAIT_S = 2.5     # сколько ждать «Алло», преж�
 # Записи разговоров: WAV 8 кГц моно (робот и клиент вместе), хранятся RECORDING_DAYS дней
 RECORDINGS = Path(os.getenv("VOICE_RECORDINGS") or Path(os.getenv("VOICE_LOG", "voice_calls.jsonl")).resolve().parent / "recordings")
 RECORDING_DAYS = float(os.getenv("VOICE_RECORDING_DAYS", "10"))
+# Фон на линии: без него в паузах звучит «мёртвая» цифровая тишина и слышно, как робот пропадает между фразами.
+# Уровень bg_noise со страницы голоса (0 — выключен). VOICE_BG_FILE — свой WAV 8 кГц моно (шум офиса), иначе мягкий шум.
+BG_NOISE = float(os.getenv("VOICE_BG_NOISE", "0.3"))
+BG_PEAK = 900  # амплитуда фона при уровне 1.0 (речь робота доходит до 10–20 тыс.)
 
 
 # ------------------------------------------------------------------ звук
@@ -79,6 +83,53 @@ def mix(a: bytes, b: bytes) -> bytes:
     for i, v in enumerate(y):
         out[i] = max(-32768, min(32767, out[i] + v))
     return out.tobytes()
+
+
+_bg_cache: dict = {}
+
+
+def background() -> array.array:
+    """Петля фона на 20 с: свой WAV или «комнатный» шум (низкочастотный, без шипения), нормированный к 1.0."""
+    if "loop" in _bg_cache:
+        return _bg_cache["loop"]
+    loop = None
+    path = os.getenv("VOICE_BG_FILE", "")
+    if path:
+        try:
+            with wave.open(path) as w:
+                if w.getframerate() == RATE and w.getnchannels() == 1 and w.getsampwidth() == 2:
+                    loop = array.array("h", w.readframes(w.getnframes()))
+                else:
+                    log.warning("фон %s: нужен WAV 8 кГц моно 16 бит", path)
+        except (OSError, wave.Error) as e:
+            log.warning("фон %s не прочитан: %s", path, e)
+    if loop:
+        peak = max(1, max(abs(v) for v in loop))
+        values = [v / peak for v in loop]
+    else:
+        import random
+        rnd = random.Random(7)
+        values, low, slow = [], 0.0, 0.0
+        for _ in range(RATE * 20):
+            white = rnd.uniform(-1, 1)
+            low = 0.9 * low + 0.1 * white          # срезаем шипение
+            slow = 0.9995 * slow + 0.0005 * rnd.uniform(-1, 1)  # медленно «дышит», как живое помещение
+            values.append(low * (0.8 + 40 * abs(slow)))
+        peak = max(abs(v) for v in values) or 1
+        values = [v / peak for v in values]
+    _bg_cache["loop"] = array.array("f", values)
+    return _bg_cache["loop"]
+
+
+def add_background(chunk: bytes, pos: int, level: float) -> tuple[bytes, int]:
+    """Подмешивает фон к кадру (или к тишине). Возвращает кадр и новую позицию в петле."""
+    loop = background()
+    x = array.array("h", chunk)
+    amp = level * BG_PEAK
+    n = len(loop)
+    for i in range(len(x)):
+        x[i] = max(-32768, min(32767, x[i] + int(loop[(pos + i) % n] * amp)))
+    return x.tobytes(), (pos + len(x)) % n
 
 
 def save_recording(name: str, robot: bytes, client: bytes, directory: Path | None = None) -> Path | None:
@@ -220,6 +271,7 @@ class PhoneCall:
         self.rec_robot = bytearray()      # запись: что сказал робот, по кадрам (тишина, когда молчит)
         self.rec_client = bytearray()     # запись: что пришло от клиента
         self.recording = True
+        self.bg_pos = 0
 
     async def send_audio(self, pcm: bytes) -> None:
         self.out += downsample(pcm, speech.TTS_RATE, RATE)
@@ -242,17 +294,24 @@ class PhoneCall:
         """Отдаёт звук робота кадрами по 20 мс в реальном времени."""
         start = time.monotonic()
         n = 0
+        level = max(0.0, min(1.0, float(speech.setting("bg_noise", BG_NOISE))))
         while not self.closed:
-            chunk_sent = bool(self.out)
+            had_speech = bool(self.out)
+            chunk_sent = had_speech or level > 0
             if self.out:
                 chunk = bytes(self.out[:FRAME_BYTES]).ljust(FRAME_BYTES, b"\0")
                 del self.out[:FRAME_BYTES]
+                if not self.out:
+                    self.ran_dry = time.monotonic()
+            else:
+                chunk = bytes(FRAME_BYTES)
+            if level > 0:  # фон идёт всё время, и под речью, и в паузах
+                chunk, self.bg_pos = add_background(chunk, self.bg_pos, level)
+            if chunk_sent:
                 await self.write(frame(KIND_AUDIO, chunk))
                 if self.recording:
                     self.rec_robot += chunk
-                if not self.out:
-                    self.ran_dry = time.monotonic()
-            elif self.ran_dry and self.session is not None and self.session.reply_spoke and (
+            if not had_speech and self.ran_dry and self.session is not None and self.session.reply_spoke and (
                     self.session.pending or self.session.reply_task and not self.session.reply_task.done()):
                 # звук кончился, а следующая фраза ещё не готова (модель пишет или синтез): пауза посреди ответа
                 log.warning("AUDIO_GAP: пауза посреди ответа робота, следующая фраза не готова")
@@ -417,6 +476,7 @@ async def serve() -> None:
                 log.info("удалено старых записей: %d", removed)
             await asyncio.sleep(3600)
 
+    await asyncio.to_thread(background)  # петля фона готовится 0,3 с: заранее, а не посреди первого звонка
     server = await asyncio.start_server(on_socket, AUDIOSOCKET_HOST, AUDIOSOCKET_PORT)
     app = web.Application()
     app.router.add_post("/dial", api_dial)

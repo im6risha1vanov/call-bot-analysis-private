@@ -307,7 +307,7 @@ settings_override: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
 SETTING_KEYS = {"voice_id": str, "model": str, "stability": float, "similarity": float, "style": float,
                 "speed": float, "speaker_boost": bool, "calm": bool, "tail_ms": int, "filler_after_ms": int,
                 "fillers": bool, "casual": float, "pause_ms": int, "fewer_commas": bool,
-                "inner_pause_ms": int, "whole_reply": bool}
+                "inner_pause_ms": int, "whole_reply": bool, "bg_noise": float}
 
 
 def clean_settings(data: dict) -> dict:
@@ -323,7 +323,8 @@ def clean_settings(data: dict) -> dict:
             continue
         out[key] = value
     for key, low, high in (("casual", 0, 1), ("stability", 0, 1), ("similarity", 0, 1), ("style", 0, 1), ("speed", 0.7, 1.2),
-                           ("tail_ms", 300, 2000), ("filler_after_ms", 100, 3000), ("pause_ms", 0, 600), ("inner_pause_ms", 40, 600)):
+                           ("tail_ms", 300, 2000), ("filler_after_ms", 100, 3000), ("pause_ms", 0, 600), ("inner_pause_ms", 40, 600),
+                           ("bg_noise", 0, 1)):
         if key in out:
             out[key] = min(max(out[key], low), high)
     if "voice_id" in out and not re.fullmatch(r"[A-Za-z0-9]{10,40}", out["voice_id"]):
