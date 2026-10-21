@@ -27,6 +27,7 @@ from tools import Forbidden
 from .dial import normalize
 from . import robot
 from .robot import OUTCOMES
+from .robot_prices import num, status as auto_prices
 
 PAID_OPTION = 'Голосовой робот подключается отдельно, за доплату. Чтобы включить, напишите вашему менеджеру Averon.'
 READONLY = 'Тестовый вход только для просмотра.'
@@ -57,7 +58,11 @@ async def set_option(pool, key: str, value) -> None:
 
 
 async def prices(pool) -> dict:
-    return {**DEFAULT_PRICES, **(await get_option(pool, 'prices', {}))}
+    """Себестоимость считает robot_prices сам; директор задаёт только коэффициент для клиента."""
+    auto = await auto_prices(pool)
+    out = {key: float((auto.get(key) or {}).get('value') or 0) for key in DEFAULT_PRICES if key != 'multiplier'}
+    out['multiplier'] = float((await get_option(pool, 'prices', {})).get('multiplier') or DEFAULT_PRICES['multiplier'])
+    return out
 
 
 async def enabled_clients(pool) -> list[str]:
@@ -96,20 +101,14 @@ async def save_options(pool, who, data: dict) -> dict:
         raise Forbidden('Раздел директора.')
     if who.test:
         raise Forbidden(READONLY)
-    if 'prices' in data:
+    if 'prices' in data:  # руками меняется только коэффициент, цены считаются сами
         got = data['prices'] if isinstance(data['prices'], dict) else {}
-        clean = {}
-        for key in DEFAULT_PRICES:
-            try:
-                value = float(str(got.get(key, DEFAULT_PRICES[key])).replace(',', '.'))
-            except ValueError:
-                raise ValueError('Цена должна быть числом.')
-            if value < 0 or value > 100000:
-                raise ValueError('Цена вне разумных пределов.')
-            clean[key] = value
-        if clean['multiplier'] <= 0:
-            raise ValueError('Коэффициент для клиента должен быть больше нуля.')
-        await set_option(pool, 'prices', clean)
+        value = num(got.get('multiplier', DEFAULT_PRICES['multiplier']))
+        if value is None:
+            raise ValueError('Коэффициент должен быть числом.')
+        if not 0 < value <= 100:
+            raise ValueError('Коэффициент для клиента должен быть больше нуля и не больше 100.')
+        await set_option(pool, 'prices', {'multiplier': value})
     if 'clients' in data:
         names = data['clients'] if isinstance(data['clients'], list) else []
         await set_option(pool, 'clients', sorted({str(n).strip()[:100] for n in names if str(n).strip()}))

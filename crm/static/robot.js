@@ -4,6 +4,7 @@
 
 const RB = {tab: 'campaigns', owner: '', st: null, f: {}};
 const RB_DAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+const RB_COSTS = [['mango_min', 'Минута Mango', 'за минуту'], ['eleven_1k_chars', 'Синтез ElevenLabs', 'за 1000 символов'], ['llm_1k_tokens', 'Модель YandexGPT', 'за 1000 токенов']];
 // Шесть вкладок; клиент видит первые четыре.
 const RB_TABS = [
   ['campaigns', 'Кампании'], ['numbers', 'Номера'], ['calls', 'Звонки'], ['operators', 'Операторы'],
@@ -372,15 +373,19 @@ RB_VIEW.settings = async el => {
   const names = [...new Set([...known, ...o.clients])];
   const p = o.prices;
   const sheet = RB.st.sheet;
-  el.innerHTML = `<div class="grid2 even"><section class="card blk"><div class="card-h"><h2>Себестоимость</h2></div>
-      <p class="lead" data-css="margin-bottom:12px">Из этого считается стоимость звонков и цена лида. Клиент видит себестоимость, умноженную на коэффициент.</p>
-      <div class="op-grid">
-        <label class="field">Минута Mango, ₽<input class="inp" data-p="mango_min" value="${p.mango_min}" inputmode="decimal"${rbRO()}></label>
-        <label class="field">Синтез ElevenLabs, ₽ за 1000 символов<input class="inp" data-p="eleven_1k_chars" value="${p.eleven_1k_chars}" inputmode="decimal"${rbRO()}></label>
-        <label class="field">Модель YandexGPT, ₽ за 1000 токенов<input class="inp" data-p="llm_1k_tokens" value="${p.llm_1k_tokens}" inputmode="decimal"${rbRO()}></label>
-        <label class="field">Коэффициент для клиента<input class="inp" data-p="multiplier" value="${p.multiplier}" inputmode="decimal"${rbRO()}></label>
-      </div><div class="row" data-css="margin-top:12px"><button class="btn primary" type="button" id="pr-save"${rbRO()}>Сохранить цены</button></div>
-      <p class="hint">Минуты считаются по длительности разговора, синтез по символам, которые робот озвучил (повторяющиеся фразы берутся из запаса и не оплачиваются), модель по токенам.</p></section>
+  const auto = o.auto || {};
+  const costRow = ([key, title, unit]) => {
+    const a = auto[key] || {};
+    return `<div class="item"><div class="main-l"><div class="t">${title}</div>
+        <div class="s wrap-s">${a.note ? esc(a.note) + (a.at ? ' · обновлено ' + fmtWhen(a.at) : '') : 'ещё не считалось'}</div>
+        ${a.error ? `<div class="s bad-text wrap-s">Не обновилось${a.tried ? ' ' + fmtWhen(a.tried) : ''}: ${esc(a.error)}</div>` : ''}</div>
+      <div class="r"><b class="num">${a.value == null ? '—' : money(a.value)}</b><div class="s">${unit}</div></div></div>`;
+  };
+  el.innerHTML = `<div class="grid2 even"><section class="card blk"><div class="card-h"><h2>Себестоимость</h2><span class="hint">считается сама раз в 6 часов</span></div>
+      <div class="list">${RB_COSTS.map(costRow).join('')}</div>
+      <div class="row" data-css="margin-top:14px;align-items:flex-end"><label class="field cost-k">Коэффициент для клиента<input class="inp" data-p="multiplier" value="${p.multiplier}" inputmode="decimal"${rbRO()}></label>
+        <button class="btn primary" type="button" id="pr-save"${rbRO()}>Сохранить</button></div>
+      <p class="hint">Клиент видит стоимость звонков и цену лида по себестоимости, умноженной на коэффициент. Сами цены руками не меняются: Mango считается по стоимости ваших исходящих звонков за 30 дней, ElevenLabs по подписке и курсу ЦБ, YandexGPT по прайсу Яндекса.</p></section>
     <section class="card blk" data-css="--i:1"><div class="card-h"><h2>Кабинет робота у клиентов</h2></div>
       <p class="lead" data-css="margin-bottom:8px">Платная опция. Включённый клиент видит в своём кабинете раздел «Робот»: свои кампании, номера, звонки и операторов со стоимостью ×${p.multiplier}.</p>
       ${names.length ? names.map(n => `<label class="rb-sw"><input type="checkbox" data-cl="${esc(n)}"${o.clients.includes(n) ? ' checked' : ''}${rbRO()}><span class="rb-sw-ui"></span><span><b>${esc(n)}</b></span></label>`).join('')
@@ -391,9 +396,8 @@ RB_VIEW.settings = async el => {
       ${sheet ? `<div class="item"><div class="main-l"><div class="t">Google Таблица</div><div class="s" data-css="white-space:normal">Итог каждого звонка строкой на лист «${esc(sheet.tab)}».</div></div><span class="chip ${sheet.on ? 'good' : ''}">${sheet.on ? 'работает' : 'не подключена'}</span></div>` : ''}
       <div class="item"><div class="main-l"><div class="t">Mango Office</div><div class="s" data-css="white-space:normal">Робот звонит через сотрудника «Робот» в Mango.</div></div><span class="chip good">работает</span></div></div></section>`;
   $('#pr-save', el).addEventListener('click', async e => {
-    const prices = {}; $$('[data-p]', el).forEach(i => { prices[i.dataset.p] = i.value; });
     busy(e.currentTarget, true);
-    try { await rbPost('/options', {prices}); toast('Цены сохранены'); reload(); } catch (err) { busy(e.currentTarget, false); toast(err.message, true); }
+    try { await rbPost('/options', {prices: {multiplier: $('[data-p="multiplier"]', el).value}}); toast('Коэффициент сохранён'); reload(); } catch (err) { busy(e.currentTarget, false); toast(err.message, true); }
   });
   $('#cl-save', el).addEventListener('click', async e => {
     busy(e.currentTarget, true);

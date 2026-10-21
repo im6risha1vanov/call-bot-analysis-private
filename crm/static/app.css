@@ -589,3 +589,7 @@ audio.rec{display:block;width:100%;max-width:420px;height:36px;margin-top:6px}
 .rb-check input{width:auto}
 .ask-box [data-ex]{white-space:normal;text-align:left;max-width:100%;height:auto;line-height:1.35;padding-block:6px}
 .list .more-l{margin:0;padding:10px 4px 0}
+.item .s.wrap-s{white-space:normal}
+.bad-text,.item .s.bad-text{color:var(--bad)}
+.item .r b{font-size:15px;color:var(--fg);font-weight:650}
+.field.cost-k{flex:1;min-width:160px;max-width:260px}

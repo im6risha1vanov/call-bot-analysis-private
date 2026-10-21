@@ -13,6 +13,7 @@
 #   bash scripts/crm_setup.sh public-off       — закрыть: снова только личные и тестовая ссылки, входы для просмотра гаснут
 #   bash scripts/crm_setup.sh director-link [TG] — личная ссылка директора (по умолчанию владельца из бота): с ней можно всё менять
 #   bash scripts/crm_setup.sh dadata-key       — ключ DaData для поиска реквизитов по ИНН в «Договорах» (спросит ключ, на экран не выводит)
+#   bash scripts/crm_setup.sh prices           — пересчитать себестоимость звонка робота сейчас и показать, откуда взялись цены
 #   bash scripts/crm_setup.sh rollback         — выключить сайт и убрать CRM_URL (таблицы CRM остаются, они ничему не мешают)
 set -euo pipefail
 APP=/opt/callbot-astra
@@ -193,6 +194,24 @@ dadata-key)
   systemctl restart callbot-crm
   echo 'DaData key saved: search by INN works in «Договоры»'
   ;;
+prices)
+  # Сайт сам пересчитывает цены раз в 6 часов; команда делает это сразу и печатает источники.
+  DATABASE_URL="$DATABASE_URL" .venv/bin/python - <<'PY'
+import asyncio, os
+import asyncpg
+from dotenv import load_dotenv
+load_dotenv('.env')
+from crm import robot_prices
+
+async def main():
+    pool = await asyncpg.create_pool(os.environ['DATABASE_URL'], min_size=1, max_size=2)
+    for key, item in (await robot_prices.refresh(pool)).items():
+        print(key, item['value'], '|', item['error'] or item['note'])
+    await pool.close()
+
+asyncio.run(main())
+PY
+  ;;
 status)
   git log -1 --oneline
   grep -q '^CRM_PUBLIC=1' .env && echo 'public view-only: ON' || echo 'public view-only: off'
@@ -212,7 +231,7 @@ rollback)
   echo "CRM is off. Caddy keeps running but has nothing behind it; stop it with: systemctl disable --now caddy"
   ;;
 *)
-  sed -n '2,16p' "$0"
+  sed -n '2,17p' "$0"
   exit 1
   ;;
 esac
