@@ -2,8 +2,6 @@
 .rb-head{display:flex;gap:12px;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;margin-bottom:4px}
 .rb-head .filters{margin-bottom:12px}
 .rb-owner{margin-bottom:12px;min-width:200px}
-.rb-filters input,.rb-filters select,.panel .row input:not([type=checkbox]){border:1px solid var(--line);border-radius:8px;padding:6px 10px;background:var(--surface);color:var(--fg)}
-.rb-filters .field{flex-direction:row;align-items:center;gap:6px}
 .rvm.rvm-wide{width:min(920px,calc(100% - 24px))}
 .op-form{display:flex;flex-direction:column;gap:12px}
 .op-form textarea,.op-form input,.op-form select{width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:var(--surface);color:var(--fg);font:inherit}

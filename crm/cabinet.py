@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import re
 from collections import defaultdict
 
@@ -77,6 +78,8 @@ def parse_client(rows) -> dict:
         'c3': 'Звонок 3 (повторный)', 'sum': 'Сумма', 'base': 'Дата базы', 'd1': 'Дата звонка 1',
         'd2': 'Дата звонка 2', 'd3': 'Дата звонка 3'}.items()}
     counts = defaultdict(int)
+    waiting = reached_first = 0
+    sources = defaultdict(lambda: defaultdict(int))
     bases = defaultdict(lambda: defaultdict(int))
     days = defaultdict(lambda: defaultdict(int))
     interested, callbacks = [], []
@@ -102,6 +105,14 @@ def parse_client(rows) -> dict:
             b['reached'] += 1
         if kind == 'interested':
             b['interested'] += 1
+        if kind == 'no_answer' and len([a for a in attempts if a]) < 3:
+            waiting += 1  # недозвон, а третьей попытки ещё не было
+        if attempts[0] and not attempts[0].startswith('НДЗ'):
+            reached_first += 1
+        src = sources[cell(r, I['tag']) or cell(r, I['project']) or '']
+        src['total'] += 1
+        src['reached'] += reached
+        src['interested'] += kind == 'interested'
         for i, (a, d) in enumerate(zip(attempts, dates)):
             if a and d:
                 day = days[d]
@@ -124,7 +135,8 @@ def parse_client(rows) -> dict:
     return {
         'counts': {k: counts[k] for k in ('total', 'called', 'not_called', 'reached', 'interested', 'callback',
                                           'not_relevant', 'no_answer', 'other')},
-        'cost': round(cost, 2), 'since': since,
+        'cost': round(cost, 2), 'since': since, 'waiting': waiting, 'reached_first': reached_first,
+        'sources': sorted(({'name': k, **v} for k, v in sources.items()), key=lambda x: -x['total']),
         'bases': [{'date': d, **v} for d, v in sorted(bases.items(), reverse=True)],
         'days': [{'day': d, **v} for d, v in sorted(days.items(), reverse=True)],
         'interested': interested, 'callbacks': callbacks,
@@ -145,3 +157,45 @@ async def cabinet(name: str) -> dict:
         raise LookupError('Такого клиента нет в таблице колл-центра.')
     rows = await gsheets.values(gsheets.leads_sheet(), f"'{name.replace(chr(39), chr(39) * 2)}'!A1:P6000")
     return {'name': name, 'summary': row, 'tariffs': info['tariffs'], **parse_client(rows)}
+
+
+async def callcenter() -> dict:
+    """Колл-центр целиком для директора: все клиенты из «Прозвон лидов» в одном ответе."""
+    info = await summary()
+    sheet = gsheets.leads_sheet()
+    sheets = await asyncio.gather(*(gsheets.values(sheet, f"'{c['name'].replace(chr(39), chr(39) * 2)}'!A1:P6000")
+                                    for c in info['clients']), return_exceptions=True)
+    clients, callbacks, sources = [], [], defaultdict(lambda: defaultdict(int))
+    days = defaultdict(lambda: defaultdict(int))
+    bases = []
+    total = defaultdict(int)
+    for row, rows in zip(info['clients'], sheets):
+        if isinstance(rows, LookupError):
+            rows = []
+        elif isinstance(rows, BaseException):
+            raise rows
+        p = parse_client(rows)
+        k = p['counts']
+        clients.append({'name': row['name'], 'since': p['since'], 'leads': k['total'], 'called': k['called'],
+                        'reached': k['reached'], 'interested': k['interested'], 'callback': k['callback'],
+                        'waiting': p['waiting'], 'not_called': k['not_called'], 'sum': row['sum']})
+        for key in ('called', 'reached', 'interested', 'total'):
+            total[key] += k[key]
+        total['reached_first'] += p['reached_first']
+        total['sum'] += row['sum']
+        for d in p['days']:
+            for key in ('first', 'repeat', 'reached', 'interested'):
+                days[d['day']][key] += d.get(key, 0)
+        callbacks += [{**c, 'client': row['name']} for c in p['callbacks']]
+        for s in p['sources']:
+            for key in ('total', 'reached', 'interested'):
+                sources[(row['name'], s['name'])][key] += s[key]
+        bases += [{**b, 'client': row['name']} for b in p['bases'] if b['date']]
+    callbacks.sort(key=lambda x: x['last'], reverse=True)
+    return {
+        'tariffs': info['tariffs'], 'clients': clients, 'total': dict(total),
+        'days': [{'day': d, **v} for d, v in sorted(days.items())][-45:],
+        'callbacks': callbacks[:150],
+        'sources': sorted(({'client': c, 'name': n, **v} for (c, n), v in sources.items()), key=lambda x: -x['total'])[:60],
+        'bases': sorted(bases, key=lambda x: x['date'], reverse=True)[:40],
+    }

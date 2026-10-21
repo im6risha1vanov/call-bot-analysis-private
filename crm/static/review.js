@@ -25,7 +25,7 @@
     const good = [...r.evidence, ...r.positives];
     return `<header class="rvm-head"><div>
         <span class="rvm-chip ${mark[0]}">${esc(mark[1])}</span>
-        <h2>${esc(r.manager || 'Менеджер')} · ${esc(r.phone || '')}</h2>
+        <h2>${esc(r.manager || 'Менеджер')} · ${esc(phone(r.phone))}</h2>
         <div class="rvm-mut">${esc(r.at || '')}${r.seconds ? ' · ' + dur(r.seconds) : ''} · звонок ${r.id}</div></div>
         <button class="rvm-x" aria-label="Закрыть">×</button>
         ${r.rec ? '<audio class="rvm-audio" controls preload="metadata" src="/api/recording/' + r.id + '"></audio>'
@@ -85,6 +85,8 @@
       return;
     }
     box.innerHTML = body(r);
+    // CRM добавляет в шапку свои кнопки (позвонить клиенту): static/calls.js.
+    document.dispatchEvent(new CustomEvent('crm-review', {detail: {box, review: r, close}}));
     const a = box.querySelector('audio');
     if (a) {
       a.addEventListener('error', () => {
