@@ -14,6 +14,7 @@
 #   bash scripts/crm_setup.sh director-link [TG] — личная ссылка директора (по умолчанию владельца из бота): с ней можно всё менять
 #   bash scripts/crm_setup.sh dadata-key       — ключ DaData для поиска реквизитов по ИНН в «Договорах» (спросит ключ, на экран не выводит)
 #   bash scripts/crm_setup.sh prices           — пересчитать себестоимость звонка робота сейчас и показать, откуда взялись цены
+#   bash scripts/crm_setup.sh yandex-key       — подключить yandex-sa-key.json (ключ сервисного аккаунта Яндекса для цены YandexGPT)
 #   bash scripts/crm_setup.sh rollback         — выключить сайт и убрать CRM_URL (таблицы CRM остаются, они ничему не мешают)
 set -euo pipefail
 APP=/opt/callbot-astra
@@ -216,6 +217,16 @@ async def main():
 asyncio.run(main())
 PY
   ;;
+yandex-key)
+  # Авторизованный ключ сервисного аккаунта без ролей, скачанный в консоли Яндекс Облака и скопированный сюда scp.
+  F=yandex-sa-key.json
+  [ -f "$F" ] || { echo "no $APP/$F yet: copy the downloaded authorized key there with scp, nothing changed"; exit 1; }
+  .venv/bin/python -c "import json; k=json.load(open('$F')); assert k['id'] and k['service_account_id'] and 'PRIVATE KEY' in k['private_key']; print('service account', k['service_account_id'])" \
+    || { echo "$F is not a Yandex authorized key file, nothing changed"; exit 1; }
+  chown callbot-astra: "$F"; chmod 600 "$F"
+  systemctl restart callbot-crm
+  echo 'key connected: the site now reads the YandexGPT price from Billing API'
+  ;;
 status)
   git log -1 --oneline
   grep -q '^CRM_PUBLIC=1' .env && echo 'public view-only: ON' || echo 'public view-only: off'
@@ -235,7 +246,7 @@ rollback)
   echo "CRM is off. Caddy keeps running but has nothing behind it; stop it with: systemctl disable --now caddy"
   ;;
 *)
-  sed -n '2,17p' "$0"
+  sed -n '2,18p' "$0"
   exit 1
   ;;
 esac

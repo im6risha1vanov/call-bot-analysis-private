@@ -5,8 +5,8 @@
 - ElevenLabs, рубли за 1000 символов: сумма следующего счёта подписки на лимит кредитов за тот же
   срок (GET /v1/user/subscription), умноженная на кредиты за символ у модели робота (GET /v1/models)
   и на курс ЦБ.
-- YandexGPT, рубли за 1000 токенов: прайс Яндекс Облака из Billing API тем же ключом, что у робота;
-  если не пустит, страница прайса Yandex AI Studio (синхронный режим, с НДС).
+- YandexGPT, рубли за 1000 токенов: прайс Яндекс Облака из Billing API (ключ сервисного аккаунта
+  yandex-sa-key.json, без него ключ робота); если не пустит, страница прайса Yandex AI Studio.
 
 Пересчёт при старте CRM и раз в 6 часов. Если источник не ответил, остаётся прошлое значение и причина.
 Коэффициент для клиента директор по-прежнему задаёт сам (robot_store.save_options).
@@ -21,6 +21,7 @@ import os
 import re
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -38,6 +39,9 @@ DAYS = 30
 ELEVEN_API = 'https://api.elevenlabs.io/v1'
 YANDEX_PRICING = 'https://aistudio.yandex.ru/docs/ru/ai-studio/pricing'
 YANDEX_SKUS = 'https://billing.api.cloud.yandex.net/billing/v1/skus'
+IAM_TOKENS = 'https://iam.api.cloud.yandex.net/iam/v1/tokens'
+# Авторизованный ключ сервисного аккаунта без ролей: им CRM читает прайс Billing API (scripts/crm_setup.sh yandex-key).
+SA_KEY_FILE = Path(__file__).resolve().parents[1] / 'yandex-sa-key.json'
 # Строки прайса Billing API, которые не про обычную синхронную генерацию.
 SKU_SKIP = re.compile(r'async|асинхрон|batch|пакетн|fine|дообуч|tun|lora|cach|кеш|кэш|tool|инструмент|embed|эмбед|classif|классиф', re.I)
 CBR_DAILY = 'https://www.cbr.ru/scripts/XML_daily.asp'
@@ -256,17 +260,47 @@ def yandex_key() -> str:
     return (os.getenv('YANDEX_GPT_API_KEY') or os.getenv('YANDEX_TTS_API_KEY') or '').strip()
 
 
-async def yandex_skus(http) -> list[dict]:
-    """Прайс Яндекс Облака из Billing API (рубли), тем же API-ключом, что у робота."""
+def sa_jwt(key: dict, now: int | None = None) -> str:
+    """JWT ключа сервисного аккаунта Яндекс Облака (PS256) для обмена на IAM-токен."""
+    import base64
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding
+
+    def b64(raw: bytes) -> str:
+        return base64.urlsafe_b64encode(raw).rstrip(b'=').decode()
+    now = int(now or time.time())
+    head = b64(json.dumps({'typ': 'JWT', 'alg': 'PS256', 'kid': key['id']}).encode())
+    body = b64(json.dumps({'aud': IAM_TOKENS, 'iss': key['service_account_id'], 'iat': now, 'exp': now + 3600}).encode())
+    pem = key['private_key'][key['private_key'].index('-----BEGIN'):]  # в файле Яндекса перед ключом идёт строка-предупреждение
+    private = serialization.load_pem_private_key(pem.encode(), password=None)
+    sig = private.sign(f'{head}.{body}'.encode(), padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=32), hashes.SHA256())
+    return f'{head}.{body}.{b64(sig)}'
+
+
+async def yandex_auth(http) -> str:
+    """Заголовок для Billing API: IAM-токен сервисного аккаунта, если его ключ лежит на сервере, иначе ключ робота."""
+    path = Path(os.getenv('YANDEX_SA_KEY_FILE') or SA_KEY_FILE)
+    if path.exists():
+        r = await http.post(IAM_TOKENS, json={'jwt': sa_jwt(json.loads(path.read_text()))})
+        if r.status_code >= 400:
+            raise PriceError(f'Яндекс не выдал токен по ключу сервисного аккаунта (код {r.status_code})')
+        return 'Bearer ' + r.json()['iamToken']
     key = yandex_key()
     if not key:
         raise PriceError('нет API-ключа Яндекса')
+    return 'Api-Key ' + key
+
+
+async def yandex_skus(http) -> list[dict]:
+    """Прайс Яндекс Облака из Billing API (рубли)."""
+    auth = await yandex_auth(http)
     skus, token = [], ''
     for _ in range(30):
         r = await http.get(YANDEX_SKUS, params={'currency': 'RUB', 'pageSize': 1000, **({'pageToken': token} if token else {})},
-                           headers={'Authorization': 'Api-Key ' + key})
+                           headers={'Authorization': auth})
         if r.status_code in (401, 403):
-            raise PriceError(f'ключ Яндекса не пускает к прайсу Billing API (код {r.status_code})')
+            who = 'сервисный аккаунт' if auth.startswith('Bearer') else 'ключ робота (нужен ключ сервисного аккаунта)'
+            raise PriceError(f'Billing API Яндекса не пускает {who}, код {r.status_code}')
         r.raise_for_status()
         data = r.json()
         skus += data.get('skus') or []
