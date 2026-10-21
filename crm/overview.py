@@ -147,7 +147,7 @@ async def summary(pool, actor, period: str = '7', ext: str | None = None, now: d
         raise ValueError('Неизвестный период.')
     tz = await store.zone(pool, actor.client_id)
     now = now or datetime.now(timezone.utc)
-    team = await sales_team(pool, actor.client_id)
+    sales = team = await sales_team(pool, actor.client_id)
     if not is_privileged(actor):
         ext = actor.extension
         team = [p for p in team if p['ext'] == ext] or [{'ext': ext, 'name': ''}]
@@ -199,6 +199,7 @@ async def summary(pool, actor, period: str = '7', ext: str | None = None, now: d
     return {
         'period': period, 'vs': b['vs'], 'hourly': b['hourly'], 'today': now.astimezone(tz).date().isoformat(),
         'now': now.astimezone(tz).strftime('%H:%M'), 'live_seconds': LIVE_SECONDS,
+        'team': [{'ext': p['ext'], 'name': p['name']} for p in sales] if is_privileged(actor) else [],
         'cur': {k: v for k, v in cur.items() if k != 'categories'},
         'prev': {k: v for k, v in prev.items() if k != 'categories'},
         'series': list(series.values()),

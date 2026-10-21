@@ -23,7 +23,7 @@ from aiohttp import web  # noqa: E402
 import mango_client  # noqa: E402
 from tools import Forbidden, is_privileged  # noqa: E402
 from . import ask as asking, auth, cabinet, contracts, deals, journal, overview, people, recording, reviews, sources, staff, store, training  # noqa: E402
-from . import prompts as prompt_mode, robot, robot_api, robot_runner  # noqa: E402
+from . import prompts as prompt_mode, robot, robot_api, robot_runner, robot_store  # noqa: E402
 from review import store as review_store  # noqa: E402
 from .dial import dial  # noqa: E402
 
@@ -214,7 +214,8 @@ async def api_me(request):
     pool = request.app[POOL]
     if who.role == 'client':
         return web.json_response({'name': who.client_key, 'role': 'client', 'test': who.test, 'client': who.client_key,
-                                  'privileged': False, 'can_dial': False, 'team': []})
+                                  'privileged': False, 'can_dial': False, 'team': [],
+                                  'robot': who.client_key in await robot_store.enabled_clients(pool)})
     a = who.actor
     name = await pool.fetchval('SELECT full_name FROM employees WHERE client_id=$1 AND telegram_user_id=$2 LIMIT 1',
                                a.client_id, a.telegram_user_id) if a.telegram_user_id else None
@@ -421,9 +422,16 @@ async def api_staff(request):
     pool = request.app[POOL]
     data = await staff.listing(pool, who.actor)
     stats = await people.summary(pool, who.actor.client_id)
+    # Вход в CRM: сколько действующих личных ссылок и когда входил последний раз.
+    tg = {p['ext']: p['tg'] for p in await staff._people(pool, who.actor.client_id)}
+    links = await pool.fetch('SELECT extension, telegram_user_id, last_used_at FROM crm_invites WHERE client_id=$1 AND revoked_at IS NULL',
+                             who.actor.client_id)
     for item in data['items']:
         item['stats'] = stats.get(item['ext']) if item['role'] == 'manager' else None
         item['kitchen'] = people.review_kitchen.handles(item['ext'])
+        own = [r for r in links if r['extension'] == item['ext'] or (tg.get(item['ext']) and r['telegram_user_id'] == tg[item['ext']])]
+        used = max((r['last_used_at'] for r in own if r['last_used_at']), default=None)
+        item['crm_links'], item['crm_used'] = len(own), used.isoformat() if used else None
     return web.json_response(data)
 
 

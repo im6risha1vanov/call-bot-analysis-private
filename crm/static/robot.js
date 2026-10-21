@@ -1,49 +1,46 @@
-// Кабинет голосового робота: операторы, кампании, контакты, стоп-лист, звонки, аналитика.
-// Работает поверх app.js (его помощники esc, $, $$, api, modal, toast, phone, dur, fmtWhen, heights, go).
+// Раздел «Робот»: кампании, номера (контакты и стоп-лист), звонки с итогами, операторы; у директора ещё голос и настройки.
+// Работает поверх app.js (его помощники esc, $, $$, api, modal, toast, phone, dur, fmtWhen, reload).
 'use strict';
 
-const RB = {tab: 'campaigns', owner: '', st: null, voiceView: VIEWS.robot};
+const RB = {tab: 'campaigns', owner: '', st: null, f: {}};
 const RB_DAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+// Шесть вкладок; клиент видит первые четыре.
 const RB_TABS = [
-  ['operators', 'Операторы'], ['campaigns', 'Кампании'], ['contacts', 'Контакты'], ['stop', 'Стоп-лист'],
-  ['calls', 'Звонки'], ['analytics', 'Аналитика'], ['integrations', 'Интеграции'],
-  ['settings', 'Цены и клиенты', 'director'], ['voice', 'Голос и тест', 'director'],
+  ['campaigns', 'Кампании'], ['numbers', 'Номера'], ['calls', 'Звонки'], ['operators', 'Операторы'],
+  ['voice', 'Голос', 'director'], ['settings', 'Настройки', 'director'],
 ];
-try { Object.assign(RB, JSON.parse(localStorage.getItem('crm-robot') || '{}'), {st: null, voiceView: RB.voiceView}); } catch (e) { /* без хранилища */ }
+const RB_OLD_TAB = {contacts: 'numbers', stop: 'numbers', analytics: 'calls', integrations: 'settings'};
+try { const saved = JSON.parse(localStorage.getItem('crm-robot') || '{}'); RB.tab = RB_OLD_TAB[saved.tab] || saved.tab || RB.tab; RB.owner = saved.owner || ''; } catch (e) { /* без хранилища */ }
 
-const rbq = (path, extra = {}) => {
-  const u = new URL('/api/robot/cab' + path, location.origin);
-  if (RB.owner) u.searchParams.set('owner', RB.owner);
-  Object.entries(extra).forEach(([k, v]) => { if (v !== '' && v != null) u.searchParams.set(k, v); });
-  return u.pathname + u.search;
-};
-const rbGet = (path, extra) => api(rbq(path, extra), {scoped: false});
-const rbPost = (path, body = {}) => api('/api/robot/cab' + path, {method: 'POST', scoped: false, body: {...body, owner: RB.owner}});
+const rbq = (path, extra = {}) => '/api/robot/cab' + path + qs({owner: RB.owner, ...extra});
+const rbGet = (path, extra) => api(rbq(path, extra));
+const rbPost = (path, body = {}) => api('/api/robot/cab' + path, {method: 'POST', body: {...body, owner: RB.owner}});
 const rbRO = () => RB.st.readonly ? ' disabled' : '';
 const rbSave = () => { try { localStorage.setItem('crm-robot', JSON.stringify({tab: RB.tab, owner: RB.owner})); } catch (e) { /* без хранилища */ } };
 const money = v => v == null ? '—' : `${Number(v).toLocaleString('ru-RU', {maximumFractionDigits: 2})} ₽`;
 const opName = id => (RB.st.operators || []).find(o => o.id === id)?.name || id;
 
-VIEWS.robot = async view => {
-  RB.st = await api(rbq(''), {scoped: false}).catch(async e => {
-    if (RB.owner) { RB.owner = ''; rbSave(); return api(rbq(''), {scoped: false}); }
+VIEWS.robot = async (view, arg) => {
+  if (arg && RB_TABS.some(t => t[0] === arg)) RB.tab = arg;
+  RB.st = await loading(view, api(rbq('')).catch(async e => {
+    if (RB.owner) { RB.owner = ''; rbSave(); return api(rbq('')); }
     throw e;
-  });
+  }), 'page');
   if (!RB.st.enabled) {
-    view.innerHTML = `<div class="panel"><h2>Голосовой робот</h2><p>${esc(RB.st.paid_note)}</p>
-      <p class="muted">Робот сам обзванивает ваши номера по расписанию, выясняет интерес и записывает итог каждого звонка. Вы видите звонки, записи разговоров и аналитику здесь.</p></div>`;
+    view.innerHTML = `<div class="page"><section class="card blk"><div class="card-h"><h2>Голосовой робот</h2></div><p class="lead">${esc(RB.st.paid_note)}</p>
+      <p class="hint">Робот сам обзванивает ваши номера по расписанию, выясняет интерес и записывает итог каждого звонка. Вы видите звонки, записи разговоров и аналитику здесь.</p></section></div>`;
     return;
   }
   const tabs = RB_TABS.filter(t => !t[2] || t[2] === RB.st.role);
   if (!tabs.some(t => t[0] === RB.tab)) RB.tab = 'campaigns';
-  const owners = RB.st.owners.length > 1 ? `<label class="field rb-owner">Чей кабинет<select id="rb-owner">${RB.st.owners.map(o =>
-    `<option value="${esc(o.id)}"${o.id === RB.st.owner ? ' selected' : ''}>${esc(o.name)}</option>`).join('')}</select></label>` : '';
-  view.innerHTML = `<div class="rb-head"><div class="filters rb-tabs">${tabs.map(([k, t]) =>
-      `<button data-rbt="${k}" aria-pressed="${k === RB.tab}">${t}</button>`).join('')}</div>${owners}</div><div id="rb-body"><div class="empty">Загружаю…</div></div>`;
-  $$('[data-rbt]', view).forEach(b => b.addEventListener('click', () => { RB.tab = b.dataset.rbt; rbSave(); go('robot'); }));
-  $('#rb-owner', view)?.addEventListener('change', e => { RB.owner = e.target.value; rbSave(); go('robot'); });
+  const owners = RB.st.owners.length > 1 && RB.tab !== 'voice' && RB.tab !== 'settings'
+    ? `<select class="inp" id="rb-owner" aria-label="Чей кабинет">${RB.st.owners.map(o => `<option value="${esc(o.id)}"${o.id === RB.st.owner ? ' selected' : ''}>${esc(o.name)}</option>`).join('')}</select>` : '';
+  setHead({filters: owners});
+  $('#rb-owner')?.addEventListener('change', e => { RB.owner = e.target.value; rbSave(); reload(); });
+  view.innerHTML = `<div class="page">${tabsHtml(tabs.map(([k, t]) => [k, t]), RB.tab)}<div class="page" id="rb-body"></div></div>`;
+  $$('[data-tab]', view).forEach(b => b.addEventListener('click', () => { RB.tab = b.dataset.tab; rbSave(); go('robot', RB.tab, {replace: true}); }));
   const body = $('#rb-body', view);
-  try { await RB_VIEW[RB.tab](body); } catch (e) { body.innerHTML = `<div class="panel empty">${esc(e.message)}</div>`; }
+  try { await RB_VIEW[RB.tab](body); } catch (e) { body.innerHTML = emptyCard(esc(e.message)); }
 };
 
 const RB_VIEW = {};
@@ -51,14 +48,14 @@ const RB_VIEW = {};
 // ---------- операторы ----------
 RB_VIEW.operators = async el => {
   const ops = RB.st.operators;
-  el.innerHTML = `<div class="panel"><h2>Операторы <span class="muted">· ${ops.length}</span></h2>
-    <p class="muted">Оператор — это сценарий робота: как представляется, план разговора, правила и аргументы, что записать. Встроенного оператора можно скопировать и править копию.</p>
-    <div class="row gapb"><button class="btn primary" id="op-new"${rbRO()}>Новый оператор</button></div>
-    ${ops.length ? `<table class="tbl"><thead><tr><th>Имя</th><th>Компания</th><th class="hide-m">Цель</th><th class="n">План / правила / аргументы</th><th></th></tr></thead><tbody>
-      ${ops.map(o => `<tr class="click" data-op="${esc(o.id)}"><td><b>${esc(o.name)}</b>${o.builtin ? ' <span class="chip">встроенный</span>' : ''}</td>
-        <td>${esc(o.company)}</td><td class="hide-m muted">${esc(o.goal)}</td><td class="n">${o.plan} / ${o.rules} / ${o.facts}</td>
-        <td><button class="btn small" data-copy="${esc(o.id)}"${rbRO()}>Копия</button></td></tr>`).join('')}</tbody></table>`
-      : '<div class="empty">Операторов пока нет.</div>'}</div>`;
+  el.innerHTML = `<section class="card blk"><div class="card-h"><h2>Операторы</h2><span class="hint">${ops.length}</span><span class="sp"></span>
+      <button class="btn primary small" type="button" id="op-new"${rbRO()}>Новый оператор</button></div>
+    <p class="lead" data-css="margin-bottom:12px">Оператор — это сценарий робота: как представляется, план разговора, правила и что записать. Встроенного оператора можно скопировать и править копию.</p>
+    ${ops.length ? `<div class="tbl-wrap"><table class="tbl anim"><thead><tr><th>Имя</th><th>Компания</th><th class="hide-m">Цель</th><th class="n hide-m">План / правила / аргументы</th><th></th></tr></thead><tbody>
+      ${ops.map((o, i) => `<tr class="click" data-op="${esc(o.id)}" data-css="--r:${i}"><td class="nw"><b>${esc(o.name)}</b>${o.builtin ? ' <span class="chip">встроенный</span>' : ''}</td>
+        <td>${esc(o.company)}</td><td class="hide-m s wrap">${esc(o.goal)}</td><td class="n hide-m">${o.plan} / ${o.rules} / ${o.facts}</td>
+        <td><button class="btn small" type="button" data-copy="${esc(o.id)}"${rbRO()}>Копия</button></td></tr>`).join('')}</tbody></table></div>`
+      : '<div class="empty">Операторов пока нет.</div>'}</section>`;
   $('#op-new', el).addEventListener('click', () => operatorForm(null));
   $$('[data-op]', el).forEach(tr => tr.addEventListener('click', e => { if (!e.target.closest('[data-copy]')) operatorForm(tr.dataset.op); }));
   $$('[data-copy]', el).forEach(b => b.addEventListener('click', () => operatorForm(null, b.dataset.copy)));
@@ -114,16 +111,16 @@ async function operatorForm(id, copyFrom) {
     out.fields = $$('[data-list="fields"] textarea', box).map(t => ({key: t.dataset.key || '', text: t.value.trim()})).filter(f => f.text);
     return out;
   };
-  $('#op-copy', box)?.addEventListener('click', () => { box.previousElementSibling?.remove(); box.remove(); operatorForm(null, id); });
+  $('#op-copy', box)?.addEventListener('click', () => { box.close(); operatorForm(null, id); });
   $('#op-save', box)?.addEventListener('click', async () => {
     try {
       await rbPost('/operators' + (id ? '/' + encodeURIComponent(id) : ''), {...collect(), copy_from: copyFrom || ''});
-      box.previousElementSibling?.remove(); box.remove(); toast('Оператор сохранён. Робот возьмёт его со следующего звонка.'); go('robot');
+      box.close(); toast('Оператор сохранён. Робот возьмёт его со следующего звонка.'); reload();
     } catch (e) { $('#op-st', box).textContent = e.message; }
   });
   $('#op-del', box)?.addEventListener('click', async () => {
-    if (!confirm('Удалить оператора?')) return;
-    try { await rbPost('/operators/' + encodeURIComponent(id) + '/delete'); box.previousElementSibling?.remove(); box.remove(); go('robot'); }
+    if (!await askConfirm('Удалить оператора?')) return;
+    try { await rbPost('/operators/' + encodeURIComponent(id) + '/delete'); box.close(); reload(); }
     catch (e) { $('#op-st', box).textContent = e.message; }
   });
 }
@@ -135,23 +132,22 @@ function opItem(value, ro, key = '') {
 // ---------- кампании ----------
 RB_VIEW.campaigns = async el => {
   const {items} = await rbGet('/campaigns');
-  el.innerHTML = `<div class="panel"><h2>Кампании <span class="muted">· ${items.length}</span></h2>
-    <p class="muted">Кампания — это список номеров, оператор и расписание. Робот звонит сам в рабочие дни и часы кампании, по одному звонку за раз, и повторяет недозвоны. Звоните только тем, кто согласился на звонок.</p>
-    <div class="row gapb"><button class="btn primary" id="cp-new"${rbRO()}>Новая кампания</button></div>
-    ${items.length ? `<table class="tbl"><thead><tr><th>Кампания</th><th>Статус</th><th class="hide-m">Расписание</th><th class="n">Обзвонено</th><th class="n">Лиды</th><th></th></tr></thead><tbody>
-      ${items.map(c => `<tr><td><b>${esc(c.name)}</b><div class="muted">${esc(opName(c.operator))}</div></td>
+  el.innerHTML = `<section class="card blk"><div class="card-h"><h2>Кампании</h2><span class="hint">${items.length}</span><span class="sp"></span>
+      <button class="btn primary small" type="button" id="cp-new"${rbRO()}>Новая кампания</button></div>
+    <p class="lead" data-css="margin-bottom:12px">Кампания — это список номеров, оператор и расписание. Робот звонит сам в рабочие часы кампании и повторяет недозвоны. Звоните только тем, кто согласился на звонок.</p>
+    ${items.length ? `<div class="tbl-wrap"><table class="tbl anim"><thead><tr><th>Кампания</th><th>Статус</th><th class="hide-m">Расписание</th><th class="n">Обзвонено</th><th class="n">Лиды</th><th></th></tr></thead><tbody>
+      ${items.map((c, i) => `<tr class="click" data-ce="${c.id}" data-css="--r:${i}"><td><b>${esc(c.name)}</b><div class="s">${esc(opName(c.operator))}</div></td>
         <td><span class="chip ${c.status === 'running' ? 'good' : c.status === 'paused' ? 'warn' : ''}">${esc(c.status_name)}</span></td>
-        <td class="hide-m">${c.days.map(d => RB_DAYS[d - 1]).join(' ')} · ${c.start_time}–${c.end_time}<div class="muted">${esc(tzName(c.timezone))} · попыток ${c.attempts}</div></td>
-        <td class="n">${c.done} из ${c.total}</td><td class="n">${c.interested}</td>
-        <td><div class="row">${c.status === 'running' ? `<button class="btn small" data-ca="pause" data-id="${c.id}"${rbRO()}>Пауза</button>`
-          : c.status !== 'done' ? `<button class="btn small primary" data-ca="start" data-id="${c.id}"${rbRO()}>Запустить</button>` : ''}
-          <button class="btn small" data-ce="${c.id}">Открыть</button></div></td></tr>`).join('')}</tbody></table>`
-      : '<div class="empty">Кампаний пока нет. Сначала загрузите номера во вкладке «Контакты».</div>'}</div>`;
+        <td class="hide-m nw">${c.days.map(d => RB_DAYS[d - 1]).join(' ')} · ${c.start_time}–${c.end_time}<div class="s">${esc(tzName(c.timezone))} · попыток ${c.attempts}</div></td>
+        <td class="n nw">${c.done} из ${c.total}</td><td class="n">${c.interested}</td>
+        <td>${c.status === 'running' ? `<button class="btn small" type="button" data-ca="pause" data-id="${c.id}"${rbRO()}>Пауза</button>`
+          : c.status !== 'done' ? `<button class="btn small primary" type="button" data-ca="start" data-id="${c.id}"${rbRO()}>Запустить</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`
+      : '<div class="empty">Кампаний пока нет. Сначала загрузите номера во вкладке «Номера».</div>'}</section>`;
   $('#cp-new', el).addEventListener('click', () => campaignForm(null));
-  $$('[data-ce]', el).forEach(b => b.addEventListener('click', () => campaignForm(items.find(c => c.id === +b.dataset.ce))));
+  $$('[data-ce]', el).forEach(tr => tr.addEventListener('click', e => { if (!e.target.closest('[data-ca]')) campaignForm(items.find(c => c.id === +tr.dataset.ce)); }));
   $$('[data-ca]', el).forEach(b => b.addEventListener('click', async () => {
-    if (b.dataset.ca === 'start' && !confirm('Запустить кампанию? Робот начнёт звонить по расписанию. Убедитесь, что у этих людей есть согласие на звонок.')) return;
-    try { await rbPost(`/campaigns/${b.dataset.id}/${b.dataset.ca}`); go('robot'); } catch (e) { toast(e.message, true); }
+    if (b.dataset.ca === 'start' && !await askConfirm('Запустить кампанию? Робот начнёт звонить по расписанию. Убедитесь, что у этих людей есть согласие на звонок.')) return;
+    try { await rbPost(`/campaigns/${b.dataset.id}/${b.dataset.ca}`); reload(); } catch (e) { toast(e.message, true); }
   }));
 };
 
@@ -185,14 +181,14 @@ async function campaignForm(c) {
     </div>`);
   box.classList.add('rvm-wide');
   $$('[data-day]', box).forEach(b => b.addEventListener('click', () => b.setAttribute('aria-pressed', b.getAttribute('aria-pressed') !== 'true')));
-  const close = () => { box.previousElementSibling?.remove(); box.remove(); };
+  const close = () => box.close();
   const st = t => { $('#cf-st', box).textContent = t; };
   $('#cf-save', box).addEventListener('click', async () => {
     const body = {name: $('#cf-name', box).value, operator: $('#cf-op', box).value,
       days: $$('[data-day][aria-pressed="true"]', box).map(b => +b.dataset.day), start_time: $('#cf-start', box).value, end_time: $('#cf-end', box).value,
       timezone: $('#cf-tz', box).value, attempts: +$('#cf-att', box).value, retry_minutes: +$('#cf-retry', box).value};
     if ($('#cf-all', box).checked) body.contacts = 'all';
-    try { await rbPost('/campaigns' + (c ? '/' + c.id : ''), body); close(); toast('Кампания сохранена.'); go('robot'); } catch (e) { st(e.message); }
+    try { await rbPost('/campaigns' + (c ? '/' + c.id : ''), body); close(); toast('Кампания сохранена.'); reload(); } catch (e) { st(e.message); }
   });
   $('#cf-targets', box)?.addEventListener('click', async () => {
     const {items} = await rbGet(`/campaigns/${c.id}/targets`);
@@ -202,8 +198,8 @@ async function campaignForm(c) {
   });
   for (const [sel, action, ask] of [['#cf-finish', 'finish', 'Завершить кампанию? Робот больше не будет по ней звонить.'], ['#cf-del', 'delete', 'Удалить кампанию вместе со списком номеров? Звонки останутся во вкладке «Звонки».']]) {
     $(sel, box)?.addEventListener('click', async () => {
-      if (!confirm(ask)) return;
-      try { await rbPost(`/campaigns/${c.id}/${action}`); close(); go('robot'); } catch (e) { st(e.message); }
+      if (!await askConfirm(ask)) return;
+      try { await rbPost(`/campaigns/${c.id}/${action}`); close(); reload(); } catch (e) { st(e.message); }
     });
   }
 }
@@ -211,28 +207,28 @@ async function campaignForm(c) {
 // ---------- контакты ----------
 RB_VIEW.contacts = async el => {
   const [data, tabs] = await Promise.all([rbGet('/contacts', {q: RB.q || ''}), rbGet('/contacts/tabs').catch(() => ({tabs: []}))]);
-  el.innerHTML = `<div class="grid2"><div class="panel"><h2>Контакты <span class="muted">· ${data.total}</span></h2>
-      <div class="row gapb"><input id="ct-q" placeholder="Поиск по номеру, имени, заметке" value="${esc(RB.q || '')}"><button class="btn" id="ct-find">Найти</button>
-        ${data.items.length ? `<button class="btn danger small" id="ct-del"${rbRO()}>Удалить отмеченные</button>` : ''}</div>
-      ${data.items.length ? `<div class="scroll"><table class="tbl"><thead><tr><th></th><th>Номер</th><th>Имя</th><th class="hide-m">Заметка</th><th class="hide-m">Откуда</th></tr></thead><tbody>
-        ${data.items.map(c => `<tr><td><input type="checkbox" data-ct="${c.id}"></td><td>${esc(phone(c.phone))}${c.stopped ? ' <span class="chip bad">стоп</span>' : ''}</td>
-          <td>${esc(c.name)}</td><td class="hide-m muted">${esc(c.note)}</td><td class="hide-m muted">${esc(c.source)}</td></tr>`).join('')}</tbody></table></div>
-        ${data.items.length < data.total ? `<p class="muted">Показаны последние ${data.items.length}. Остальные найдутся поиском.</p>` : ''}`
-        : '<div class="empty">Контактов нет. Загрузите файл или возьмите номера с листа таблицы.</div>'}</div>
-    <div class="stack"><div class="panel"><h2>Загрузить файл</h2>
-      <p class="muted">CSV или Excel (.xlsx). Столбец с номером найдётся по заголовку «Телефон», имя по «Имя» или «ФИО», заметка по «Комментарий». Без заголовков берём столбец, где номера.</p>
-      <input type="file" id="ct-file" accept=".csv,.txt,.xlsx"${rbRO()}><div class="muted" id="ct-st"></div></div>
-      <div class="panel"><h2>Из таблицы «Прозвон лидов»</h2>
-      ${tabs.tabs.length ? `<div class="row"><select id="ct-tab">${tabs.tabs.map(t => `<option>${esc(t)}</option>`).join('')}</select>
-        <button class="btn" id="ct-sheet"${rbRO()}>Взять номера</button></div><div class="muted" id="ct-st2"></div>` : '<div class="empty">Листы таблицы сейчас недоступны.</div>'}</div></div></div>`;
-  const find = () => { RB.q = $('#ct-q', el).value; go('robot'); };
+  el.innerHTML = `<div class="grid2"><section class="card blk"><div class="card-h"><h2>Номера для обзвона</h2><span class="hint">${fmt(data.total)}</span></div>
+      <div class="row gapb"><input class="inp" id="ct-q" type="search" placeholder="Номер, имя или заметка" value="${esc(RB.q || '')}"><button class="btn" type="button" id="ct-find">Найти</button>
+        ${data.items.length ? `<button class="btn danger small" type="button" id="ct-del"${rbRO()}>Удалить отмеченные</button>` : ''}</div>
+      ${data.items.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th></th><th>Номер</th><th>Имя</th><th class="hide-m">Заметка</th><th class="hide-m">Откуда</th></tr></thead><tbody>
+        ${data.items.map(c => `<tr><td><input type="checkbox" data-ct="${c.id}" aria-label="Отметить"></td><td class="num nw">${esc(phone(c.phone))}${c.stopped ? ' <span class="chip bad">стоп</span>' : ''}</td>
+          <td>${esc(c.name)}</td><td class="hide-m s">${esc(c.note)}</td><td class="hide-m s">${esc(c.source)}</td></tr>`).join('')}</tbody></table></div>
+        ${data.items.length < data.total ? `<p class="hint">Показаны последние ${data.items.length}. Остальные найдутся поиском.</p>` : ''}`
+        : '<div class="empty">Номеров пока нет. Загрузите файл или возьмите номера с листа таблицы.</div>'}</section>
+    <div class="stack"><section class="card blk" data-css="--i:1"><div class="card-h"><h2>Загрузить файл</h2></div>
+      <p class="lead" data-css="margin-bottom:10px">CSV или Excel (.xlsx). Номер ищем по заголовку «Телефон», имя по «Имя» или «ФИО», заметку по «Комментарий».</p>
+      <input type="file" id="ct-file" accept=".csv,.txt,.xlsx"${rbRO()}><div class="hint" id="ct-st"></div></section>
+      <section class="card blk" data-css="--i:2"><div class="card-h"><h2>Из таблицы «Прозвон лидов»</h2></div>
+      ${tabs.tabs.length ? `<div class="row"><select class="inp" id="ct-tab" aria-label="Лист">${tabs.tabs.map(t => `<option>${esc(t)}</option>`).join('')}</select>
+        <button class="btn" type="button" id="ct-sheet"${rbRO()}>Взять номера</button></div><div class="hint" id="ct-st2"></div>` : '<div class="empty">Листы таблицы сейчас недоступны.</div>'}</section></div></div>`;
+  const find = () => { RB.q = $('#ct-q', el).value; reload(); };
   $('#ct-find', el).addEventListener('click', find);
   $('#ct-q', el).addEventListener('keydown', e => { if (e.key === 'Enter') find(); });
   $('#ct-del', el)?.addEventListener('click', async () => {
     const ids = $$('[data-ct]:checked', el).map(i => +i.dataset.ct);
     if (!ids.length) return toast('Отметьте контакты.', true);
-    if (!confirm(`Удалить ${ids.length} контакт(ов)? Из уже созданных кампаний номера не пропадут.`)) return;
-    try { await rbPost('/contacts/delete', {ids}); go('robot'); } catch (e) { toast(e.message, true); }
+    if (!await askConfirm(`Удалить ${ids.length} контакт(ов)? Из уже созданных кампаний номера не пропадут.`)) return;
+    try { await rbPost('/contacts/delete', {ids}); reload(); } catch (e) { toast(e.message, true); }
   });
   $('#ct-file', el).addEventListener('change', async e => {
     const f = e.target.files[0]; if (!f) return;
@@ -254,12 +250,12 @@ RB_VIEW.contacts = async el => {
         }
       }
       toast(`Добавлено номеров: ${added}${skipped ? `, без номера пропущено строк: ${skipped}` : ''}. Всего в кабинете ${total}.`);
-      go('robot');
+      reload();
     } catch (err) { st.textContent = err.message; }
   });
   $('#ct-sheet', el)?.addEventListener('click', async () => {
     const st = $('#ct-st2', el); st.textContent = 'Читаю лист…';
-    try { const r = await rbPost('/contacts/sheet', {tab: $('#ct-tab', el).value}); toast(`Добавлено номеров: ${r.added}. Всего в кабинете ${r.total}.`); go('robot'); }
+    try { const r = await rbPost('/contacts/sheet', {tab: $('#ct-tab', el).value}); toast(`Добавлено номеров: ${r.added}. Всего в кабинете ${r.total}.`); reload(); }
     catch (e) { st.textContent = e.message; }
   });
 };
@@ -283,56 +279,76 @@ function csvParts(text, size = 250_000) { // крупный CSV частями, 
   return parts;
 }
 
-// ---------- стоп-лист ----------
-RB_VIEW.stop = async el => {
+// ---------- стоп-лист: в «Номерах», под «Подробнее» ----------
+async function stopBlock(el) {
   const {items} = await rbGet('/stop');
-  el.innerHTML = `<div class="grid2"><div class="panel"><h2>Стоп-лист <span class="muted">· ${items.length}</span></h2>
-      <p class="muted">По этим номерам робот не звонит ни в одной кампании. Кто просит робота больше не звонить, попадает сюда сам.</p>
-      ${items.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Номер</th><th>Причина</th><th class="hide-m">Когда</th><th></th></tr></thead><tbody>
-        ${items.map(s => `<tr><td>${esc(phone(s.phone))}</td><td>${esc(s.reason)}</td><td class="hide-m">${fmtWhen(s.at)}</td>
-          <td><button class="btn small" data-unstop="${esc(s.phone)}"${rbRO()}>Убрать</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">Стоп-лист пуст.</div>'}</div>
-    <div class="panel"><h2>Добавить номера</h2><label class="field">По одному в строке<textarea id="sl-phones" rows="6"${rbRO()}></textarea></label>
-      <label class="field">Причина<input id="sl-reason" placeholder="просил не звонить"${rbRO()}></label>
-      <div class="row"><button class="btn primary" id="sl-add"${rbRO()}>Добавить</button></div></div></div>`;
+  el.innerHTML = moreBlock('Стоп-лист', `${items.length} ${plural(items.length, 'номер', 'номера', 'номеров')} · по ним робот не звонит`, `
+    <p class="hint" data-css="margin:0">По этим номерам робот не звонит ни в одной кампании. Кто просит робота больше не звонить, попадает сюда сам.</p>
+    <div class="grid2"><div>${items.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Номер</th><th>Причина</th><th class="hide-m">Когда</th><th></th></tr></thead><tbody>
+      ${items.map(x => `<tr><td class="num nw">${esc(phone(x.phone))}</td><td>${esc(x.reason)}</td><td class="hide-m nw">${fmtWhen(x.at)}</td>
+        <td><button class="btn small" type="button" data-unstop="${esc(x.phone)}"${rbRO()}>Убрать</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">Стоп-лист пуст.</div>'}</div>
+    <div><label class="field">Добавить номера, по одному в строке<textarea id="sl-phones" rows="5"${rbRO()}></textarea></label>
+      <label class="field" data-css="margin-top:10px">Причина<input id="sl-reason" placeholder="просил не звонить"${rbRO()}></label>
+      <div class="row" data-css="margin-top:10px"><button class="btn primary" type="button" id="sl-add"${rbRO()}>Добавить в стоп-лист</button></div></div></div>`, 2, RB.stopOpen);
+  $('details', el).addEventListener('toggle', e => { RB.stopOpen = e.target.open; });
   $('#sl-add', el).addEventListener('click', async () => {
-    try { const r = await rbPost('/stop', {phones: $('#sl-phones', el).value, reason: $('#sl-reason', el).value}); toast(`В стоп-лист добавлено: ${r.added}.`); go('robot'); }
+    try { const r = await rbPost('/stop', {phones: $('#sl-phones', el).value, reason: $('#sl-reason', el).value}); toast(`В стоп-лист добавлено: ${r.added}`); reload(); }
     catch (e) { toast(e.message, true); }
   });
   $$('[data-unstop]', el).forEach(b => b.addEventListener('click', async () => {
-    try { await rbPost('/stop/remove', {phone: b.dataset.unstop}); go('robot'); } catch (e) { toast(e.message, true); }
+    try { await rbPost('/stop/remove', {phone: b.dataset.unstop}); reload(); } catch (e) { toast(e.message, true); }
   }));
+}
+RB_VIEW.numbers = async el => {
+  el.innerHTML = '<div data-ct></div><div data-stop></div>';
+  await Promise.all([RB_VIEW.contacts($('[data-ct]', el)), stopBlock($('[data-stop]', el))]);
 };
 
 // ---------- звонки ----------
 function rbFilters(campaigns, withOutcome = true) {
   const f = RB.f || {};
   return `<div class="row gapb rb-filters">
-    <select id="rf-camp"><option value="">Все кампании</option>${campaigns.map(c => `<option value="${c.id}"${String(c.id) === String(f.campaign || '') ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}</select>
-    ${withOutcome ? `<select id="rf-out"><option value="">Все статусы</option>${Object.entries(RB.st.outcomes).map(([k, t]) => `<option value="${k}"${k === f.outcome ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select>` : ''}
-    <label class="field">с<input type="date" id="rf-from" value="${esc(f.from || '')}"></label><label class="field">по<input type="date" id="rf-to" value="${esc(f.to || '')}"></label>
-    <button class="btn" id="rf-go">Показать</button></div>`;
+    <select class="inp" id="rf-camp" aria-label="Кампания"><option value="">Все кампании</option>${campaigns.map(c => `<option value="${c.id}"${String(c.id) === String(f.campaign || '') ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}</select>
+    ${withOutcome ? `<select class="inp" id="rf-out" aria-label="Итог"><option value="">Все статусы</option>${Object.entries(RB.st.outcomes).map(([k, t]) => `<option value="${k}"${k === f.outcome ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select>` : ''}
+    <label class="field">с<input class="inp" type="date" id="rf-from" value="${esc(f.from || '')}"></label><label class="field">по<input class="inp" type="date" id="rf-to" value="${esc(f.to || '')}"></label>
+    <button class="btn" type="button" id="rf-go">Показать</button></div>`;
 }
 function bindFilters(el) {
   $('#rf-go', el).addEventListener('click', () => {
-    RB.f = {campaign: $('#rf-camp', el).value, outcome: $('#rf-out', el)?.value || '', from: $('#rf-from', el).value, to: $('#rf-to', el).value};
-    go('robot');
+    RB.f = {campaign: $('#rf-camp', el).value, outcome: $('#rf-out', el)?.value ?? RB.f?.outcome ?? '', from: $('#rf-from', el).value, to: $('#rf-to', el).value};
+    reload();
   });
 }
 
 RB_VIEW.calls = async el => {
   const f = RB.f || {};
-  const [{items}, camps] = await Promise.all([rbGet('/calls', f), rbGet('/campaigns')]);
-  el.innerHTML = `<div class="panel"><h2>Звонки <span class="muted">· ${items.length}${items.length >= 500 ? ' последних' : ''}</span></h2>
-    ${rbFilters(camps.items)}
-    <div class="row gapb"><a class="btn small" href="${esc(rbq('/calls.csv', f))}" download>Скачать CSV</a>
-      <span class="muted">Записи разговоров хранятся ${RB.st.recording_days} дней.</span></div>
-    ${items.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Дата</th><th>Телефон</th><th>Статус</th><th class="n">Длит.</th><th class="hide-m">Кампания</th><th class="n hide-m">Стоимость</th><th>Запись</th></tr></thead><tbody>
-      ${items.map((c, i) => `<tr class="click" data-call="${i}"><td>${fmtWhen(c.at)}</td><td>${esc(phone(c.phone))}</td>
-        <td><span class="chip ${c.good ? 'good' : c.outcome_key === 'do_not_call' ? 'bad' : ''}">${esc(c.outcome)}</span>${c.comment ? `<div class="muted">${esc(c.comment)}</div>` : ''}</td>
-        <td class="n">${c.seconds ? dur(c.seconds) : ''}</td><td class="hide-m">${esc(c.campaign || 'вручную')}</td><td class="n hide-m">${c.cost ? money(c.cost) : ''}</td>
-        <td>${c.recording ? `<button class="btn small" data-play="${i}">▶</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`
-      : '<div class="empty">Звонков по этим условиям нет.</div>'}</div>`;
+  const [{items}, camps, an] = await Promise.all([rbGet('/calls', f), rbGet('/campaigns'), rbGet('/analytics', {campaign: f.campaign, from: f.from, to: f.to})]);
+  const dir = RB.st.role === 'director';
+  const ends = an.ends.filter(e => e.count);
+  el.innerHTML = `<div class="kpis">${[
+      {key: 'rb-total', label: 'Звонков', value: an.total, sub: `${fmt(an.minutes)} мин разговоров`},
+      {key: 'rb-rate', label: 'Дозвон', value: an.dial_rate, kind: 'pct', sub: `${plainItems(an.reached, 'разговор', 'разговора', 'разговоров')}`},
+      {key: 'rb-leads', label: 'Лидов', value: an.leads, sub: `конверсия ${pctTxt(an.conversion)}`, help: 'Клиент заинтересован: робот записал интерес.'},
+      {key: 'rb-cost', label: dir && RB.owner ? 'Цена лида (себестоимость)' : 'Цена лида', value: an.priced ? an.lead_cost : 0, kind: 'rub',
+        sub: an.priced ? `всего ${money(an.cost)}${dir && RB.owner ? ` · клиенту ${money(an.client_cost)}` : ''}` : (dir ? 'впишите цены в «Настройках»' : '')}].map((k, i) => kpiHtml(k, i)).join('')}</div>
+    <section class="card blk" data-css="--i:4">
+      ${ends.length ? `<div class="filters" data-css="margin-bottom:12px"><button type="button" data-out="" aria-pressed="${!f.outcome}">Все<span class="c">${an.total}</span></button>${ends.map(e => {
+        const key = e.key || Object.keys(RB.st.outcomes).find(k => RB.st.outcomes[k] === e.name) || '';
+        return `<button type="button" data-out="${esc(key)}" aria-pressed="${!!key && key === f.outcome}"${key ? '' : ' disabled'}>${esc(e.name)}<span class="c">${e.count}</span></button>`;
+      }).join('')}</div>` : ''}
+      ${rbFilters(camps.items, false)}
+      <div class="row" data-css="margin-bottom:12px"><a class="btn small" href="${esc(rbq('/calls.csv', f))}" download>Скачать CSV</a>
+        <span class="hint">Записи разговоров хранятся ${RB.st.recording_days} дней.</span></div>
+    ${items.length ? `<div class="tbl-wrap"><table class="tbl anim"><thead><tr><th>Когда</th><th>Телефон</th><th>Итог</th><th class="n hide-m">Длит.</th><th class="hide-m">Кампания</th><th class="n hide-m">Стоимость</th><th></th></tr></thead><tbody>
+      ${items.map((c, i) => `<tr class="click" data-call="${i}" data-css="--r:${Math.min(i, 30)}"><td class="nw">${fmtWhen(c.at)}</td><td class="num nw">${esc(phone(c.phone))}</td>
+        <td><span class="chip ${c.good ? 'good' : c.outcome_key === 'do_not_call' ? 'bad' : ''}">${esc(c.outcome)}</span>${c.comment ? `<div class="s">${esc(c.comment)}</div>` : ''}</td>
+        <td class="n hide-m">${c.seconds ? dur(c.seconds) : ''}</td><td class="hide-m">${esc(c.campaign || 'вручную')}</td><td class="n hide-m">${c.cost ? money(c.cost) : ''}</td>
+        <td>${c.recording ? `<button class="btn small" type="button" data-play="${i}">▶</button>` : ''}</td></tr>`).join('')}</tbody></table></div>
+      ${items.length >= 500 ? '<p class="hint">Показаны последние 500.</p>' : ''}`
+      : '<div class="empty">Звонков по этим условиям нет.</div>'}</section>`;
+  countUp(el);
   bindFilters(el);
+  $$('[data-out]', el).forEach(b => b.addEventListener('click', () => { RB.f = {...f, outcome: b.dataset.out}; reload(); }));
   $$('[data-call]', el).forEach(tr => tr.addEventListener('click', e => { if (!e.target.closest('[data-play]')) rbCallCard(items[+tr.dataset.call]); }));
   $$('[data-play]', el).forEach(b => b.addEventListener('click', () => rbCallCard(items[+b.dataset.play], true)));
 };
@@ -348,73 +364,42 @@ function rbCallCard(c, autoplay = false) {
   if (autoplay) $('audio', box)?.play().catch(() => {});
 }
 
-// ---------- аналитика ----------
-RB_VIEW.analytics = async el => {
-  const f = RB.f || {};
-  const [a, camps] = await Promise.all([rbGet('/analytics', f), rbGet('/campaigns')]);
-  const max = Math.max(1, ...a.days.map(d => d.calls));
-  const endMax = Math.max(1, ...a.ends.map(e => e.count));
-  const director = RB.st.role === 'director';
-  el.innerHTML = `${rbFilters(camps.items, false)}<div class="kpis">
-      <div class="kpi"><b>${a.total}</b><span>звонков</span></div>
-      <div class="kpi"><b>${a.dial_rate}%</b><span>дозвон · ${a.reached} разговоров</span></div>
-      <div class="kpi"><b>${a.conversion}%</b><span>конверсия в лид</span></div>
-      <div class="kpi"><b>${a.leads}</b><span>лидов (заинтересованы)</span></div>
-      <div class="kpi"><b>${a.priced ? money(a.lead_cost) : '—'}</b><span>цена лида${director && RB.owner ? ' (себестоимость)' : ''}</span></div>
-      <div class="kpi"><b>${a.priced ? money(a.cost) : '—'}</b><span>${a.minutes} мин разговоров${director && RB.owner && a.priced ? ` · клиенту ${money(a.client_cost)}` : ''}</span></div></div>
-    ${!a.priced && director ? '<p class="muted">Стоимость появится, когда вы впишете цены во вкладке «Цены и клиенты».</p>' : ''}
-    <div class="grid2"><div class="panel"><h2>Звонки по дням</h2>${a.days.length ? `<div class="bars">${a.days.slice(-31).map(d =>
-        `<div class="bar" title="${ddmm(d.day)}: ${d.calls} звонков, ${d.reached} дозвон, ${d.leads} лидов"><div class="stackbar"><i data-h="${d.reached / max * 100}"></i><i class="b2" data-h="${(d.calls - d.reached) / max * 100}"></i></div><span>${ddmm(d.day)}</span></div>`).join('')}</div>
-        <p class="muted">Зелёным разговоры, серым недозвоны.</p>` : '<div class="empty">Звонков пока нет.</div>'}</div>
-    <div class="panel"><h2>Чем заканчивались звонки</h2>${a.total ? a.ends.map(e => `<div class="rb-end"><span>${esc(e.name)}</span><b>${e.count}</b>
-        <div class="rb-endbar"><i data-w="${e.count / endMax * 100}"></i></div></div>`).join('') : '<div class="empty">Звонков пока нет.</div>'}</div></div>`;
-  heights(el);
-  $$('[data-w]', el).forEach(x => { x.style.width = x.dataset.w + '%'; });
-  bindFilters(el);
-};
-
-// ---------- интеграции ----------
-RB_VIEW.integrations = async el => {
-  const sheet = RB.st.sheet;
-  el.innerHTML = `<div class="panel"><h2>Интеграции</h2>
-    <p class="muted">Здесь только то, что робот реально использует сейчас.</p>
-    <table class="tbl"><tbody>
-      <tr><td><b>CRM Averon</b><div class="muted">Звонки, записи и итоги робота попадают сюда, во вкладки «Звонки» и «Аналитика».</div></td><td><span class="chip good">работает</span></td></tr>
-      ${sheet ? `<tr><td><b>Google Таблица</b><div class="muted">Итог каждого звонка робота строкой на лист «${esc(sheet.tab)}».</div></td>
-        <td><span class="chip ${sheet.on ? 'good' : ''}">${sheet.on ? 'работает' : 'не подключена'}</span></td></tr>` : ''}
-      <tr><td><b>Mango Office</b><div class="muted">Робот звонит через сотрудника «Робот» в Mango.</div></td><td><span class="chip good">работает</span></td></tr>
-    </tbody></table></div>`;
-};
-
-// ---------- цены и клиенты (директор) ----------
+// ---------- цены, клиенты и интеграции (директор) ----------
 RB_VIEW.settings = async el => {
   const o = RB.st.options;
   let known = [];
   try { known = (await rbGet('/known-clients')).clients; } catch (e) { /* таблица недоступна */ }
   const names = [...new Set([...known, ...o.clients])];
   const p = o.prices;
-  el.innerHTML = `<div class="grid2"><div class="panel"><h2>Себестоимость</h2>
-      <p class="muted">Из этого считается стоимость звонков и цена лида. Клиент видит себестоимость, умноженную на коэффициент.</p>
+  const sheet = RB.st.sheet;
+  el.innerHTML = `<div class="grid2 even"><section class="card blk"><div class="card-h"><h2>Себестоимость</h2></div>
+      <p class="lead" data-css="margin-bottom:12px">Из этого считается стоимость звонков и цена лида. Клиент видит себестоимость, умноженную на коэффициент.</p>
       <div class="op-grid">
-        <label class="field">Минута Mango, ₽<input data-p="mango_min" value="${p.mango_min}" inputmode="decimal"${rbRO()}></label>
-        <label class="field">Синтез ElevenLabs, ₽ за 1000 символов<input data-p="eleven_1k_chars" value="${p.eleven_1k_chars}" inputmode="decimal"${rbRO()}></label>
-        <label class="field">Модель YandexGPT, ₽ за 1000 токенов<input data-p="llm_1k_tokens" value="${p.llm_1k_tokens}" inputmode="decimal"${rbRO()}></label>
-        <label class="field">Коэффициент для клиента<input data-p="multiplier" value="${p.multiplier}" inputmode="decimal"${rbRO()}></label>
-      </div><div class="row"><button class="btn primary" id="pr-save"${rbRO()}>Сохранить цены</button></div>
-      <p class="muted">Минуты считаются по длительности разговора, синтез по символам, которые робот озвучил (повторяющиеся фразы берутся из запаса и не оплачиваются), модель по токенам.</p></div>
-    <div class="panel"><h2>Кабинет робота у клиентов</h2>
-      <p class="muted">Платная опция. Включённый клиент видит в своём кабинете вкладку «Робот»: свои операторы, кампании, контакты, звонки и аналитику со стоимостью ×${p.multiplier}.</p>
-      ${names.length ? names.map(n => `<label class="rb-check"><input type="checkbox" data-cl="${esc(n)}"${o.clients.includes(n) ? ' checked' : ''}${rbRO()}> ${esc(n)}</label>`).join('')
+        <label class="field">Минута Mango, ₽<input class="inp" data-p="mango_min" value="${p.mango_min}" inputmode="decimal"${rbRO()}></label>
+        <label class="field">Синтез ElevenLabs, ₽ за 1000 символов<input class="inp" data-p="eleven_1k_chars" value="${p.eleven_1k_chars}" inputmode="decimal"${rbRO()}></label>
+        <label class="field">Модель YandexGPT, ₽ за 1000 токенов<input class="inp" data-p="llm_1k_tokens" value="${p.llm_1k_tokens}" inputmode="decimal"${rbRO()}></label>
+        <label class="field">Коэффициент для клиента<input class="inp" data-p="multiplier" value="${p.multiplier}" inputmode="decimal"${rbRO()}></label>
+      </div><div class="row" data-css="margin-top:12px"><button class="btn primary" type="button" id="pr-save"${rbRO()}>Сохранить цены</button></div>
+      <p class="hint">Минуты считаются по длительности разговора, синтез по символам, которые робот озвучил (повторяющиеся фразы берутся из запаса и не оплачиваются), модель по токенам.</p></section>
+    <section class="card blk" data-css="--i:1"><div class="card-h"><h2>Кабинет робота у клиентов</h2></div>
+      <p class="lead" data-css="margin-bottom:8px">Платная опция. Включённый клиент видит в своём кабинете раздел «Робот»: свои кампании, номера, звонки и операторов со стоимостью ×${p.multiplier}.</p>
+      ${names.length ? names.map(n => `<label class="rb-sw"><input type="checkbox" data-cl="${esc(n)}"${o.clients.includes(n) ? ' checked' : ''}${rbRO()}><span class="rb-sw-ui"></span><span><b>${esc(n)}</b></span></label>`).join('')
         : '<div class="empty">Клиентов в таблице «Прозвон лидов» не нашлось.</div>'}
-      <div class="row"><button class="btn primary" id="cl-save"${rbRO()}>Сохранить</button></div></div></div>`;
-  $('#pr-save', el).addEventListener('click', async () => {
+      <div class="row" data-css="margin-top:8px"><button class="btn primary" type="button" id="cl-save"${rbRO()}>Сохранить</button></div></section></div>
+    <section class="card blk" data-css="--i:2"><div class="card-h"><h2>Куда идут итоги звонков</h2></div><div class="list">
+      <div class="item"><div class="main-l"><div class="t">CRM Averon</div><div class="s" data-css="white-space:normal">Звонки, записи и итоги робота попадают сюда, на вкладку «Звонки».</div></div><span class="chip good">работает</span></div>
+      ${sheet ? `<div class="item"><div class="main-l"><div class="t">Google Таблица</div><div class="s" data-css="white-space:normal">Итог каждого звонка строкой на лист «${esc(sheet.tab)}».</div></div><span class="chip ${sheet.on ? 'good' : ''}">${sheet.on ? 'работает' : 'не подключена'}</span></div>` : ''}
+      <div class="item"><div class="main-l"><div class="t">Mango Office</div><div class="s" data-css="white-space:normal">Робот звонит через сотрудника «Робот» в Mango.</div></div><span class="chip good">работает</span></div></div></section>`;
+  $('#pr-save', el).addEventListener('click', async e => {
     const prices = {}; $$('[data-p]', el).forEach(i => { prices[i.dataset.p] = i.value; });
-    try { await rbPost('/options', {prices}); toast('Цены сохранены.'); go('robot'); } catch (e) { toast(e.message, true); }
+    busy(e.currentTarget, true);
+    try { await rbPost('/options', {prices}); toast('Цены сохранены'); reload(); } catch (err) { busy(e.currentTarget, false); toast(err.message, true); }
   });
-  $('#cl-save', el).addEventListener('click', async () => {
-    try { await rbPost('/options', {clients: $$('[data-cl]:checked', el).map(i => i.dataset.cl)}); toast('Сохранено.'); go('robot'); } catch (e) { toast(e.message, true); }
+  $('#cl-save', el).addEventListener('click', async e => {
+    busy(e.currentTarget, true);
+    try { await rbPost('/options', {clients: $$('[data-cl]:checked', el).map(i => i.dataset.cl)}); toast('Сохранено'); reload(); } catch (err) { busy(e.currentTarget, false); toast(err.message, true); }
   });
 };
 
-// ---------- голос и тестовый звонок: прежняя страница робота ----------
-RB_VIEW.voice = async el => { await RB.voiceView(el); };
+// ---------- голос и тестовый звонок (static/robot-voice.js) ----------
+RB_VIEW.voice = async el => { await robotVoiceView(el); };

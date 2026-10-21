@@ -1,7 +1,7 @@
 // Страница «Источники»: подбор доноров под нишу клиента (из podbor-istochnikov.html Григория) и закладка
 // «Собрать номера» для 2ГИС и Яндекс Карт (static/sources-collect.js). Справочник ниш — sources-data.js,
 // логика без интерфейса — sources-logic.js. Черновик подборки живёт в браузере, сохранённые подборки — в CRM.
-// Работает поверх app.js (его помощники api, toast, go, S, VIEWS).
+// Работает поверх app.js (его помощники api, toast, go, S).
 'use strict';
 
 (() => {
@@ -204,7 +204,7 @@
 
   // ---------- сохранённые подборки ----------
   async function loadSaved() {
-    try { saved = (await api('/api/sources/selections', {scoped: false})).items; } catch (e) { saved = []; }
+    try { saved = (await api('/api/sources/selections', {})).items; } catch (e) { saved = []; }
     renderSaved();
   }
   function renderSaved() {
@@ -219,7 +219,7 @@
   }
   async function openSaved(id) {
     if (state.donors.length && state.savedId !== id && !confirm('Открыть сохранённую подборку? Текущий черновик заменится.')) return;
-    const s = await api('/api/sources/selections/' + id, {scoped: false});
+    const s = await api('/api/sources/selections/' + id, {});
     state = Object.assign(blank(), {query: s.query || s.niche_name, nicheId: s.niche, city: s.city || '', client: s.client || '', seg: s.seg || '',
       savedId: s.id, donors: s.donors.map(d => Object.assign({}, d, {id: newId()}))});
     fill(); saveDraft(); renderSaved(); window.scrollTo(0, 0);
@@ -344,7 +344,7 @@
             category: c.name, type: c.t, level: e.level, label: e.label, signals: L.signalsFor(d, niche)};
         })};
       try {
-        const r = await api('/api/sources/selections', {method: 'POST', scoped: false, body});
+        const r = await api('/api/sources/selections', {method: 'POST', body});
         state.savedId = r.id; saveDraft();
         g('sp-outHint').textContent = 'Подборка сохранена в CRM.';
         loadSaved();
@@ -359,7 +359,7 @@
       try {
         if (o) await openSaved(+o.getAttribute('data-open'));
         if (d && confirm('Удалить сохранённую подборку?')) {
-          await api(`/api/sources/selections/${+d.getAttribute('data-drop')}/delete`, {method: 'POST', scoped: false, body: {}});
+          await api(`/api/sources/selections/${+d.getAttribute('data-drop')}/delete`, {method: 'POST', body: {}});
           if (state.savedId === +d.getAttribute('data-drop')) { state.savedId = null; saveDraft(); }
           loadSaved();
         }
@@ -376,10 +376,10 @@
     loadDraft(); fill(); renderSaved();
   });
 
-  VIEWS.sources = async view => {
+  // Вкладка «Подбор доноров» раздела «Источники» (static/more.js). arg — номера из закладки (import:...).
+  window.SourcesPicker = async (view, arg) => {
     view.innerHTML = PAGE;
     loadDraft();
-    const arg = S.arg; S.arg = null;
     if (arg && arg.startsWith('import:')) importFrom(arg);
     bind(view);
     fill();

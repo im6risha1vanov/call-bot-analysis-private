@@ -17,7 +17,7 @@ os.environ.setdefault('CVC_API_KEY', 'test')
 os.environ.setdefault('ANTHROPIC_API_KEY', 'test')
 os.environ.setdefault('ENCRYPTION_KEY', 'q7m8b4gN0bO2PZqvG6b0yC3rA1D5pYc8tW2XkL9uQeE=')
 
-from crm import auth, cabinet, dial, gsheets, journal, overview, recording, staff, store
+from crm import auth, cabinet, dial, gsheets, journal, overview, recording, robot_store, staff, store
 from review import callbacks, engine
 from review import store as review_store
 from tests.test_review import CALLBACK, LOST, TRANSCRIPT, WON
@@ -133,10 +133,10 @@ class DBCase(unittest.IsolatedAsyncioTestCase):
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS assigned_by_telegram_user_id BIGINT;""")
         for name in ('008_call_reviews.sql', '009_callback_tasks.sql', '012_prompt_versions.sql', '013_employee_invites.sql',
                      '014_crm.sql', '015_crm_roles.sql', '016_crm_access.sql', '017_crm_reports.sql', '018_crm_questions.sql',
-                     '019_crm_staff.sql', '021_manager_memory.sql', '022_presentations.sql', '024_deals.sql', '025_contracts.sql', '026_presentation_client.sql', '027_sources.sql'):
+                     '019_crm_staff.sql', '020_robot.sql', '021_manager_memory.sql', '022_presentations.sql', '024_deals.sql', '025_contracts.sql', '026_presentation_client.sql', '027_sources.sql'):
             await self.pool.execute((root / 'migrations' / name).read_text())
         await self.pool.execute('TRUNCATE clients, crm_login_tokens, crm_sessions, crm_docs, crm_invites, crm_reports, crm_questions, '
-                                'employee_invites, manager_memory, deal_events, contracts, source_selections, prompt_active, prompt_versions, prompt_drafts, astra_daily_spend CASCADE')
+                                'employee_invites, manager_memory, deal_events, contracts, source_selections, prompt_active, prompt_versions, prompt_drafts, astra_daily_spend, robot_options CASCADE')
         from crypto_util import encrypt
         await self.pool.execute("INSERT INTO clients(id,timezone,processing_enabled,vpbx_api_key_enc,vpbx_api_salt_enc) "
                                 "VALUES(1,'Europe/Moscow',true,$1,$2)", encrypt('key'), encrypt('salt'))
@@ -498,7 +498,8 @@ class WebTests(DBCase):
                 self.assertEqual((r.status, r.headers['Location']), (302, '/'))
             cc = await (await self.http.get('/api/callcenter')).json()
             self.assertEqual(cc['total']['interested'], 1)
-            self.assertEqual((await self.http.get('/api/summary?period=today')).status, 200)
+            summ = await (await self.http.get('/api/summary?period=today')).json()
+            self.assertEqual([p['ext'] for p in summ['team']], ['101', '102'])  # выбор менеджера в шапке «Сводки»
             clients = await (await self.http.get('/api/cabinet')).json()
             self.assertEqual(len(clients['clients']), 2)
             cab = await (await self.http.get('/api/cabinet?client=Кухни')).json()
@@ -525,6 +526,7 @@ class WebTests(DBCase):
             self.assertEqual((await self.http.get('/api/cabinet')).status, 403)
             mine = await (await self.http.get('/api/summary?ext=101')).json()
             self.assertEqual([m['ext'] for m in mine['managers']], ['102'])  # менеджер видит только себя
+            self.assertEqual(mine['team'], [])
             with patch('crm.dial.mango_client.callback', AsyncMock(return_value={'result': 1000})) as cb:
                 r = await self.http.post('/api/dial', json={'number': '89991234567'}, headers={'X-CRM': '1'})
             self.assertEqual(r.status, 403)
@@ -537,7 +539,9 @@ class WebTests(DBCase):
             self.assertEqual(r.status, 400)
             self.assertEqual(await self.enter('client', client='Кухни'), '/')
             me = await (await self.http.get('/api/me')).json()
-            self.assertEqual((me['role'], me['name']), ('client', 'Кухни'))
+            self.assertEqual((me['role'], me['name'], me['robot']), ('client', 'Кухни', False))
+            await robot_store.set_option(self.pool, 'clients', ['Кухни'])  # платная опция «Робот» включена
+            self.assertTrue((await (await self.http.get('/api/me')).json())['robot'])
             cab = await (await self.http.get('/api/cabinet?client=Окна')).json()
             self.assertEqual((cab['name'], cab['counts']['total']), ('Кухни', 4))  # чужое имя в запросе не действует
             for path in ('/api/queue', '/api/tasks', '/api/leads', '/api/stats', '/api/summary', '/api/journal',
@@ -973,6 +977,11 @@ class WebTests(DBCase):
             self.assertEqual((d['copies_source'], d['copies_other']), ('env', 1))
             own = d['items'][0]
             self.assertEqual((own['copies'], own['can_unlink'], own['can_copy']), (True, False, True))
+            self.assertEqual((own['crm_links'], own['crm_used']), (0, None))
+            await self.pool.execute("INSERT INTO crm_invites(token_hash,role,client_id,extension,last_used_at) VALUES('x101','manager',1,'101',now())")
+            m101 = next(p for p in (await (await self.http.get('/api/staff')).json())['items'] if p['ext'] == '101')
+            self.assertEqual(m101['crm_links'], 1)
+            self.assertTrue(m101['crm_used'])
             # новый менеджер: строка и одноразовая ссылка в бота, по ней он подключается сам
             r = await self.http.post('/api/staff', json={'role': 'manager', 'person_ext': '15', 'name': 'Пётр'}, headers=h)
             link = (await r.json())['link']
