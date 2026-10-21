@@ -945,33 +945,38 @@ VIEWS.prompts = async view => {
 };
 
 // Голосовой робот: звонок роботом, голос и манера речи (как страница /voice робота), итоги звонков.
-const ROBOT_SLIDERS = [
-  ['speed', 'Скорость речи', 0.7, 1.2, 0.01, '1.0 обычно, 1.1 заметно быстрее, максимум 1.2'],
-  ['stability', 'Стабильность', 0, 1, 0.05, 'выше: ровнее и одинаковее от фразы к фразе; ниже: живее, но интонация гуляет'],
-  ['similarity', 'Схожесть с голосом', 0, 1, 0.05, ''],
-  ['style', 'Выразительность', 0, 1, 0.05, '0 спокойно; больше: эмоциональнее и чуть медленнее синтез'],
+// Ползунок: [ключ, название, min, max, шаг, подпись слева, подпись справа, вид значения]
+const ROBOT_VOICE = [
+  ['speed', 'Скорость речи', 0.7, 1.2, 0.01, 'медленнее', 'быстрее', 'x'],
+  ['stability', 'Ровность голоса', 0, 1, 0.05, 'живее, интонация гуляет', 'ровнее', '%'],
 ];
 const ROBOT_MANNER = [
-  ['casual', 'Разговорность', 0, 1, 0.05, '0 как диктор; выше: «пожалста», «щас», иногда «ну»'],
-  ['bg_noise', 'Фон на линии', 0, 1, 0.05, 'тихий шум помещения весь звонок, чтобы в паузах линия не «пропадала»; 0 выключает, слышно только в звонке'],
-  ['tempo_vary', 'Разный темп', 0, 0.3, 0.01, 'вопрос медленнее, длинное утверждение быстрее; 0.1 — на 10 %, 0 выключает'],
-  ['pause_ms', 'Пауза между фразами, мс', 0, 600, 10, 'тишина после каждого предложения'],
-  ['inner_pause_ms', 'Паузы на знаках, мс', 40, 600, 10, 'самая длинная пауза внутри фразы, всё длиннее укорачивается'],
-  ['tail_ms', 'Конец реплики клиента, мс', 600, 2000, 50, 'сколько тишины ждать перед ответом; меньше: быстрее, но может перебить'],
-  ['filler_after_ms', '«Так…» через, мс', 100, 3000, 50, 'когда сказать «Так…», если модель думает дольше'],
+  ['casual', 'Разговорность', 0, 1, 0.05, 'как диктор', '«щас», «пожалста», «ну»', '%'],
+  ['bg_noise', 'Фон на линии', 0, 1, 0.05, 'тишина', 'шум офиса', '%'],
+  ['pause_ms', 'Пауза между фразами', 0, 600, 10, 'слитно', 'с паузой', 's'],
+  ['tail_ms', 'Ждать, пока клиент договорит', 600, 2000, 50, 'отвечает быстрее', 'реже перебивает', 's'],
 ];
-const ROBOT_CHECKS = [
-  ['speaker_boost', 'Усиление сходства с голосом'],
-  ['calm', 'Спокойный тон: «!» читать как точку, «отлично» как «хорошо»'],
-  ['whole_reply', 'Реплика на одном дыхании: озвучивать ответ целиком (ровнее интонация, ответ на 0,3–0,6 с позже)'],
-  ['one_breath', 'Фраза на одном дыхании: без пауз на запятых, двоеточиях и тире внутри предложения (не звучит как стих)'],
-  ['fewer_commas', 'Меньше пауз на запятых'],
-  ['fillers', '«Так…», «Угу…», пока модель думает; когда клиент назвал данные — «Так, записываю…»'],
-  ['backchannel', '«Угу», «Ага» по ходу долгого рассказа клиента'],
-  ['goodbye_wait', 'Ответить «Всего доброго» на прощание клиента, а не класть трубку сразу'],
+const ROBOT_EXTRA = [
+  ['similarity', 'Схожесть с исходным голосом', 0, 1, 0.05, '', '', '%'],
+  ['style', 'Выразительность', 0, 1, 0.05, 'спокойно', 'эмоционально', '%'],
+  ['tempo_vary', 'Разный темп: вопросы медленнее', 0, 0.3, 0.01, 'один темп', 'заметно', '%'],
+  ['inner_pause_ms', 'Пауза на знаках внутри фразы', 40, 600, 10, '', '', 's'],
+  ['filler_after_ms', '«Так…», если модель думает дольше', 100, 3000, 50, '', '', 's'],
+];
+// Переключатель может вести несколько настроек сразу: они значат для слуха одно и то же
+const ROBOT_TOGGLES = [
+  [['fillers', 'backchannel'], 'Живые реакции', '«так, записываю…», пока думает; «угу» по ходу рассказа клиента'],
+  [['calm', 'one_breath', 'fewer_commas'], 'Спокойная ровная речь', 'без «!» и восторгов, без пауз на запятых внутри фразы'],
+  [['goodbye_wait'], 'Прощаться по-человечески', 'ответить «всего доброго» на прощание клиента и только потом положить трубку'],
+];
+const ROBOT_EXTRA_TOGGLES = [
+  [['whole_reply'], 'Реплика целиком', 'интонация ровнее через всю реплику, ответ на 0,3–0,6 с позже'],
+  [['speaker_boost'], 'Усиление сходства с голосом', ''],
 ];
 const ROBOT_MODELS = [['eleven_v4', 'eleven_v4 (самая живая)'], ['eleven_multilingual_v2', 'eleven_multilingual_v2'],
   ['eleven_flash_v2_5', 'eleven_flash_v2_5 (самая быстрая)'], ['eleven_turbo_v2_5', 'eleven_turbo_v2_5']];
+const rbValue = (v, kind) => kind === 'x' ? '×' + v.toFixed(2) : kind === 's' ? (v / 1000).toFixed(v < 1000 && v % 100 ? 2 : 1).replace('.', ',') + ' с'
+  : Math.round(v * 100) + ' %';
 let robotAudio = null;
 
 function robotCall(c) {
@@ -986,15 +991,20 @@ function robotCall(c) {
 VIEWS.robot = async view => {
   const [d, log] = await Promise.all([api('/api/robot', {scoped: false}), api('/api/robot/calls', {scoped: false})]);
   const cfg = {...d.settings};
-  const slider = ([id, label, min, max, step, hint]) => `<div class="rb-row"><label for="rb-${id}">${label}</label>
-    <input type="range" id="rb-${id}" data-k="${id}" min="${min}" max="${max}" step="${step}" value="${cfg[id]}"><output id="rb-${id}-v"></output>
-    ${hint ? `<div class="muted">${hint}</div>` : ''}</div>`;
+  const slider = ([id, label, min, max, step, left, right, kind]) => `<div class="rb-sl">
+    <div class="rb-sl-top"><label for="rb-${id}">${label}</label><output id="rb-${id}-v"></output></div>
+    <input type="range" id="rb-${id}" data-k="${id}" data-kind="${kind}" min="${min}" max="${max}" step="${step}" value="${cfg[id]}">
+    ${left || right ? `<div class="rb-sl-ends"><span>${left}</span><span>${right}</span></div>` : ''}</div>`;
+  const toggle = ([keys, label, hint]) => `<label class="rb-sw"><input type="checkbox" data-c="${keys.join(',')}"${keys.every(k => cfg[k]) ? ' checked' : ''}>
+    <span class="rb-sw-ui" aria-hidden="true"></span><span><b>${label}</b>${hint ? `<span class="muted">${hint}</span>` : ''}</span></label>`;
   const models = ROBOT_MODELS.some(([m]) => m === cfg.model) ? ROBOT_MODELS : [...ROBOT_MODELS, [cfg.model, cfg.model]];
+  const voiceNames = Object.entries(d.voices || {});
+  const knownVoice = voiceNames.some(([, id]) => id === cfg.voice_id);
   const ro = d.readonly ? ' disabled' : '';
   view.innerHTML = `<div class="grid2"><div class="rb-col">
     <div class="panel"><h2>Позвонить роботом</h2>
       <p class="muted">${d.up ? '<span class="chip good">робот включён</span>' : '<span class="chip bad">робот выключен</span> Включается на сервере: <code>bash scripts/voice_test.sh sip</code>'}
-        Робот звонит с текущими сохранёнными настройками голоса. Звоните только тем, кто согласился на звонок.</p>
+        Звонит с сохранёнными настройками. Только тем, кто согласился на звонок.</p>
       <div class="outform">
         <label class="field">Номер<input id="rb-phone" inputmode="tel" placeholder="+7 999 123-45-67"></label>
         <label class="field">Сценарий<select id="rb-op">${d.operators.map(o => `<option value="${esc(o.id)}">${esc(o.name)} · ${esc(o.company)}</option>`).join('')}</select></label>
@@ -1002,54 +1012,64 @@ VIEWS.robot = async view => {
         ${d.test_phones.length ? `<button class="btn" id="rb-me"${ro}>Позвонить мне</button>` : ''}</div>
       <div class="muted" id="rb-call-st"></div></div>
     <div class="panel"><h2>Голос</h2>
-      <div class="rb-row"><label for="rb-voice">Голос из аккаунта ElevenLabs</label><select id="rb-voice"><option value="">— указать voice_id —</option>
-        ${Object.entries(d.voices || {}).map(([name, id]) => `<option value="${esc(id)}"${id === cfg.voice_id ? ' selected' : ''}>${esc(name)}</option>`).join('')}</select></div>
-      <div class="rb-row"><label for="rb-voice_id">voice_id</label><input id="rb-voice_id" value="${esc(cfg.voice_id)}" autocomplete="off"></div>
-      <div class="rb-row"><label for="rb-model">Модель</label><select id="rb-model">${models.map(([m, t]) => `<option value="${esc(m)}"${m === cfg.model ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select></div>
-      ${ROBOT_SLIDERS.map(slider).join('')}</div>
-    <div class="panel"><h2>Подобрать голос</h2>
-      <p class="muted">Русские голоса из библиотеки ElevenLabs. «Слушать» играет образец автора голоса, «Взять» добавляет голос в аккаунт и подставляет его выше; потом «Прослушать» и «Сохранить для звонков».</p>
-      <div class="outform"><label class="field">Поиск<input id="rb-vq" placeholder="например calm, office, Анна" autocomplete="off"></label>
-        <label class="field">Пол<select id="rb-vg"><option value="female">женский</option><option value="male">мужской</option><option value="">любой</option></select></label>
-        <label class="field">Тип<select id="rb-vu"><option value="conversational">разговорный</option><option value="">любой</option></select></label>
-        <button class="btn" id="rb-vfind">Найти</button></div>
-      <div id="rb-vres"></div></div>
-    <div class="panel"><h2>Клон голоса</h2>
-      <p class="muted">Голос живого менеджера по его записям: 1–3 минуты чистой речи одного человека, без голоса клиента и музыки. Только с согласия этого человека.</p>
-      <div class="outform"><label class="field">Название<input id="rb-cname" value="Ольга" autocomplete="off"></label>
-        <label class="field">Записи (mp3, wav, m4a)<input type="file" id="rb-cfiles" accept="audio/*" multiple></label>
-        <button class="btn" id="rb-clone"${ro}>Сделать клон</button></div>
-      <div class="muted" id="rb-cst"></div></div>
-    <div class="panel"><h2>Манера и темп разговора</h2>
+      <label class="field">Чей голос<select id="rb-voice">
+        ${voiceNames.map(([name, id]) => `<option value="${esc(id)}"${id === cfg.voice_id ? ' selected' : ''}>${esc(name)}</option>`).join('')}
+        <option value=""${knownVoice ? '' : ' selected'}>Другой, по voice_id…</option></select></label>
+      <label class="field" id="rb-vid-row"${knownVoice ? ' hidden' : ''}>voice_id<input id="rb-voice_id" value="${esc(cfg.voice_id)}" autocomplete="off"></label>
+      ${ROBOT_VOICE.map(slider).join('')}
+      <details class="rb-more"><summary>Найти другой голос или сделать клон</summary>
+        <h3>Библиотека ElevenLabs</h3>
+        <p class="muted">«Слушать» играет образец, «Взять» добавляет голос в аккаунт и выбирает его.</p>
+        <div class="outform"><label class="field">Поиск<input id="rb-vq" placeholder="например calm, office, Анна" autocomplete="off"></label>
+          <label class="field">Пол<select id="rb-vg"><option value="female">женский</option><option value="male">мужской</option><option value="">любой</option></select></label>
+          <label class="field">Тип<select id="rb-vu"><option value="conversational">разговорный</option><option value="">любой</option></select></label>
+          <button class="btn" id="rb-vfind">Найти</button></div>
+        <div id="rb-vres"></div>
+        <h3>Клон голоса</h3>
+        <p class="muted">1–3 минуты чистой речи одного человека, без клиента и музыки. Только с его согласия.</p>
+        <div class="outform"><label class="field">Название<input id="rb-cname" value="Ольга" autocomplete="off"></label>
+          <label class="field">Записи (mp3, wav, m4a)<input type="file" id="rb-cfiles" accept="audio/*" multiple></label>
+          <button class="btn" id="rb-clone"${ro}>Сделать клон</button></div>
+        <div class="muted" id="rb-cst"></div></details></div>
+    <div class="panel"><h2>Как говорит</h2>
       ${ROBOT_MANNER.map(slider).join('')}
-      ${ROBOT_CHECKS.map(([id, label]) => `<label class="rb-check"><input type="checkbox" data-c="${id}"${cfg[id] ? ' checked' : ''}> ${label}</label>`).join('')}</div>
+      <div class="rb-sws">${ROBOT_TOGGLES.map(toggle).join('')}</div></div>
     <div class="panel"><h2>Произношение</h2>
-      <p class="muted">Если робот ставит не то ударение или читает сокращение по буквам, впишите слово и как его читать, по строке на слово.
-        «+» после ударной гласной ставит ударение, «*» после слова — все его формы: <code>замер* = заме+р</code>, <code>ПВХ = пэ-вэ-ха+</code>.
-        Проверьте кнопкой «Прослушать» ниже.</p>
-      <textarea id="rb-pron" rows="4" placeholder="столешниц* = столе+шниц">${esc(cfg.pronounce || '')}</textarea>
-      <details><summary class="muted">Уже в словаре</summary><pre class="muted">${esc(cfg.pronounce_default || '')}</pre></details></div>
-    <div class="panel"><h2>Проверка</h2>
-      <textarea id="rb-text" rows="3">Замер и дизайн-проект у нас бесплатные. По фасадам что смотрите: плёнку ПВХ, эмаль, пластик? Специалист вам перезвонит завтра.</textarea>
-      <div class="row"><button class="btn" id="rb-listen">Прослушать</button>
-        <button class="btn primary" id="rb-save"${d.can_save && !d.readonly ? '' : ' disabled'}>Сохранить для звонков</button>
-        <button class="btn" id="rb-reset">Вернуть сохранённое</button></div>
-      <div class="muted" id="rb-st">${d.can_save ? 'Сохранённые настройки действуют со следующего звонка, без перезапуска.' : 'Робот не установлен на этом сервере: сохранить некуда.'}</div></div>
+      <p class="muted">Слово и как его читать, по строке на слово. «+» после ударной гласной, «*» — все формы слова.</p>
+      <textarea id="rb-pron" class="rb-area" rows="3" placeholder="столешниц* = столе+шниц">${esc(cfg.pronounce || '')}</textarea>
+      <details class="rb-more"><summary>Уже в словаре</summary><pre class="muted">${esc(cfg.pronounce_default || '')}</pre></details></div>
+    <details class="panel rb-more rb-extra"><summary><h2>Дополнительно</h2></summary>
+      <label class="field">Модель синтеза<select id="rb-model">${models.map(([m, t]) => `<option value="${esc(m)}"${m === cfg.model ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select></label>
+      ${ROBOT_EXTRA.map(slider).join('')}
+      <div class="rb-sws">${ROBOT_EXTRA_TOGGLES.map(toggle).join('')}</div></details>
     </div>
+    <div class="rb-col">
+    <div class="panel rb-try"><h2>Проверка</h2>
+      <textarea id="rb-text" class="rb-area" rows="3">Замер и дизайн-проект у нас бесплатные. По фасадам что смотрите: плёнку ПВХ, эмаль, пластик? Специалист вам перезвонит завтра.</textarea>
+      <div class="row"><button class="btn" id="rb-listen">▶ Слушать</button>
+        <button class="btn primary" id="rb-save"${d.can_save && !d.readonly ? '' : ' disabled'}>Сохранить</button>
+        <button class="btn" id="rb-reset">Отменить</button></div>
+      <div class="muted" id="rb-st">${d.can_save ? 'Меняйте настройки слева и слушайте здесь. Сохранённое действует со следующего звонка.' : 'Робот не установлен на этом сервере: сохранить некуда.'}</div></div>
     <div class="panel"><h2>Звонки робота <span class="muted">· ${log.items.length}</span></h2>
       ${log.items.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Когда</th><th>Номер</th><th>Итог</th><th class="n">Длит.</th></tr></thead><tbody>
         ${log.items.map((c, i) => `<tr class="click" data-rc="${i}"><td>${fmtWhen(c.at)}</td><td>${esc(phone(c.phone))}</td>
           <td><span class="chip ${c.good ? 'good' : ''}">${esc(c.outcome)}</span>${c.comment ? `<div class="muted">${esc(c.comment)}</div>` : ''}</td><td class="n">${c.seconds ? dur(c.seconds) : ''}</td></tr>`).join('')}</tbody></table></div>`
-        : '<div class="empty">Звонков по телефону ещё не было.</div>'}</div></div>`;
-  const show = el => { const v = Number(el.value); $(`#${el.id}-v`, view).textContent = el.dataset.k.endsWith('_ms') ? v : v.toFixed(2); };
+        : '<div class="empty">Звонков по телефону ещё не было.</div>'}</div></div></div>`;
+  const show = el => {
+    const v = Number(el.value);
+    $(`#${el.id}-v`, view).textContent = rbValue(v, el.dataset.kind);
+    el.style.setProperty('--p', ((v - el.min) / (el.max - el.min) * 100) + '%');
+  };
   $$('[data-k]', view).forEach(el => { show(el); el.addEventListener('input', () => show(el)); });
   const voiceSel = $('#rb-voice', view), voiceId = $('#rb-voice_id', view);
-  voiceSel.addEventListener('change', () => { if (voiceSel.value) voiceId.value = voiceSel.value; });
-  voiceId.addEventListener('input', () => { voiceSel.value = [...voiceSel.options].some(o => o.value === voiceId.value) ? voiceId.value : ''; });
+  voiceSel.addEventListener('change', () => {
+    if (voiceSel.value) voiceId.value = voiceSel.value;
+    $('#rb-vid-row', view).hidden = !!voiceSel.value;
+  });
   const collect = () => {
     const out = {voice_id: voiceId.value.trim(), model: $('#rb-model', view).value};
     $$('[data-k]', view).forEach(el => { out[el.dataset.k] = Number(el.value); });
-    $$('[data-c]', view).forEach(el => { out[el.dataset.c] = el.checked; });
+    $$('[data-c]', view).forEach(el => el.dataset.c.split(',').forEach(k => { out[k] = el.checked; }));
     out.pronounce = $('#rb-pron', view).value;
     return out;
   };
@@ -1077,10 +1097,10 @@ VIEWS.robot = async view => {
   });
   $('#rb-reset', view).addEventListener('click', () => go('robot'));
   const useVoice = (id, name, voices) => {
-    if (voices) voiceSel.innerHTML = '<option value="">— указать voice_id —</option>' + Object.entries(voices).map(([n, v]) => `<option value="${esc(v)}">${esc(n)}</option>`).join('');
+    if (voices) voiceSel.innerHTML = Object.entries(voices).map(([n, v]) => `<option value="${esc(v)}">${esc(n)}</option>`).join('') + '<option value="">Другой, по voice_id…</option>';
     if (![...voiceSel.options].some(o => o.value === id)) voiceSel.insertAdjacentHTML('beforeend', `<option value="${esc(id)}">${esc(name)}</option>`);
-    voiceSel.value = id; voiceId.value = id;
-    st(`Голос «${name}» подставлен. Нажмите «Прослушать», затем «Сохранить для звонков».`);
+    voiceSel.value = id; voiceId.value = id; $('#rb-vid-row', view).hidden = true;
+    st(`Голос «${name}» выбран. Нажмите «Слушать», затем «Сохранить».`);
   };
   let vPage = 0, vSample = null;
   const findVoices = async (more) => {
@@ -1135,7 +1155,7 @@ VIEWS.robot = async view => {
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(data.error || 'Клон не получился.');
       useVoice(data.voice_id, name, data.voices);
-      out.textContent = `Клон «${name}» готов и подставлен в «Голос». Послушайте и сохраните.`;
+      out.textContent = `Клон «${name}» готов и выбран. Послушайте и сохраните.`;
     } catch (e) { out.textContent = e.message; }
     $('#rb-clone', view).disabled = false;
   });
@@ -1144,7 +1164,7 @@ VIEWS.robot = async view => {
     out.textContent = 'Заказываю звонок…';
     try {
       const r = await api('/api/robot/call', {method: 'POST', scoped: false, body: {phone: number, operator: $('#rb-op', view).value}});
-      out.textContent = `Робот звонит на ${phone(r.number)}. Итог появится в списке справа после разговора, обновите страницу.`;
+      out.textContent = `Робот звонит на ${phone(r.number)}. Итог появится в «Звонки робота» после разговора, обновите страницу.`;
     } catch (e) { out.textContent = e.message; }
   };
   $('#rb-call', view).addEventListener('click', () => {
