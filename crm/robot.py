@@ -110,6 +110,53 @@ async def preview(who, data) -> tuple[bytes, int]:
     return pcm, speech.TTS_RATE
 
 
+async def voices_search(who, query: str, gender: str, use_case: str, page) -> dict:
+    """Поиск русских голосов в библиотеке ElevenLabs."""
+    check(who)
+    from voice import speech
+    try:
+        return await speech.search_library(query or '', gender or '', use_case or '', int(page or 0))
+    except (speech.ElevenError, httpx.HTTPError) as exc:
+        raise ValueError(f'Поиск голосов не получился: {exc}') from exc
+
+
+async def voices_add(who, data) -> dict:
+    """Голос из библиотеки в аккаунт ElevenLabs; после этого его можно прослушать и сохранить для звонков."""
+    check(who, write=True)
+    from voice import speech
+    try:
+        voice_id = await speech.add_library_voice(str(data.get('owner') or ''), str(data.get('voice_id') or ''),
+                                                  str(data.get('name') or ''))
+    except (speech.ElevenError, httpx.HTTPError) as exc:
+        raise ValueError(f'Голос не добавился: {exc}') from exc
+    return {'voice_id': voice_id, 'voices': speech._eleven_direct}
+
+
+async def voices_preview(who, url: str) -> tuple[bytes, str]:
+    check(who)
+    from voice import speech
+    try:
+        return await speech.library_preview(str(url or ''))
+    except (speech.ElevenError, httpx.HTTPError) as exc:
+        raise ValueError(str(exc)) from exc
+
+
+CLONE_MAX_BYTES = 20 * 1024 * 1024
+
+
+async def voices_clone(who, name: str, files: list[tuple[str, bytes]]) -> dict:
+    """Клон голоса по записям одного человека (только с его согласия)."""
+    check(who, write=True)
+    from voice import speech
+    if not files:
+        raise ValueError('Приложите записи голоса.')
+    try:
+        voice_id = await speech.clone_voice(name, files, 'Клон из CRM')
+    except (speech.ElevenError, httpx.HTTPError) as exc:
+        raise ValueError(f'Клон не получился: {exc}') from exc
+    return {'voice_id': voice_id, 'voices': speech._eleven_direct}
+
+
 async def call(who, phone, operator) -> dict:
     check(who, write=True)
     number = normalize(phone)
