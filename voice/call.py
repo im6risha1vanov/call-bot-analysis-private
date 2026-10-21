@@ -244,7 +244,7 @@ class CallSession:
             if self.filler_said_at > time.monotonic() - 3:
                 text_all = _strip_reaction(text_all)
                 self.filler_said_at = 0.0
-            rest = [text_all] if text_all.strip() else []
+            rest = speech.split_for_tempo(text_all) if text_all.strip() else []
         for phrase in rest:
             await self._say(phrase, generation)
         if turn.fallback:
