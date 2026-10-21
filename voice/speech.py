@@ -402,7 +402,7 @@ SETTING_KEYS = {"voice_id": str, "model": str, "stability": float, "similarity":
                 "speed": float, "speaker_boost": bool, "calm": bool, "tail_ms": int, "filler_after_ms": int,
                 "fillers": bool, "casual": float, "pause_ms": int, "fewer_commas": bool,
                 "inner_pause_ms": int, "whole_reply": bool, "bg_noise": float, "tempo_vary": float,
-                "one_breath": bool, "backchannel": bool, "goodbye_wait": bool}
+                "one_breath": bool, "backchannel": bool, "goodbye_wait": bool, "pronounce": str}
 
 
 # Яндекс присылает промежуточный текст раз в 0,25–0,4 с, пока клиент говорит. При 300 мс реплика закрывалась
@@ -427,6 +427,8 @@ def clean_settings(data: dict) -> dict:
                            ("bg_noise", 0, 1), ("tempo_vary", 0, 0.3)):
         if key in out:
             out[key] = min(max(out[key], low), high)
+    if "pronounce" in out:
+        out["pronounce"] = out["pronounce"][:4000]
     if "voice_id" in out and not re.fullmatch(r"[A-Za-z0-9]{10,40}", out["voice_id"]):
         del out["voice_id"]
     if "model" in out and not re.fullmatch(r"eleven_[a-z0-9_]{2,40}", out["model"]):
@@ -724,8 +726,49 @@ async def synthesize_pcm(text: str, voice: Voice) -> bytes:
     return shape_pauses(pcm, TTS_RATE, setting("inner_pause_ms", INNER_PAUSE_MS), setting("pause_ms", PAUSE_MS))
 
 
+# Произношение. Синтез ставит ударения сам и ошибается: «зАмеры», «плёнка пэвэхаа» (звонок 21.10).
+# Строка словаря: «слово = как читать», «+» после ударной гласной ставит ударение. «замер* = заме+р» —
+# все формы слова: окончание до трёх букв сохраняется. Словарь со страницы «Голос и тест» дополняет и правит этот.
+PRONOUNCE = """замер* = заме+р
+ПВХ = пэ-вэ-ха+
+эмал* = эма+л
+позвонит = позвони+т
+перезвонит = перезвони+т
+позвоним = позвони+м
+перезвоним = перезвони+м
+звонит = звони+т"""
+STRESS = "\u0301"  # знак ударения после гласной: так ударение понимает ElevenLabs
+
+
+def pronounce_rules(text: str) -> list[tuple[re.Pattern, str]]:
+    rules: dict[str, tuple[re.Pattern, str]] = {}
+    for line in text.splitlines():
+        word, sep, say = line.partition("=")
+        word, say = word.strip(), say.strip()
+        if not sep or not say or not re.fullmatch(r"[\wё-]+\*?", word):
+            continue
+        stem = word.rstrip("*")
+        tail = r"([а-яё]{0,3})" if word.endswith("*") else "()"  # окончание, но не другое слово: «замерзать»
+        pattern = re.compile(r"(?<![\wё])" + re.escape(stem) + tail + r"(?![\wё])", re.IGNORECASE)
+        rules[stem.lower()] = (pattern, say.replace("+", STRESS))
+    return list(rules.values())
+
+
+def pronounce(text: str) -> str:
+    def put(say: str):
+        def repl(m: re.Match) -> str:
+            word = say + m.group(1)
+            first = m.group(0)[:1]
+            title = first.isupper() and not m.group(0).isupper()  # «Замеры» с большой, но не «ПВХ»
+            return word[:1].upper() + word[1:] if title else word
+        return repl
+    for pattern, say in pronounce_rules(PRONOUNCE + "\n" + setting("pronounce", "")):
+        text = pattern.sub(put(say), text)
+    return text
+
+
 def spoken_text(text: str) -> str:
-    return fewer_pauses(casual_text(plain_questions(calm_text(text))))
+    return pronounce(fewer_pauses(casual_text(plain_questions(calm_text(text)))))
 
 
 # Потоковый синтез ElevenLabs: первые звуки фразы приходят через 0,3–0,6 с вместо 1,3–2,2 с за всю фразу

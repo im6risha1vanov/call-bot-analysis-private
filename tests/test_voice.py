@@ -515,6 +515,19 @@ class CasualTextTest(unittest.TestCase):
         self.assertEqual(speech.plain_questions("Скажите номер, я запишу."), "Скажите номер, я запишу.")
 
 
+class PronounceTest(unittest.TestCase):
+    def test_stress_and_abbreviations(self):
+        # звонок 21.10: «зАмеры», «плёнка пэвэхаа»
+        a = speech.STRESS
+        self.assertEqual(speech.pronounce("Замеры бесплатные, после замера. Плёнка ПВХ. Замерзать не будет."),
+                         f"Заме{a}ры бесплатные, после заме{a}ра. Плёнка пэ-вэ-ха{a}. Замерзать не будет.")
+        token = speech.settings_override.set({"pronounce": "столешниц* = столе+шниц\nбез знака равно\nзамер* = за+мер"})
+        try:
+            self.assertEqual(speech.pronounce("Столешница и замер"), f"Столе{a}шница и за{a}мер")
+        finally:
+            speech.settings_override.reset(token)
+
+
 class TempoTest(unittest.TestCase):
     def test_question_slower_statement_faster(self):
         token = speech.settings_override.set({"tempo_vary": 0.1})
