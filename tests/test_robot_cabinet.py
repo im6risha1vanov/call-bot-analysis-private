@@ -188,15 +188,24 @@ class CabinetTests(DBCase):
         r = await self.http.get('/api/robot/cab/recording/a2')
         self.assertEqual(r.status, 200)
 
-        # аналитика и цены: себестоимость считает CRM, директор меняет только коэффициент
+        # аналитика и цены: себестоимость считает CRM, директор задаёт только цену минуты каждому клиенту
         await robot_store.set_option(self.pool, 'prices_auto', {'mango_min': {'value': 1.5}, 'eleven_1k_chars': {'value': 10},
                                                                 'llm_1k_tokens': {'value': 1}})
-        r = await self.http.post('/api/robot/cab/options', json={'prices': {'mango_min': 99, 'multiplier': '2,5'}}, headers=H)
-        self.assertEqual((await r.json())['prices'], {'mango_min': 1.5, 'eleven_1k_chars': 10.0, 'llm_1k_tokens': 1.0, 'multiplier': 2.5})
-        r = await self.http.post('/api/robot/cab/options', json={'prices': {'multiplier': 0}}, headers=H)
-        self.assertEqual(r.status, 400)
+        r = await self.http.post('/api/robot/cab/options', json={'clients': ['Кухни'], 'prices': {
+            'mango_min': 99, 'client_min': {'Кухни': '12,5', 'Окна': ''}}}, headers=H)
+        got = await r.json()
+        self.assertEqual(got['prices'], {'mango_min': 1.5, 'eleven_1k_chars': 10.0, 'llm_1k_tokens': 1.0, 'client_min': {'Кухни': 12.5}})
+        for bad in (-1, 'дорого', 5000):
+            r = await self.http.post('/api/robot/cab/options', json={'prices': {'client_min': {'Кухни': bad}}}, headers=H)
+            self.assertEqual(r.status, 400)
         st = await (await self.http.get('/api/robot/cab')).json()
         self.assertEqual(st['options']['auto']['mango_min']['value'], 1.5)
+        econ = st['options']['econ']
+        # 2 минуты разговора, 2000 символов и 3000 токенов: 1000 симв. и 1500 ток. на минуту
+        self.assertEqual((econ['cost_min'], econ['parts'], econ['chars_min'], econ['tokens_min']),
+                         (13.0, {'mango': 1.5, 'synth': 10.0, 'llm': 1.5}, 1000, 1500))
+        self.assertEqual(econ['typical'], {'calls': 3, 'reach': 67, 'minutes_per_talk': 1.0})
+        self.assertEqual(econ['clients'], [{'name': 'Кухни', 'price': 12.5, 'calls': 0, 'minutes': 0.0, 'cost': 0, 'charge': 0.0, 'profit': 0.0}])
         a = await (await self.http.get('/api/robot/cab/analytics')).json()
         self.assertEqual((a['total'], a['reached'], a['leads'], a['dial_rate'], a['conversion']), (3, 2, 1, 66.7, 33.3))
         self.assertEqual(a['cost'], 26.0)  # 2 мин × 1,5 + 2000 симв. × 10/1000 + 3000 ток. × 1/1000
@@ -211,7 +220,7 @@ class CabinetTests(DBCase):
         self.assertEqual((await self.http.get('/api/robot/cab/calls')).status, 403)
         await robot_store.set_option(self.pool, 'clients', ['Кухни'])
         await robot_store.set_option(self.pool, 'prices_auto', {'mango_min': {'value': 1}})
-        await robot_store.set_option(self.pool, 'prices', {'multiplier': 3})
+        await robot_store.set_option(self.pool, 'prices', {'client_min': {'Кухни': 3}})
         self.call_line(call_id='c1', phone='79990000001', outcome='interested', duration_s=60, owner='Кухни')
         self.call_line(call_id='d1', phone='79990000002', outcome='interested', duration_s=60)
         await robot_runner.ingest(self.pool)
@@ -219,7 +228,10 @@ class CabinetTests(DBCase):
         self.assertEqual((st['enabled'], st['owner'], st['owners']), (True, 'Кухни', []))
         self.assertNotIn('kitchen', [o['id'] for o in st['operators']])  # встроенные операторы — нашего кабинета
         calls = (await (await self.http.get('/api/robot/cab/calls')).json())['items']
-        self.assertEqual([(c['id'], c['cost']) for c in calls], [('c1', 3.0)])  # только свои, по цене ×3
+        self.assertEqual([(c['id'], c['cost']) for c in calls], [('c1', 3.0)])  # только свои, минута по 3 ₽
+        a = await (await self.http.get('/api/robot/cab/analytics')).json()
+        self.assertEqual((a['cost'], a['lead_cost'], a['priced']), (3.0, 3.0, True))
+        self.assertNotIn('client_cost', a)
         tabs = await (await self.http.get('/api/robot/cab/contacts/tabs')).json()
         self.assertEqual(tabs['tabs'], ['Кухни'])
         r = await self.http.post('/api/robot/cab/contacts/sheet', json={'tab': 'Кухни'}, headers=H)

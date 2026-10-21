@@ -592,4 +592,13 @@ audio.rec{display:block;width:100%;max-width:420px;height:36px;margin-top:6px}
 .item .s.wrap-s{white-space:normal}
 .bad-text,.item .s.bad-text{color:var(--bad)}
 .item .r b{font-size:15px;color:var(--fg);font-weight:650}
-.field.cost-k{flex:1;min-width:160px;max-width:260px}
+.rb-calc{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 12px;margin-bottom:10px}
+.rb-unit{display:flex;align-items:center;gap:6px}
+.rb-unit .inp{flex:1;min-width:0;width:100%}
+.rb-unit i{font-style:normal;color:var(--muted);font-size:13px}
+.rb-prices td{vertical-align:middle}
+.rb-prices .rb-sw{padding:2px 0}
+.rb-prices .rb-unit{max-width:96px}
+@media (max-width:640px){.rb-prices th,.rb-prices td{padding-left:6px;padding-right:6px}.rb-prices .rb-sw{gap:8px}}
+.rb-total .t{font-weight:650}
+.rb-total .r b{color:var(--accent)}
