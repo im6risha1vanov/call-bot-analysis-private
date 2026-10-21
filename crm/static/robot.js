@@ -385,7 +385,7 @@ RB_VIEW.settings = async el => {
       <div class="list">${RB_COSTS.map(costRow).join('')}</div>
       <div class="row" data-css="margin-top:14px;align-items:flex-end"><label class="field cost-k">Коэффициент для клиента<input class="inp" data-p="multiplier" value="${p.multiplier}" inputmode="decimal"${rbRO()}></label>
         <button class="btn primary" type="button" id="pr-save"${rbRO()}>Сохранить</button></div>
-      <p class="hint">Клиент видит стоимость звонков и цену лида по себестоимости, умноженной на коэффициент. Сами цены руками не меняются: Mango считается по стоимости ваших исходящих звонков за 30 дней, ElevenLabs по подписке и курсу ЦБ, YandexGPT по прайсу Яндекса.</p></section>
+      <p class="hint">Клиент видит стоимость звонков и цену лида по себестоимости, умноженной на коэффициент. Сами цены руками не меняются: Mango считается по списаниям с баланса на минуты исходящих разговоров за 30 дней, ElevenLabs по подписке и курсу ЦБ, YandexGPT по прайсу Яндекса.</p></section>
     <section class="card blk" data-css="--i:1"><div class="card-h"><h2>Кабинет робота у клиентов</h2></div>
       <p class="lead" data-css="margin-bottom:8px">Платная опция. Включённый клиент видит в своём кабинете раздел «Робот»: свои кампании, номера, звонки и операторов со стоимостью ×${p.multiplier}.</p>
       ${names.length ? names.map(n => `<label class="rb-sw"><input type="checkbox" data-cl="${esc(n)}"${o.clients.includes(n) ? ' checked' : ''}${rbRO()}><span class="rb-sw-ui"></span><span><b>${esc(n)}</b></span></label>`).join('')
