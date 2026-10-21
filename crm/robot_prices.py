@@ -5,7 +5,8 @@
 - ElevenLabs, рубли за 1000 символов: сумма следующего счёта подписки на лимит кредитов за тот же
   срок (GET /v1/user/subscription), умноженная на кредиты за символ у модели робота (GET /v1/models)
   и на курс ЦБ.
-- YandexGPT, рубли за 1000 токенов: прайс Yandex AI Studio (синхронный режим, с НДС) для модели робота.
+- YandexGPT, рубли за 1000 токенов: прайс Яндекс Облака из Billing API тем же ключом, что у робота;
+  если не пустит, страница прайса Yandex AI Studio (синхронный режим, с НДС).
 
 Пересчёт при старте CRM и раз в 6 часов. Если источник не ответил, остаётся прошлое значение и причина.
 Коэффициент для клиента директор по-прежнему задаёт сам (robot_store.save_options).
@@ -35,7 +36,10 @@ BALANCE_KEY = 'mango_balance'
 MSK = ZoneInfo('Europe/Moscow')
 DAYS = 30
 ELEVEN_API = 'https://api.elevenlabs.io/v1'
-YANDEX_PRICING = 'https://yandex.cloud/ru/docs/ai-studio/pricing'
+YANDEX_PRICING = 'https://aistudio.yandex.ru/docs/ru/ai-studio/pricing'
+YANDEX_SKUS = 'https://billing.api.cloud.yandex.net/billing/v1/skus'
+# Строки прайса Billing API, которые не про обычную синхронную генерацию.
+SKU_SKIP = re.compile(r'async|асинхрон|batch|пакетн|fine|дообуч|tun|lora|cach|кеш|кэш|tool|инструмент|embed|эмбед|classif|классиф', re.I)
 CBR_DAILY = 'https://www.cbr.ru/scripts/XML_daily.asp'
 CBR_MIRROR = 'https://www.cbr-xml-daily.ru/daily_json.js'  # те же курсы ЦБ, если cbr.ru не пускает сервер из-за границы
 BROWSER = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36',
@@ -248,11 +252,96 @@ async def yandex_page(http):
     return r
 
 
+def yandex_key() -> str:
+    return (os.getenv('YANDEX_GPT_API_KEY') or os.getenv('YANDEX_TTS_API_KEY') or '').strip()
+
+
+async def yandex_skus(http) -> list[dict]:
+    """Прайс Яндекс Облака из Billing API (рубли), тем же API-ключом, что у робота."""
+    key = yandex_key()
+    if not key:
+        raise PriceError('нет API-ключа Яндекса')
+    skus, token = [], ''
+    for _ in range(30):
+        r = await http.get(YANDEX_SKUS, params={'currency': 'RUB', 'pageSize': 1000, **({'pageToken': token} if token else {})},
+                           headers={'Authorization': 'Api-Key ' + key})
+        if r.status_code in (401, 403):
+            raise PriceError(f'ключ Яндекса не пускает к прайсу Billing API (код {r.status_code})')
+        r.raise_for_status()
+        data = r.json()
+        skus += data.get('skus') or []
+        token = data.get('nextPageToken')
+        if not token:
+            break
+    return skus
+
+
+def sku_price(sku: dict, now: datetime | None = None) -> float | None:
+    """Действующая цена SKU (первая ступень) за единицу pricingUnit."""
+    now = now or datetime.now(timezone.utc)
+    versions = [v for v in sku.get('pricingVersions') or []
+                if datetime.fromisoformat(str(v.get('effectiveTime', '1970-01-01T00:00:00Z')).replace('Z', '+00:00')) <= now]
+    if not versions:
+        return None
+    version = max(versions, key=lambda v: str(v.get('effectiveTime')))
+    rates = [rate for e in version.get('pricingExpressions') or [] for rate in e.get('rates') or []]
+    rates.sort(key=lambda rate: num(rate.get('startPricingQuantity')) or 0)
+    return num(rates[0].get('unitPrice')) if rates else None
+
+
+def per_1k_tokens(unit: str) -> float | None:
+    """Во сколько раз умножить цену за pricingUnit, чтобы вышла цена за 1000 токенов."""
+    unit = unit.lower().replace(' ', '')
+    if 'token' not in unit and 'токен' not in unit:
+        return None
+    if unit.startswith(('1k', 'k', 'thousand', '1000', 'тыс')) or 'thousand' in unit:
+        return 1.0
+    if unit.startswith(('1m', 'million', 'млн')):
+        return 0.001
+    return 1000.0
+
+
+def model_words(name: str) -> list[str]:
+    return [w for w in name.lower().split() if w != 'yandexgpt']
+
+
+def sku_matches(text: str, name: str) -> bool:
+    text = text.lower()
+    if 'gpt' not in text or SKU_SKIP.search(text):
+        return False
+    return all(re.search(rf'(?<![\w.]){re.escape(w)}(?![\w]|\.\d)', text) for w in model_words(name))
+
+
+def yandex_sku_rate(skus: list[dict], name: str) -> tuple[float, str]:
+    prices = []
+    for sku in skus:
+        text = f"{sku.get('name', '')} {sku.get('description', '')}"
+        factor = per_1k_tokens(str(sku.get('pricingUnit', '')))
+        price = sku_price(sku)
+        if factor and price is not None and sku_matches(text, name):
+            prices.append(price * factor)
+    if not prices:
+        raise PriceError(f'в прайсе Billing API нет строки {name}')
+    first, last = min(prices), max(prices)  # вход и выход, если Яндекс считает их отдельно
+    value = (first + last) / 2
+    if not 0.01 <= value <= 50:
+        raise PriceError(f'странная цена {value} ₽ в прайсе Billing API')
+    return value, (f'прайс Яндекс Облака (Billing API), {name}: {ru(first)} ₽'
+                   f'{"" if first == last else f" – {ru(last)} ₽"} за 1000 токенов')
+
+
 async def yandex(http) -> tuple[float, str]:
     if os.getenv('VOICE_LLM', 'cvc').strip().lower() != 'yandex':
         raise PriceError('робот сейчас отвечает не через YandexGPT')
     name = yandex_name(os.getenv('VOICE_MODEL', 'yandexgpt-lite/latest'))
-    return yandex_price((await yandex_page(http)).text, name)
+    try:
+        return yandex_sku_rate(await yandex_skus(http), name)
+    except (PriceError, httpx.HTTPError) as e:
+        api = str(e) if isinstance(e, PriceError) else f'Billing API не ответил ({type(e).__name__})'
+    try:  # запасной путь: страница прайса, если Яндекс её покажет без капчи
+        return yandex_price((await yandex_page(http)).text, name)
+    except (PriceError, httpx.HTTPError):
+        raise PriceError(f'{api}; страница прайса Яндекса недоступна серверу (проверка «вы не робот»)') from None
 
 
 async def mango_balance_probe(pool) -> str:
@@ -280,6 +369,12 @@ async def probe(pool, http=None) -> list[str]:
             r = await http.get(ELEVEN_API + '/user/subscription', headers={'xi-api-key': key})
             detail = r.json().get('detail') if r.headers.get('content-type', '').startswith('application/json') else None
             out.append(f'elevenlabs: subscription answered {r.status_code} {json.dumps(detail, ensure_ascii=False)[:300] if detail else ""}')
+        try:
+            gpt = [k for k in await yandex_skus(http) if 'gpt' in f"{k.get('name', '')} {k.get('description', '')}".lower()]
+            out.append(f'yandex billing: {len(gpt)} gpt skus')
+            out += [f"  {k.get('name')} | {k.get('pricingUnit')} | {sku_price(k)} | {str(k.get('description', ''))[:80]}" for k in gpt[:25]]
+        except Exception as e:  # noqa: BLE001 — это только отчёт
+            out.append(f'yandex billing: {e!r}'[:300])
         try:
             r = await yandex_page(http)
             text = page_text(r.text)

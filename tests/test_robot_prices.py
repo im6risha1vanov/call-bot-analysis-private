@@ -22,6 +22,18 @@ YANDEX_PAGE = """<html><head><title>Правила тарификации для
 
 SUBSCRIPTION = {'tier': 'creator', 'character_limit': 100000, 'currency': 'usd', 'billing_period': 'monthly_period',
                 'character_refresh_period': 'monthly_period', 'next_invoice': {'amount_due_cents': 2200}}
+def sku(name, price, unit='1K tokens', when='2025-01-01T00:00:00Z', desc=''):
+    return {'name': name, 'description': desc, 'pricingUnit': unit,
+            'pricingVersions': [{'effectiveTime': when, 'pricingExpressions': [{'rates': [{'startPricingQuantity': '0', 'unitPrice': str(price)}]}]}]}
+
+
+SKUS = [sku('YandexGPT Pro 5.1. Генерация', 0.8), sku('YandexGPT Pro 5.1. Асинхронный режим', 0.41),
+        sku('YandexGPT Pro 5. Генерация', 1.2), sku('YandexGPT Lite, вход', 0.0002, unit='token'), sku('YandexGPT Lite, выход', 0.4),
+        sku('Compute vCPU', 1.1, unit='core*hour'),
+        {**sku('YandexGPT Pro 5.1. Генерация', 0.8), 'pricingVersions': [  # новая цена с будущего месяца ещё не действует
+            {'effectiveTime': '2025-01-01T00:00:00Z', 'pricingExpressions': [{'rates': [{'startPricingQuantity': '0', 'unitPrice': '0.8'}]}]},
+            {'effectiveTime': '2099-01-01T00:00:00Z', 'pricingExpressions': [{'rates': [{'startPricingQuantity': '0', 'unitPrice': '9'}]}]}]}]
+
 MODELS = [{'model_id': 'eleven_flash_v2_5', 'model_rates': {'character_cost_multiplier': 0.5, 'cost_discount_multiplier': 1.0}},
           {'model_id': 'eleven_v3', 'model_rates': {'character_cost_multiplier': 1.0}}]
 
@@ -73,6 +85,15 @@ class ParseTest(unittest.TestCase):
         self.assertAlmostEqual(value, 17.6)
         with self.assertRaises(rp.PriceError):
             rp.eleven_rate(dict(SUBSCRIPTION, next_invoice=None), MODELS, 'eleven_v3', 80)
+
+    def test_yandex_billing(self):
+        self.assertEqual(rp.yandex_sku_rate(SKUS, 'YandexGPT Pro 5.1')[0], 0.8)  # не асинхронные 0,41 и не будущие 9
+        self.assertEqual(rp.yandex_sku_rate(SKUS, 'YandexGPT Pro 5')[0], 1.2)
+        value, note = rp.yandex_sku_rate(SKUS, 'YandexGPT Lite')
+        self.assertAlmostEqual(value, 0.3)  # 0,0002 за токен = 0,2 за 1000; выход 0,4
+        self.assertIn('0,2 ₽ – 0,4 ₽', note)
+        with self.assertRaises(rp.PriceError):
+            rp.yandex_sku_rate(SKUS[-2:-1], 'YandexGPT Pro 5.1')
 
     def test_yandex(self):
         self.assertEqual(rp.yandex_name('gpt://b1g/yandexgpt-5.1/latest'), 'YandexGPT Pro 5.1')
@@ -158,8 +179,10 @@ class RefreshTest(DBCase):
         def answer(request):
             if 'elevenlabs' in request.url.host:
                 return httpx.Response(401, json={'detail': {'status': 'missing_permissions', 'message': 'user_read'}})
+            if 'billing' in request.url.host:
+                return httpx.Response(200, json={'skus': SKUS})
             return httpx.Response(200, text=YANDEX_PAGE)
-        with patch.dict(os.environ, {'ELEVENLABS_API_KEY': 'k', 'VOICE_MODEL': 'yandexgpt-5.1/latest'}), \
+        with patch.dict(os.environ, {'ELEVENLABS_API_KEY': 'k', 'VOICE_MODEL': 'yandexgpt-5.1/latest', 'YANDEX_TTS_API_KEY': 'y'}), \
                 patch('mango_client.call', AsyncMock(return_value={'result': 1000, 'balance': 512.3})):
             lines = await rp.probe(self.pool, httpx.AsyncClient(transport=httpx.MockTransport(answer)))
         text = '\n'.join(lines)
@@ -168,6 +191,35 @@ class RefreshTest(DBCase):
         self.assertIn('subscription answered 401', text)
         self.assertIn('mango balance: 512,30 ₽', text)
         self.assertIn('yandexgpt x', text)
+        self.assertIn('yandex billing: 6 gpt skus', text)
+        self.assertIn('YandexGPT Pro 5.1. Генерация | 1K tokens | 0.8 |', text)
+
+    async def test_yandex_billing_then_page(self):
+        import httpx
+        env = {'VOICE_LLM': 'yandex', 'VOICE_MODEL': 'yandexgpt-5.1/latest', 'YANDEX_GPT_API_KEY': 'y'}
+        seen = []
+
+        def billing_ok(request):
+            seen.append(request.headers.get('authorization'))
+            return httpx.Response(200, json={'skus': SKUS})
+        with patch.dict(os.environ, env):
+            async with httpx.AsyncClient(transport=httpx.MockTransport(billing_ok)) as http:
+                self.assertEqual((await rp.yandex(http))[0], 0.8)
+        self.assertEqual(seen, ['Api-Key y'])
+
+        def captcha(request):
+            if 'billing' in request.url.host:
+                return httpx.Response(403, json={'message': 'Permission denied'})
+            return httpx.Response(200, text='<title>Верификация</title>')
+        with patch.dict(os.environ, env):
+            async with httpx.AsyncClient(transport=httpx.MockTransport(captcha)) as http:
+                with self.assertRaisesRegex(rp.PriceError, r'не пускает к прайсу Billing API \(код 403\); страница прайса'):
+                    await rp.yandex(http)
+
+            def page_ok(request):
+                return httpx.Response(401) if 'billing' in request.url.host else httpx.Response(200, text=YANDEX_PAGE)
+            async with httpx.AsyncClient(transport=httpx.MockTransport(page_ok)) as http:
+                self.assertEqual((await rp.yandex(http))[0], 0.8)
 
     async def test_yandex_only_when_robot_uses_it(self):
         with patch.dict(os.environ, {'VOICE_LLM': 'cvc'}):
