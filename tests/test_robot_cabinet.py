@@ -188,10 +188,15 @@ class CabinetTests(DBCase):
         r = await self.http.get('/api/robot/cab/recording/a2')
         self.assertEqual(r.status, 200)
 
-        # аналитика и цены: директор видит себестоимость
-        r = await self.http.post('/api/robot/cab/options', json={'prices': {'mango_min': '1,5', 'eleven_1k_chars': 10, 'llm_1k_tokens': 1}},
-                                 headers=H)
-        self.assertEqual((await r.json())['prices']['multiplier'], 3.0)
+        # аналитика и цены: себестоимость считает CRM, директор меняет только коэффициент
+        await robot_store.set_option(self.pool, 'prices_auto', {'mango_min': {'value': 1.5}, 'eleven_1k_chars': {'value': 10},
+                                                                'llm_1k_tokens': {'value': 1}})
+        r = await self.http.post('/api/robot/cab/options', json={'prices': {'mango_min': 99, 'multiplier': '2,5'}}, headers=H)
+        self.assertEqual((await r.json())['prices'], {'mango_min': 1.5, 'eleven_1k_chars': 10.0, 'llm_1k_tokens': 1.0, 'multiplier': 2.5})
+        r = await self.http.post('/api/robot/cab/options', json={'prices': {'multiplier': 0}}, headers=H)
+        self.assertEqual(r.status, 400)
+        st = await (await self.http.get('/api/robot/cab')).json()
+        self.assertEqual(st['options']['auto']['mango_min']['value'], 1.5)
         a = await (await self.http.get('/api/robot/cab/analytics')).json()
         self.assertEqual((a['total'], a['reached'], a['leads'], a['dial_rate'], a['conversion']), (3, 2, 1, 66.7, 33.3))
         self.assertEqual(a['cost'], 26.0)  # 2 мин × 1,5 + 2000 симв. × 10/1000 + 3000 ток. × 1/1000
@@ -205,7 +210,8 @@ class CabinetTests(DBCase):
         self.assertFalse(st['enabled'])
         self.assertEqual((await self.http.get('/api/robot/cab/calls')).status, 403)
         await robot_store.set_option(self.pool, 'clients', ['Кухни'])
-        await robot_store.set_option(self.pool, 'prices', {'mango_min': 1, 'multiplier': 3})
+        await robot_store.set_option(self.pool, 'prices_auto', {'mango_min': {'value': 1}})
+        await robot_store.set_option(self.pool, 'prices', {'multiplier': 3})
         self.call_line(call_id='c1', phone='79990000001', outcome='interested', duration_s=60, owner='Кухни')
         self.call_line(call_id='d1', phone='79990000002', outcome='interested', duration_s=60)
         await robot_runner.ingest(self.pool)

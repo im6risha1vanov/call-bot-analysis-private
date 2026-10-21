@@ -23,7 +23,7 @@ from aiohttp import web  # noqa: E402
 import mango_client  # noqa: E402
 from tools import Forbidden, is_privileged  # noqa: E402
 from . import ask as asking, auth, cabinet, contracts, deals, journal, overview, people, recording, reviews, sources, staff, store, training  # noqa: E402
-from . import prompts as prompt_mode, robot, robot_api, robot_runner, robot_store  # noqa: E402
+from . import prompts as prompt_mode, robot, robot_api, robot_prices, robot_runner, robot_store  # noqa: E402
 from review import store as review_store  # noqa: E402
 from .dial import dial  # noqa: E402
 
@@ -874,10 +874,11 @@ async def make_app() -> web.Application:
         await mango_client.close()
     app.on_cleanup.append(close)
 
-    async def robot_cabinet(_app):  # кампании робота по расписанию и перенос итогов его звонков
-        task = asyncio.create_task(robot_runner.loop(pool)) if robot_runner.enabled() else None
+    async def robot_cabinet(_app):  # кампании робота по расписанию, перенос итогов его звонков и себестоимость
+        tasks = [asyncio.create_task(robot_runner.loop(pool))] if robot_runner.enabled() else []
+        tasks.append(asyncio.create_task(robot_prices.loop(pool)))
         yield
-        if task:
+        for task in tasks:
             task.cancel()
     app.cleanup_ctx.append(robot_cabinet)
     return app
