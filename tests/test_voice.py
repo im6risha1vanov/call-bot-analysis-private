@@ -482,6 +482,50 @@ class CasualTextTest(unittest.TestCase):
         speech.settings_override.reset(token)
         self.assertEqual(speech.casual_text("Так…"), "Так…")
 
+    def test_no_word_repeat_stutter(self):
+        # на звонке 21.10 «Угу, поняла. Специалист…» прозвучало как «поняла, поняла, специалист, поняла…»
+        token = speech.settings_override.set({"casual": 1})
+        try:
+            for phrase in ["Угу, поняла. Специалист бесплатно сделает замер и проект, расчёт стоимости сразу по проекту.",
+                           "Ага, поняла. В каком городе или районе будет стоять кухня?",
+                           "Так. На какую сумму ориентируетесь, примерно, в рублях?"]:
+                said = speech.casual_text(phrase).replace("Ну, ", "").replace("Так, ", "").replace("э-э, ", "")
+                words = [w.strip(",.?…").lower() for w in said.split()]
+                self.assertFalse(any(a == b for a, b in zip(words, words[1:])), said)
+                self.assertNotIn("поняла. поняла", said.lower())
+        finally:
+            speech.settings_override.reset(token)
+
+    def test_plain_questions(self):
+        self.assertEqual(speech.plain_questions("Хорошо. Скажите, пожалуйста, на какую сумму ориентируетесь?"),
+                         "Хорошо. На какую сумму ориентируетесь?")
+        self.assertEqual(speech.plain_questions("Подскажите, вопрос ещё актуален?"), "Вопрос ещё актуален?")
+        self.assertEqual(speech.plain_questions("Скажите, какой материал фасадов вас интересует: плёнка ПВХ, эмаль или пластик?"),
+                         "Какой материал фасадов вас интересует: плёнка ПВХ, эмаль или пластик?")
+        self.assertEqual(speech.plain_questions("Скажите номер, я запишу."), "Скажите номер, я запишу.")
+
+
+class TempoTest(unittest.TestCase):
+    def test_question_slower_statement_faster(self):
+        token = speech.settings_override.set({"tempo_vary": 0.1})
+        try:
+            self.assertEqual(speech.phrase_speed("Как к вам обращаться?", 1.2), 1.08)
+            self.assertEqual(speech.phrase_speed("Специалист бесплатно сделает замер и проект.", 1.0), 1.05)
+            self.assertEqual(speech.phrase_speed("Специалист бесплатно сделает замер и проект.", 1.2), 1.2)
+            self.assertEqual(speech.phrase_speed("Угу.", 1.0), 1.0)
+            self.assertEqual(speech.split_for_tempo("Угу, поняла. Специалист бесплатно сделает замер и проект. Какой материал фасадов?"),
+                             ["Угу, поняла. Специалист бесплатно сделает замер и проект.", "Какой материал фасадов?"])
+            self.assertEqual(speech.split_for_tempo("Поняла, Краснодар. Какой материал?"), ["Поняла, Краснодар. Какой материал?"])
+        finally:
+            speech.settings_override.reset(token)
+        token = speech.settings_override.set({"tempo_vary": 0})
+        try:
+            self.assertEqual(speech.phrase_speed("Как к вам обращаться?", 1.2), 1.2)
+            self.assertEqual(speech.split_for_tempo("Специалист бесплатно сделает замер и проект. Какой материал?"),
+                             ["Специалист бесплатно сделает замер и проект. Какой материал?"])
+        finally:
+            speech.settings_override.reset(token)
+
 
 class SynthesisTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):

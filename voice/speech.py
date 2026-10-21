@@ -307,7 +307,7 @@ settings_override: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
 SETTING_KEYS = {"voice_id": str, "model": str, "stability": float, "similarity": float, "style": float,
                 "speed": float, "speaker_boost": bool, "calm": bool, "tail_ms": int, "filler_after_ms": int,
                 "fillers": bool, "casual": float, "pause_ms": int, "fewer_commas": bool,
-                "inner_pause_ms": int, "whole_reply": bool, "bg_noise": float}
+                "inner_pause_ms": int, "whole_reply": bool, "bg_noise": float, "tempo_vary": float}
 
 
 def clean_settings(data: dict) -> dict:
@@ -324,7 +324,7 @@ def clean_settings(data: dict) -> dict:
         out[key] = value
     for key, low, high in (("casual", 0, 1), ("stability", 0, 1), ("similarity", 0, 1), ("style", 0, 1), ("speed", 0.7, 1.2),
                            ("tail_ms", 300, 2000), ("filler_after_ms", 100, 3000), ("pause_ms", 0, 600), ("inner_pause_ms", 40, 600),
-                           ("bg_noise", 0, 1)):
+                           ("bg_noise", 0, 1), ("tempo_vary", 0, 0.3)):
         if key in out:
             out[key] = min(max(out[key], low), high)
     if "voice_id" in out and not re.fullmatch(r"[A-Za-z0-9]{10,40}", out["voice_id"]):
@@ -376,12 +376,12 @@ def eleven_params() -> tuple[str, dict]:
     }
 
 
-def effective_voice(voice: Voice) -> Voice:
-    """Голос ElevenLabs и темп со страницы настроек. Голоса Яндекса (автотест) не трогаем."""
+def effective_voice(voice: Voice, text: str = "") -> Voice:
+    """Голос ElevenLabs и темп со страницы настроек, темп с поправкой на фразу. Голоса Яндекса (автотест) не трогаем."""
     if not voice.name.startswith("11:"):
         return voice
     voice_id = setting("voice_id", "")
-    return Voice(f"11:{voice_id}" if voice_id else voice.name, voice.role, setting("speed", voice.speed))
+    return Voice(f"11:{voice_id}" if voice_id else voice.name, voice.role, phrase_speed(text, setting("speed", voice.speed)))
 
 
 async def _eleven_direct_tts(text: str, voice: Voice, on_pcm=None) -> bytes:
@@ -456,7 +456,7 @@ _REDUCTIONS = [
     (r"\b([Нн])ичего страшного\b", r"\1ичё страшного"),
     (r"\bсейчас\b", "щас"),
 ]
-_HESITATIONS = ["Ну, ", "Так, ", "Так, вот, ", "Ну вот, "]
+_HESITATIONS = ["Ну, ", "Так, "]  # «Ну вот, скажите…» после «Так, так…» звучало заученно
 
 
 def casual_text(text: str) -> str:
@@ -472,18 +472,49 @@ def casual_text(text: str) -> str:
     words = text.split()
     if len(words) < 6 or "голосовой помощник" in text or rng.random() > level * 0.5:  # запинка не в каждой фразе и не в коротких
         return text
-    # повтор слова («подскажите, подскажите…») на звонке звучал как сбой: оставляем только «ну» и «э-э»
+    # повтор слова («поняла… поняла, специалист…») на звонке звучал как заикание: только «ну», «так» и «э-э»
     kind = rng.choice(["prefix", "prefix", "uh"])
     if kind == "prefix" and not re.match(r"(Ну|Так|Угу|Ага)\b", text):
         return rng.choice(_HESITATIONS) + text[0].lower() + text[1:]
     if kind == "uh" and ", " in text:
         head, tail = text.split(", ", 1)
         return f"{head}, э-э, {tail}"
-    # повтор слова, как будто подбирает слово: «в каком… в каком городе»
-    for i in range(1, len(words) - 2):
-        if len(words[i]) >= 4 and words[i].isalpha():
-            return " ".join(words[:i] + [words[i - 1] + " " + words[i] + "…"] + words[i - 1:])
     return text
+
+
+# «Скажите, пожалуйста, …?» три раза за минуту выдаёт робота: живой менеджер спрашивает сразу
+_ASK_LEAD = re.compile(r"(^|[.?!…]\s+)(?:[Пп]од)?[Сс]кажите(?:,? пожалуйста)?,\s+([^.?!…]*\?)")
+
+
+def plain_questions(text: str) -> str:
+    return _ASK_LEAD.sub(lambda m: m.group(1) + m.group(2)[:1].upper() + m.group(2)[1:], text)
+
+
+# Темп. Ольга заученное проговаривает быстро, а главный вопрос задаёт медленнее; робот всё читал одним темпом.
+# tempo_vary 0.1: вопрос на 10 % медленнее темпа со страницы, длинное утверждение на 5 % быстрее (не выше 1,2).
+TEMPO_VARY = float(os.getenv("VOICE_TEMPO_VARY", "0.1"))
+
+
+def phrase_speed(text: str, base: float) -> float:
+    vary = setting("tempo_vary", TEMPO_VARY)
+    if vary <= 0 or not text.strip():
+        return base
+    if text.rstrip(" .…").endswith("?"):
+        return round(max(base * (1 - vary), 0.7), 2)
+    if len(text.split()) >= 5:
+        return round(min(base * (1 + vary / 2), 1.2), 2)
+    return base
+
+
+def split_for_tempo(text: str) -> list[str]:
+    """Реплика целиком, но вопрос в конце отдельным куском: его синтезатор читает медленнее."""
+    if setting("tempo_vary", TEMPO_VARY) <= 0 or not text.rstrip().endswith("?"):
+        return [text]
+    parts = re.split(r"(?<=[.!…])\s+(?=[А-ЯЁA-Z])", text.strip())
+    head = " ".join(parts[:-1])
+    if len(parts) < 2 or len(head.split()) < 4:
+        return [text]
+    return [head, parts[-1]]
 
 
 # Паузы. Ответ озвучивается по предложениям, и у каждого куска синтезатор оставляет тишину в начале и в конце:
@@ -582,7 +613,7 @@ async def synthesize_pcm(text: str, voice: Voice) -> bytes:
 
 
 def spoken_text(text: str) -> str:
-    return fewer_pauses(casual_text(calm_text(text)))
+    return fewer_pauses(casual_text(plain_questions(calm_text(text))))
 
 
 # Потоковый синтез ElevenLabs: первые звуки фразы приходят через 0,3–0,6 с вместо 1,3–2,2 с за всю фразу
@@ -592,11 +623,11 @@ ELEVEN_STREAM = os.getenv("VOICE_ELEVEN_STREAM", "1") != "0"
 async def stream_pcm(text: str, voice: Voice, on_audio) -> bytes:
     """Как synthesize_pcm, но отдаёт звук в on_audio кусками по мере синтеза. Возвращает весь звук."""
     text = spoken_text(text)
-    voice = effective_voice(voice)
+    asked, voice = voice, effective_voice(voice, text)
     shaper = PauseShaper(TTS_RATE, setting("inner_pause_ms", INNER_PAUSE_MS), setting("pause_ms", PAUSE_MS))
     path = _cache_path(text, voice)
     if path is not None and path.exists() or not (ELEVEN_STREAM and voice.name.startswith("11:")):
-        pcm = await _synthesize_cached(text, voice)
+        pcm = await _synthesize_cached(text, asked)
         out = shape_pauses(pcm, TTS_RATE, setting("inner_pause_ms", INNER_PAUSE_MS), setting("pause_ms", PAUSE_MS))
         await on_audio(out)
         return out
@@ -627,7 +658,7 @@ async def stream_pcm(text: str, voice: Voice, on_audio) -> bytes:
 
 
 async def _synthesize_cached(text: str, voice: Voice) -> bytes:
-    voice = effective_voice(voice)
+    voice = effective_voice(voice, text)
     path = _cache_path(text, voice)
     if path is not None and path.exists():
         return path.read_bytes()
