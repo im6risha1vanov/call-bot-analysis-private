@@ -22,16 +22,13 @@ from aiohttp import web  # noqa: E402
 
 import mango_client  # noqa: E402
 from tools import Forbidden, is_privileged  # noqa: E402
-from . import ask as asking, auth, cabinet, contracts, deals, gsheets, journal, people, recording, reviews, sources, staff, store, training  # noqa: E402
+from . import ask as asking, auth, cabinet, contracts, deals, journal, overview, people, recording, reviews, sources, staff, store, training  # noqa: E402
 from . import prompts as prompt_mode, robot, robot_api, robot_runner  # noqa: E402
 from review import store as review_store  # noqa: E402
 from .dial import dial  # noqa: E402
 
 log = logging.getLogger('crm')
 STATIC = Path(__file__).resolve().parent / 'static'
-DIRECTOR = Path(__file__).resolve().parent / 'director'
-# Снимок разобранных звонков до 07.10 с номерами клиентов: лежит только на сервере, не в git.
-DIRECTOR_DATA = Path(os.getenv('CRM_DIRECTOR_DATA', str(ROOT / 'crm_private' / 'team-data.js')))
 COOKIE = 'crm_session'
 TEST_COOKIE = 'crm_test'
 POOL = web.AppKey('pool', asyncpg.Pool)
@@ -43,14 +40,10 @@ HEADERS = {
     'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'no-referrer',
 }
-# Страница директора перенесена из claude.ai как есть: встроенные скрипты и шрифты Google.
-DIRECTOR_CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' "
-                "https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; "
-                "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 TEST_READONLY = 'Тестовый вход только для просмотра: звонки и отметки работают во входе самого менеджера.'
 VIEW_ONLY = 'Это вход только для просмотра. Менять, звонить и спрашивать можно по личной ссылке.'
 # Запросы, которые ничего не меняют и разрешены входу для просмотра; остальные POST ему закрыты.
-VIEW_ONLY_POSTS = {'/api/logout', '/api/test/login', '/api/gs'}
+VIEW_ONLY_POSTS = {'/api/logout', '/api/test/login'}
 
 
 def fail(status: int, text: str) -> web.Response:
@@ -83,8 +76,6 @@ async def guard(request: web.Request, handler):
         log.exception('ошибка CRM: %s %s', request.method, request.path)
         response = fail(500, 'Что-то пошло не так. Попробуйте ещё раз.')
     response.headers.update(HEADERS)
-    if request.path.startswith('/director'):
-        response.headers['Content-Security-Policy'] = DIRECTOR_CSP
     if request.path.startswith('/api/'):
         response.headers['Cache-Control'] = 'no-store'
     return response
@@ -161,8 +152,6 @@ async def index(request):
     who = await auth.viewer_for(request.app[POOL], request.cookies.get(COOKIE))
     if who is None and auth.public_on():
         raise web.HTTPFound('/t/' + auth.PUBLIC_KEY)  # открытый сайт: сразу выбор входа
-    if who is not None and who.role == 'director' and 'work' not in request.query:
-        raise web.HTTPFound('/director')
     return web.FileResponse(STATIC / 'index.html')
 
 
@@ -184,7 +173,7 @@ async def personal_page(request):
             '<h1>Ссылка не действует</h1><p>Её отозвали или в ней ошибка. Попросите у руководителя новую.</p></body>'))
     session, role = got
     await auth.logout(request.app[POOL], request.cookies.get(COOKIE))
-    response = web.HTTPFound('/director' if role == 'director' else '/')
+    response = web.HTTPFound('/')
     response.set_cookie(COOKIE, session, max_age=int(auth.PERSONAL_TTL.total_seconds()), httponly=True,
                         secure=SECURE_COOKIE, samesite='Lax', path='/')
     raise response
@@ -205,22 +194,10 @@ async def logout_page(request):
     raise response
 
 
-async def director_page(request):
-    await director(request)
-    return web.FileResponse(DIRECTOR / 'index.html')
-
-
-async def director_file(request):
-    await director(request)
-    name = request.match_info['name']
-    if name == 'data.js':
-        if DIRECTOR_DATA.is_file():
-            return web.FileResponse(DIRECTOR_DATA, headers={'Content-Type': 'text/javascript; charset=utf-8'})
-        # Без снимка страница работает на живых данных из таблиц, только без истории до 07.10.
-        return web.FileResponse(DIRECTOR / 'empty-data.js', headers={'Content-Type': 'text/javascript; charset=utf-8'})
-    if name not in ('shim.js',):
-        raise web.HTTPNotFound()
-    return web.FileResponse(DIRECTOR / name)
+async def old_director(request):
+    # Отдельной страницы директора больше нет: всё в одной CRM. Старые закладки ведут на главную,
+    # а #раздел из ссылки браузер переносит сам, CRM откроет нужный раздел по старому имени.
+    raise web.HTTPFound('/')
 
 
 # ---- API ----
@@ -280,22 +257,10 @@ async def api_test_login(request):
         if client_key not in names:
             raise ValueError('Такого клиента нет.')
     session = await auth.test_login(request.app[POOL], role, data.get('ext'), client_key)
-    response = web.json_response({'ok': True, 'go': '/director' if role == 'director' else '/'})
+    response = web.json_response({'ok': True, 'go': '/'})
     response.set_cookie(COOKIE, session, max_age=int(auth.TEST_TTL.total_seconds()), httponly=True,
                         secure=SECURE_COOKIE, samesite='Lax', path='/')
     return response
-
-
-async def api_gs(request):
-    await director(request)
-    data = await body(request)
-    try:
-        rows = await gsheets.values(str(data.get('spreadsheetId') or ''), str(data.get('range') or ''))
-    except PermissionError as exc:
-        raise Forbidden(str(exc))
-    except LookupError as exc:
-        raise ValueError(str(exc))
-    return web.json_response({'values': rows})
 
 
 def doc_path(value) -> str:
@@ -358,6 +323,14 @@ async def api_cabinet(request):
         raise Forbidden('Кабинет клиента недоступен.')
     try:
         return web.json_response(await cabinet.cabinet(name))
+    except LookupError as exc:
+        raise ValueError(str(exc))
+
+
+async def api_callcenter(request):
+    await director(request)
+    try:
+        return web.json_response(await cabinet.callcenter())
     except LookupError as exc:
         raise ValueError(str(exc))
 
@@ -776,6 +749,32 @@ async def api_stats(request):
     return web.json_response(await store.stats(request.app[POOL], who.client_id, ext, days))
 
 
+def period_arg(request) -> str:
+    return request.query.get('period') or '7'
+
+
+async def api_summary(request):
+    who = await actor(request)
+    return web.json_response(await overview.summary(request.app[POOL], who, period_arg(request), request.query.get('ext') or None))
+
+
+async def api_journal(request):
+    who = await actor(request)
+    q = request.query
+    try:
+        offset = int(q.get('offset') or 0)
+    except ValueError:
+        raise ValueError('Неверное смещение.')
+    return web.json_response(await overview.journal(
+        request.app[POOL], who, period_arg(request), q.get('ext') or None, q.get('result') or '', q.get('kind') or '',
+        (q.get('q') or '')[:80], offset))
+
+
+async def api_callbacks(request):
+    who = await actor(request)
+    return web.json_response(await overview.callbacks(request.app[POOL], who, request.query.get('ext') or None))
+
+
 def build(pool) -> web.Application:
     app = web.Application(middlewares=[guard], client_max_size=512 * 1024)
     app[POOL] = pool
@@ -784,17 +783,17 @@ def build(pool) -> web.Application:
     app.router.add_get('/p/{token}', personal_page)
     app.router.add_get('/test-exit', test_exit)
     app.router.add_get('/logout', logout_page)
-    app.router.add_get('/director', director_page)
-    app.router.add_get('/director/{name}', director_file)
+    app.router.add_get('/director', old_director)
+    app.router.add_get('/director/{name}', old_director)
     app.router.add_static('/static/', STATIC, show_index=False)
     app.router.add_post('/api/logout', api_logout)
     app.router.add_get('/api/me', api_me)
     app.router.add_get('/api/test/options', api_test_options)
     app.router.add_post('/api/test/login', api_test_login)
-    app.router.add_post('/api/gs', api_gs)
     app.router.add_get('/api/docs', api_docs)
     app.router.add_post('/api/docs', api_docs_write)
     app.router.add_get('/api/cabinet', api_cabinet)
+    app.router.add_get('/api/callcenter', api_callcenter)
     app.router.add_get('/api/recording/{id}', api_recording)
     app.router.add_get('/api/review/{id}', api_review)
     app.router.add_get('/api/reports', api_reports)
@@ -839,6 +838,9 @@ def build(pool) -> web.Application:
     app.router.add_post('/api/prompts/version/{id}/use', api_prompt_use)
     app.router.add_get('/api/prompts/{kind}', api_prompt)
     app.router.add_post('/api/prompts/{kind}/{action}', api_prompt_action)
+    app.router.add_get('/api/summary', api_summary)
+    app.router.add_get('/api/journal', api_journal)
+    app.router.add_get('/api/callbacks', api_callbacks)
     app.router.add_get('/api/queue', api_queue)
     app.router.add_get('/api/tasks', api_tasks)
     app.router.add_post('/api/tasks/{id}', api_task_change)

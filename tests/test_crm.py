@@ -17,7 +17,7 @@ os.environ.setdefault('CVC_API_KEY', 'test')
 os.environ.setdefault('ANTHROPIC_API_KEY', 'test')
 os.environ.setdefault('ENCRYPTION_KEY', 'q7m8b4gN0bO2PZqvG6b0yC3rA1D5pYc8tW2XkL9uQeE=')
 
-from crm import auth, cabinet, dial, gsheets, journal, recording, staff, store
+from crm import auth, cabinet, dial, gsheets, journal, overview, recording, staff, store
 from review import callbacks, engine
 from review import store as review_store
 from tests.test_review import CALLBACK, LOST, TRANSCRIPT, WON
@@ -95,6 +95,21 @@ class PureTests(unittest.TestCase):
         day11 = next(d for d in c['days'] if d['day'] == '2026-10-11')
         self.assertEqual((day11['calls'], day11['first'], day11['repeat'], day11['reached'], day11['interested']),
                          (2, 1, 1, 1, 1))
+        self.assertEqual((c['waiting'], c['reached_first']), (1, 1))
+        self.assertEqual(c['sources'][0], {'name': 'сайт-а', 'total': 2, 'reached': 1, 'interested': 1})
+
+
+class CallcenterTests(unittest.IsolatedAsyncioTestCase):
+    async def test_all_clients_in_one_answer(self):
+        with patch.dict(os.environ, {'KITCHEN_SHEET_ID': 'leads'}), patch.object(gsheets, 'values', fake_values):
+            cc = await cabinet.callcenter()
+        self.assertEqual([c['name'] for c in cc['clients']], ['Кухни', 'Окна'])
+        self.assertEqual({k: cc['clients'][0][k] for k in ('leads', 'called', 'reached', 'interested', 'callback', 'waiting', 'sum')},
+                         {'leads': 4, 'called': 3, 'reached': 2, 'interested': 1, 'callback': 1, 'waiting': 1, 'sum': 190})
+        self.assertEqual(cc['clients'][1]['leads'], 0)  # листа «Окна» нет: клиент остаётся с нулями
+        self.assertEqual((cc['total']['called'], cc['total']['reached'], cc['total']['reached_first']), (3, 2, 1))
+        self.assertEqual(cc['days'][0], {'day': '2026-10-10', 'first': 2, 'repeat': 0, 'reached': 1, 'interested': 0})
+        self.assertEqual([(x['phone'], x['client']) for x in cc['callbacks']], [('79990000002', 'Кухни')])
 
 
 class DBCase(unittest.IsolatedAsyncioTestCase):
@@ -284,6 +299,102 @@ class StoreTests(DBCase):
 
 
 @unittest.skipUnless(DSN, 'METHODOLOGY_TEST_DATABASE_URL не задан')
+class OverviewTests(DBCase):
+    """Сводка, журнал и перезвоны новой CRM: всё из базы, дозвон одинаковый везде."""
+    NOW = datetime(2026, 10, 21, 12, 0, tzinfo=MSK)
+
+    async def call(self, ext, at, seconds, number=None, direction=2, review=None):
+        call_id = await self.pool.fetchval(
+            "INSERT INTO calls(client_id,extension,direction,duration_seconds,call_started_at,client_number) "
+            "VALUES(1,$1,$2,$3,$4,$5) RETURNING id", ext, direction, seconds, at, number)
+        if review:
+            kind, success, chance, category, data = review
+            await self.pool.execute(
+                "INSERT INTO call_reviews(call_id,client_id,extension,prompt_version,kind,success,chance,category,data) "
+                "VALUES($1,1,$2,'t',$3,$4,$5,$6,$7::jsonb)", call_id, ext, kind, success, chance, category,
+                json.dumps(data, ensure_ascii=False))
+        return call_id
+
+    async def seed(self):
+        at = lambda d, h, m=0: datetime(2026, 10, d, h, m, tzinfo=MSK)  # noqa: E731
+        await self.call('101', at(21, 10), 0, '79990000001')
+        await self.call('101', at(21, 10, 30), 60, '79990000002', review=(
+            'cold_first', True, 'none', None, {'outcome': ['meeting'], 'client': {'company': 'ООО Ромашка'},
+                                               'rop_line': 'Назначил встречу на пятницу'}))
+        await self.call('101', at(20, 11), 45, '79990000003', review=(
+            'cold_first', False, 'hot', 'no_close', {'outcome': [], 'client': {'company': 'Лето'}}))
+        await self.call('101', at(19, 11), 30, '79990000004', review=('no_conversation', False, 'none', None, {}))
+        await self.call('102', at(18, 15), 20, '79990000005')
+        await self.call('101', at(10, 11), 50, '79990000006')  # прошлая неделя
+        await self.call(None, at(21, 9), 0, '79990000011', direction=1)  # пропущенный на общий номер
+        await self.call('101', at(21, 9, 10), 0, '79990000012', direction=1)
+        await self.call('101', at(21, 9, 30), 40, '79990000012')  # перезвонили, уже не пропущенный
+
+    async def test_summary_counts_and_compares(self):
+        await self.seed()
+        data = await overview.summary(self.pool, HEAD, '7', now=self.NOW)
+        cur = data['cur']
+        self.assertEqual((cur['dials'], cur['live'], cur['talks'], cur['result'], cur['meet'], cur['lost']), (6, 4, 2, 1, 1, 1))
+        self.assertEqual((data['prev']['dials'], data['prev']['live']), (1, 1))
+        first = next(m for m in data['managers'] if m['ext'] == '101')
+        self.assertEqual((first['dials'], first['live'], first['mistake']['key']), (5, 3, 'no_close'))
+        self.assertEqual([m['number'] for m in data['missed']], ['79990000011'])
+        self.assertEqual(len(data['series']), 7)
+        self.assertEqual(data['series'][-1], {'key': '2026-10-21', 'dials': 3, 'result': 1, 'live': 2})
+
+        today = await overview.summary(self.pool, HEAD, 'today', now=self.NOW)
+        self.assertEqual([s['key'] for s in today['series']][:2], ['09', '10'])
+        self.assertEqual(today['cur']['dials'], 3)
+
+        # Менеджер видит только себя, даже если просит чужого.
+        mine = await overview.summary(self.pool, OTHER, '7', ext='101', now=self.NOW)
+        self.assertEqual([m['ext'] for m in mine['managers']], ['102'])
+        self.assertEqual(mine['cur']['dials'], 1)
+        self.assertEqual(mine['missed'], [])
+        with self.assertRaises(Forbidden):
+            await overview.summary(self.pool, HEAD, '7', ext='999', now=self.NOW)
+        with self.assertRaises(ValueError):
+            await overview.summary(self.pool, HEAD, 'year', now=self.NOW)
+
+    async def test_journal_filters_and_pages(self):
+        await self.seed()
+        data = await overview.journal(self.pool, HEAD, '7', now=self.NOW)
+        self.assertEqual(len(data['items']), 8)
+        self.assertFalse(data['more'])
+        won = await overview.journal(self.pool, HEAD, '7', result='result', now=self.NOW)
+        self.assertEqual([(i['company'], i['result'], i['text'], i['line']) for i in won['items']],
+                         [('ООО Ромашка', 'result', 'встреча', 'Назначил встречу на пятницу')])
+        hot = await overview.journal(self.pool, HEAD, '7', result='hot', now=self.NOW)
+        self.assertEqual([i['text'] for i in hot['items']], ['не предложили шаг в конце'])
+        found = await overview.journal(self.pool, HEAD, '7', q='8 999 000-00-03', now=self.NOW)
+        self.assertEqual([i['number'] for i in found['items']], ['79990000003'])
+        self.assertEqual(len((await overview.journal(self.pool, HEAD, '7', q='ромаш', now=self.NOW))['items']), 1)
+        self.assertEqual(len((await overview.journal(self.pool, HEAD, '7', result='no_answer', now=self.NOW))['items']), 3)
+        mine = await overview.journal(self.pool, OTHER, '7', ext='101', now=self.NOW)
+        self.assertEqual([i['ext'] for i in mine['items']], ['102'])
+
+        for i in range(55):
+            await self.call('102', self.NOW - timedelta(minutes=i + 1), 15, f'7999111{i:04d}')
+        page = await overview.journal(self.pool, HEAD, '7', ext='102', now=self.NOW)
+        self.assertEqual((len(page['items']), page['more'], page['offset']), (50, True, 50))
+        rest = await overview.journal(self.pool, HEAD, '7', ext='102', offset=50, now=self.NOW)
+        self.assertEqual((len(rest['items']), rest['more']), (6, False))
+
+    async def test_callbacks_one_line_per_client(self):
+        today = self.today()
+        await self.pool.execute(
+            """INSERT INTO callback_tasks(client_id,extension,client_number,company,kind,due_date,raw,source) VALUES
+               (1,'101','79990000001','Ромашка','callback',$1,'после обеда','review'),
+               (1,'101','79990000001',NULL,'callback',$2,'','crm'),
+               (1,'102','79990000002','Лето','meeting',$2,'','crm')""", today - timedelta(days=1), today + timedelta(days=2))
+        data = await overview.callbacks(self.pool, HEAD)
+        self.assertEqual([(i['number'], i['more'], i['late'], i['manager']) for i in data['items']],
+                         [('79990000001', 1, True, 'Первый'), ('79990000002', 0, False, 'Второй')])
+        mine = await overview.callbacks(self.pool, MANAGER, ext='102')
+        self.assertEqual([i['number'] for i in mine['items']], ['79990000001'])
+
+
+@unittest.skipUnless(DSN, 'METHODOLOGY_TEST_DATABASE_URL не задан')
 class WebTests(DBCase):
     """Через HTTP: вход по ссылке, защита от чужих запросов, звонок."""
 
@@ -375,19 +486,19 @@ class WebTests(DBCase):
             r = await self.http.post('/api/test/login', json={'key': 'nope', 'role': 'director'}, headers={'X-CRM': '1'})
             self.assertEqual(r.status, 404)
 
-            # директор: своя страница, таблицы через сервер, общая база
-            self.assertEqual(await self.enter('director'), '/director')
+            # директор: та же CRM, что у всех; старая страница /director ведёт на главную
+            self.assertEqual(await self.enter('director'), '/')
             me = await (await self.http.get('/api/me')).json()
             self.assertEqual((me['role'], me['test'], me['can_dial']), ('director', True, False))
-            r = await self.http.get('/director')
+            r = await self.http.get('/', allow_redirects=False)
             self.assertEqual(r.status, 200)
-            self.assertIn("'unsafe-inline'", r.headers['Content-Security-Policy'])
-            self.assertEqual((await self.http.get('/director/shim.js')).status, 200)
-            self.assertEqual((await self.http.get('/director/../web.py')).status, 404)
-            r = await self.http.post('/api/gs', json={'spreadsheetId': 'leads', 'range': 'Сводка!A1:F80'}, headers={'X-CRM': '1'})
-            self.assertEqual((await r.json())['values'][1][0], 'Вид звонка')
-            r = await self.http.post('/api/gs', json={'spreadsheetId': 'other', 'range': 'A1'}, headers={'X-CRM': '1'})
-            self.assertEqual(r.status, 403)
+            self.assertNotIn("'unsafe-inline'", r.headers['Content-Security-Policy'])
+            for old in ('/director', '/director/shim.js'):
+                r = await self.http.get(old, allow_redirects=False)
+                self.assertEqual((r.status, r.headers['Location']), (302, '/'))
+            cc = await (await self.http.get('/api/callcenter')).json()
+            self.assertEqual(cc['total']['interested'], 1)
+            self.assertEqual((await self.http.get('/api/summary?period=today')).status, 200)
             clients = await (await self.http.get('/api/cabinet')).json()
             self.assertEqual(len(clients['clients']), 2)
             cab = await (await self.http.get('/api/cabinet?client=Кухни')).json()
@@ -410,8 +521,10 @@ class WebTests(DBCase):
             await store.add_leads(self.pool, 1, '101', '89991112233', 'ГЦК')
             q = await (await self.http.get('/api/queue?ext=101')).json()
             self.assertEqual(q['items'], [])  # чужой добавочный в запросе не действует
-            self.assertEqual((await self.http.get('/director')).status, 403)
+            self.assertEqual((await self.http.get('/api/callcenter')).status, 403)
             self.assertEqual((await self.http.get('/api/cabinet')).status, 403)
+            mine = await (await self.http.get('/api/summary?ext=101')).json()
+            self.assertEqual([m['ext'] for m in mine['managers']], ['102'])  # менеджер видит только себя
             with patch('crm.dial.mango_client.callback', AsyncMock(return_value={'result': 1000})) as cb:
                 r = await self.http.post('/api/dial', json={'number': '89991234567'}, headers={'X-CRM': '1'})
             self.assertEqual(r.status, 403)
@@ -427,10 +540,9 @@ class WebTests(DBCase):
             self.assertEqual((me['role'], me['name']), ('client', 'Кухни'))
             cab = await (await self.http.get('/api/cabinet?client=Окна')).json()
             self.assertEqual((cab['name'], cab['counts']['total']), ('Кухни', 4))  # чужое имя в запросе не действует
-            for path in ('/api/queue', '/api/tasks', '/api/leads', '/api/stats', '/director', '/api/docs?path=a/b'):
+            for path in ('/api/queue', '/api/tasks', '/api/leads', '/api/stats', '/api/summary', '/api/journal',
+                         '/api/callbacks', '/api/callcenter', '/api/docs?path=a/b'):
                 self.assertEqual((await self.http.get(path)).status, 403, path)
-            r = await self.http.post('/api/gs', json={'spreadsheetId': 'leads', 'range': 'Сводка!A1'}, headers={'X-CRM': '1'})
-            self.assertEqual(r.status, 403)
 
     async def test_test_link_off_without_key(self):
         with patch.dict(os.environ, {'CRM_TEST_KEY': ''}):
@@ -452,8 +564,7 @@ class WebTests(DBCase):
             self.assertEqual(r.status, 200)
             self.assertTrue((await (await self.http.get('/api/me')).json())['test'])
             self.assertEqual((await self.http.get('/api/staff')).status, 200)  # смотреть можно всё
-            r = await self.http.post('/api/gs', json={'spreadsheetId': 'leads', 'range': 'Сводка!A1:F80'}, headers=h)
-            self.assertEqual(r.status, 200)
+            self.assertEqual((await self.http.get('/api/callcenter')).status, 200)
             # менять нельзя ничего: ни ссылки, ни сотрудников, ни данные страницы, ни звонки, ни вопросы
             for path, data in [('/api/access', {'role': 'director'}), ('/api/staff', {'role': 'head', 'name': 'X'}),
                                ('/api/staff/unlink', {'person_ext': 'head'}), ('/api/docs', {'path': 'a/b', 'op': 'set', 'data': {}}),
@@ -920,7 +1031,7 @@ class WebTests(DBCase):
         with patch.dict(os.environ, {'PROMPT_EDITORS': '901, 905'}), \
                 patch('crm.telegram.send', AsyncMock(return_value=True)) as send:
             r = await self.http.get('/p/' + token, allow_redirects=False)
-            self.assertEqual(r.headers['Location'], '/director')
+            self.assertEqual(r.headers['Location'], '/')
             me = await (await self.http.get('/api/me')).json()
             self.assertEqual((me['role'], me['name']), ('director', 'Руководитель'))
             o = await (await self.http.get('/api/prompts')).json()
