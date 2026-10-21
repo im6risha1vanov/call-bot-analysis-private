@@ -139,12 +139,15 @@ class RefreshTest(DBCase):
             if 'elevenlabs' in request.url.host:
                 return httpx.Response(401, json={'detail': {'status': 'missing_permissions', 'message': 'user_read'}})
             return httpx.Response(200, text=YANDEX_PAGE)
-        with patch.dict(os.environ, {'ELEVENLABS_API_KEY': 'k', 'VOICE_MODEL': 'yandexgpt-5.1/latest'}):
+        with patch.dict(os.environ, {'ELEVENLABS_API_KEY': 'k', 'VOICE_MODEL': 'yandexgpt-5.1/latest'}), \
+                patch('mango_client.call', AsyncMock(return_value={'result': 1000, 'balance': 512.3})) as mango_call:
             lines = await rp.probe(self.pool, httpx.AsyncClient(transport=httpx.MockTransport(answer)))
         text = '\n'.join(lines)
         self.assertIn('fields: context_calls, context_type, talk_duration, to_number; leg fields: call_end_reason', text)
         self.assertNotIn('79990001122', text)
         self.assertIn('subscription answered 401', text)
+        self.assertIn('mango balance: {"result": 1000, "balance": 512.3}', text)
+        self.assertEqual(mango_call.call_args.args[0], 'account/balance')
         self.assertIn('yandexgpt x', text)
 
     async def test_yandex_only_when_robot_uses_it(self):

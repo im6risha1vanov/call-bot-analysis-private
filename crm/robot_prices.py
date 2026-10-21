@@ -218,6 +218,21 @@ async def yandex(http) -> tuple[float, str]:
     return yandex_price((await yandex_page(http)).text, name)
 
 
+async def mango_balance_probe(pool) -> str:
+    """Отдаёт ли API Mango баланс счёта: только чтение, ничего не меняет."""
+    import mango_client
+    from crypto_util import decrypt
+    client = await pool.fetchrow('SELECT vpbx_api_key_enc, vpbx_api_salt_enc FROM clients '
+                                 'WHERE vpbx_api_key_enc IS NOT NULL ORDER BY id LIMIT 1')
+    if not client:
+        return 'no Mango key in clients'
+    try:
+        data = await mango_client.call('account/balance', decrypt(client['vpbx_api_key_enc']), decrypt(client['vpbx_api_salt_enc']), {})
+        return json.dumps(data, ensure_ascii=False)[:300]
+    except Exception as e:  # noqa: BLE001 — это только отчёт
+        return repr(e)[:300]
+
+
 async def probe(pool, http=None) -> list[str]:
     """Для scripts/crm_setup.sh prices: что на самом деле пришло от источников. Без номеров и ключей."""
     out = []
@@ -228,6 +243,7 @@ async def probe(pool, http=None) -> list[str]:
     keys = sorted({k for raw in raws for k in raw})
     legs = sorted({k for raw in raws for leg in raw.get('context_calls') or [] if isinstance(leg, dict) for k in leg})
     out.append(f'mango: {len(raws)} outgoing calls; fields: {", ".join(keys)}; leg fields: {", ".join(legs)}')
+    out.append('mango balance: ' + await mango_balance_probe(pool))
     async with http or httpx.AsyncClient(timeout=httpx.Timeout(20, connect=10)) as http:
         key = os.getenv('ELEVENLABS_API_KEY', '').strip()
         if key:
