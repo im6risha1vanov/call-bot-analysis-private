@@ -474,7 +474,8 @@ def save_settings(data: dict) -> dict:
 def eleven_params() -> tuple[str, dict]:
     """Модель и ползунки ElevenLabs с учётом страницы настроек. Модель задаёт выбранный набор, если он есть."""
     from voice import presets
-    return presets.tts_model() or setting("model", ELEVEN_DIRECT_MODEL), {
+    tts = presets.tts_model() or ""
+    return tts if tts.startswith("eleven_") else setting("model", ELEVEN_DIRECT_MODEL), {
         "stability": setting("stability", ELEVEN_SETTINGS["stability"]),
         "similarity_boost": setting("similarity", ELEVEN_SETTINGS["similarity_boost"]),
         "style": setting("style", ELEVEN_SETTINGS["style"]),
@@ -482,10 +483,17 @@ def eleven_params() -> tuple[str, dict]:
     }
 
 
+YANDEX_PRESET_VOICE = os.getenv("VOICE_YANDEX_VOICE", "dasha")
+YANDEX_PRESET_ROLE = os.getenv("VOICE_YANDEX_ROLE", "friendly")
+
+
 def effective_voice(voice: Voice, text: str = "") -> Voice:
     """Голос ElevenLabs и темп со страницы настроек, темп с поправкой на фразу. Голоса Яндекса (автотест) не трогаем."""
     if not voice.name.startswith("11:"):
         return voice
+    from voice import presets
+    if presets.tts_model() == "yandex":  # набор «Эконом»: голос Яндекса вместо ElevenLabs
+        return Voice(YANDEX_PRESET_VOICE, YANDEX_PRESET_ROLE, phrase_speed(text, setting("speed", voice.speed)))
     voice_id = setting("voice_id", "")
     return Voice(f"11:{voice_id}" if voice_id else voice.name, voice.role, phrase_speed(text, setting("speed", voice.speed)))
 
@@ -868,6 +876,9 @@ async def _synthesize_one(text: str, voice: Voice) -> bytes:
         return await _eleven(text, voice)
     if voice.name.startswith("11:"):
         return await _eleven_direct_tts(text, voice)
+    usage = tts_usage.get()
+    if usage is not None:  # синтез Яндекса тоже платный: символы считаются, как у ElevenLabs
+        usage["chars"] = usage.get("chars", 0) + len(text)
     if os.getenv("VOICE_TTS_API", "v3") == "v3":
         try:
             return await _yandex_v3(text, voice)

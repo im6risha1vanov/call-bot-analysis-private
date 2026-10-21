@@ -204,9 +204,8 @@ async def eleven(http) -> tuple[float, str]:
     r.raise_for_status()
     sub = r.json()
     models = await http.get(ELEVEN_API + '/models', headers=headers)
-    from . import robot  # noqa: F401  пути настроек робота задаются до импорта voice.speech
-    from voice import speech  # модель синтеза со страницы «Голос»
-    return eleven_rate(sub, models.json() if models.status_code == 200 else [], speech.eleven_params()[0],
+    # цена v4: от неё считаются наборы робота (v4 Turbo вдвое дешевле, у голоса Яндекса своя цена)
+    return eleven_rate(sub, models.json() if models.status_code == 200 else [], 'eleven_v4',
                        await rub_per(http, str(sub.get('currency') or 'usd')))
 
 
@@ -370,11 +369,6 @@ async def yandex(http) -> tuple[float, str]:
     from . import robot  # noqa: F401  пути настроек робота задаются до импорта voice
     from voice import presets
     model = presets.llm_model() or os.getenv('VOICE_MODEL', 'yandexgpt-lite/latest')
-    if model in presets.LLM and not model.startswith('yandexgpt'):
-        # моделей Alice AI в Billing API под понятным именем нет: цена обычного входа из прайса набора
-        price = presets.LLM[model]['price']
-        return price[0], (f'прайс AI Studio на 21.10.2026, {presets.LLM[model]["name"]}: {ru(price[0])} ₽ за 1000 токенов '
-                          f'(повторный вход {ru(price[1])} ₽, ответ {ru(price[2])} ₽)')
     name = yandex_name(model)
     try:
         return yandex_sku_rate(await yandex_skus(http), name)

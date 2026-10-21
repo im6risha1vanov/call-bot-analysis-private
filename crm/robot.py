@@ -70,11 +70,12 @@ def operators() -> list[dict]:
     return out
 
 
-def preset_list(costs: dict) -> list[dict]:
-    """Наборы робота для выбора в CRM: что внутри, оценка минуты и чем отличаются."""
+def preset_list(costs: dict, v4_price: float) -> list[dict]:
+    """Наборы робота для выбора в CRM: что внутри, цена синтеза, оценка минуты и чем отличаются."""
     from voice import presets
     return [{'key': key, 'name': ps['name'], 'llm': presets.LLM[ps['llm']]['name'], 'tts': presets.TTS[ps['tts']]['name'],
-             'llm_price': presets.LLM[ps['llm']]['price'], 'cost_min': costs.get(key), 'quality': ps['quality']}
+             'tts_price': round(presets.tts_rub_1k(ps['tts'], v4_price), 2) if v4_price or ps['tts'] == 'yandex' else None,
+             'cost_min': costs.get(key), 'quality': ps['quality']}
             for key, ps in presets.PRESETS.items()]
 
 
@@ -91,7 +92,8 @@ async def overview(who, pool=None) -> dict:
     return {'up': await robot_up(), 'operators': operators(), 'test_phones': test_phones(),
             'settings': _current_voice(), 'voices': speech._eleven_direct,
             'can_save': bool(speech.SETTINGS_FILE) and DATA.is_dir(), 'readonly': who.test,
-            'presets': preset_list((await robot_store.economics(pool))['presets'] if pool is not None else {}),
+            'presets': preset_list((await robot_store.economics(pool))['presets'] if pool is not None else {},
+                                   (await robot_store.prices(pool))['eleven_1k_chars'] if pool is not None else 0),
             'preset': presets.current() or presets.DEFAULT}
 
 

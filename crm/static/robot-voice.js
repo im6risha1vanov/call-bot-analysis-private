@@ -30,7 +30,7 @@ const ROBOT_EXTRA_TOGGLES = [
   [['whole_reply'], 'Реплика целиком', 'интонация ровнее через всю реплику, ответ на 0,3–0,6 с позже'],
   [['speaker_boost'], 'Усиление сходства с голосом', ''],
 ];
-const rbRub = v => String(v).replace('.', ',') + ' ₽';
+const rbRub = v => Number(v).toLocaleString('ru-RU', {maximumFractionDigits: 2}) + ' ₽';
 const rbValue = (v, kind) => kind === 'x' ? '×' + v.toFixed(2) : kind === 's' ? (v / 1000).toFixed(v < 1000 && v % 100 ? 2 : 1).replace('.', ',') + ' с'
   : Math.round(v * 100) + ' %';
 let robotAudio = null;
@@ -57,14 +57,14 @@ async function robotVoiceView(view) {
         ${d.test_phones.length ? `<button class="btn" type="button" id="rb-me"${ro}>Позвонить мне</button>` : ''}</div></div>
       <p class="hint" id="rb-call-st"></p></section>
     <section class="card blk" data-css="--i:1"><div class="card-h"><h2>Набор</h2></div>
-      <p class="lead">Модель ответов и голос подобраны заранее. Выбор действует со следующего звонка.</p>
+      <p class="lead">Отвечает везде YandexGPT, наборы отличаются голосом. Выбор действует со следующего звонка.</p>
       <div class="rb-presets" role="radiogroup">${(d.presets || []).map(p => `<label class="rb-preset">
         <input type="radio" name="rb-preset" value="${esc(p.key)}"${p.key === d.preset ? ' checked' : ''}${ro}>
         <span class="rb-preset-ui"><span class="rb-preset-top"><b>${esc(p.name)}</b>
           <span class="rb-preset-cost">${p.cost_min ? '≈ ' + money(p.cost_min) + ' / мин' : ''}</span></span>
           <span class="muted">${esc(p.llm)} · ${esc(p.tts)}</span>
           <span>${esc(p.quality)}</span>
-          <span class="muted">Модель: ${rbRub(p.llm_price[0])} за 1000 токенов${p.llm_price[1] < p.llm_price[0] ? `, повторная инструкция ${rbRub(p.llm_price[1])}` : ''}</span></span></label>`).join('')}</div>
+          ${p.tts_price != null ? `<span class="muted">Синтез: ≈ ${rbRub(p.tts_price)} за 1000 символов</span>` : ''}</span></label>`).join('')}</div>
       <p class="hint">${(d.presets || []).some(p => p.cost_min) ? 'Минута — оценка по звонкам робота за 30 дней: связь, распознавание, синтез и модель.' : 'Оценка минуты появится после звонков робота.'}</p></section>
     <section class="card blk" data-css="--i:1"><div class="card-h"><h2>Голос</h2></div>
       <label class="field">Чей голос<select id="rb-voice">

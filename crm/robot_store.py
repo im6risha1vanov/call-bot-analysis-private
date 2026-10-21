@@ -65,6 +65,8 @@ async def prices(pool) -> dict:
     """Себестоимость считает robot_prices сам; директор задаёт только цену минуты для каждого клиента."""
     auto = await auto_prices(pool)
     out = {key: float((auto.get(key) or {}).get('value') or 0) for key in COST_KEYS}
+    from voice import presets, speech
+    out['tts_1k_chars'] = presets.tts_rub_1k(presets.tts_model() or speech.eleven_params()[0], out['eleven_1k_chars'])
     out['client_min'] = {k: float(v) for k, v in ((await get_option(pool, 'prices', {})).get('client_min') or {}).items()}
     return out
 
@@ -583,7 +585,7 @@ def asr_cost(seconds: float) -> float:
 
 
 def call_cost(r, p: dict) -> float:
-    return (r['duration_s'] / 60 * p['mango_min'] + r['tts_chars'] / 1000 * p['eleven_1k_chars']
+    return (r['duration_s'] / 60 * p['mango_min'] + r['tts_chars'] / 1000 * p['tts_1k_chars']
             + r['llm_tokens'] / 1000 * p['llm_1k_tokens'] + asr_cost(r['duration_s']))
 
 
@@ -676,16 +678,14 @@ async def analytics(pool, who, owner: str, f: dict) -> dict:
 
 def preset_costs(p: dict, parts: dict, chars_min, tokens_min) -> dict:
     """Оценка минуты разговора для каждого набора робота при нынешнем расходе символов и токенов.
-    Цена синтеза — нынешняя цена ElevenLabs, пересчитанная на модель набора; модель — цена обычного входа
-    по прайсу (повторный вход у Alice дешевле, но Яндекс кеш не гарантирует)."""
-    from voice import presets, speech
+    Синтез — цена ElevenLabs v4, пересчитанная на голос набора; модель — по прайсу набора."""
+    from voice import presets
     if chars_min is None or tokens_min is None:
         return {}  # звонков робота ещё не было: оценивать не по чему
-    now = presets.TTS.get(speech.eleven_params()[0], {}).get('factor', 1.0)
     out = {}
     for key, ps in presets.PRESETS.items():
-        synth = (chars_min or 0) / 1000 * p['eleven_1k_chars'] / now * presets.TTS[ps['tts']]['factor']
-        llm = (tokens_min or 0) / 1000 * presets.LLM[ps['llm']]['price'][0]
+        synth = chars_min / 1000 * presets.tts_rub_1k(ps['tts'], p['eleven_1k_chars'])
+        llm = tokens_min / 1000 * presets.LLM[ps['llm']]['price'][0]
         out[key] = round((parts.get('mango') or 0) + (parts.get('asr') or 0) + synth + llm, 2)
     return out
 
@@ -704,7 +704,7 @@ async def economics(pool) -> dict:
     chars_min = use['chars'] / minutes if minutes else None
     tokens_min = use['tokens'] / minutes if minutes else None
     parts = {'mango': p['mango_min'],
-             'synth': chars_min / 1000 * p['eleven_1k_chars'] if chars_min is not None else None,
+             'synth': chars_min / 1000 * p['tts_1k_chars'] if chars_min is not None else None,
              'llm': tokens_min / 1000 * p['llm_1k_tokens'] if tokens_min is not None else None}
     parts['asr'] = round(asr_cost(use['seconds']) / minutes, 2) if minutes else round(ASR_15S * 4, 2)
     cost_min = sum(v or 0 for v in parts.values())
