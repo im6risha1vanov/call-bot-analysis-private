@@ -10,7 +10,7 @@ from tests.test_crm import DBCase
 from crm import robot_prices as rp, robot_store
 
 # Кусок прайса Yandex AI Studio: сначала синхронный режим (рубли с НДС), потом цены в долларах, потом асинхронный.
-YANDEX_PAGE = """<html><head><script>window.__DATA__={"title":"YandexGPT Pro 5.1 9 ₽"}</script></head><body>
+YANDEX_PAGE = """<html><head><title>Правила тарификации для Yandex AI Studio</title></head><body>
 <h2>Синхронный режим</h2><table><tr><th>Модель</th><th>Цена за 1000 входящих токенов, вкл. НДС</th>
 <th>кешированных</th><th>инструментов</th><th>Цена за 1000 исходящих токенов, вкл. НДС</th></tr>
 <tr><td><p>YandexGPT Pro 5.1</p></td><td>0,8&nbsp;₽</td><td>0,8&nbsp;₽</td><td>0,2&nbsp;₽</td><td>0,8&nbsp;₽</td></tr>
@@ -71,13 +71,19 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(rp.yandex_name('yandexgpt/latest'), 'YandexGPT Pro 5')
         with self.assertRaises(rp.PriceError):
             rp.yandex_name('llama/latest')
-        self.assertEqual(rp.yandex_price(YANDEX_PAGE, 'YandexGPT Pro 5.1')[0], 0.8)  # не 9 ₽ из скрипта и не асинхронные 0,41
+        self.assertEqual(rp.yandex_price(YANDEX_PAGE, 'YandexGPT Pro 5.1')[0], 0.8)  # не асинхронные 0,41
         self.assertEqual(rp.yandex_price(YANDEX_PAGE, 'YandexGPT Pro 5')[0], 1.2)  # не строка Pro 5.1
         value, note = rp.yandex_price(YANDEX_PAGE, 'YandexGPT Lite')
         self.assertAlmostEqual(value, 0.3)  # вход и выход пополам
         self.assertIn('0,2 ₽ вход, 0,4 ₽ выход', note)
         with self.assertRaises(rp.PriceError):
             rp.yandex_price('<p>Цены скоро будут</p>', 'YandexGPT Pro 5.1')
+        # таблица только внутри JSON в скрипте, с экранированными тегами и знаком рубля
+        packed = ('<html><body><div id="root"></div><script>window.__DATA__={"html":"' +
+                  json.dumps(YANDEX_PAGE.split('<body>')[1].replace('\n', ''))[1:-1].replace('<', '\\u003c').replace('>', '\\u003e')
+                  + '"}</script></body></html>')
+        self.assertNotIn('<td>', packed)
+        self.assertEqual(rp.yandex_price(packed, 'YandexGPT Pro 5.1')[0], 0.8)
 
 
 class RefreshTest(DBCase):
@@ -122,6 +128,24 @@ class RefreshTest(DBCase):
             return httpx.Response(200, json={'Valute': {'USD': {'Nominal': 1, 'Value': 80.0}}})
         async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as http:
             self.assertEqual(await rp.rub_per(http, 'usd'), 80.0)
+
+    async def test_probe_reports_without_numbers(self):
+        import httpx
+        await self.pool.execute("INSERT INTO calls(client_id,extension,call_started_at,raw_summary) VALUES(1,'101',now(),$1::jsonb)",
+                                json.dumps({'context_type': 2, 'talk_duration': 60, 'to_number': '79990001122',
+                                            'context_calls': [{'call_end_reason': 1}]}))
+
+        def answer(request):
+            if 'elevenlabs' in request.url.host:
+                return httpx.Response(401, json={'detail': {'status': 'missing_permissions', 'message': 'user_read'}})
+            return httpx.Response(200, text=YANDEX_PAGE)
+        with patch.dict(os.environ, {'ELEVENLABS_API_KEY': 'k', 'VOICE_MODEL': 'yandexgpt-5.1/latest'}):
+            lines = await rp.probe(self.pool, httpx.AsyncClient(transport=httpx.MockTransport(answer)))
+        text = '\n'.join(lines)
+        self.assertIn('fields: context_calls, context_type, talk_duration, to_number; leg fields: call_end_reason', text)
+        self.assertNotIn('79990001122', text)
+        self.assertIn('subscription answered 401', text)
+        self.assertIn('yandexgpt x', text)
 
     async def test_yandex_only_when_robot_uses_it(self):
         with patch.dict(os.environ, {'VOICE_LLM': 'cvc'}):

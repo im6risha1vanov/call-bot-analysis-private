@@ -31,6 +31,8 @@ ELEVEN_API = 'https://api.elevenlabs.io/v1'
 YANDEX_PRICING = 'https://yandex.cloud/ru/docs/ai-studio/pricing'
 CBR_DAILY = 'https://www.cbr.ru/scripts/XML_daily.asp'
 CBR_MIRROR = 'https://www.cbr-xml-daily.ru/daily_json.js'  # те же курсы ЦБ, если cbr.ru не пускает сервер из-за границы
+BROWSER = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36',
+           'Accept': 'text/html,application/xhtml+xml', 'Accept-Language': 'ru-RU,ru;q=0.9'}
 PERIOD_MONTHS = {'monthly_period': 1, '3_month_period': 3, '6_month_period': 6, 'annual_period': 12}
 # Как модели из VOICE_MODEL называются в прайсе Яндекса.
 YANDEX_NAMES = {'yandexgpt-5.1': 'YandexGPT Pro 5.1', 'yandexgpt': 'YandexGPT Pro 5', 'yandexgpt-lite': 'YandexGPT Lite'}
@@ -173,13 +175,20 @@ def yandex_name(model: str) -> str:
     return YANDEX_NAMES[part]
 
 
+def page_text(page: str) -> str:
+    """Текст страницы без разметки. Сайт документации Яндекса может прислать таблицу внутри JSON в скрипте,
+    с экранированными <, > и ₽, поэтому сначала раскрываем экранирование, потом убираем теги."""
+    page = re.sub(r'\\u([0-9a-fA-F]{4})', lambda m: chr(int(m.group(1), 16)), page)
+    page = page.replace('\\"', '"').replace('\\n', ' ').replace('\\/', '/')
+    return re.sub(r'\s+', ' ', html.unescape(re.sub(r'<[^>]+>', ' ', page)))
+
+
 def yandex_price(page: str, name: str) -> tuple[float, str]:
     """Цена за 1000 токенов из первой таблицы прайса с этой моделью (синхронный режим идёт первым)."""
-    page = re.sub(r'<(script|style)\b.*?</\1\s*>', ' ', page, flags=re.S | re.I)
-    text = re.sub(r'\s+', ' ', html.unescape(re.sub(r'<[^>]+>', ' ', page)))
-    for m in re.finditer(re.escape(name) + r'(?![\d.,])', text):
+    text = page_text(page)
+    for m in re.finditer(re.escape(name).replace(r'\ ', r'\s*') + r'(?![\d.,])', text, re.I):
         tail = text[m.end():m.end() + 300]
-        cut = tail.find('YandexGPT')
+        cut = tail.lower().find('yandexgpt')
         tail = tail[:cut] if cut >= 0 else tail
         if not re.match(r'[^\d₽]{0,40}\d', tail):
             continue
@@ -195,13 +204,46 @@ def yandex_price(page: str, name: str) -> tuple[float, str]:
     raise PriceError(f'в прайсе Яндекса не нашлась строка {name}')
 
 
+async def yandex_page(http):
+    # Без обычного браузерного заголовка Яндекс может ответить проверкой «вы не робот».
+    r = await http.get(YANDEX_PRICING, follow_redirects=True, headers=BROWSER)
+    r.raise_for_status()
+    return r
+
+
 async def yandex(http) -> tuple[float, str]:
     if os.getenv('VOICE_LLM', 'cvc').strip().lower() != 'yandex':
         raise PriceError('робот сейчас отвечает не через YandexGPT')
     name = yandex_name(os.getenv('VOICE_MODEL', 'yandexgpt-lite/latest'))
-    r = await http.get(YANDEX_PRICING, follow_redirects=True)
-    r.raise_for_status()
-    return yandex_price(r.text, name)
+    return yandex_price((await yandex_page(http)).text, name)
+
+
+async def probe(pool, http=None) -> list[str]:
+    """Для scripts/crm_setup.sh prices: что на самом деле пришло от источников. Без номеров и ключей."""
+    out = []
+    rows = await pool.fetch(
+        "SELECT raw_summary::jsonb AS r FROM calls WHERE call_started_at > now() - make_interval(days => $1) "
+        "AND raw_summary IS NOT NULL AND raw_summary::jsonb->>'context_type' = '2' LIMIT 500", DAYS)
+    raws = [r['r'] if isinstance(r['r'], dict) else json.loads(r['r']) for r in rows]
+    keys = sorted({k for raw in raws for k in raw})
+    legs = sorted({k for raw in raws for leg in raw.get('context_calls') or [] if isinstance(leg, dict) for k in leg})
+    out.append(f'mango: {len(raws)} outgoing calls; fields: {", ".join(keys)}; leg fields: {", ".join(legs)}')
+    async with http or httpx.AsyncClient(timeout=httpx.Timeout(20, connect=10)) as http:
+        key = os.getenv('ELEVENLABS_API_KEY', '').strip()
+        if key:
+            r = await http.get(ELEVEN_API + '/user/subscription', headers={'xi-api-key': key})
+            detail = r.json().get('detail') if r.headers.get('content-type', '').startswith('application/json') else None
+            out.append(f'elevenlabs: subscription answered {r.status_code} {json.dumps(detail, ensure_ascii=False)[:300] if detail else ""}')
+        try:
+            r = await yandex_page(http)
+            text = page_text(r.text)
+            name = yandex_name(os.getenv('VOICE_MODEL', 'yandexgpt-lite/latest'))
+            at = text.lower().find(name.lower())
+            out.append(f'yandex: {r.status_code} {r.url} {len(r.text)} bytes; yandexgpt x{text.lower().count("yandexgpt")}, '
+                       f'rub x{text.count("₽")}, title: {text[:120]!r}; near model: {text[at:at + 200] if at >= 0 else "-"!r}')
+        except Exception as e:  # noqa: BLE001 — это только отчёт
+            out.append(f'yandex: {e!r}')
+    return out
 
 
 # ------------------------------------------------------------------ пересчёт
