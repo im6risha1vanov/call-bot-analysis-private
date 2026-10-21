@@ -28,16 +28,24 @@ MODELS = [{'model_id': 'eleven_flash_v2_5', 'model_rates': {'character_cost_mult
 
 class ParseTest(unittest.TestCase):
     def test_mango(self):
-        raws = [{'context_type': 2, 'talk_duration': 120, 'context_cost_full': '3,0'},
-                {'context_type': 2, 'talk_duration': 60, 'context_calls': [{'cost': 1}, {'cost': '0.5'}]},
-                {'context_type': 2, 'talk_duration': 600}]  # без стоимости не считается вовсе
-        value, note = rp.mango_rate(raws)
-        self.assertEqual(value, 1.5)  # 4,5 ₽ за 3 минуты
-        self.assertIn('за 3 мин', note)
-        with self.assertRaisesRegex(rp.PriceError, 'не присылает стоимость'):
-            rp.mango_rate([{'talk_duration': 60}])
-        with self.assertRaisesRegex(rp.PriceError, 'нет исходящих разговоров'):
-            rp.mango_rate([{'talk_duration': 0, 'cost': 0}])
+        utc = timezone.utc
+        t = lambda d, h, m=0: datetime(2026, 10, d, h, m, tzinfo=utc)  # noqa: E731
+        hist = lambda *pts: [{'at': at.isoformat(), 'balance': b} for at, b in pts]  # noqa: E731
+        # 20.10: за час списано 30 ₽ при 20 минутах разговоров = 1,5 ₽/мин
+        # 21.10: пополнение +1000 (час не считается), потом 40 ₽ на 20 минут = 2 ₽/мин
+        # 22.10: абонентская плата 900 ₽ за час с 10 минутами = 90 ₽/мин, медиана её отсекает
+        # 23.10: 5 минут разговоров — день слишком шумный и не считается
+        history = hist((t(20, 9), 5000), (t(20, 10), 4970), (t(21, 9), 4970), (t(21, 10), 5960), (t(21, 11), 5920),
+                       (t(22, 6), 5920), (t(22, 7), 5020), (t(23, 9), 5020), (t(23, 10), 5000))
+        calls = [(t(20, 9, 10), 1200), (t(21, 9, 30), 600), (t(21, 10, 30), 1200), (t(22, 6, 30), 600), (t(23, 9, 5), 300)]
+        value, note = rp.mango_rate(history, calls)
+        self.assertEqual(value, 2.0)  # середина из 1,5 / 2 / 90
+        self.assertIn('по 3 дн.', note)
+        # разрыв в замерах дольше двух часов не считается
+        with self.assertRaises(rp.NotYet):
+            rp.mango_rate(hist((t(20, 9), 5000), (t(20, 12), 4970)), [(t(20, 10), 1200)])
+        with self.assertRaises(rp.NotYet):
+            rp.mango_rate([], [])
 
     def test_cbr(self):
         xml = ('<ValCurs><Valute ID="R01235"><NumCode>840</NumCode><CharCode>USD</CharCode><Nominal>1</Nominal>'
@@ -91,13 +99,25 @@ class RefreshTest(DBCase):
         await super().asyncSetUp()
         await self.pool.execute('ALTER TABLE calls ADD COLUMN IF NOT EXISTS raw_summary JSONB')  # как на сервере
 
-    async def test_mango_from_calls(self):
-        at = datetime.now(timezone.utc) - timedelta(days=1)
-        for raw in ({'context_type': 2, 'talk_duration': 120, 'context_cost_full': 4},
-                    {'context_type': 1, 'talk_duration': 600, 'context_cost_full': 0}):  # входящие не в счёт
+    async def test_mango_from_balance(self):
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        for raw, ago in (({'context_type': 2, 'talk_duration': 1200}, 50), ({'context_type': 1, 'talk_duration': 600}, 40)):  # входящие не в счёт
             await self.pool.execute("INSERT INTO calls(client_id,extension,call_started_at,raw_summary) VALUES(1,'101',$1,$2::jsonb)",
-                                    at, json.dumps(raw))
-        self.assertEqual((await rp.mango(self.pool))[0], 2.0)
+                                    now - timedelta(minutes=ago), json.dumps(raw))
+        await robot_store.set_option(self.pool, 'mango_balance', [{'at': (now - timedelta(hours=1)).isoformat(), 'balance': 100.0},
+                                                                  {'at': (now - timedelta(days=40)).isoformat(), 'balance': 900.0}])
+        with patch('mango_client.call', AsyncMock(return_value={'result': 1000, 'balance': '70.00'})) as call:
+            await rp.snapshot(self.pool)
+        self.assertEqual(call.call_args.args[0], 'account/balance')
+        history = await robot_store.get_option(self.pool, 'mango_balance', [])
+        self.assertEqual([h['balance'] for h in history], [100.0, 70.0])  # старше 31 дня выброшено
+        self.assertEqual((await rp.mango(self.pool))[0], 1.5)  # 30 ₽ за 20 минут
+
+        await robot_store.set_option(self.pool, 'mango_balance', [])
+        with patch.multiple(rp, eleven=AsyncMock(return_value=(8.8, 'e')), yandex=AsyncMock(return_value=(0.8, 'y'))):
+            got = await rp.refresh(self.pool, http=object())
+        self.assertEqual((got['mango_min']['value'], got['mango_min']['error']), (None, None))  # данных мало — не ошибка
+        self.assertIn('первая цена появится', got['mango_min']['note'])
 
     async def test_failed_source_keeps_last_value(self):
         ok = {'mango': AsyncMock(return_value=(1.5, 'mango')), 'eleven': AsyncMock(return_value=(8.8, 'eleven')),
@@ -140,14 +160,13 @@ class RefreshTest(DBCase):
                 return httpx.Response(401, json={'detail': {'status': 'missing_permissions', 'message': 'user_read'}})
             return httpx.Response(200, text=YANDEX_PAGE)
         with patch.dict(os.environ, {'ELEVENLABS_API_KEY': 'k', 'VOICE_MODEL': 'yandexgpt-5.1/latest'}), \
-                patch('mango_client.call', AsyncMock(return_value={'result': 1000, 'balance': 512.3})) as mango_call:
+                patch('mango_client.call', AsyncMock(return_value={'result': 1000, 'balance': 512.3})):
             lines = await rp.probe(self.pool, httpx.AsyncClient(transport=httpx.MockTransport(answer)))
         text = '\n'.join(lines)
         self.assertIn('fields: context_calls, context_type, talk_duration, to_number; leg fields: call_end_reason', text)
         self.assertNotIn('79990001122', text)
         self.assertIn('subscription answered 401', text)
-        self.assertIn('mango balance: {"result": 1000, "balance": 512.3}', text)
-        self.assertEqual(mango_call.call_args.args[0], 'account/balance')
+        self.assertIn('mango balance: 512,30 ₽', text)
         self.assertIn('yandexgpt x', text)
 
     async def test_yandex_only_when_robot_uses_it(self):

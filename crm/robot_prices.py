@@ -1,7 +1,7 @@
 """Себестоимость звонка робота: три цены CRM считает сама, руками их не правят.
 
-- Mango, рубли за минуту разговора: стоимость исходящих звонков за 30 дней из статистики Mango
-  (поля стоимости в calls.raw_summary), делённая на минуты разговоров в этих звонках.
+- Mango, рубли за минуту разговора: списания с баланса счёта Mango (замер раз в час) на минуты
+  исходящих разговоров, середина по дням за 30 дней (подробнее у mango_rate).
 - ElevenLabs, рубли за 1000 символов: сумма следующего счёта подписки на лимит кредитов за тот же
   срок (GET /v1/user/subscription), умноженная на кредиты за символ у модели робота (GET /v1/models)
   и на курс ЦБ.
@@ -18,7 +18,9 @@ import json
 import logging
 import os
 import re
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -26,6 +28,11 @@ log = logging.getLogger(__name__)
 
 KEYS = ('mango_min', 'eleven_1k_chars', 'llm_1k_tokens')
 EVERY_S = 6 * 3600
+SNAP_S = 3600  # баланс Mango запоминается раз в час
+MAX_GAP = timedelta(hours=2)  # если между замерами дольше, этот промежуток не считается
+MIN_DAY_MINUTES = 10  # день с меньшим числом минут разговоров слишком шумный
+BALANCE_KEY = 'mango_balance'
+MSK = ZoneInfo('Europe/Moscow')
 DAYS = 30
 ELEVEN_API = 'https://api.elevenlabs.io/v1'
 YANDEX_PRICING = 'https://yandex.cloud/ru/docs/ai-studio/pricing'
@@ -55,42 +62,72 @@ def num(value) -> float | None:
 
 
 # ------------------------------------------------------------------ Mango
+# Стоимость звонков Mango в статистике не отдаёт, зато отдаёт баланс счёта. CRM раз в час запоминает
+# баланс; за каждый час без пополнения списание делится на минуты исходящих разговоров этого часа.
+# Часы складываются по дням, цена минуты — середина (медиана) дневных значений за 30 дней: так день
+# абонентской платы не задирает цену, а часы с пополнением просто не считаются.
 
 
-def call_money(raw: dict) -> float | None:
-    """Стоимость звонка из статистики Mango: целиком или суммой по плечам."""
-    for key in ('context_cost_full', 'cost'):
-        value = num(raw.get(key))
-        if value is not None:
-            return value
-    legs = [num(leg.get('cost')) for leg in raw.get('context_calls') or [] if isinstance(leg, dict)]
-    legs = [v for v in legs if v is not None]
-    return sum(legs) if legs else None
+class NotYet(PriceError):
+    """Данных пока мало: это не ошибка, цена появится сама."""
 
 
-def mango_rate(raws: list[dict]) -> tuple[float, str]:
-    money = minutes = 0.0
-    priced = 0
-    for raw in raws:
-        cost = call_money(raw)
-        if cost is None:
+async def mango_keys(pool):
+    from crypto_util import decrypt
+    client = await pool.fetchrow('SELECT vpbx_api_key_enc, vpbx_api_salt_enc FROM clients '
+                                 'WHERE vpbx_api_key_enc IS NOT NULL ORDER BY id LIMIT 1')
+    if not client:
+        raise PriceError('нет ключа API Mango')
+    return decrypt(client['vpbx_api_key_enc']), decrypt(client['vpbx_api_salt_enc'])
+
+
+async def mango_balance(pool) -> float:
+    import mango_client
+    data = await mango_client.call('account/balance', *await mango_keys(pool), {})
+    value = num(data.get('balance'))
+    if data.get('result') != 1000 or value is None:
+        raise PriceError(f'Mango не отдал баланс (код {data.get("result")})')
+    return value
+
+
+async def snapshot(pool) -> None:
+    """Запомнить баланс Mango сейчас; история хранится за 31 день."""
+    from .robot_store import get_option, set_option
+    value = await mango_balance(pool)
+    now = datetime.now(timezone.utc)
+    keep = (now - timedelta(days=DAYS + 1)).isoformat()
+    history = [h for h in await get_option(pool, BALANCE_KEY, []) if h['at'] >= keep]
+    history.append({'at': now.isoformat(timespec='seconds'), 'balance': value})
+    await set_option(pool, BALANCE_KEY, history)
+
+
+def mango_rate(history: list[dict], calls: list[tuple]) -> tuple[float, str]:
+    """history: [{'at', 'balance'}] по времени; calls: [(начало звонка, секунды разговора)] исходящих."""
+    points = sorted((datetime.fromisoformat(h['at']), float(h['balance'])) for h in history)
+    calls = sorted(calls)
+    days: dict = {}
+    for (t0, b0), (t1, b1) in zip(points, points[1:]):
+        if not timedelta(0) < t1 - t0 <= MAX_GAP or b1 > b0:  # сайт стоял или счёт пополнили
             continue
-        priced += 1
-        money += cost
-        minutes += (num(raw.get('talk_duration')) or 0) / 60
-    if not priced:
-        raise PriceError('Mango не присылает стоимость звонков в статистике')
-    if minutes < 1:
-        raise PriceError('за 30 дней нет исходящих разговоров')
-    return money / minutes, f'{ru(money, ".0f")} ₽ за {ru(minutes, ".0f")} мин исходящих разговоров за {DAYS} дней'
+        talk = sum(s for at, s in calls if t0 <= at < t1)
+        day = days.setdefault(t1.astimezone(MSK).date(), [0.0, 0.0])
+        day[0] += b0 - b1
+        day[1] += talk / 60
+    rates = sorted(spent / minutes for spent, minutes in days.values() if minutes >= MIN_DAY_MINUTES)
+    if not rates:
+        raise NotYet('считается по списаниям с баланса Mango; первая цена появится после суток с разговорами')
+    mid = len(rates) // 2
+    value = rates[mid] if len(rates) % 2 else (rates[mid - 1] + rates[mid]) / 2
+    return value, f'списания с баланса Mango на минуту исходящих разговоров, середина по {len(rates)} дн.'
 
 
 async def mango(pool) -> tuple[float, str]:
+    from .robot_store import get_option
     rows = await pool.fetch(
-        "SELECT raw_summary::jsonb AS r FROM calls WHERE call_started_at > now() - make_interval(days => $1) "
-        "AND raw_summary IS NOT NULL AND raw_summary::jsonb->>'context_type' = '2'", DAYS)
-    raws = [r['r'] if isinstance(r['r'], dict) else json.loads(r['r']) for r in rows]
-    return mango_rate(raws)
+        "SELECT call_started_at AS at, coalesce((raw_summary::jsonb->>'talk_duration')::numeric, 0) AS talk FROM calls "
+        "WHERE call_started_at > now() - make_interval(days => $1) AND raw_summary IS NOT NULL "
+        "AND raw_summary::jsonb->>'context_type' = '2'", DAYS + 1)
+    return mango_rate(await get_option(pool, BALANCE_KEY, []), [(r['at'], float(r['talk'])) for r in rows])
 
 
 # ------------------------------------------------------------------ курс ЦБ
@@ -220,15 +257,8 @@ async def yandex(http) -> tuple[float, str]:
 
 async def mango_balance_probe(pool) -> str:
     """Отдаёт ли API Mango баланс счёта: только чтение, ничего не меняет."""
-    import mango_client
-    from crypto_util import decrypt
-    client = await pool.fetchrow('SELECT vpbx_api_key_enc, vpbx_api_salt_enc FROM clients '
-                                 'WHERE vpbx_api_key_enc IS NOT NULL ORDER BY id LIMIT 1')
-    if not client:
-        return 'no Mango key in clients'
     try:
-        data = await mango_client.call('account/balance', decrypt(client['vpbx_api_key_enc']), decrypt(client['vpbx_api_salt_enc']), {})
-        return json.dumps(data, ensure_ascii=False)[:300]
+        return f'{ru(await mango_balance(pool), ".2f")} ₽'
     except Exception as e:  # noqa: BLE001 — это только отчёт
         return repr(e)[:300]
 
@@ -286,7 +316,9 @@ async def refresh(pool, http=None) -> dict:
     out = {}
     for key, res in got.items():
         prev = old.get(key) or {}
-        if isinstance(res, BaseException):
+        if isinstance(res, NotYet):
+            out[key] = {'value': prev.get('value'), 'at': prev.get('at'), 'note': prev.get('note') or str(res), 'error': None, 'tried': now}
+        elif isinstance(res, BaseException):
             why = str(res) if isinstance(res, PriceError) else f'источник не ответил ({type(res).__name__})'
             if not isinstance(res, PriceError):
                 log.warning('себестоимость робота %s: %r', key, res)
@@ -299,11 +331,21 @@ async def refresh(pool, http=None) -> dict:
 
 
 async def loop(pool) -> None:
+    """Раз в час баланс Mango, раз в 6 часов пересчёт цен (и сразу при старте CRM)."""
+    last = None
     while True:
         try:
-            await refresh(pool)
+            await snapshot(pool)
         except asyncio.CancelledError:
             raise
-        except Exception:
-            log.exception('себестоимость робота: пересчёт не удался')
-        await asyncio.sleep(EVERY_S)
+        except Exception as e:  # noqa: BLE001 — цена Mango просто дольше не обновится
+            log.warning('баланс Mango не получен: %r', e)
+        if last is None or time.monotonic() - last >= EVERY_S - 60:
+            last = time.monotonic()
+            try:
+                await refresh(pool)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception('себестоимость робота: пересчёт не удался')
+        await asyncio.sleep(SNAP_S)
