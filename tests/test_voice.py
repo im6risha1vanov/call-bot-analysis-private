@@ -975,9 +975,9 @@ class PhoneTest(unittest.IsolatedAsyncioTestCase):
         from pathlib import Path
         from unittest import mock
         tmp = Path(tempfile.mkdtemp())
-        patch = mock.patch.object(sip, "RECORDINGS", tmp)
-        patch.start()
-        self.addCleanup(patch.stop)
+        for patch in (mock.patch.object(sip, "RECORDINGS", tmp), mock.patch.object(sip, "BG_NOISE", 0.0)):
+            patch.start()
+            self.addCleanup(patch.stop)
         client = FakeClient([finish({"outcome": "not_relevant", "comment": "Шаг 1: неактуально"}, "Поняла, всего доброго!")])
         call_id = str(uuidlib.uuid4())
         sip.PENDING[call_id] = sip.Pending("79990001122", "kitchen", {"campaign_id": 7, "owner": ""})
@@ -1014,6 +1014,17 @@ class PhoneTest(unittest.IsolatedAsyncioTestCase):
         with wave.open(str(tmp / (call_id + ".wav"))) as w:
             self.assertEqual((w.getframerate(), w.getnchannels()), (8000, 1))
             self.assertGreater(w.getnframes(), 0)
+
+    def test_background_noise(self):
+        import array
+        from voice import sip
+        silence = bytes(sip.FRAME_BYTES)
+        chunk, pos = sip.add_background(silence, 0, 0.3)
+        x = array.array("h", chunk)
+        self.assertEqual((len(chunk), pos), (sip.FRAME_BYTES, sip.FRAME_BYTES // 2))
+        self.assertTrue(any(x) and max(abs(v) for v in x) <= 0.3 * sip.BG_PEAK + 1)  # тихо, но не мёртвая тишина
+        loud = array.array("h", [32000] * (sip.FRAME_BYTES // 2)).tobytes()
+        self.assertLessEqual(max(array.array("h", sip.add_background(loud, 0, 1.0)[0])), 32767)
 
     def test_recording_mix_and_cleanup(self):
         import array, os, tempfile, time
