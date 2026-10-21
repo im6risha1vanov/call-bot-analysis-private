@@ -146,9 +146,9 @@ class RefreshTest(DBCase):
         with patch.multiple(rp, **ok):
             got = await rp.refresh(self.pool, http=object())
         self.assertEqual({k: v['value'] for k, v in got.items()}, {'mango_min': 1.5, 'eleven_1k_chars': 8.8, 'llm_1k_tokens': 0.8})
-        await robot_store.set_option(self.pool, 'prices', {'multiplier': 3})
+        await robot_store.set_option(self.pool, 'prices', {'client_min': {'Кухни': 12}})
         self.assertEqual(await robot_store.prices(self.pool),
-                         {'mango_min': 1.5, 'eleven_1k_chars': 8.8, 'llm_1k_tokens': 0.8, 'multiplier': 3.0})
+                         {'mango_min': 1.5, 'eleven_1k_chars': 8.8, 'llm_1k_tokens': 0.8, 'client_min': {'Кухни': 12.0}})
 
         bad = dict(ok, eleven=AsyncMock(side_effect=rp.PriceError('ключу ElevenLabs не хватает права User → Read')),
                    yandex=AsyncMock(side_effect=OSError('timeout')))

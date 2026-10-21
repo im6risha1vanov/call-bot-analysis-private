@@ -331,7 +331,7 @@ RB_VIEW.calls = async el => {
       {key: 'rb-rate', label: 'Дозвон', value: an.dial_rate, kind: 'pct', sub: `${plainItems(an.reached, 'разговор', 'разговора', 'разговоров')}`},
       {key: 'rb-leads', label: 'Лидов', value: an.leads, sub: `конверсия ${pctTxt(an.conversion)}`, help: 'Клиент заинтересован: робот записал интерес.'},
       {key: 'rb-cost', label: dir && RB.owner ? 'Цена лида (себестоимость)' : 'Цена лида', value: an.priced ? an.lead_cost : 0, kind: 'rub',
-        sub: an.priced ? `всего ${money(an.cost)}${dir && RB.owner ? ` · клиенту ${money(an.client_cost)}` : ''}` : (dir ? 'впишите цены в «Настройках»' : '')}].map((k, i) => kpiHtml(k, i)).join('')}</div>
+        sub: an.priced ? `всего ${money(an.cost)}${dir && RB.owner ? ` · клиент платит ${an.client_cost == null ? '— цена не задана' : money(an.client_cost)}` : ''}` : (dir ? 'цены ещё не посчитались' : '')}].map((k, i) => kpiHtml(k, i)).join('')}</div>
     <section class="card blk" data-css="--i:4">
       ${ends.length ? `<div class="filters" data-css="margin-bottom:12px"><button type="button" data-out="" aria-pressed="${!f.outcome}">Все<span class="c">${an.total}</span></button>${ends.map(e => {
         const key = e.key || Object.keys(RB.st.outcomes).find(k => RB.st.outcomes[k] === e.name) || '';
@@ -366,12 +366,17 @@ function rbCallCard(c, autoplay = false) {
 }
 
 // ---------- цены, клиенты и интеграции (директор) ----------
+const rbNum = v => { const n = parseFloat(String(v ?? '').replace(',', '.').replace(/\s/g, '')); return Number.isFinite(n) ? n : null; };
+
 RB_VIEW.settings = async el => {
   const o = RB.st.options;
   let known = [];
   try { known = (await rbGet('/known-clients')).clients; } catch (e) { /* таблица недоступна */ }
-  const names = [...new Set([...known, ...o.clients])];
   const p = o.prices;
+  const econ = o.econ;
+  const names = [...new Set([...known, ...o.clients, ...Object.keys(p.client_min || {})])];
+  const month = econ.clients.reduce((m, c) => (m[c.name] = c, m), {});
+  const since = `с 1 ${MONTHS[new Date(econ.month + 'T12:00:00Z').getUTCMonth()]}`;
   const sheet = RB.st.sheet;
   const auto = o.auto || {};
   const costRow = ([key, title, unit]) => {
@@ -381,27 +386,60 @@ RB_VIEW.settings = async el => {
         ${a.error ? `<div class="s bad-text wrap-s">Не обновилось${a.tried ? ' ' + fmtWhen(a.tried) : ''}: ${esc(a.error)}</div>` : ''}</div>
       <div class="r"><b class="num">${a.value == null ? '—' : money(a.value)}</b><div class="s">${unit}</div></div></div>`;
   };
+  const pt = econ.parts;
+  const minuteNote = econ.sample_minutes
+    ? `Mango ${money(pt.mango)} + синтез ${money(pt.synth)} + модель ${money(pt.llm)}. Расход на минуту по звонкам робота за 30 дней: ${fmt(econ.chars_min)} символов и ${fmt(econ.tokens_min)} токенов.`
+    : `Пока только Mango: у робота ещё нет разговоров за 30 дней, чтобы посчитать расход синтеза и модели на минуту.`;
+  const ty = econ.typical;
+  const firstPrice = Object.values(p.client_min || {})[0];
+  const calcField = (key, label, value, unit) => `<label class="field"><span>${label}</span><span class="rb-unit"><input class="inp" data-calc="${key}" inputmode="decimal" value="${value ?? ''}"><i>${unit}</i></span></label>`;
   el.innerHTML = `<div class="grid2 even"><section class="card blk"><div class="card-h"><h2>Себестоимость</h2><span class="hint">считается сама раз в 6 часов</span></div>
-      <div class="list">${RB_COSTS.map(costRow).join('')}</div>
-      <div class="row" data-css="margin-top:14px;align-items:flex-end"><label class="field cost-k">Коэффициент для клиента<input class="inp" data-p="multiplier" value="${p.multiplier}" inputmode="decimal"${rbRO()}></label>
-        <button class="btn primary" type="button" id="pr-save"${rbRO()}>Сохранить</button></div>
-      <p class="hint">Клиент видит стоимость звонков и цену лида по себестоимости, умноженной на коэффициент. Сами цены руками не меняются: Mango считается по списаниям с баланса на минуты исходящих разговоров за 30 дней, ElevenLabs по подписке и курсу ЦБ, YandexGPT по прайсу Яндекса.</p></section>
-    <section class="card blk" data-css="--i:1"><div class="card-h"><h2>Кабинет робота у клиентов</h2></div>
-      <p class="lead" data-css="margin-bottom:8px">Платная опция. Включённый клиент видит в своём кабинете раздел «Робот»: свои кампании, номера, звонки и операторов со стоимостью ×${p.multiplier}.</p>
-      ${names.length ? names.map(n => `<label class="rb-sw"><input type="checkbox" data-cl="${esc(n)}"${o.clients.includes(n) ? ' checked' : ''}${rbRO()}><span class="rb-sw-ui"></span><span><b>${esc(n)}</b></span></label>`).join('')
+      <div class="list">${RB_COSTS.map(costRow).join('')}
+        <div class="item rb-total"><div class="main-l"><div class="t">Минута разговора робота</div><div class="s wrap-s">${minuteNote}</div></div>
+          <div class="r"><b class="num">${money(econ.cost_min)}</b><div class="s">наша себестоимость</div></div></div></div>
+      <p class="hint">Руками эти цены не меняются: Mango считается по списаниям с баланса на минуты исходящих разговоров, ElevenLabs по подписке и курсу ЦБ, YandexGPT по прайсу Яндекс Облака.</p></section>
+    <section class="card blk" data-css="--i:1"><div class="card-h"><h2>Калькулятор</h2><span class="hint">прикинуть цену для клиента</span></div>
+      <div class="rb-calc">${calcField('calls', 'Звонков в месяц', ty.calls || 1000, 'шт')}${calcField('reach', 'Дозвон', ty.reach ?? 30, '%')}
+        ${calcField('len', 'Средний разговор', ty.minutes_per_talk ?? 1.5, 'мин')}${calcField('price', 'Цена минуты для клиента', firstPrice ?? '', '₽')}</div>
+      <div class="list" id="calc-out"></div></section></div>
+    <section class="card blk" data-css="--i:2"><div class="card-h"><h2>Клиенты и цены</h2><span class="hint">цифры ${since}</span></div>
+      <p class="lead" data-css="margin-bottom:8px">Платная опция. Включённый клиент видит в кабинете раздел «Робот» и стоимость своих звонков: минуты разговоров, посекундно, по его цене. Пока цена не задана, стоимость ему не показывается.</p>
+      ${names.length ? `<div class="tbl-wrap"><table class="tbl rb-prices"><thead><tr><th>Клиент</th><th>Цена минуты</th><th class="n hide-m">Минут</th><th class="n">Клиент платит</th><th class="n hide-m">Себестоимость</th><th class="n">Прибыль</th></tr></thead><tbody>
+        ${names.map(n => { const m = month[n]; const price = (p.client_min || {})[n];
+          return `<tr><td><label class="rb-sw"><input type="checkbox" data-cl="${esc(n)}"${o.clients.includes(n) ? ' checked' : ''}${rbRO()}><span class="rb-sw-ui"></span><span><b>${esc(n)}</b></span></label></td>
+            <td><span class="rb-unit"><input class="inp rb-price" data-price="${esc(n)}" inputmode="decimal" value="${price ?? ''}" placeholder="—"${rbRO()}><i>₽</i></span></td>
+            <td class="n hide-m">${m ? fmt(m.minutes) : '—'}</td><td class="n">${m && m.charge != null ? money(m.charge) : '—'}</td>
+            <td class="n hide-m">${m ? money(m.cost) : '—'}</td><td class="n ${m && m.profit < 0 ? 'bad-text' : ''}">${m && m.profit != null ? money(m.profit) : '—'}</td></tr>`; }).join('')}</tbody></table></div>`
         : '<div class="empty">Клиентов в таблице «Прозвон лидов» не нашлось.</div>'}
-      <div class="row" data-css="margin-top:8px"><button class="btn primary" type="button" id="cl-save"${rbRO()}>Сохранить</button></div></section></div>
-    <section class="card blk" data-css="--i:2"><div class="card-h"><h2>Куда идут итоги звонков</h2></div><div class="list">
+      <div class="row" data-css="margin-top:10px"><button class="btn primary" type="button" id="cl-save"${rbRO()}>Сохранить</button>
+        <span class="hint">Себестоимость минуты сейчас ${money(econ.cost_min)}: цена ниже неё работает в минус.</span></div></section>
+    <section class="card blk" data-css="--i:3"><div class="card-h"><h2>Куда идут итоги звонков</h2></div><div class="list">
       <div class="item"><div class="main-l"><div class="t">CRM Averon</div><div class="s" data-css="white-space:normal">Звонки, записи и итоги робота попадают сюда, на вкладку «Звонки».</div></div><span class="chip good">работает</span></div>
       ${sheet ? `<div class="item"><div class="main-l"><div class="t">Google Таблица</div><div class="s" data-css="white-space:normal">Итог каждого звонка строкой на лист «${esc(sheet.tab)}».</div></div><span class="chip ${sheet.on ? 'good' : ''}">${sheet.on ? 'работает' : 'не подключена'}</span></div>` : ''}
       <div class="item"><div class="main-l"><div class="t">Mango Office</div><div class="s" data-css="white-space:normal">Робот звонит через сотрудника «Робот» в Mango.</div></div><span class="chip good">работает</span></div></div></section>`;
-  $('#pr-save', el).addEventListener('click', async e => {
+  const calc = () => {
+    const v = k => rbNum($(`[data-calc="${k}"]`, el).value);
+    const minutes = (v('calls') || 0) * (v('reach') || 0) / 100 * (v('len') || 0);
+    const cost = minutes * econ.cost_min;
+    const price = v('price');
+    const pay = price == null ? null : minutes * price;
+    const profit = pay == null ? null : pay - cost;
+    const line = (t, val, sub = '', cls = '') => `<div class="item"><div class="main-l"><div class="t">${t}</div>${sub ? `<div class="s wrap-s">${sub}</div>` : ''}</div><div class="r"><b class="num ${cls}">${val}</b></div></div>`;
+    $('#calc-out', el).innerHTML = line('Минут разговоров', fmt(minutes), 'звонки × дозвон × средний разговор')
+      + line('Наша себестоимость', money(cost), `по ${money(econ.cost_min)} за минуту`)
+      + (pay == null ? line('Клиент платит', '—', 'впишите цену минуты') : line('Клиент платит', money(pay))
+        + line('Прибыль', money(profit), pay ? `маржа ${pctTxt(profit / pay * 100)}` : '', profit < 0 ? 'bad-text' : ''));
+  };
+  $$('[data-calc]', el).forEach(i => i.addEventListener('input', calc));
+  calc();
+  $('#cl-save', el)?.addEventListener('click', async e => {
     busy(e.currentTarget, true);
-    try { await rbPost('/options', {prices: {multiplier: $('[data-p="multiplier"]', el).value}}); toast('Коэффициент сохранён'); reload(); } catch (err) { busy(e.currentTarget, false); toast(err.message, true); }
-  });
-  $('#cl-save', el).addEventListener('click', async e => {
-    busy(e.currentTarget, true);
-    try { await rbPost('/options', {clients: $$('[data-cl]:checked', el).map(i => i.dataset.cl)}); toast('Сохранено'); reload(); } catch (err) { busy(e.currentTarget, false); toast(err.message, true); }
+    const prices = {};
+    $$('[data-price]', el).forEach(i => { prices[i.dataset.price] = i.value.trim(); });
+    try {
+      await rbPost('/options', {clients: $$('[data-cl]:checked', el).map(i => i.dataset.cl), prices: {client_min: prices}});
+      toast('Сохранено'); reload();
+    } catch (err) { busy(e.currentTarget, false); toast(err.message, true); }
   });
 };
 

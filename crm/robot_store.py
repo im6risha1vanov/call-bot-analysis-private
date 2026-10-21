@@ -31,7 +31,9 @@ from .robot_prices import num, status as auto_prices
 
 PAID_OPTION = 'Голосовой робот подключается отдельно, за доплату. Чтобы включить, напишите вашему менеджеру Averon.'
 READONLY = 'Тестовый вход только для просмотра.'
-DEFAULT_PRICES = {'mango_min': 0.0, 'eleven_1k_chars': 0.0, 'llm_1k_tokens': 0.0, 'multiplier': 3.0}
+COST_KEYS = ('mango_min', 'eleven_1k_chars', 'llm_1k_tokens')
+MAX_CLIENT_MIN = 1000.0  # цена минуты для клиента выше этого — опечатка
+CALC_DAYS = 30  # сколько дней звонков робота брать для расхода символов и токенов на минуту
 STATUSES = {'draft': 'Черновик', 'running': 'Идёт', 'paused': 'На паузе', 'done': 'Завершена'}
 TIMEZONES = [('Europe/Kaliningrad', 'Калининград, МСК−1'), ('Europe/Moscow', 'Москва, МСК'), ('Europe/Samara', 'Самара, МСК+1'),
              ('Asia/Yekaterinburg', 'Екатеринбург, МСК+2'), ('Asia/Omsk', 'Омск, МСК+3'), ('Asia/Novosibirsk', 'Новосибирск, МСК+4'),
@@ -58,11 +60,17 @@ async def set_option(pool, key: str, value) -> None:
 
 
 async def prices(pool) -> dict:
-    """Себестоимость считает robot_prices сам; директор задаёт только коэффициент для клиента."""
+    """Себестоимость считает robot_prices сам; директор задаёт только цену минуты для каждого клиента."""
     auto = await auto_prices(pool)
-    out = {key: float((auto.get(key) or {}).get('value') or 0) for key in DEFAULT_PRICES if key != 'multiplier'}
-    out['multiplier'] = float((await get_option(pool, 'prices', {})).get('multiplier') or DEFAULT_PRICES['multiplier'])
+    out = {key: float((auto.get(key) or {}).get('value') or 0) for key in COST_KEYS}
+    out['client_min'] = {k: float(v) for k, v in ((await get_option(pool, 'prices', {})).get('client_min') or {}).items()}
     return out
+
+
+def client_charge(seconds: float, p: dict, owner: str) -> float | None:
+    """Сколько клиент платит за разговоры: минуты (посекундно) × его цена минуты; None, если цена не задана."""
+    price = p['client_min'].get(owner)
+    return None if price is None else round(seconds / 60 * price, 2)
 
 
 async def enabled_clients(pool) -> list[str]:
@@ -101,18 +109,22 @@ async def save_options(pool, who, data: dict) -> dict:
         raise Forbidden('Раздел директора.')
     if who.test:
         raise Forbidden(READONLY)
-    if 'prices' in data:  # руками меняется только коэффициент, цены считаются сами
+    if 'prices' in data:  # руками задаётся только цена минуты для клиентов, себестоимость считается сама
         got = data['prices'] if isinstance(data['prices'], dict) else {}
-        value = num(got.get('multiplier', DEFAULT_PRICES['multiplier']))
-        if value is None:
-            raise ValueError('Коэффициент должен быть числом.')
-        if not 0 < value <= 100:
-            raise ValueError('Коэффициент для клиента должен быть больше нуля и не больше 100.')
-        await set_option(pool, 'prices', {'multiplier': value})
+        clean = {}
+        for name, raw in (got.get('client_min') or {}).items():
+            name = str(name).strip()[:100]
+            if not name or str(raw).strip() == '':
+                continue  # пустое поле — цена не задана
+            value = num(raw)
+            if value is None or not 0 <= value <= MAX_CLIENT_MIN:
+                raise ValueError(f'Цена минуты для «{name}» должна быть числом от 0 до {MAX_CLIENT_MIN:g} ₽.')
+            clean[name] = value
+        await set_option(pool, 'prices', {'client_min': clean})
     if 'clients' in data:
         names = data['clients'] if isinstance(data['clients'], list) else []
         await set_option(pool, 'clients', sorted({str(n).strip()[:100] for n in names if str(n).strip()}))
-    return {'prices': await prices(pool), 'clients': await enabled_clients(pool)}
+    return {'prices': await prices(pool), 'clients': await enabled_clients(pool), 'econ': await economics(pool)}
 
 
 # ------------------------------------------------------------------ операторы
@@ -591,7 +603,7 @@ async def calls(pool, who, owner: str, f: dict, limit: int = 500) -> dict:
     where, args = _filters(owner, f)
     rows = await pool.fetch(f'SELECT * FROM robot_calls WHERE {where} ORDER BY at DESC LIMIT {int(limit)}', *args)
     p = await prices(pool)
-    k = p['multiplier'] if who.role == 'client' else 1.0
+    client = who.role == 'client'
     names = {r['id']: r['name'] for r in await pool.fetch('SELECT id, name FROM robot_campaigns WHERE owner=$1', owner)}
     cutoff = datetime.now(timezone.utc) - timedelta(days=RECORDING_DAYS)
     data = {r['call_id']: json.loads(r['data'] or '{}') for r in rows}
@@ -599,7 +611,7 @@ async def calls(pool, who, owner: str, f: dict, limit: int = 500) -> dict:
         'id': r['call_id'], 'at': r['at'].astimezone(ZoneInfo('Europe/Moscow')).isoformat(timespec='minutes'), 'phone': r['phone'],
         'campaign': names.get(r['campaign_id'], ''), 'campaign_id': r['campaign_id'], 'outcome_key': r['outcome'],
         'outcome': OUTCOMES.get(r['outcome'], r['outcome']), 'good': r['outcome'] in ('interested', 'callback'),
-        'comment': r['comment'], 'seconds': r['duration_s'], 'cost': round(call_cost(r, p) * k, 2),
+        'comment': r['comment'], 'seconds': r['duration_s'], 'cost': client_charge(r['duration_s'], p, owner) if client else round(call_cost(r, p), 2),
         'recording': bool(r['recording']) and r['at'] > cutoff and (robot.DATA / 'recordings' / r['recording']).is_file(),
         'facts': data[r['call_id']].get('facts') or {},
         'transcript': [{'who': 'Робот' if w == 'robot' else 'Клиент' if w == 'client' else w, 'text': t}
@@ -632,7 +644,9 @@ async def analytics(pool, who, owner: str, f: dict) -> dict:
     reached = sum(r['outcome'] != 'ndz' for r in rows)
     leads = sum(r['outcome'] == 'interested' for r in rows)
     cost = sum(call_cost(r, p) for r in rows)
-    k = p['multiplier'] if who.role == 'client' else 1.0
+    charge = client_charge(sum(r['duration_s'] for r in rows), p, owner)
+    if who.role == 'client':
+        cost = charge
     days: dict[str, dict] = {}
     for r in rows:
         day = r['at'].astimezone(ZoneInfo('Europe/Moscow')).date().isoformat()
@@ -641,13 +655,48 @@ async def analytics(pool, who, owner: str, f: dict) -> dict:
         d['reached'] += r['outcome'] != 'ndz'
         d['leads'] += r['outcome'] == 'interested'
     ends = {key: sum(r['outcome'] == key for r in rows) for key in OUTCOMES}
-    priced = any(p[key] for key in ('mango_min', 'eleven_1k_chars', 'llm_1k_tokens'))
+    priced = cost is not None and (who.role == 'client' or any(p[key] for key in COST_KEYS))
     out = {'total': total, 'reached': reached, 'leads': leads,
            'dial_rate': round(reached / total * 100, 1) if total else 0, 'conversion': round(leads / total * 100, 1) if total else 0,
            'minutes': round(sum(r['duration_s'] for r in rows) / 60, 1), 'priced': priced,
-           'cost': round(cost * k, 2), 'lead_cost': round(cost * k / leads, 2) if leads else None,
+           'cost': round(cost or 0, 2), 'lead_cost': round(cost / leads, 2) if leads and cost is not None else None,
            'days': sorted(days.values(), key=lambda d: d['day']),
            'ends': [{'key': key, 'name': OUTCOMES[key], 'count': n} for key, n in ends.items()]}
     if who.role == 'director' and owner:
-        out['client_cost'] = round(cost * p['multiplier'], 2)
+        out['client_cost'] = charge
     return out
+
+
+async def economics(pool) -> dict:
+    """Для калькулятора директора: сколько стоит нам минута разговора робота и что по каждому клиенту в этом месяце.
+
+    Синтез и модель считаются в символах и токенах, поэтому их расход на минуту берётся из звонков робота
+    за последние 30 дней."""
+    p = await prices(pool)
+    since = datetime.now(timezone.utc) - timedelta(days=CALC_DAYS)
+    use = await pool.fetchrow('SELECT count(*) AS calls, count(*) FILTER (WHERE outcome <> $2) AS reached, '
+                              'coalesce(sum(duration_s), 0) AS seconds, coalesce(sum(tts_chars), 0) AS chars, '
+                              'coalesce(sum(llm_tokens), 0) AS tokens FROM robot_calls WHERE at > $1', since, 'ndz')
+    minutes = use['seconds'] / 60
+    chars_min = use['chars'] / minutes if minutes else None
+    tokens_min = use['tokens'] / minutes if minutes else None
+    parts = {'mango': p['mango_min'],
+             'synth': chars_min / 1000 * p['eleven_1k_chars'] if chars_min is not None else None,
+             'llm': tokens_min / 1000 * p['llm_1k_tokens'] if tokens_min is not None else None}
+    cost_min = sum(v or 0 for v in parts.values())
+    month = datetime.now(ZoneInfo('Europe/Moscow')).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    rows = await pool.fetch('SELECT owner, duration_s, tts_chars, llm_tokens, outcome FROM robot_calls WHERE at >= $1', month)
+    clients = []
+    for name in await enabled_clients(pool):
+        mine = [r for r in rows if r['owner'] == name]
+        seconds = sum(r['duration_s'] for r in mine)
+        cost = round(sum(call_cost(r, p) for r in mine), 2)
+        charge = client_charge(seconds, p, name)
+        clients.append({'name': name, 'price': p['client_min'].get(name), 'calls': len(mine), 'minutes': round(seconds / 60, 1),
+                        'cost': cost, 'charge': charge, 'profit': None if charge is None else round(charge - cost, 2)})
+    reach = use['reached'] / use['calls'] if use['calls'] else None
+    return {'cost_min': round(cost_min, 2), 'parts': {k: None if v is None else round(v, 2) for k, v in parts.items()},
+            'chars_min': None if chars_min is None else round(chars_min), 'tokens_min': None if tokens_min is None else round(tokens_min),
+            'sample_minutes': round(minutes), 'month': month.date().isoformat(), 'clients': clients,
+            'typical': {'calls': use['calls'], 'reach': None if reach is None else round(reach * 100),
+                        'minutes_per_talk': round(minutes / use['reached'], 1) if use['reached'] and minutes else None}}

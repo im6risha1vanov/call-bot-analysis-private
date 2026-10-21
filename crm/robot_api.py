@@ -28,7 +28,8 @@ def routes(viewer, body, pool_key) -> list:
         if who.role == 'director':
             from voice.results import SHEET_TITLE
             import os
-            out['options'] = {'prices': await rs.prices(pool), 'auto': await rs.auto_prices(pool), 'clients': await rs.enabled_clients(pool)}
+            out['options'] = {'prices': await rs.prices(pool), 'auto': await rs.auto_prices(pool), 'clients': await rs.enabled_clients(pool),
+                              'econ': await rs.economics(pool)}
             out['sheet'] = {'on': bool(os.getenv('VOICE_SHEET_ID', '').strip()), 'tab': SHEET_TITLE}
         return web.json_response(out)
 
