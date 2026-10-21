@@ -92,6 +92,7 @@ const ICON = {
   deal: '<path d="M3 4h18l-7 8v6l-4 2v-8z"/>',
   doc: '<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 12h7M9 16h7M9 20h3"/>',
   star: '<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/>',
+  source: '<circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5M11 8v6M8 11h6"/>',
 };
 const svg = k => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[k]}</svg>`;
 
@@ -101,6 +102,7 @@ const PAGES = [
   {id: 'queue', name: 'Очередь', icon: 'queue', roles: STAFF},
   {id: 'tasks', name: 'Перезвоны', icon: 'tasks', roles: STAFF},
   {id: 'leads', name: 'База', icon: 'leads', roles: STAFF},
+  {id: 'sources', name: 'Источники', icon: 'source', roles: STAFF},
   {id: 'deals', name: 'Сделки', icon: 'deal', roles: STAFF},
   {id: 'contracts', name: 'Договоры', icon: 'doc', roles: STAFF},
   {id: 'calls', name: 'Звонки', icon: 'calls', roles: STAFF},
@@ -1460,10 +1462,18 @@ function dealForm(box, d, kind) {
     S.ext = S.me.team.some(p => p.ext === saved.ext) ? saved.ext : S.me.team[0]?.ext || null;
   }
   shell();
-  // Ссылка из меню директора на странице аналитики: /?work#раздел.
-  const asked = decodeURIComponent(location.hash.slice(1));
-  if (asked) history.replaceState(null, '', location.pathname + location.search);
-  go(asked || saved.page || HOME[S.me.role]);
+  // Ссылка из меню директора на странице аналитики: /?work#раздел. После раздела через «/» может идти
+  // его параметр: так закладка «Собрать номера» присылает номера в «Источники» (#sources/import:...).
+  const fromHash = () => {
+    let asked = '';
+    try { asked = decodeURIComponent(location.hash.slice(1)); } catch (e) { /* испорченная ссылка */ }
+    if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+    const cut = asked.indexOf('/');
+    S.arg = cut < 0 ? null : asked.slice(cut + 1);
+    return cut < 0 ? asked : asked.slice(0, cut);
+  };
+  go(fromHash() || saved.page || HOME[S.me.role]);
+  window.addEventListener('hashchange', () => { const page = fromHash(); if (page) go(page); });
   // Очередь и счётчики обновляются раз в минуту, если менеджер не заполняет итог.
   setInterval(async () => {
     if (document.hidden || S.busy || S.dial || $('.drawer') || $('#outform:not(.hidden)')) return;

@@ -22,7 +22,7 @@ from aiohttp import web  # noqa: E402
 
 import mango_client  # noqa: E402
 from tools import Forbidden, is_privileged  # noqa: E402
-from . import ask as asking, auth, cabinet, contracts, deals, gsheets, journal, people, recording, reviews, staff, store, training  # noqa: E402
+from . import ask as asking, auth, cabinet, contracts, deals, gsheets, journal, people, recording, reviews, sources, staff, store, training  # noqa: E402
 from . import prompts as prompt_mode, robot, robot_api, robot_runner  # noqa: E402
 from review import store as review_store  # noqa: E402
 from .dial import dial  # noqa: E402
@@ -534,6 +534,25 @@ async def api_contracts_lookup(request):
     return web.json_response(await contracts.lookup(kind, request.match_info['value']))
 
 
+async def api_sources(request):
+    """Сохранённые подборки доноров отдела (страница «Источники»)."""
+    return web.json_response({'items': await sources.listing(request.app[POOL], await actor(request))})
+
+
+async def api_source(request):
+    return web.json_response(await sources.one(request.app[POOL], await actor(request), int_id(request.match_info['id'])))
+
+
+async def api_source_save(request):
+    who = await actor(request, write=True)
+    return web.json_response(await sources.save(request.app[POOL], who, await body(request)))
+
+
+async def api_source_delete(request):
+    await sources.delete(request.app[POOL], await actor(request, write=True), int_id(request.match_info['id']))
+    return web.json_response({'ok': True})
+
+
 async def api_staff_add(request):
     who = await director(request)
     data = await body(request)
@@ -752,6 +771,10 @@ def build(pool) -> web.Application:
     app.router.add_get('/api/deals', api_deals)
     app.router.add_get('/api/deals/{phone}', api_deal)
     app.router.add_post('/api/deals/{phone}/event', api_deal_event)
+    app.router.add_get('/api/sources/selections', api_sources)
+    app.router.add_post('/api/sources/selections', api_source_save)
+    app.router.add_get('/api/sources/selections/{id}', api_source)
+    app.router.add_post('/api/sources/selections/{id}/delete', api_source_delete)
     app.router.add_post('/api/presentations/{id}/link', api_presentation_link)
     app.router.add_get('/api/contracts', api_contracts)
     app.router.add_get('/api/contracts/config', api_contracts_config)

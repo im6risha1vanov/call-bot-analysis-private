@@ -116,10 +116,10 @@ class DBCase(unittest.IsolatedAsyncioTestCase):
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS assigned_by_telegram_user_id BIGINT;""")
         for name in ('008_call_reviews.sql', '009_callback_tasks.sql', '012_prompt_versions.sql', '013_employee_invites.sql',
                      '014_crm.sql', '015_crm_roles.sql', '016_crm_access.sql', '017_crm_reports.sql', '018_crm_questions.sql',
-                     '019_crm_staff.sql', '021_manager_memory.sql', '022_presentations.sql', '024_deals.sql', '025_contracts.sql', '026_presentation_client.sql'):
+                     '019_crm_staff.sql', '021_manager_memory.sql', '022_presentations.sql', '024_deals.sql', '025_contracts.sql', '026_presentation_client.sql', '027_sources.sql'):
             await self.pool.execute((root / 'migrations' / name).read_text())
         await self.pool.execute('TRUNCATE clients, crm_login_tokens, crm_sessions, crm_docs, crm_invites, crm_reports, crm_questions, '
-                                'employee_invites, manager_memory, deal_events, contracts, prompt_active, prompt_versions, prompt_drafts, astra_daily_spend CASCADE')
+                                'employee_invites, manager_memory, deal_events, contracts, source_selections, prompt_active, prompt_versions, prompt_drafts, astra_daily_spend CASCADE')
         from crypto_util import encrypt
         await self.pool.execute("INSERT INTO clients(id,timezone,processing_enabled,vpbx_api_key_enc,vpbx_api_salt_enc) "
                                 "VALUES(1,'Europe/Moscow',true,$1,$2)", encrypt('key'), encrypt('salt'))
@@ -317,6 +317,48 @@ class WebTests(DBCase):
         r = await self.http.post('/api/test/login', json={'key': TEST_KEY, 'role': role, **extra}, headers={'X-CRM': '1'})
         self.assertEqual(r.status, 200, await r.text())
         return (await r.json())['go']
+
+    async def test_sources_selections(self):
+        """«Источники»: подборки общие для отдела, удалить может автор или руководитель, тестовый вход только смотрит."""
+        h = {'X-CRM': '1'}
+        await self.login(123)
+        sel = {'niche': 'kitchen', 'niche_name': 'Кухни на заказ', 'query': 'кухни', 'city': 'Новороссийск', 'client': 'Кухни Мария',
+               'seg': 'bad', 'id': None, 'donors': [
+                   {'name': 'Салон «Кухни Юг»', 'phone': '79181234567', 'site': 'kuhni-yug.ru', 'cat': 0, 'checks': [1, 1, 1, 1],
+                    'from': '2gis', 'type': 'direct', 'level': 'good', 'label': 'берём', 'signals': ['Звонки', 'СМС']},
+                   {'name': 'Циан', 'phone': '78005553535', 'level': 'bad', 'type': 'evil', 'from': 'x'}]}
+        r = await self.http.post('/api/sources/selections', json={**sel, 'donors': [{'name': 'пусто'}]}, headers=h)
+        self.assertEqual(r.status, 400)
+        r = await self.http.post('/api/sources/selections', json=sel, headers=h)
+        self.assertEqual(r.status, 200, await r.text())
+        sid = (await r.json())['id']
+        items = (await (await self.http.get('/api/sources/selections')).json())['items']
+        self.assertEqual([(i['id'], i['donors'], i['good'], i['author'], i['can_delete']) for i in items], [(sid, 2, 1, 'Первый', True)])
+        one = await (await self.http.get(f'/api/sources/selections/{sid}')).json()
+        self.assertEqual((one['seg'], one['donors'][0]['checks'], one['donors'][1]['type'], one['donors'][1]['from']), ('', [True] * 4, 'direct', ''))
+        # повторное сохранение автором обновляет ту же подборку
+        r = await self.http.post('/api/sources/selections', json={**sel, 'id': sid, 'city': 'Анапа'}, headers=h)
+        self.assertEqual((await r.json())['id'], sid)
+        # другой менеджер видит, но не удаляет и не переписывает: его сохранение — новая подборка
+        await self.http.get('/logout')
+        await self.login(124)
+        items = (await (await self.http.get('/api/sources/selections')).json())['items']
+        self.assertEqual([(i['city'], i['can_delete']) for i in items], [('Анапа', False)])
+        self.assertEqual((await self.http.post(f'/api/sources/selections/{sid}/delete', json={}, headers=h)).status, 403)
+        r = await self.http.post('/api/sources/selections', json={**sel, 'id': sid}, headers=h)
+        self.assertNotEqual((await r.json())['id'], sid)
+        # руководитель удаляет любую
+        await self.http.get('/logout')
+        await self.director()
+        self.assertEqual((await self.http.post(f'/api/sources/selections/{sid}/delete', json={}, headers=h)).status, 200)
+        self.assertEqual(len((await (await self.http.get('/api/sources/selections')).json())['items']), 1)
+        self.assertEqual((await self.http.get(f'/api/sources/selections/{sid}')).status, 400)
+        # тестовый вход: смотреть можно, сохранять нельзя
+        await self.http.get('/logout')
+        with patch.dict(os.environ, {'CRM_TEST_KEY': TEST_KEY}):
+            await self.enter('director')
+            self.assertEqual((await self.http.get('/api/sources/selections')).status, 200)
+            self.assertEqual((await self.http.post('/api/sources/selections', json=sel, headers=h)).status, 403)
 
     async def test_test_link_and_three_entries(self):
         with patch.dict(os.environ, {'CRM_TEST_KEY': TEST_KEY, 'KITCHEN_SHEET_ID': 'leads'}), \

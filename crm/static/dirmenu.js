@@ -21,6 +21,7 @@
     robot: '<rect x="5" y="8" width="14" height="11" rx="3"/><path d="M12 4v4M9 13h.01M15 13h.01M9.5 16.5h5"/>',
     pen: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>',
     key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3M15 8l2 2"/>',
+    source: '<circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5M11 8v6M8 11h6"/>',
     more: '<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>',
   };
   // bar — пункт нижней полоски на телефоне; more — под «Ещё»; label — подпись группы внутри «Ещё».
@@ -35,6 +36,7 @@
     {id: 'a:olga', name: 'Колл-центр · Ольга', icon: 'olga', more: true},
     {id: 'a:leads', name: 'База лидов', icon: 'leads', more: true},
     {id: 'w:clients', name: 'Клиенты', icon: 'client', more: true},
+    {id: 'w:sources', name: 'Источники', icon: 'source', more: true},
     {id: 'w:training', name: 'Тренировки', icon: 'train', more: true},
     {id: 'w:ask', name: 'Вопрос по отделу', icon: 'ask', more: true},
     {id: 'w:team', name: 'Очереди', icon: 'queue', more: true, label: 'Работа менеджеров'},
