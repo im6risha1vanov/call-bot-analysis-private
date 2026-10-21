@@ -1284,11 +1284,60 @@ class NoiseAndFillerTest(unittest.IsolatedAsyncioTestCase):
                 await asyncio.sleep(0.01)
         finally:
             call.FILLER_CHANCE, call.FILLER_AFTER_S = old
-        self.assertIn(said[1], call.FILLERS)
+        self.assertIn(said[1], call.NOTE_FILLERS)  # клиент назвал город: «так, записываю…», а не «угу…»
         self.assertEqual(said[-1], "Хорошо, записала.")
         robot = [e["text"] for e in events if e.get("role") == "robot"]
         self.assertNotIn(said[1], robot)  # «так…» не попадает в разговор
         await session.hangup()
+
+    def test_names_data(self):
+        from voice import call
+        self.assertTrue(call._names_data("город сыктывкар"))
+        self.assertTrue(call._names_data("двести тридцать тысяч"))
+        self.assertFalse(call._names_data("да конечно"))
+        self.assertFalse(call._names_data("Нет."))
+
+    async def test_backchannel_during_long_client_story(self):
+        from voice import call
+        audio, events, said = [], [], []
+        session = self.session(FakeClient([say("Поняла.")]), audio, events, said)
+        await session.start()
+        await self.wait_audio(audio)
+        session.speaking_until = 0.0
+        sent = len(audio)
+        story = "у нас сейчас на кухне старый гарнитур и мы хотим"
+        await session.heard("у нас сейчас", False)
+        await session.heard(story, False)  # рассказ ещё короткий по времени: молчим
+        self.assertEqual(len(audio), sent)
+        session.utterance_at -= call.BACKCHANNEL_AFTER_S + 0.1
+        await session.heard(story + " заменить фасады", False)
+        self.assertEqual(len(audio), sent + 1)
+        self.assertIn(said[-1], call.BACKCHANNELS)
+        self.assertFalse(session.is_speaking())  # «угу» не делает робота говорящим: клиент его не перебивает
+        await session.heard(story + " заменить фасады и столешницу целиком", False)
+        self.assertEqual(len(audio), sent + 1)  # не чаще раза в несколько секунд
+        robot = [e["text"] for e in events if e.get("role") == "robot"]
+        self.assertNotIn(said[-1], robot[1:])
+        await session.hangup()
+
+    async def test_parting_words_answer_client_goodbye(self):
+        from voice import call
+        audio, events, said = [], [], []
+        session = self.session(FakeClient([say("Хорошо.")]), audio, events, said)
+        await session.start()
+        await session.hangup("тест")
+        session.saved = {"outcome": "interested"}
+        await session.heard("Спасибо, до свидания", True)
+        self.assertTrue(await session.parting_words())
+        self.assertEqual(said[-1], call.PARTING["thanks"])
+        await session.heard("а вот ещё вопрос по поводу сроков изготовления кухни", True)
+        self.assertEqual(await session.parting_words(), b"")  # не прощание: не отвечаем «всего доброго»
+        old = call.GOODBYE_WAIT_S
+        call.GOODBYE_WAIT_S = 0.05
+        try:
+            self.assertEqual(await session.parting_words(), b"")  # клиент молчит: просто кладём трубку
+        finally:
+            call.GOODBYE_WAIT_S = old
 
 
 class YandexAsrTest(unittest.IsolatedAsyncioTestCase):

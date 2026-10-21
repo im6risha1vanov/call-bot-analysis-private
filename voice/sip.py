@@ -370,6 +370,12 @@ class PhoneCall:
             else:
                 while self.out and not reader_task.done():  # договорить прощание
                     await asyncio.sleep(0.1)
+                if not reader_task.done():  # клиент ещё на линии: ответить на его «до свидания»
+                    parting = await session.parting_words()
+                    if parting and not reader_task.done():
+                        await self.send_audio(parting)
+                        while self.out and not reader_task.done():
+                            await asyncio.sleep(0.1)
                 await self.write(frame(KIND_HANGUP))
         finally:
             self.closed = True
