@@ -529,6 +529,47 @@ async def api_robot_preview(request):
     return web.Response(body=pcm, content_type='application/octet-stream', headers={'X-Rate': str(rate)})
 
 
+async def api_robot_voices(request):
+    who = await director(request)
+    q = request.query
+    return web.json_response(await robot.voices_search(who, q.get('q', ''), q.get('gender', ''), q.get('use', ''),
+                                                       q.get('page', '0')))
+
+
+async def api_robot_voice_add(request):
+    who = await director(request)
+    return web.json_response(await robot.voices_add(who, await body(request)))
+
+
+async def api_robot_voice_sample(request):
+    who = await director(request)
+    audio, kind = await robot.voices_preview(who, request.query.get('url', ''))
+    return web.Response(body=audio, content_type=kind.split(';')[0] if kind.startswith('audio/') else 'audio/mpeg')
+
+
+async def api_robot_voice_clone(request):
+    """Записи для клона приходят формой multipart; читаем сами, общий предел запроса (512 КБ) для них мал."""
+    who = await director(request)
+    if not request.content_type.startswith('multipart/'):
+        raise ValueError('Неверный запрос.')
+    if request.content_length and request.content_length > robot.CLONE_MAX_BYTES:
+        raise ValueError('Записи больше 20 МБ: сократите или сожмите в mp3.')
+    reader = await request.multipart()
+    name, files, total = '', [], 0
+    while (part := await reader.next()) is not None:
+        if part.name == 'name':
+            name = (await part.text())[:60]
+        elif part.name == 'files' and part.filename:
+            chunks = []
+            while chunk := await part.read_chunk(256 * 1024):
+                total += len(chunk)
+                if total > robot.CLONE_MAX_BYTES:
+                    raise ValueError('Записи больше 20 МБ: сократите или сожмите в mp3.')
+                chunks.append(chunk)
+            files.append((part.filename[-80:], b''.join(chunks)))
+    return web.json_response(await robot.voices_clone(who, name, files))
+
+
 async def api_robot_call(request):
     who = await director(request)
     data = await body(request)
@@ -670,6 +711,10 @@ def build(pool) -> web.Application:
     app.router.add_post('/api/robot/settings', api_robot_settings)
     app.router.add_post('/api/robot/preview', api_robot_preview)
     app.router.add_post('/api/robot/call', api_robot_call)
+    app.router.add_get('/api/robot/voices', api_robot_voices)
+    app.router.add_post('/api/robot/voices/add', api_robot_voice_add)
+    app.router.add_get('/api/robot/voices/sample', api_robot_voice_sample)
+    app.router.add_post('/api/robot/voices/clone', api_robot_voice_clone)
     app.router.add_routes(robot_api.routes(viewer, body, POOL))
     app.router.add_get('/api/prompts/version/{id}', api_prompt_version)
     app.router.add_post('/api/prompts/version/{id}/use', api_prompt_use)

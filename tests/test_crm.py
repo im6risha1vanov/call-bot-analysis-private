@@ -8,7 +8,9 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
+import aiohttp
 import asyncpg
+import httpx
 
 os.environ.setdefault('BOT_TOKEN', '1:test')
 os.environ.setdefault('CVC_API_KEY', 'test')
@@ -715,6 +717,55 @@ class WebTests(DBCase):
                                              headers=h)
                     self.assertEqual((r.status, len(await r.read())), (200, 20))
                     self.assertEqual(synth.await_args.args[1].name, '11:Voice2234567890')
+                # библиотека голосов ElevenLabs: поиск, образец, добавление, клон
+                seen = []
+
+                def eleven(request):
+                    seen.append(request)
+                    path = request.url.path
+                    if path.endswith('/shared-voices'):
+                        return httpx.Response(200, json={'has_more': True, 'voices': [
+                            {'public_owner_id': 'owner123', 'voice_id': 'Lib1234567890', 'name': 'Анна', 'gender': 'female',
+                             'age': 'young', 'use_case': 'conversational', 'preview_url': 'https://storage.googleapis.com/x.mp3'}]})
+                    if path.endswith('/x.mp3'):
+                        return httpx.Response(200, content=b'ID3mp3', headers={'content-type': 'audio/mpeg'})
+                    if path.endswith('/voices/add/owner123/Lib1234567890'):
+                        return httpx.Response(200, json={'voice_id': 'Acc1234567890'})
+                    if path.endswith('/voices/add'):
+                        return httpx.Response(200, json={'voice_id': 'Cln1234567890'})
+                    if path.endswith('/voices'):
+                        return httpx.Response(200, json={'voices': [{'name': 'Анна', 'voice_id': 'Acc1234567890'}]})
+                    return httpx.Response(404, json={'detail': {'message': 'нет'}})
+
+                speech._http = httpx.AsyncClient(transport=httpx.MockTransport(eleven))
+                os.environ['ELEVENLABS_API_KEY'] = 'xi'
+                try:
+                    r = await self.http.get('/api/robot/voices', params={'q': 'calm', 'gender': 'female', 'use': 'conversational'})
+                    found = await r.json()
+                    self.assertEqual((found['more'], found['items'][0]['owner'], found['items'][0]['name']), (True, 'owner123', 'Анна'))
+                    self.assertEqual((seen[-1].url.params['language'], seen[-1].url.params['use_cases'], seen[-1].url.params['search']),
+                                     ('ru', 'conversational', 'calm'))
+                    r = await self.http.get('/api/robot/voices/sample', params={'url': 'https://storage.googleapis.com/x.mp3'})
+                    self.assertEqual((r.status, await r.read()), (200, b'ID3mp3'))
+                    r = await self.http.get('/api/robot/voices/sample', params={'url': 'https://evil.example/x.mp3'})
+                    self.assertEqual(r.status, 400)
+                    r = await self.http.post('/api/robot/voices/add', json={'owner': 'owner123', 'voice_id': 'Lib1234567890', 'name': 'Анна'},
+                                             headers=h)
+                    added = await r.json()
+                    self.assertEqual((added['voice_id'], added['voices']), ('Acc1234567890', {'Анна': 'Acc1234567890'}))
+                    form = aiohttp.FormData()
+                    form.add_field('name', 'Ольга')
+                    form.add_field('files', b'RIFFwav' * 1000, filename='olga.wav', content_type='audio/wav')
+                    r = await self.http.post('/api/robot/voices/clone', data=form, headers=h)
+                    self.assertEqual((await r.json())['voice_id'], 'Cln1234567890')
+                    clone = next(q for q in seen if q.url.path.endswith('/voices/add'))
+                    self.assertIn(b'name="files"; filename="olga.wav"', clone.content)
+                    self.assertIn('Ольга'.encode(), clone.content)
+                    r = await self.http.post('/api/robot/voices/clone', data=aiohttp.FormData({'name': 'x'}), headers=h)
+                    self.assertEqual(r.status, 400)
+                finally:
+                    speech._http = None
+                    speech._eleven_direct.clear()
         finally:
             await server.close()
 
