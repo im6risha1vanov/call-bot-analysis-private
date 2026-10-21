@@ -29,13 +29,15 @@ STOP_WORDS = {"стоп", "нет", "подождите", "погодите", "�
 # «эффект думания»: если модель не начала отвечать за FILLER_AFTER_S, робот говорит «так…», «угу…»
 FILLERS = [w.strip() for w in os.getenv("VOICE_FILLERS", "Так…|Угу…|Ага…|Так-так…").split("|") if w.strip()]
 FILLER_AFTER_S = int(os.getenv("VOICE_FILLER_AFTER_MS", "400")) / 1000
-FILLER_COOLDOWN_S = 6.0
+FILLER_COOLDOWN_S = 12.0  # на звонке 21.10 «так…» звучало на каждой реплике: заученный шаблон
 # Ольга, когда клиент называет данные (город, сумму, имя), говорит «так, записываю…» и пишет: пауза
 # на раздумье звучит как работа, а не как зависание. Ответ «да»/«нет» записывать нечего: обычное «угу…».
 NOTE_FILLERS = [w.strip() for w in os.getenv("VOICE_NOTE_FILLERS", "Так, записываю…|Секундочку…|Так, сейчас…").split("|")
                 if w.strip()]
 SHORT_ANSWERS = {"да", "нет", "ага", "угу", "конечно", "не", "неа", "ну", "давайте", "хорошо", "ладно", "можно",
-                 "алло", "слушаю", "да-да", "так"}
+                 "алло", "слушаю", "да-да", "так", "актуален", "актуально", "актуальна", "планирую", "планируем",
+                 "готов", "готова", "готовы", "подходит", "интересно", "интересует", "нормально", "верно", "правильно",
+                 "точно", "вопрос", "ещё", "еще", "уже", "пока", "наверное"}
 # Поддакивание: пока клиент долго рассказывает, Ольга вставляет «угу», «ага», «да-да». Робот молчал.
 BACKCHANNELS = [w.strip() for w in os.getenv("VOICE_BACKCHANNELS", "Угу.|Ага.|Да-да.").split("|") if w.strip()]
 BACKCHANNEL_AFTER_S = 3.5   # клиент говорит дольше, без конца реплики
@@ -62,7 +64,7 @@ def _names_data(text: str) -> bool:
     return bool(words) and not all(w in SHORT_ANSWERS for w in words)
 
 
-FILLER_CHANCE = float(os.getenv("VOICE_FILLER_CHANCE", "0.8"))  # не на каждой реплике, чтобы не звучало заученно
+FILLER_CHANCE = float(os.getenv("VOICE_FILLER_CHANCE", "0.5"))  # не на каждой реплике, чтобы не звучало заученно
 
 SendAudio = Callable[[bytes], Awaitable[None]]
 SendEvent = Callable[[dict], Awaitable[None]]
