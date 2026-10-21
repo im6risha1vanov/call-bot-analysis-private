@@ -6,6 +6,7 @@
     team: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
     mgr: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/>',
     pipe: '<path d="M3 4h18l-7 8v6l-4 2v-8z"/>',
+    doc: '<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 12h7M9 16h7M9 20h3"/>',
     calls: '<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/>',
     callbacks: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
     report: '<path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5M10 13h6M10 17h6"/>',
@@ -20,30 +21,33 @@
     robot: '<rect x="5" y="8" width="14" height="11" rx="3"/><path d="M12 4v4M9 13h.01M15 13h.01M9.5 16.5h5"/>',
     pen: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>',
     key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l3 3M15 8l2 2"/>',
+    source: '<circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5M11 8v6M8 11h6"/>',
     more: '<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>',
   };
   // bar — пункт нижней полоски на телефоне; more — под «Ещё»; label — подпись группы внутри «Ещё».
   const ITEMS = [
     {id: 'a:team', name: 'Сводка', icon: 'team', bar: true},
-    {id: 'a:mgr', name: 'Менеджеры', icon: 'mgr', bar: true},
-    {id: 'a:pipe', name: 'Воронка', icon: 'pipe'},
+    {id: 'w:staff', name: 'Сотрудники', icon: 'people', bar: true},
+    {id: 'w:deals', name: 'Сделки', icon: 'pipe'},
+    {id: 'w:contracts', name: 'Договоры', icon: 'doc', more: true},
     {id: 'a:calls', name: 'Звонки', icon: 'calls', bar: true},
     {id: 'a:callbacks', name: 'Перезвоны', icon: 'callbacks', bar: true},
     {id: 'w:reports', name: 'Отчёты', icon: 'report'},
     {id: 'a:olga', name: 'Колл-центр · Ольга', icon: 'olga', more: true},
     {id: 'a:leads', name: 'База лидов', icon: 'leads', more: true},
     {id: 'w:clients', name: 'Клиенты', icon: 'client', more: true},
+    {id: 'w:sources', name: 'Источники', icon: 'source', more: true},
     {id: 'w:training', name: 'Тренировки', icon: 'train', more: true},
     {id: 'w:ask', name: 'Вопрос по отделу', icon: 'ask', more: true},
     {id: 'w:team', name: 'Очереди', icon: 'queue', more: true, label: 'Работа менеджеров'},
     {id: 'w:tasks', name: 'Перезвоны в CRM', icon: 'tasks', more: true},
-    {id: 'w:staff', name: 'Сотрудники', icon: 'people', more: true, label: 'Настройки'},
-    {id: 'w:robot', name: 'Робот', icon: 'robot', more: true},
+    {id: 'w:robot', name: 'Робот', icon: 'robot', more: true, label: 'Настройки'},
     {id: 'w:prompts', name: 'Промты', icon: 'pen', more: true},
     {id: 'w:access', name: 'Доступы', icon: 'key', more: true},
   ];
   // Разделы работы отдела, которые открываются из меню не напрямую (очередь менеджера из «Очередей»).
-  const ALIAS = {'w:queue': 'w:team', 'w:leads': 'w:team', 'w:calls': 'w:team', 'w:stats': 'w:team'};
+  // «Менеджеры» аналитики объединены с «Сотрудниками»: старая ссылка ведёт в карточки сотрудников.
+  const ALIAS = {'w:queue': 'w:team', 'w:leads': 'w:team', 'w:calls': 'w:team', 'w:stats': 'w:team', 'a:mgr': 'w:staff', 'w:me': 'w:staff', 'a:pipe': 'w:deals'};
   const svg = k => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[k]}</svg>`;
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
   const store = {

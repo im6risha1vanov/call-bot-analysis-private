@@ -12,6 +12,7 @@
 #   bash scripts/crm_setup.sh public-on        — открыть сайт всем только на просмотр: без ссылки сразу выбор входа
 #   bash scripts/crm_setup.sh public-off       — закрыть: снова только личные и тестовая ссылки, входы для просмотра гаснут
 #   bash scripts/crm_setup.sh director-link [TG] — личная ссылка директора (по умолчанию владельца из бота): с ней можно всё менять
+#   bash scripts/crm_setup.sh dadata-key       — ключ DaData для поиска реквизитов по ИНН в «Договорах» (спросит ключ, на экран не выводит)
 #   bash scripts/crm_setup.sh rollback         — выключить сайт и убрать CRM_URL (таблицы CRM остаются, они ничему не мешают)
 set -euo pipefail
 APP=/opt/callbot-astra
@@ -37,7 +38,7 @@ test_link() {
 }
 
 # Все миграции CRM; каждая только добавляет и повторный запуск ничего не ломает.
-migrate() { for f in migrations/014_crm.sql migrations/015_crm_roles.sql migrations/016_crm_access.sql migrations/017_crm_reports.sql migrations/018_crm_questions.sql migrations/019_crm_staff.sql migrations/020_robot.sql; do
+migrate() { for f in migrations/014_crm.sql migrations/015_crm_roles.sql migrations/016_crm_access.sql migrations/017_crm_reports.sql migrations/018_crm_questions.sql migrations/019_crm_staff.sql migrations/020_robot.sql migrations/021_manager_memory.sql migrations/022_presentations.sql migrations/023_tg_chats.sql migrations/024_deals.sql migrations/025_contracts.sql migrations/026_presentation_client.sql migrations/027_sources.sql; do
   psql "$DATABASE_URL" -q -v ON_ERROR_STOP=1 -f "$f"; done; }
 
 listeners() { ss -ltnpH "( sport = :80 or sport = :443 )" || true; }
@@ -180,6 +181,18 @@ asyncio.run(main())
 PY
   echo 'open this link once on each device; it stays signed in for 90 days. Revoke it in «Доступы».'
   ;;
+dadata-key)
+  read -rsp 'DaData API key (dadata.ru, API-ключи): ' KEY; echo
+  KEY=$(printf '%s' "$KEY" | tr -dc 'A-Za-z0-9')
+  [ -n "$KEY" ] || { echo 'empty key, nothing changed'; exit 1; }
+  CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -H "Authorization: Token $KEY" -H 'Content-Type: application/json' \
+    -d '{"query":"7707083893","count":1}' https://suggestions.dadata.ru/suggestions/api/4_1/rs/findById/party || true)
+  [ "$CODE" = 200 ] || { echo "DaData answered $CODE to this key, nothing changed"; exit 1; }
+  sed -i '/^DADATA_KEY=/d' .env
+  echo "DADATA_KEY=$KEY" >> .env
+  systemctl restart callbot-crm
+  echo 'DaData key saved: search by INN works in «Договоры»'
+  ;;
 status)
   git log -1 --oneline
   grep -q '^CRM_PUBLIC=1' .env && echo 'public view-only: ON' || echo 'public view-only: off'
@@ -199,7 +212,7 @@ rollback)
   echo "CRM is off. Caddy keeps running but has nothing behind it; stop it with: systemctl disable --now caddy"
   ;;
 *)
-  sed -n '2,15p' "$0"
+  sed -n '2,16p' "$0"
   exit 1
   ;;
 esac

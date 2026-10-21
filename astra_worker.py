@@ -34,10 +34,30 @@ from crypto_util import decrypt
 from reports import esc, send_long
 from tools import owner_chat_ids, report_chat_ids
 from crm import journal as crm_journal
-from review import callbacks as review_callbacks, engine as review_engine, kitchen as review_kitchen, render as review_render, sheets as review_sheets, store as review_store
+from review import callbacks as review_callbacks, engine as review_engine, kitchen as review_kitchen, memory as review_memory, presentations as review_presentations, render as review_render, tgchats as review_tgchats, sheets as review_sheets, store as review_store
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("callbot-astra-worker")
+
+
+_presentations_task = None
+
+
+async def _run_presentations(pool) -> None:
+    try:
+        await review_presentations.maybe_run(pool)
+    except Exception:
+        log.exception("не удалось разобрать презентации из реестра")
+
+
+_tg_task = None
+
+
+async def _run_tgchats(pool) -> None:
+    try:
+        await review_tgchats.maybe_run(pool)
+    except Exception:
+        log.exception("не удалось прочитать рабочий Telegram")
 
 bot = Bot(token=os.environ["BOT_TOKEN"])
 
@@ -618,6 +638,20 @@ async def main() -> None:
                 await maybe_send_digests(pool)
                 if review_engine.enabled():
                     await review_callbacks.maybe_send(pool, bot)
+                    try:
+                        # Раз в день после 19:00: карточки памяти по менеджерам (MANAGER_MEMORY=on).
+                        await review_memory.maybe_update(pool)
+                    except Exception:
+                        log.exception("не удалось обновить память по менеджерам")
+                    # Презентации из реестра Григория (PRESENTATIONS=on): скачать, распознать и
+                    # разобрать занимает минуты, поэтому в фоне и не больше одного прохода сразу.
+                    global _presentations_task
+                    if review_presentations.enabled() and (_presentations_task is None or _presentations_task.done()):
+                        _presentations_task = asyncio.create_task(_run_presentations(pool))
+                    # Переписка рабочего Telegram (TG_CHATS=on): только чтение, тоже в фоне.
+                    global _tg_task
+                    if review_tgchats.enabled() and (_tg_task is None or _tg_task.done()):
+                        _tg_task = asyncio.create_task(_run_tgchats(pool))
                 await maybe_enqueue_rop_digests(pool)
                 await maybe_enqueue_oversight_report(pool)
                 last_sweep = now

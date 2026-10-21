@@ -22,7 +22,7 @@ from aiohttp import web  # noqa: E402
 
 import mango_client  # noqa: E402
 from tools import Forbidden, is_privileged  # noqa: E402
-from . import ask as asking, auth, cabinet, gsheets, journal, recording, reviews, staff, store, training  # noqa: E402
+from . import ask as asking, auth, cabinet, contracts, deals, gsheets, journal, people, recording, reviews, sources, staff, store, training  # noqa: E402
 from . import prompts as prompt_mode, robot, robot_api, robot_runner  # noqa: E402
 from review import store as review_store  # noqa: E402
 from .dial import dial  # noqa: E402
@@ -445,7 +445,112 @@ async def api_access_revoke(request):
 
 async def api_staff(request):
     who = await director(request)
-    return web.json_response(await staff.listing(request.app[POOL], who.actor))
+    pool = request.app[POOL]
+    data = await staff.listing(pool, who.actor)
+    stats = await people.summary(pool, who.actor.client_id)
+    for item in data['items']:
+        item['stats'] = stats.get(item['ext']) if item['role'] == 'manager' else None
+        item['kitchen'] = people.review_kitchen.handles(item['ext'])
+    return web.json_response(data)
+
+
+async def api_person(request):
+    """Карточка сотрудника. Директор выбирает человека (?person=), менеджер видит только себя."""
+    who = await actor(request)
+    return web.json_response(await people.card(request.app[POOL], who, request.query.get('person')))
+
+
+async def api_deals(request):
+    """Сделки: директор видит всех (?person= — одного менеджера), менеджер только свои."""
+    who = await actor(request)
+    days = request.query.get('days')
+    return web.json_response(await deals.listing(request.app[POOL], who, request.query.get('person') or None,
+                                                 int(days) if days and days.isdigit() else None))
+
+
+async def api_deal(request):
+    who = await actor(request)
+    pool = request.app[POOL]
+    deal = await deals.one(pool, who, request.match_info['phone'])
+    return web.json_response({**deal, 'contracts': await contracts.for_deal(pool, who.client_id, deal['phone'])})
+
+
+async def author_name(pool, who) -> str | None:
+    name = await pool.fetchval('SELECT full_name FROM employees WHERE client_id=$1 AND telegram_user_id=$2 LIMIT 1',
+                               who.client_id, who.telegram_user_id) if who.telegram_user_id else None
+    return name or ('Директор' if who.role == 'owner' else None)
+
+
+async def api_deal_event(request):
+    who = await actor(request, write=True)
+    pool = request.app[POOL]
+    data = await body(request)
+    return web.json_response(await deals.add_event(pool, who, request.match_info['phone'], str(data.get('kind') or ''),
+                                                   data.get('note'), data.get('reason'), data.get('amount'),
+                                                   await author_name(pool, who)))
+
+
+async def api_presentation_link(request):
+    """«Привязать к клиенту»: номер клиента для презентации, которая шла не через Mango."""
+    who = await actor(request, write=True)
+    pool = request.app[POOL]
+    data = await body(request)
+    try:
+        presentation_id = int(request.match_info['id'])
+    except ValueError:
+        raise web.HTTPNotFound()
+    return web.json_response(await deals.link_presentation(pool, who, presentation_id, str(data.get('phone') or ''),
+                                                           await author_name(pool, who)))
+
+
+# Генератор договоров (static/contracts/): пути — те, что ждёт страница генератора.
+async def api_contracts_config(request):
+    await actor(request)
+    return web.json_response(contracts.config())
+
+
+async def api_contracts_next(request):
+    who = await actor(request)
+    return web.json_response({'num': await contracts.next_number(request.app[POOL], who.client_id)})
+
+
+async def api_contracts_register(request):
+    who = await actor(request, write=True)
+    pool = request.app[POOL]
+    return web.json_response(await contracts.register(pool, who, await body(request), await author_name(pool, who)))
+
+
+async def api_contracts(request):
+    who = await actor(request)
+    return web.json_response({'items': await contracts.listing(request.app[POOL], who),
+                              'types': contracts.TYPES})
+
+
+async def api_contracts_lookup(request):
+    await actor(request)
+    kind = {'inn': 'party', 'bik': 'bank'}.get(request.match_info['kind'])
+    if not kind:
+        raise web.HTTPNotFound()
+    return web.json_response(await contracts.lookup(kind, request.match_info['value']))
+
+
+async def api_sources(request):
+    """Сохранённые подборки доноров отдела (страница «Источники»)."""
+    return web.json_response({'items': await sources.listing(request.app[POOL], await actor(request))})
+
+
+async def api_source(request):
+    return web.json_response(await sources.one(request.app[POOL], await actor(request), int_id(request.match_info['id'])))
+
+
+async def api_source_save(request):
+    who = await actor(request, write=True)
+    return web.json_response(await sources.save(request.app[POOL], who, await body(request)))
+
+
+async def api_source_delete(request):
+    await sources.delete(request.app[POOL], await actor(request, write=True), int_id(request.match_info['id']))
+    return web.json_response({'ok': True})
 
 
 async def api_staff_add(request):
@@ -662,6 +767,20 @@ def build(pool) -> web.Application:
     app.router.add_post('/api/access', api_access_create)
     app.router.add_post('/api/access/{id}/revoke', api_access_revoke)
     app.router.add_get('/api/staff', api_staff)
+    app.router.add_get('/api/person', api_person)
+    app.router.add_get('/api/deals', api_deals)
+    app.router.add_get('/api/deals/{phone}', api_deal)
+    app.router.add_post('/api/deals/{phone}/event', api_deal_event)
+    app.router.add_get('/api/sources/selections', api_sources)
+    app.router.add_post('/api/sources/selections', api_source_save)
+    app.router.add_get('/api/sources/selections/{id}', api_source)
+    app.router.add_post('/api/sources/selections/{id}/delete', api_source_delete)
+    app.router.add_post('/api/presentations/{id}/link', api_presentation_link)
+    app.router.add_get('/api/contracts', api_contracts)
+    app.router.add_get('/api/contracts/config', api_contracts_config)
+    app.router.add_get('/api/contracts/next-number', api_contracts_next)
+    app.router.add_post('/api/contracts/register', api_contracts_register)
+    app.router.add_get('/api/contracts/lookup/{kind}/{value}', api_contracts_lookup)
     app.router.add_post('/api/staff', api_staff_add)
     app.router.add_post('/api/staff/{action}', api_staff_action)
     app.router.add_get('/api/prompts', api_prompts)

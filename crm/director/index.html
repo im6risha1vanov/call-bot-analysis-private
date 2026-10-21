@@ -535,7 +535,6 @@ const ICONS={
 };
 const PAGES=[
   {id:'team',name:'Сводка отдела',tab:'Сводка',grp:'team'},
-  {id:'mgr',name:'Менеджеры',tab:'Менеджеры',grp:'team'},
   {id:'pipe',name:'Воронка продаж',tab:'Воронка',grp:'team'},
   {id:'calls',name:'Журнал звонков',tab:'Звонки',grp:'team'},
   {id:'callbacks',name:'Перезвоны',tab:'Перезвоны',grp:'team'},
@@ -1319,7 +1318,7 @@ const PSTAGES=[
   {id:'contract',n:'Договор',d:'Отмечается вручную в карточке клиента'},
   {id:'paid',n:'Оплачено',d:'Отмечается вручную в карточке клиента'}];
 const PIDX=Object.fromEntries(PSTAGES.map((s,i)=>[s.id,i]));
-let pipeF={per:'all',m:'all'};
+let pipeF={per:'all',m:(()=>{try{const v=sessionStorage.getItem('avr-pipe-m');sessionStorage.removeItem('avr-pipe-m');return v||'all'}catch(e){return 'all'}})()};
 const phKey=p=>String(p||'').replace(/\D/g,'').slice(-10);
 function autoStage(cs){let i=0;cs.forEach(c=>{if(c.r!=='ok')return;i=Math.max(i,c.g.includes('КП')||c.g.includes('встреча')?2:1)});return i}
 function pipeClients(){

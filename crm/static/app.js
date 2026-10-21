@@ -89,7 +89,10 @@ const ICON = {
   people: '<circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/><path d="M19 4v4M17 6h4"/>',
   robot: '<rect x="5" y="8" width="14" height="11" rx="3"/><path d="M12 4v4M9 13h.01M15 13h.01M9.5 16.5h5"/>',
   pen: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>',
+  deal: '<path d="M3 4h18l-7 8v6l-4 2v-8z"/>',
+  doc: '<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 12h7M9 16h7M9 20h3"/>',
   star: '<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/>',
+  source: '<circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5M11 8v6M8 11h6"/>',
 };
 const svg = k => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[k]}</svg>`;
 
@@ -99,6 +102,9 @@ const PAGES = [
   {id: 'queue', name: 'Очередь', icon: 'queue', roles: STAFF},
   {id: 'tasks', name: 'Перезвоны', icon: 'tasks', roles: STAFF},
   {id: 'leads', name: 'База', icon: 'leads', roles: STAFF},
+  {id: 'sources', name: 'Источники', icon: 'source', roles: STAFF},
+  {id: 'deals', name: 'Сделки', icon: 'deal', roles: STAFF},
+  {id: 'contracts', name: 'Договоры', icon: 'doc', roles: STAFF},
   {id: 'calls', name: 'Звонки', icon: 'calls', roles: STAFF},
   {id: 'stats', name: 'Итоги', icon: 'stats', roles: STAFF},
   {id: 'reports', name: 'Отчёты', icon: 'report', roles: STAFF},
@@ -106,6 +112,7 @@ const PAGES = [
   {id: 'ask', name: 'Вопрос по отделу', icon: 'ask', roles: STAFF},
   {id: 'clients', name: 'Клиенты', icon: 'client', roles: ['director']},
   {id: 'staff', name: 'Сотрудники', icon: 'people', roles: ['director']},
+  {id: 'me', name: 'Моя карточка', icon: 'people', roles: ['manager']},
   {id: 'robot', name: 'Робот', icon: 'robot', roles: ['director', 'client']},
   {id: 'prompts', name: 'Промты', icon: 'pen', roles: ['director']},
   {id: 'access', name: 'Доступы', icon: 'key', roles: ['director']},
@@ -149,12 +156,15 @@ function shell() {
       <header class="top"><h1 id="title"></h1><span class="sp"></span>${people}</header>
       <main class="content" id="view"></main>
     </div></div>`;
-  $$('.nav button').forEach(b => b.addEventListener('click', () => go(b.dataset.page)));
-  if (director) DirMenu.mount({side: '.side', here: 'w', name: S.me.name, test: S.me.test, onOpen: go});
+  $$('.nav button').forEach(b => b.addEventListener('click', () => openPage(b.dataset.page)));
+  if (director) DirMenu.mount({side: '.side', here: 'w', name: S.me.name, test: S.me.test, onOpen: openPage});
   if ($('#logout')) $('#logout').addEventListener('click', async () => { await api('/api/logout', {method: 'POST', body: {}}).catch(() => {}); showLogin(); });
   const pick = $('#pick-ext');
   if (pick) pick.addEventListener('change', () => { S.ext = pick.value; S.queue = null; S.pos = 0; S.dial = null; save(); go(S.page); });
 }
+
+// Переход из меню: раздел открывается с начала (список сотрудников, а не последняя карточка).
+function openPage(page) { S.person = null; S.personTab = null; go(page); }
 
 function save() { try { localStorage.setItem('crm', JSON.stringify({page: S.page, ext: S.ext})); } catch (e) { /* без хранилища */ } }
 function load() { try { return JSON.parse(localStorage.getItem('crm') || '{}'); } catch (e) { return {}; } }
@@ -791,24 +801,40 @@ function linkBox(out, link, note) {
   });
 }
 
+// ---------- сотрудники: список и карточка человека ----------
+const pctN = (a, b) => b ? Math.round(a / b * 100) : null;
+const pctTxt = (a, b) => b ? pctN(a, b) + '%' : '—';
+// Стрелка к прошлой неделе: доля с результатом выросла или упала.
+function trend(now, before) {
+  const a = pctN(now.success, now.talks), b = pctN(before.success, before.talks);
+  if (a === null || b === null || a === b) return '';
+  return a > b ? `<span class="trend up" title="Прошлая неделя: ${b}%">▲ ${a - b}</span>` : `<span class="trend down" title="Прошлая неделя: ${b}%">▼ ${b - a}</span>`;
+}
+const botChip = p => p.linked ? `<span class="chip good">в боте</span>` : p.invite_until ? '<span class="chip warn">ждёт по ссылке</span>' : '<span class="chip">не подключён</span>';
+
 VIEWS.staff = async view => {
+  if (S.person) return personView(view, S.person);
   const d = await api('/api/staff', {scoped: false});
-  const tgCell = p => p.linked ? `<span class="chip good">подключён</span>${p.username ? ' @' + esc(p.username) : ''}`
-    : p.invite_until ? `<span class="chip warn">ждёт по ссылке</span> до ${fmtWhen(p.invite_until)}` : '<span class="chip">не подключён</span>';
-  const reviewed = p => p.reviewed === null ? '' : p.reviewed ? 'да' : 'нет';
-  view.innerHTML = `<div class="panel"><h2>Сотрудники в боте <span class="muted">· ${d.items.length}</span></h2>
-      <p class="muted">Менеджеров из Mango бот добавляет сам. Человек подключается к боту по одноразовой ссылке-приглашению: открывает её и жмёт «Старт».
-        Отключённый от бота перестаёт получать сообщения, а на его место можно пригласить другого.</p>
-      <div class="scroll"><table class="tbl"><thead><tr><th>Кто</th><th>Роль</th><th class="n">Доб.</th><th>Бот</th><th class="hide-m">Звонки разбираются</th><th>Копии всех разборов</th><th></th></tr></thead><tbody>
-      ${d.items.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.role_title)}</td><td class="n">${/^\d+$/.test(p.ext) ? esc(p.ext) : '—'}</td>
-        <td>${tgCell(p)}</td><td class="hide-m">${reviewed(p)}</td>
-        <td>${p.can_copy ? `<label class="row"><input type="checkbox" data-copies="${esc(p.ext)}"${p.copies ? ' checked' : ''}> ${p.copies ? 'получает' : 'нет'}</label>` : (p.copies ? 'получает' : '')}</td>
-        <td><div class="row">${p.linked ? '' : `<button class="btn small" data-inv="${esc(p.ext)}">Ссылка в бота</button>`}
-          ${p.can_unlink ? `<button class="btn small" data-unlink="${esc(p.ext)}" data-name="${esc(p.name)}">Отключить</button>` : ''}</div></td></tr>
-        <tr hidden data-out="${esc(p.ext)}"><td colspan="7"></td></tr>`).join('')}</tbody></table></div>
-      <p class="muted">Копии всех разборов приходят в Telegram целиком, по каждому звонку, поэтому включаются только руководителям.
-        ${d.copies_source === 'env' ? 'Сейчас список копий взят из настроек сервера; после первого изменения здесь он хранится в CRM и меняется без перезапуска бота.' : ''}
-        ${d.copies_other ? `Ещё получателей не из списка сотрудников: ${d.copies_other}, они остаются.` : ''}</p></div>
+  const managers = d.items.filter(p => p.role === 'manager');
+  const others = d.items.filter(p => p.role !== 'manager');
+  const mRow = p => {
+    const s = p.stats || {week: {talks: 0, success: 0}, prev: {talks: 0, success: 0}, dials: {dials: 0}, top: null};
+    const head = `<tr class="click" data-person="${esc(p.ext)}"><td><b>${esc(p.name)}</b> <span class="muted">· ${esc(p.ext)}</span></td>
+      <td class="n hide-m">${s.dials.dials}</td>`;
+    if (p.kitchen) return `${head}<td class="hide-m"></td><td class="muted">свой скрипт (кухни)</td><td class="hide-m"></td><td>${botChip(p)}</td></tr>`;
+    return `${head}<td class="n hide-m">${s.week.talks}</td>
+      <td class="n">${s.week.success} <span class="muted">${pctTxt(s.week.success, s.week.talks)}</span> ${trend(s.week, s.prev)}</td>
+      <td class="hide-m">${s.top ? `${esc(s.top.label)} <span class="muted">· ${s.top.n}</span>` : '<span class="muted">—</span>'}</td>
+      <td>${botChip(p)}</td></tr>`;
+  };
+  view.innerHTML = `<div class="panel"><h2>Менеджеры <span class="muted">· ${managers.length}</span></h2>
+      <div class="scroll"><table class="tbl"><thead><tr><th>Кто</th><th class="n hide-m">Наборов за 7 дн.</th><th class="n hide-m">Разговоров разобрано</th>
+        <th class="n">С результатом</th><th class="hide-m">Частая ошибка за 30 дн.</th><th>Бот</th></tr></thead><tbody>
+      ${managers.map(mRow).join('') || '<tr><td colspan="6" class="muted">Менеджеров нет.</td></tr>'}</tbody></table></div>
+      <p class="muted">Нажмите на человека, чтобы открыть его карточку: цифры, ошибки, звонки, тренировки, перезвоны, доступы. Стрелка показывает, как изменилась доля разговоров с результатом к прошлой неделе.</p></div>
+    <div class="panel"><h2>Руководители <span class="muted">· ${others.length}</span></h2><div class="scroll"><table class="tbl"><tbody>
+      ${others.map(p => `<tr class="click" data-person="${esc(p.ext)}"><td><b>${esc(p.name)}</b></td><td>${esc(p.role_title)}</td>
+        <td>${botChip(p)}${p.username ? ' @' + esc(p.username) : ''}</td><td class="hide-m">${p.copies ? 'получает копии разборов' : ''}</td></tr>`).join('')}</tbody></table></div></div>
     <div class="panel"><h2>Добавить человека</h2>
       <div class="outform">
         <label class="field">Кто<select id="s-role"><option value="manager">Менеджер</option><option value="head">Руководитель</option></select></label>
@@ -817,8 +843,9 @@ VIEWS.staff = async view => {
         <label class="field">Ник в Telegram, если знаете<input id="s-user" maxlength="33" placeholder="@nick"></label>
         <button class="btn primary" id="s-go">Добавить и дать ссылку</button></div>
       <div id="s-out"></div>
-      <p class="muted">С ником хватит простого /start в боте, ссылка нужна на случай, если ника нет. Ссылка одноразовая и действует 7 дней.
-        Руководитель получает отчёты по отделу и горячие потери; копии всех разборов включаются отдельно в таблице выше.</p></div>`;
+      <p class="muted">Менеджеров из Mango бот добавляет сам. С ником хватит простого /start в боте, ссылка нужна на случай, если ника нет. Ссылка одноразовая и действует 7 дней.
+        Руководитель получает отчёты по отделу и горячие потери; копии всех разборов включаются в его карточке.</p></div>`;
+  $$('[data-person]', view).forEach(tr => tr.addEventListener('click', () => { S.person = tr.dataset.person; S.personTab = null; S.memIdx = 0; go('staff'); }));
   const role = $('#s-role', view);
   role.addEventListener('change', () => { $('#s-ext-f', view).hidden = role.value !== 'manager'; });
   $('#s-go', view).addEventListener('click', async () => {
@@ -826,26 +853,184 @@ VIEWS.staff = async view => {
     try {
       const r = await api('/api/staff', {method: 'POST', scoped: false, body: {role: role.value, person_ext: $('#s-ext', view).value,
         name: $('#s-name', view).value, username: $('#s-user', view).value}});
-      linkBox(out, r.link, 'Отправьте ссылку человеку лично. Он появится в таблице после обновления страницы.');
+      linkBox(out, r.link, 'Отправьте ссылку человеку лично. Он появится в списке после обновления страницы.');
     } catch (e) { out.innerHTML = `<p class="muted">${esc(e.message)}</p>`; }
   });
-  $$('[data-inv]', view).forEach(b => b.addEventListener('click', async () => {
-    const row = $(`[data-out="${CSS.escape(b.dataset.inv)}"]`, view);
-    row.hidden = false;
-    try {
-      const r = await api('/api/staff/invite', {method: 'POST', scoped: false, body: {person_ext: b.dataset.inv}});
-      linkBox($('td', row), r.link, 'Ссылка одноразовая, действует 7 дней.');
-    } catch (e) { $('td', row).textContent = e.message; }
-  }));
-  $$('[data-unlink]', view).forEach(b => b.addEventListener('click', async () => {
-    if (!confirm(`Отключить ${b.dataset.name} от бота? Сообщения бота ему больше не придут. Вход в CRM по его личной ссылке закрывается в «Доступах».`)) return;
-    try { await api('/api/staff/unlink', {method: 'POST', scoped: false, body: {person_ext: b.dataset.unlink}}); go('staff'); }
-    catch (e) { alert(e.message); }
-  }));
-  $$('[data-copies]', view).forEach(c => c.addEventListener('change', async () => {
-    try { await api('/api/staff/copies', {method: 'POST', scoped: false, body: {person_ext: c.dataset.copies, on: c.checked}}); go('staff'); }
-    catch (e) { alert(e.message); c.checked = !c.checked; }
-  }));
+};
+
+// Своя карточка менеджера: то же, что видит руководитель, кроме доступов.
+VIEWS.me = async view => personView(view, null);
+
+const PERSON_TABS = [['over', 'Обзор'], ['memory', 'Память'], ['calls', 'Звонки и разборы'], ['train', 'Тренировки'], ['tasks', 'Перезвоны'], ['access', 'Доступ и бот']];
+
+async function personView(view, ext) {
+  const p = await api('/api/person' + (ext ? '?person=' + encodeURIComponent(ext) : ''), {scoped: false});
+  const tabs = PERSON_TABS.filter(([k]) => k === 'access' ? !!p.access : p.manager);
+  const tab = tabs.some(([k]) => k === S.personTab) ? S.personTab : tabs[0][0];
+  const back = ext ? '<button class="btn small" id="p-back">← Все сотрудники</button>' : '';
+  view.innerHTML = `<div class="row gapb">${back}<b class="p-name">${esc(p.name)}</b><span class="muted">${esc(p.role_title)}${/^\d+$/.test(p.ext) ? ' · доб. ' + esc(p.ext) : ''}</span>
+      ${p.access ? botChip(p.access) : ''}</div>
+    ${tabs.length > 1 ? `<div class="filters">${tabs.map(([k, t]) => `<button data-ptab="${k}" aria-pressed="${tab === k}">${t}</button>`).join('')}</div>` : ''}
+    <div id="p-body"></div>`;
+  if (back) $('#p-back', view).addEventListener('click', () => { S.person = null; go('staff'); });
+  PERSON_TAB[tab]($('#p-body', view), p, () => personView(view, ext));
+  $$('[data-ptab]', view).forEach(b => b.addEventListener('click', () => { S.personTab = b.dataset.ptab; S.memIdx = 0; personView(view, ext); }));
+}
+
+const kitchenNote = p => p.kitchen ? '<div class="panel muted">Звонки этого сотрудника бот разбирает по отдельному скрипту (кухни), поэтому разговоров, результатов и ошибок здесь нет. Наборы, перезвоны и тренировки показываются как у всех.</div>' : '';
+
+const exBtns = list => (list || []).map(c => `<button class="btn small" data-review="${c.id}">${esc(c.at ? when(c.at) : 'звонок ' + c.id)}</button>`).join('');
+const RESULT_CHIP = {'получилось': 'good', 'частично': 'warn', 'не получилось': 'bad'};
+
+function memoryCard(c, latest) {
+  const weak = c.weak_spots || [], good = c.strengths || [];
+  const counts = x => x.counts ? `<span class="muted">за 30 дн. ${x.counts.month} · за 7 дн. ${x.counts.week} · неделей раньше ${x.counts.prev}</span>` : '';
+  return `${c.focus || c.trend ? `<div class="panel mem-focus">
+      ${c.focus ? `<div class="mem-label">Фокус на ближайшие дни</div><div class="mem-big">${esc(c.focus)}</div>` : ''}
+      ${c.previous_focus ? `<p class="muted">Прошлый фокус: «${esc(c.previous_focus)}»${c.focus_result ? ` <span class="chip ${RESULT_CHIP[c.focus_result] || ''}">${esc(c.focus_result)}</span>` : ''}</p>` : ''}
+      ${c.trend ? `<p>${esc(c.trend)}</p>` : ''}</div>` : ''}
+    <div class="grid2"><div class="panel"><h2>Слабые места <span class="muted">· ${weak.length}</span></h2>
+      ${weak.length ? weak.map((x, i) => `<div class="mem-item">
+        <div class="mem-title"><b>${i + 1}. ${esc(x.title)}</b> ${counts(x)}</div>
+        ${x.pattern ? `<p>${esc(x.pattern)}</p>` : ''}
+        ${x.advice ? `<p class="mem-say">Как лучше: ${esc(x.advice)}</p>` : ''}
+        ${x.examples.length ? `<div class="p-ex">${exBtns(x.examples)}</div>` : ''}</div>`).join('') : '<div class="empty">Слабых мест бот не выделил.</div>'}</div>
+    <div class="panel"><h2>Что получается</h2>${good.length ? good.map(x => `<div class="p-pos"><span>${esc(x.title)}</span> ${exBtns(x.examples)}</div>`).join('')
+      : '<div class="empty">Пока не отмечено.</div>'}
+      <p class="muted">Карточка от ${esc(ddmm(c.day))}${latest ? '' : ' (старая версия)'} по ${c.talks} ${plural(c.talks, 'разговору', 'разговорам', 'разговорам')} за 30 дней. Кнопки с датой открывают разбор и запись звонка.</p></div></div>`;
+}
+
+const PERSON_TAB = {
+  memory(el, p) {
+    if (p.kitchen) { el.innerHTML = kitchenNote(p); return; }
+    const cards = p.memory || [];
+    const pick = Math.min(S.memIdx || 0, Math.max(cards.length - 1, 0));
+    if (!cards.length) {
+      el.innerHTML = `<div class="panel empty">${p.memory_on ? `Бот пишет карточку памяти каждый день после ${p.memory_hour}:00, если у менеджера были новые разборы. Первая появится сегодня вечером.`
+        : 'Память включится после выкладки: бот будет писать карточку каждый день после 19:00.'}<br>Пока можно смотреть частые ошибки по цифрам на вкладке «Обзор».</div>`;
+      return;
+    }
+    el.innerHTML = memoryCard(cards[pick], pick === 0) + (cards.length > 1 ? `<div class="panel"><h2>История памяти <span class="muted">· ${cards.length}</span></h2><div class="scroll"><table class="tbl"><tbody>
+      ${cards.map((c, i) => `<tr class="click${i === pick ? ' mem-cur' : ''}" data-mem="${i}"><td>${esc(ddmm(c.day))}</td><td>${esc(c.focus || c.trend || '')}</td>
+        <td>${c.focus_result ? `<span class="chip ${RESULT_CHIP[c.focus_result] || ''}">${esc(c.focus_result)}</span>` : ''}</td></tr>`).join('')}</tbody></table></div></div>` : '');
+    $$('[data-mem]', el).forEach(tr => tr.addEventListener('click', () => { S.memIdx = +tr.dataset.mem; PERSON_TAB.memory(el, p); window.scrollTo(0, 0); }));
+  },
+  over(el, p) {
+    if (p.kitchen) {
+      const d = p.dials;
+      el.innerHTML = `${kitchenNote(p)}<div class="kpis">${[['week', '7 дней'], ['month', '30 дней']].map(([k, t]) =>
+        `<div class="kpi"><b>${d[k].dials}</b><span>наборов за ${t} · дозвон ${pctTxt(d[k].answered, d[k].dials)}</span></div>`).join('')}</div>`;
+      return;
+    }
+    const w = p.periods.week, pr = p.periods.prev, m = p.periods.month, dw = p.dials.week;
+    const max = Math.max(1, ...p.days.map(d => d.talks));
+    const outs = Object.entries(m.outcomes).sort((a, b) => b[1] - a[1]);
+    const mem = (p.memory || [])[0];
+    el.innerHTML = `${mem && mem.focus ? `<div class="panel mem-focus row"><span><span class="mem-label">Фокус от бота · ${esc(ddmm(mem.day))}</span> ${esc(mem.focus)}</span>
+        <button class="btn small" data-ptab="memory">Слабые места →</button></div>` : ''}<div class="kpis">
+        <div class="kpi"><b>${dw.dials}</b><span>наборов за 7 дней · дозвон ${pctTxt(dw.answered, dw.dials)} · на линии ${hm(dw.seconds)}</span></div>
+        <div class="kpi"><b>${w.talks}</b><span>разговоров разобрано · прошлая неделя ${pr.talks}</span></div>
+        <div class="kpi"><b>${w.success} <small>${pctTxt(w.success, w.talks)}</small></b><span>с результатом ${trend(w, pr) || ''} · прошлая неделя ${pr.success} (${pctTxt(pr.success, pr.talks)})</span></div>
+        <div class="kpi"><b>${w.hot}</b><span>горячих потерь за 7 дней</span></div></div>
+      <div class="grid2"><div class="stack">
+        <div class="panel"><h2>Частые ошибки за 30 дней <span class="muted">· потеряно ${m.lost} из ${m.talks} разговоров</span></h2>
+          ${p.mistakes.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Где терялся результат</th><th class="n">30 дн.</th><th class="n">7 дн.</th><th class="n hide-m">Пред. 7 дн.</th></tr></thead><tbody>
+          ${p.mistakes.map(x => `<tr><td>${esc(x.label)}${x.examples.length ? `<div class="p-ex">${x.examples.map(c =>
+              `<button class="btn small" data-review="${c.id}" title="${esc(c.what || '')}">${esc(when(c.at))}</button>`).join('')}</div>` : ''}</td>
+            <td class="n">${x.month}</td><td class="n">${x.week}</td><td class="n hide-m">${x.prev}</td></tr>`).join('')}</tbody></table></div>
+          <p class="muted">Кнопки с датой открывают пример: разбор и запись звонка.</p>` : '<div class="empty">Потерь с понятной причиной за 30 дней нет.</div>'}</div>
+        <div class="panel"><h2>Разговоры по дням</h2>${m.talks ? `<div class="bars p-days">${p.days.map(d =>
+            `<div class="bar" title="${ddmm(d.day)}: разговоров ${d.talks}, с результатом ${d.success}, наборов ${d.dials}"><div class="stackbar"><i data-h="${d.success / max * 100}"></i><i class="b2" data-h="${(d.talks - d.success) / max * 100}"></i></div><span>${ddmm(d.day).slice(0, 2)}</span></div>`).join('')}</div>
+          <p class="muted">Зелёным разговоры с результатом, серым без результата, за 30 дней.</p>` : '<div class="empty">Разобранных разговоров за 30 дней нет.</div>'}</div></div>
+      <div class="stack">
+        <div class="panel"><h2>Результаты за 30 дней <span class="muted">· ${m.success} из ${m.talks}</span></h2>${outs.length ? `<table class="tbl"><tbody>${outs.map(([k, n]) =>
+            `<tr><td>${esc(p.outcome_labels[k] || k)}</td><td class="n">${n}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">Пока нет.</div>'}
+          <button class="btn small" data-deals-of="${esc(p.ext)}">${S.me.role === 'director' ? 'Его сделки' : 'Мои сделки'} →</button></div>
+        <div class="panel"><h2>Что получается</h2>${p.positives.length ? `<div class="list">${p.positives.map(x =>
+            `<div class="p-pos"><span>${esc(x.why)}</span> <button class="btn small" data-review="${x.id}">${esc(when(x.at))}</button></div>`).join('')}</div>` : '<div class="empty">Пока нет отмеченных удачных мест.</div>'}</div>
+      </div></div>`;
+    heights(el);
+  },
+  calls(el, p) {
+    const f = S.personCalls || 'all';
+    const shown = p.calls.filter(c => f === 'all' || (f === 'good' ? c.success : f === 'lost' ? !c.success && c.chance !== 'none' : c.category === f));
+    const cats = p.mistakes.map(x => [x.key, x.label]);
+    el.innerHTML = `${kitchenNote(p)}<div class="panel"><h2>Разобранные разговоры за 30 дней <span class="muted">· ${p.calls.length}${p.calls.length >= 60 ? ', последние' : ''}</span></h2>
+      <div class="row gapb"><div class="filters">${[['all', 'Все'], ['good', 'С результатом'], ['lost', 'Потеряны']].map(([k, t]) =>
+        `<button data-cf="${k}" aria-pressed="${f === k}">${t}</button>`).join('')}</div>
+        ${cats.length ? `<label class="field"><select id="p-cat" aria-label="Ошибка"><option value="">Любая ошибка</option>${cats.map(([k, t]) =>
+          `<option value="${esc(k)}"${f === k ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select></label>` : ''}</div>
+      ${shown.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Когда</th><th>Номер</th><th class="n">Длит.</th><th>Итог</th><th></th></tr></thead><tbody>
+      ${shown.map(c => `<tr><td>${esc(when(c.at))}</td><td class="num">${esc(phone(c.number))}</td><td class="n">${dur(c.seconds)}</td>
+        <td><span class="chip ${c.success ? 'good' : c.chance === 'hot' ? 'bad' : c.chance === 'normal' ? 'warn' : ''}">${c.success ? 'результат' : c.chance === 'hot' ? 'горячий, потерян' : c.chance === 'normal' ? 'потерян' : 'без шанса'}</span>
+          ${c.verdict ? esc(c.verdict) : ''}${c.rop_line ? `<div class="muted">${esc(c.rop_line)}</div>` : ''}</td>
+        <td><button class="btn small" data-review="${c.id}">Разбор${c.rec ? ' и запись' : ''}</button></td></tr>`).join('')}</tbody></table></div>`
+        : '<div class="empty">Таких разговоров нет.</div>'}</div>`;
+    $$('[data-cf]', el).forEach(b => b.addEventListener('click', () => { S.personCalls = b.dataset.cf; PERSON_TAB.calls(el, p); }));
+    $('#p-cat', el)?.addEventListener('change', e => { S.personCalls = e.target.value || 'all'; PERSON_TAB.calls(el, p); });
+  },
+  train(el, p, reload) {
+    const t = p.trainings, top = p.mistakes[0];
+    const canAssign = S.me.role === 'director' && !S.me.test;
+    el.innerHTML = `<div class="stack">
+      ${canAssign ? `<div class="panel"><h2>Назначить тренировку</h2>
+        <p class="muted">Менеджеру придёт сообщение в боте с кнопкой старта. ${top ? `Самая частая ошибка за 30 дней: «${esc(top.label)}».` : ''}</p>
+        <div class="row">${top ? `<button class="btn primary" id="p-train-top">Отработать «${esc(top.label)}»</button>` : ''}
+          <button class="btn" id="p-train-dialog">Разговор целиком</button></div><div class="muted" id="p-train-out"></div></div>` : ''}
+      ${t.pending.length ? `<div class="panel"><h2>Назначено, ещё не начато <span class="muted">· ${t.pending.length}</span></h2><div class="list">
+        ${t.pending.map(x => `<div class="row gapb"><span>${esc(x.mode)}${x.topic ? ' · ' + esc(x.topic) : ''}</span>
+          ${x.link ? `<a class="btn small primary" href="${esc(x.link)}" target="_blank" rel="noopener">Начать в тренажёре</a>` : ''}</div>`).join('')}</div></div>` : ''}
+      <div class="panel"><h2>Пройденные тренировки <span class="muted">· ${t.items.length}</span></h2>${t.items.length ? `<div class="scroll"><table class="tbl">
+        <thead><tr><th>Когда</th><th>Режим</th><th>Тема</th><th>Итог</th></tr></thead><tbody>
+        ${t.items.map(x => `<tr class="click" data-tid="${x.id}"><td>${fmtWhen(x.at)}</td><td>${esc(x.mode)}</td><td>${esc(x.topic || '')}</td><td>${esc(x.result)}${x.test ? ' <span class="muted">· пробная</span>' : ''}</td></tr>`).join('')}
+        </tbody></table></div>` : '<div class="empty">Тренировок пока не было.</div>'}</div></div>`;
+    $$('tr[data-tid]', el).forEach(tr => tr.addEventListener('click', () => trainingDetail(tr.dataset.tid)));
+    const assign = async (mode, topic) => {
+      const out = $('#p-train-out', el);
+      try {
+        await api('/api/trainings', {method: 'POST', scoped: false, body: {person_ext: p.ext, mode, topic}});
+        out.textContent = 'Назначено.'; setTimeout(reload, 700);
+      } catch (e) { out.textContent = e.message; }
+    };
+    $('#p-train-top', el)?.addEventListener('click', () => assign('drill', top.label));
+    $('#p-train-dialog', el)?.addEventListener('click', () => assign('dialog', ''));
+  },
+  tasks(el, p) {
+    const late = p.tasks.filter(t => t.late).length;
+    el.innerHTML = `<div class="panel"><h2>Открытые перезвоны и встречи <span class="muted">· ${p.tasks.length}${late ? `, просрочено ${late}` : ''}</span></h2>
+      ${p.tasks.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Когда</th><th>Что</th><th>Номер</th><th>Клиент</th><th class="hide-m">Договорённость</th></tr></thead><tbody>
+      ${p.tasks.map(t => `<tr><td><span class="chip ${t.late ? 'late' : t.due_date === p.today ? 'today' : ''}">${esc(ddmm(t.due_date))}${t.due_time ? ' ' + esc(t.due_time) : ''}${t.late ? ' · просрочен' : ''}</span></td>
+        <td>${esc(t.label)}</td><td class="num">${esc(phone(t.number))}</td><td>${esc(t.title)}</td><td class="hide-m">${esc(t.note)}</td></tr>`).join('')}</tbody></table></div>`
+        : '<div class="empty">Открытых перезвонов нет.</div>'}</div>`;
+  },
+  access(el, p, reload) {
+    const a = p.access;
+    el.innerHTML = `<div class="panel"><h2>Telegram-бот</h2>
+        <p>${a.linked ? `Подключён${a.username ? ' как @' + esc(a.username) : ''}. Получает разборы и уведомления.` : a.invite_until ? `Ждёт подключения по ссылке до ${fmtWhen(a.invite_until)}.` : 'Не подключён.'}</p>
+        ${a.reviewed === null ? '' : `<p class="muted">Звонки ${a.reviewed ? 'разбираются ботом' : 'не разбираются ботом'}.</p>`}
+        <div class="row">${a.linked ? '' : '<button class="btn" id="p-inv">Ссылка в бота</button>'}
+          ${a.can_unlink ? '<button class="btn" id="p-unlink">Отключить от бота</button>' : ''}</div><div id="p-inv-out"></div></div>
+      ${a.can_copy ? `<div class="panel"><h2>Копии всех разборов</h2>
+        <label class="row"><input type="checkbox" id="p-copies"${a.copies ? ' checked' : ''}> Присылать полные разборы всех менеджеров в Telegram</label>
+        <p class="muted">Включается только руководителям: там звонки всех менеджеров.</p></div>` : ''}
+      <div class="panel"><h2>Вход в CRM</h2><p>${a.crm_links ? `Личных ссылок: ${a.crm_links}. Последний вход: ${a.crm_used ? fmtWhen(a.crm_used) : 'ещё не входил'}.` : 'Личной ссылки нет.'}</p>
+        <button class="btn" id="p-access">Открыть «Доступы»</button></div>`;
+    $('#p-access', el).addEventListener('click', () => go('access'));
+    $('#p-inv', el)?.addEventListener('click', async () => {
+      const out = $('#p-inv-out', el);
+      try { const r = await api('/api/staff/invite', {method: 'POST', scoped: false, body: {person_ext: p.ext}}); linkBox(out, r.link, 'Ссылка одноразовая, действует 7 дней.'); }
+      catch (e) { out.textContent = e.message; }
+    });
+    $('#p-unlink', el)?.addEventListener('click', async () => {
+      if (!confirm(`Отключить ${p.name} от бота? Сообщения бота ему больше не придут. Вход в CRM по его личной ссылке закрывается в «Доступах».`)) return;
+      try { await api('/api/staff/unlink', {method: 'POST', scoped: false, body: {person_ext: p.ext}}); reload(); }
+      catch (e) { alert(e.message); }
+    });
+    $('#p-copies', el)?.addEventListener('change', async e => {
+      try { await api('/api/staff/copies', {method: 'POST', scoped: false, body: {person_ext: p.ext, on: e.target.checked}}); reload(); }
+      catch (err) { alert(err.message); e.target.checked = !e.target.checked; }
+    });
+  },
 };
 
 // Режим промта: черновик живёт на странице, сохраняется только текст, по которому собран пример.
@@ -1069,6 +1254,201 @@ VIEWS.robot = async view => {
   $$('[data-rc]', view).forEach(tr => tr.addEventListener('click', () => robotCall(log.items[+tr.dataset.rc])));
 };
 
+// ---------- сделки: клиент от холодного звонка до оплаты ----------
+const DEAL_SHOW = [['active', 'В работе'], ['stalled', 'Зависшие'], ['lost', 'Отказ'], ['paid', 'Оплачено'], ['all', 'Все']];
+const DEAL_PERIODS = [['30', '30 дней'], ['90', '90 дней'], ['', 'Всё время']];
+const TEMP = {hot: ['горячий', 'good'], warm: ['тёплый', 'warn'], cold: ['холодный', ''], lost: ['отказ', 'bad']};
+const dealName = d => d.company || phone(d.number);
+function dealStatus(d) {
+  if (d.status === 'paid') return `<span class="chip good">оплачено${d.amount ? ' · ' + rub(d.amount) : ''}</span>`;
+  if (d.status === 'lost') return `<span class="chip bad">отказ${d.lost.auto ? '' : ' · отмечен'}</span>`;
+  if (d.stalled_days != null) return `<span class="chip late">стоит ${d.stalled_days} дн.</span>`;
+  return '<span class="chip acc">в работе</span>';
+}
+function dealSteps(d) {
+  return `<div class="deal-steps">${(S.dealStages || []).slice(1).map((st, i) => {
+    const n = i + 2;
+    const cls = d.stage_no > n || (d.stage_no === n && d.status === 'paid') ? 'done' : d.stage_no === n ? (d.status === 'lost' ? 'lost' : 'cur') : '';
+    return `<span class="${cls}">${esc(st.name)}</span>`;
+  }).join('')}</div>`;
+}
+
+VIEWS.deals = async view => {
+  const director = S.me.role === 'director';
+  const f = S.dealF || (S.dealF = {show: 'active', days: '90', person: ''});
+  const q = new URLSearchParams({days: f.days, person: director ? f.person : ''});
+  const d = await api('/api/deals?' + q, {scoped: false});
+  S.dealStages = d.stages; S.dealReasons = d.reasons; S.canPay = d.can_pay;
+  const list = d.deals.filter(x => f.show === 'all' || (f.show === 'stalled' ? x.stalled_days != null : x.status === f.show));
+  const fn = d.funnel;
+  const stageRows = fn.stages.map((st, i) => {
+    const prev = i ? fn.stages[i - 1].reached : 0;
+    const conv = i > 1 && prev ? Math.round(st.reached * 100 / prev) + '%' : '';
+    return `<tr><td><b>${i + 1}. ${esc(st.name)}</b></td><td class="n">${st.reached}</td><td class="n muted hide-m">${conv}</td>
+      <td>${st.lost ? `<span class="chip bad">${st.lost}</span> ${st.reasons.map(([r, n]) => `<span class="muted">${esc(r)} · ${n}</span>`).join('; ')}` : '<span class="muted">—</span>'}</td></tr>`;
+  }).join('');
+  view.innerHTML = `
+    <div class="filters">${DEAL_SHOW.map(([k, t]) => `<button data-ds="${k}" aria-pressed="${f.show === k}">${t}${k === 'stalled' && fn.stalled ? ' · ' + fn.stalled : ''}</button>`).join('')}</div>
+    <div class="filters">${DEAL_PERIODS.map(([k, t]) => `<button data-dd="${k}" aria-pressed="${f.days === k}">${t}</button>`).join('')}
+      ${director ? `<label class="field"><select id="deal-person" aria-label="Менеджер"><option value="">Все менеджеры</option>${d.managers.map(m => `<option value="${esc(m.ext)}"${m.ext === f.person ? ' selected' : ''}>${esc(m.name)}</option>`).join('')}</select></label>` : ''}</div>
+    <div class="kpis">
+      <div class="kpi"><b>${fn.active}</b><span>в работе${fn.stalled ? `, из них ${fn.stalled} без движения` : ''}</span></div>
+      <div class="kpi"><b>${fn.cold_results}</b><span>с результатом на холодном звонке из ${fn.stages[1].reached}</span></div>
+      <div class="kpi"><b>${fn.paid}</b><span>оплачено${fn.paid_sum ? ' на ' + rub(fn.paid_sum) : ''}</span></div>
+    </div>
+    <div class="panel"><h2>Где отваливаются клиенты</h2><div class="scroll"><table class="tbl"><thead><tr><th>Этап</th><th class="n">Дошли</th><th class="n hide-m">Переход</th><th>Отказ на этапе и почему</th></tr></thead><tbody>${stageRows}</tbody></table></div>
+      <p class="muted">Клиент — номер телефона. Звонки и презентации CRM разбирает сама; Telegram или почту, договор и отказ отмечает менеджер в сделке, оплату — директор. Отказ на холодном звонке CRM ставит сама, если последний разговор без результата и перезвона нет; причина берётся из разбора.</p></div>
+    ${d.unlinked && d.unlinked.length ? `<div class="panel"><h2>Презентации без клиента <span class="muted">· ${d.unlinked.length}</span></h2>
+      <p class="muted">Эти презентации шли не через Mango (мессенджер, Zoom), и бот не знает номер клиента. Укажите номер, и презентация попадёт в сделку клиента.</p>
+      <div class="scroll"><table class="tbl"><thead><tr><th>Когда</th>${director ? '<th class="hide-m">Менеджер</th>' : ''}<th>О чём</th><th></th></tr></thead><tbody>
+      ${d.unlinked.map(u => `<tr><td>${esc(when(u.at))}</td>${director ? `<td class="hide-m">${esc(u.manager || '')}</td>` : ''}
+        <td>${u.company ? `<b>${esc(u.company)}</b> · ` : ''}${esc(u.summary || '')}${u.contact ? `<div class="muted">В реестре: ${esc(u.contact)}</div>` : ''}
+          <div><a class="btn small" href="https://drive.google.com/file/d/${encodeURIComponent(u.file_id)}/view" target="_blank" rel="noopener">Запись</a></div></td>
+        <td>${S.me.readonly ? '' : `<button class="btn small" data-plink="${u.id}">Привязать к клиенту</button>`}</td></tr>`).join('')}</tbody></table></div></div>` : ''}
+    <div class="panel"><h2>${esc(DEAL_SHOW.find(x => x[0] === f.show)[1])} <span class="muted">· ${list.length}</span></h2>
+      ${list.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Клиент</th>${director ? '<th class="hide-m">Менеджер</th>' : ''}<th>Этап</th><th class="hide-m">Последнее</th><th>Что дальше</th></tr></thead><tbody>
+      ${list.slice(0, 300).map(x => `<tr class="click" data-deal="${esc(x.phone)}"><td><b>${esc(dealName(x))}</b>${x.company ? `<div class="muted">${esc(phone(x.number))}</div>` : ''}</td>
+        ${director ? `<td class="hide-m">${esc(x.manager)}</td>` : ''}<td>${esc(x.stage_name)}<div>${dealStatus(x)}</div></td><td class="hide-m">${esc(when(x.last_at))}</td>
+        <td>${x.status === 'lost' ? `<span class="muted">${esc(x.lost.reason)}</span>` : esc(x.advice || '')}</td></tr>`).join('')}</tbody></table></div>`
+      : '<p class="muted">Таких сделок нет.</p>'}</div>`;
+  $$('[data-ds]', view).forEach(b => b.addEventListener('click', () => { f.show = b.dataset.ds; go('deals'); }));
+  $$('[data-dd]', view).forEach(b => b.addEventListener('click', () => { f.days = b.dataset.dd; go('deals'); }));
+  $('#deal-person', view)?.addEventListener('change', e => { f.person = e.target.value; go('deals'); });
+  $$('[data-deal]', view).forEach(tr => tr.addEventListener('click', () => dealCard(tr.dataset.deal)));
+  $$('[data-plink]', view).forEach(b => b.addEventListener('click', () => linkPresentation(d.unlinked.find(u => String(u.id) === b.dataset.plink))));
+};
+
+function linkPresentation(u) {
+  const box = modal(`<header class="rvm-head"><div><h2>Привязать к клиенту</h2>
+      <div class="rvm-mut">Презентация ${esc(when(u.at))}${u.company ? ' · ' + esc(u.company) : ''}</div></div><button class="rvm-x" aria-label="Закрыть">×</button></header>
+    <div class="rvm-body"><div class="outform">
+      <label class="field">Номер клиента<input id="pl-phone" inputmode="tel" placeholder="+7 999 123-45-67" autocomplete="off"></label>
+      <button class="btn primary" id="pl-go">Привязать</button></div>
+      <p class="muted">Номер, по которому менеджер звонил клиенту или с которого клиент писал в мессенджер. Если с этим номером был холодный звонок, презентация встанет в ту же сделку.</p></div>`);
+  $('#pl-phone', box).focus();
+  $('#pl-go', box).addEventListener('click', async () => {
+    try {
+      const r = await api(`/api/presentations/${u.id}/link`, {method: 'POST', scoped: false, body: {phone: $('#pl-phone', box).value}});
+      toast(r.call_found ? 'Привязано к сделке клиента' : 'Привязано. Звонков с этим номером в Mango нет, сделка создана по презентации');
+      $('.rvm-x', box).click();
+      go('deals');
+    } catch (e) { toast(e.message, true); }
+  });
+}
+
+// Кнопка «Его сделки» в карточке сотрудника.
+document.addEventListener('click', e => {
+  const b = e.target.closest && e.target.closest('[data-deals-of]');
+  if (b) { S.dealF = {show: 'active', days: '90', person: b.dataset.dealsOf}; openPage('deals'); }
+});
+
+function dealTimeline(items) {
+  return items.map(t => {
+    const head = `<div class="rvm-ih"><b>${esc(t.title)}</b><span class="rvm-mut">${esc(when(t.at))}${t.by ? ' · ' + esc(t.by) : ''}</span>
+      ${t.type === 'presentation' && TEMP[t.temperature] ? `<span class="rvm-chip ${TEMP[t.temperature][1]}">клиент ${TEMP[t.temperature][0]}</span>` : ''}
+      ${t.amount ? `<span class="rvm-chip good">${rub(t.amount)}</span>` : ''}</div>`;
+    const cls = t.type === 'event' ? '' : t.ok || (t.type === 'presentation' && !t.lost) ? 'good' : t.lost ? 'miss' : '';
+    return `<div class="rvm-item ${cls}">${head}
+      ${t.text ? `<div>${esc(t.text)}</div>` : ''}
+      ${t.lost ? `<div class="rvm-q">Где остыл: ${esc(t.lost)}</div>` : ''}
+      ${t.say ? `<div class="rvm-say">Как можно было: ${esc(t.say)}</div>` : ''}
+      ${t.type === 'call' ? `<div><button class="btn small" data-review="${t.id}">Разбор и запись</button></div>` : ''}
+      ${t.file_id ? `<div><a class="btn small" href="https://drive.google.com/file/d/${encodeURIComponent(t.file_id)}/view" target="_blank" rel="noopener">Запись презентации</a></div>` : ''}</div>`;
+  }).join('');
+}
+
+async function dealCard(ph) {
+  const box = modal('<header class="rvm-head"><div class="rvm-mut">Загружаю…</div><button class="rvm-x" aria-label="Закрыть">×</button></header>');
+  let d;
+  try { d = await api('/api/deals/' + encodeURIComponent(ph), {scoped: false}); } catch (e) { $('.rvm-mut', box).textContent = e.message; return; }
+  const ro = S.me.readonly;
+  const acts = d.status === 'active' ? [
+    ['presentation', 'Презентация проведена'], ['materials', 'Отправил материалы'], ['contract_sent', 'Договор отправлен'],
+    ['contract_edits', 'Правки по договору'], ['contract_signed', 'Договор подписан'],
+    ...(d.can_pay ? [['paid', 'Оплата получена']] : []), ['lost', 'Отказ']] : [['reopen', 'Снова в работе']];
+  box.innerHTML = `<header class="rvm-head"><div><div>${dealStatus(d)}</div><h2>${esc(dealName(d))}</h2>
+      <div class="rvm-mut">${d.company ? `<a href="tel:+${esc(d.number)}">${esc(phone(d.number))}</a> · ` : ''}${esc(d.manager)} · этап: ${esc(d.stage_name)}</div></div>
+      <button class="rvm-x" aria-label="Закрыть">×</button></header>
+    <div class="rvm-body">
+      ${dealSteps(d)}
+      ${d.status === 'lost' ? `<div class="rvm-item miss"><b>Отказ: ${esc(d.lost.reason)}</b>${d.lost.note ? `<div>${esc(d.lost.note)}</div>` : ''}
+        <div class="rvm-q">${d.lost.auto ? 'CRM поставила сама по последнему разговору. Если это не так, нажмите «Снова в работе».' : 'Отмечено ' + esc(when(d.lost.at))}</div></div>` : ''}
+      ${d.advice ? `<div><h3>Что дальше</h3><div class="rvm-say">${esc(d.advice)}</div></div>` : ''}
+      ${d.missing.length && d.status === 'active' ? `<div><h3>Для договора не хватает</h3><div>${d.missing.map(m => `<span class="chip warn">${esc(m)}</span>`).join(' ')}</div></div>` : ''}
+      ${d.contracts.length ? `<div><h3>Договоры</h3>${d.contracts.map(c => `<div>${esc(contractTitle(c))}${c.by ? ` <span class="rvm-mut">· ${esc(c.by)}</span>` : ''}</div>`).join('')}</div>` : ''}
+      ${ro ? '' : `<div><h3>Отметить</h3><div class="row chips">${acts.map(([k, t]) => `<button class="btn small${k === 'lost' ? ' danger' : ''}" data-ev="${k}">${t}</button>`).join('')}
+        <button class="btn small" data-ev="note">Заметка</button><button class="btn small" data-contract>Составить договор</button></div><div id="deal-form"></div></div>`}
+      <div><h3>История</h3>${dealTimeline([...d.timeline].reverse()) || '<div class="rvm-mut">Пусто.</div>'}</div>
+    </div>`;
+  $$('[data-ev]', box).forEach(b => b.addEventListener('click', () => dealForm(box, d, b.dataset.ev)));
+  $('[data-contract]', box)?.addEventListener('click', () => {
+    S.contractDeal = {phone: d.phone, number: d.number, title: dealName(d) + (d.company ? ' · ' + phone(d.number) : ''), missing: d.missing};
+    $('.rvm-x', box).click();
+    openPage('contracts');
+  });
+}
+
+// ---------- договоры: генератор .docx (static/contracts/) и журнал ----------
+const CONTRACT_JS = ['pizzip.min.js', 'docxtemplater.min.js', 'logic.js', 'generator.js'];
+let contractJs = null;
+function contractScripts() {
+  // Библиотеки весят ~200 КБ, поэтому грузим их только при открытии раздела.
+  contractJs = contractJs || CONTRACT_JS.reduce((p, name) => p.then(() => new Promise((ok, fail) => {
+    const el = document.createElement('script');
+    el.src = '/static/contracts/' + name;
+    el.onload = ok;
+    el.onerror = () => { contractJs = null; fail(new Error('Генератор договоров не загрузился. Обновите страницу.')); };
+    document.head.appendChild(el);
+  })), Promise.resolve());
+  return contractJs;
+}
+const contractTitle = c => `${c.type_title}${c.num ? ' № ' + c.num : c.base_num ? ' к № ' + c.base_num : ''}${c.date ? ' от ' + ddmm(c.date) + '.' + c.date.slice(0, 4) : ''}${c.amount ? ' · ' + rub(c.amount) : ''}`;
+
+VIEWS.contracts = async view => {
+  await contractScripts();
+  const deal = S.contractDeal || null;
+  S.contractDeal = null;
+  view.innerHTML = `<div id="ct-gen"></div><div class="panel" id="ct-log"><p class="muted">Загружаю журнал…</p></div>`;
+  const journal = async () => {
+    const d = await api('/api/contracts', {scoped: false});
+    const box = $('#ct-log', view);
+    if (!box) return;
+    box.innerHTML = `<h2>Журнал договоров <span class="muted">· ${d.items.length}</span></h2>
+      ${d.items.length ? `<div class="scroll"><table class="tbl"><thead><tr><th class="n">№</th><th>Договор</th><th>Клиент</th><th class="hide-m">ИНН</th><th class="n">Сумма</th><th class="hide-m">Оформил</th></tr></thead><tbody>
+      ${d.items.map(c => `<tr${c.phone ? ` class="click" data-deal="${esc(c.phone)}"` : ''}><td class="n">${c.num ?? '—'}</td>
+        <td>${esc(c.type_title)}${c.base_num ? ` к № ${esc(c.base_num)}` : ''}<div class="muted">${c.date ? esc(ddmm(c.date) + '.' + c.date.slice(0, 4)) : ''}${c.tariff ? ' · ' + esc(c.tariff) : ''}</div></td>
+        <td>${esc(c.company || '')}${c.phone ? '<div class="muted">сделка →</div>' : ''}</td><td class="hide-m num">${esc(c.inn || '')}</td>
+        <td class="n">${c.amount ? rub(c.amount) : ''}</td><td class="hide-m">${esc(c.by || '')}<div class="muted">${esc(when(c.created_at))}</div></td></tr>`).join('')}
+      </tbody></table></div>` : '<p class="muted">Договоров пока нет. Оформленный здесь договор попадёт в журнал с номером.</p>'}`;
+    $$('[data-deal]', box).forEach(tr => tr.addEventListener('click', () => dealCard(tr.dataset.deal)));
+  };
+  await window.ContractGenerator.mount($('#ct-gen', view), {
+    api: (path, o = {}) => api(path, {...o, scoped: false}), deal, readonly: S.me.readonly,
+    onDone: () => journal().catch(e => toast(e.message, true)),
+  });
+  await journal();
+};
+
+function dealForm(box, d, kind) {
+  const form = $('#deal-form', box);
+  const label = {contract_edits: 'Какие правки попросил клиент', note: 'Заметка', lost: 'Что сказал клиент'}[kind];
+  form.innerHTML = `<div class="outform">
+    ${kind === 'lost' ? `<label class="field">Причина<select id="dv-reason"><option value="">Выберите</option>${Object.entries(d.reasons).map(([k, t]) => `<option value="${k}">${esc(t)}</option>`).join('')}</select></label>` : ''}
+    ${kind === 'paid' ? '<label class="field">Сумма, ₽<input id="dv-amount" inputmode="decimal" placeholder="165 000"></label>' : ''}
+    <label class="field">${esc(label || 'Комментарий, если нужно')}<textarea id="dv-note" rows="2" maxlength="2000"></textarea></label>
+    <button class="btn primary" id="dv-go">Сохранить</button></div>`;
+  $('#dv-go', form).addEventListener('click', async () => {
+    try {
+      await api(`/api/deals/${encodeURIComponent(d.phone)}/event`, {method: 'POST', scoped: false, body: {
+        kind, note: $('#dv-note', form).value, reason: $('#dv-reason', form)?.value, amount: $('#dv-amount', form)?.value}});
+      toast('Сохранено');
+      $('.rvm-x', box).click();
+      if (S.page === 'deals') go('deals');
+      dealCard(d.phone);
+    } catch (e) { toast(e.message, true); }
+  });
+}
+
 // ---------- start ----------
 (async () => {
   try {
@@ -1083,10 +1463,18 @@ VIEWS.robot = async view => {
     S.ext = S.me.team.some(p => p.ext === saved.ext) ? saved.ext : S.me.team[0]?.ext || null;
   }
   shell();
-  // Ссылка из меню директора на странице аналитики: /?work#раздел.
-  const asked = decodeURIComponent(location.hash.slice(1));
-  if (asked) history.replaceState(null, '', location.pathname + location.search);
-  go(asked || saved.page || HOME[S.me.role]);
+  // Ссылка из меню директора на странице аналитики: /?work#раздел. После раздела через «/» может идти
+  // его параметр: так закладка «Собрать номера» присылает номера в «Источники» (#sources/import:...).
+  const fromHash = () => {
+    let asked = '';
+    try { asked = decodeURIComponent(location.hash.slice(1)); } catch (e) { /* испорченная ссылка */ }
+    if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+    const cut = asked.indexOf('/');
+    S.arg = cut < 0 ? null : asked.slice(cut + 1);
+    return cut < 0 ? asked : asked.slice(0, cut);
+  };
+  go(fromHash() || saved.page || HOME[S.me.role]);
+  window.addEventListener('hashchange', () => { const page = fromHash(); if (page) go(page); });
   // Очередь и счётчики обновляются раз в минуту, если менеджер не заполняет итог.
   setInterval(async () => {
     if (document.hidden || S.busy || S.dial || $('.drawer') || $('#outform:not(.hidden)')) return;
