@@ -205,8 +205,12 @@ from crm import robot_prices
 
 async def main():
     pool = await asyncpg.create_pool(os.environ['DATABASE_URL'], min_size=1, max_size=2)
-    for key, item in (await robot_prices.refresh(pool)).items():
+    got = await robot_prices.refresh(pool)
+    for key, item in got.items():
         print(key, item['value'], '|', item['error'] or item['note'])
+    if any(item['error'] for item in got.values()):
+        print('--- what the sources returned:')
+        print('\n'.join(await robot_prices.probe(pool)))
     await pool.close()
 
 asyncio.run(main())
