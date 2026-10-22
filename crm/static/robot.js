@@ -75,6 +75,7 @@ async function operatorForm(id, copyFrom) {
       <div class="rvm-mut">${locked ? 'Только просмотр. Чтобы поменять, сделайте копию.' : 'Робот говорит только то, что здесь написано.'}</div></div>
       <button class="rvm-x" aria-label="Закрыть">×</button></header>
     <div class="rvm-body op-form">
+      ${locked ? '' : OP_GUIDE}
       <div class="op-grid">
         <label class="field">Имя робота<input data-f="name" value="${esc(src.name)}"${ro}></label>
         <label class="field">Род<select data-f="gender"${ro}><option value="female"${src.gender !== 'male' ? ' selected' : ''}>женский</option>
@@ -105,6 +106,7 @@ async function operatorForm(id, copyFrom) {
     items.lastElementChild.querySelector('textarea').focus();
   }));
   box.addEventListener('click', e => { const x = e.target.closest('[data-rm]'); if (x) x.closest('.op-item').remove(); });
+  if (!ro) $$('.op-items', box).forEach(opSortable);
   const collect = () => {
     const out = {};
     $$('[data-f]', box).forEach(i => { out[i.dataset.f] = i.value; });
@@ -127,8 +129,92 @@ async function operatorForm(id, copyFrom) {
 }
 
 function opItem(value, ro, key = '') {
-  return `<div class="op-item"><textarea rows="2" data-key="${esc(key)}"${ro}>${esc(value)}</textarea>${ro ? '' : '<button class="btn small" data-rm aria-label="Убрать">×</button>'}</div>`;
+  return `<div class="op-item">${ro ? '' : '<span class="op-grip" title="Перетащить" aria-label="Перетащить">⋮⋮</span>'}<textarea rows="2" data-key="${esc(key)}"${ro}>${esc(value)}</textarea>${ro ? '' : '<button class="btn small" data-rm aria-label="Убрать">×</button>'}</div>`;
 }
+
+// Перетаскивание пунктов за ⋮⋮ (мышь и палец): пункт едет за указателем, остальные плавно расступаются.
+const opReduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+function opFlip(items, move) {
+  const before = new Map(items.map(el => [el, el.getBoundingClientRect().top]));
+  move();
+  if (opReduced()) return;
+  items.forEach(el => {
+    const dy = before.get(el) - el.getBoundingClientRect().top;
+    if (!dy || el.classList.contains('dragging')) return;
+    el.animate([{transform: `translateY(${dy}px)`}, {transform: 'none'}], {duration: 220, easing: 'cubic-bezier(.2,.8,.2,1)'});
+  });
+}
+
+function opSortable(list) {
+  list.addEventListener('pointerdown', e => {
+    const grip = e.target.closest('.op-grip');
+    if (!grip || e.button > 0) return;
+    e.preventDefault();
+    const item = grip.closest('.op-item');
+    const startY = e.clientY, startSlot = item.offsetTop;
+    const follow = y => { item.style.transform = `translateY(${y - startY - (item.offsetTop - startSlot)}px)`; };
+    item.classList.add('dragging');
+    list.classList.add('sorting');
+    const onMove = ev => {
+      const top = list.getBoundingClientRect().top;
+      const next = [...list.children].find(el => el !== item && ev.clientY < top + el.offsetTop + el.offsetHeight / 2) || null;
+      if (item.nextElementSibling !== next) opFlip([...list.children], () => list.insertBefore(item, next));
+      follow(ev.clientY);
+    };
+    const onUp = () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      document.removeEventListener('pointercancel', onUp);
+      const from = item.style.transform;
+      item.style.transform = '';
+      list.classList.remove('sorting');
+      if (opReduced() || !from) return item.classList.remove('dragging');
+      item.animate([{transform: from}, {transform: 'none'}], {duration: 200, easing: 'cubic-bezier(.2,.8,.2,1)'})
+        .finished.finally(() => item.classList.remove('dragging'));
+    };
+    // слушаем документ, а не ⋮⋮: при перестановке пункт переезжает в DOM и захват указателя теряется
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+    document.addEventListener('pointercancel', onUp);
+  });
+  // с клавиатуры: Alt + стрелка в поле пункта двигает его вверх или вниз
+  list.addEventListener('keydown', e => {
+    if (!e.altKey || !['ArrowUp', 'ArrowDown'].includes(e.key) || !e.target.matches('textarea')) return;
+    const item = e.target.closest('.op-item');
+    const up = e.key === 'ArrowUp';
+    if (!(up ? item.previousElementSibling : item.nextElementSibling)) return;
+    e.preventDefault();
+    opFlip([...list.children], () => list.insertBefore(item, up ? item.previousElementSibling : item.nextElementSibling.nextElementSibling));
+    e.target.focus();
+  });
+}
+
+const CAMPAIGN_GUIDE = `<details class="rb-more op-guide"><summary>Как запустить кампанию</summary><div class="op-guide-body">
+  <ol>
+    <li><b>Номера.</b> Сначала загрузите их во вкладке «Номера»: файлом CSV или Excel либо из листов «Прозвон лидов». Звоните только тем, кто согласился на звонок.</li>
+    <li><b>Оператор.</b> Выберите анкету, по которой робот будет говорить, и перед запуском позвоните себе на вкладке «Голос», чтобы послушать.</li>
+    <li><b>Дни и часы.</b> Робот звонит только в эти часы по выбранному часовому поясу. Ставьте пояс клиентов, а не свой.</li>
+    <li><b>Попытки и повтор.</b> Если не дозвонился или ответил автоответчик, робот перезвонит через указанное число минут, пока не кончатся попытки. Обычно хватает 2–3 попыток с перерывом в 2 часа.</li>
+    <li><b>Запуск.</b> Сохраните, затем нажмите «Запустить» в списке кампаний. Робот звонит по одному номеру за раз, кампанию можно поставить на паузу.</li>
+    <li><b>Итоги.</b> Разговоры, записи и данные по анкете появляются во вкладке «Звонки». Кто попросил не звонить, сам попадает в стоп-лист.</li>
+  </ol>
+</div></details>`;
+
+const OP_GUIDE = `<details class="rb-more op-guide"><summary>Как правильно заполнить оператора</summary><div class="op-guide-body">
+  <p>Робот говорит только то, что написано в анкете, и пересказывает это своими словами. Пишите коротко и так, как сказали бы вслух.</p>
+  <ol>
+    <li><b>Имя, компания, откуда номер.</b> Как робот представится («Мария, кухни на заказ») и одной фразой, где клиент оставлял заявку: робот скажет это, если спросят «откуда у вас мой номер».</li>
+    <li><b>Цель.</b> Чем должен закончиться удачный звонок, например «договориться о звонке специалиста».</li>
+    <li><b>Приветствие.</b> Представиться, напомнить о заявке и закончить простым вопросом, на который легко ответить «да».</li>
+    <li><b>План.</b> Один шаг — один вопрос, по порядку. В шаге сразу пишите, когда завершать: «нет — вежливо завершить, итог not_relevant». Порядок меняется перетаскиванием за ⋮⋮. Если в копии встроенного оператора поменять план или приветствие, его готовые ответы без модели отключатся и звонок станет дороже.</li>
+    <li><b>Правила.</b> Особые случаи: занят или за рулём, просит не звонить, автоответчик, спрашивает цену, «вы робот?».</li>
+    <li><b>Аргументы и факты.</b> Только правда о компании и предложении. Чего здесь нет, робот не скажет: цены и скидки лучше оставить специалисту.</li>
+    <li><b>Образец разговора.</b> 8–12 коротких реплик из хорошего живого звонка. Робот берёт из него тон и длину фраз и иногда повторяет фразы дословно, поэтому в образце не должно быть реплик, неуместных в другом звонке.</li>
+    <li><b>Что записать по итогу.</b> Одна строка — одна колонка в итогах, варианты ответа в кавычках: «материал фасадов: «плёнка», «эмаль» или «не знает»».</li>
+  </ol>
+  <p class="muted">После сохранения позвоните себе на вкладке «Голос» и послушайте. Ударения настраиваются там же, в «Произношении».</p>
+</div></details>`;
 
 // ---------- кампании ----------
 RB_VIEW.campaigns = async el => {
@@ -163,6 +249,7 @@ async function campaignForm(c) {
       ${c ? `<div class="rvm-mut">${esc(c.status_name)} · обзвонено ${c.done} из ${c.total} · лидов ${c.interested}</div>` : ''}</div>
       <button class="rvm-x" aria-label="Закрыть">×</button></header>
     <div class="rvm-body op-form">
+      ${c || RB.st.readonly ? '' : CAMPAIGN_GUIDE}
       <label class="field">Название<input id="cf-name" value="${esc(v.name)}"${ro}></label>
       <label class="field">Оператор<select id="cf-op"${ro}>${RB.st.operators.map(o => `<option value="${esc(o.id)}"${o.id === v.operator ? ' selected' : ''}>${esc(o.name)} · ${esc(o.company)}</option>`).join('')}</select></label>
       <div class="field">Дни недели<div class="filters">${RB_DAYS.map((d, i) => `<button data-day="${i + 1}" aria-pressed="${v.days.includes(i + 1)}"${ro}>${d}</button>`).join('')}</div></div>
