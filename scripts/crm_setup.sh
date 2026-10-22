@@ -169,12 +169,12 @@ domain)
   DOMAIN="${2:-}"
   [[ "$DOMAIN" =~ ^[a-z0-9.-]+\.[a-z]{2,}$ ]] || { echo 'usage: domain averonleads.ru'; exit 1; }
   IP=$(curl -4 -s --max-time 5 https://ifconfig.me || hostname -I | awk '{print $1}')
-  DNS=$(getent ahostsv4 "$DOMAIN" | awk 'NR==1{print $1}')
+  DNS=$(getent ahostsv4 "$DOMAIN" | awk 'NR==1{print $1}' || true)
   if [ "$DNS" != "$IP" ]; then
     echo "$DOMAIN points to ${DNS:-nothing}, this server is $IP: set an A record $DOMAIN -> $IP at the registrar, wait, run again. nothing changed"; exit 1
   fi
   NAMES="$DOMAIN"
-  WWW=$(getent ahostsv4 "www.$DOMAIN" | awk 'NR==1{print $1}')
+  WWW=$(getent ahostsv4 "www.$DOMAIN" | awk 'NR==1{print $1}' || true)
   [ "$WWW" = "$IP" ] && NAMES="$DOMAIN, www.$DOMAIN"
   CF=/etc/caddy/Caddyfile
   mkdir -p "$STATE"; chmod 700 "$STATE"
