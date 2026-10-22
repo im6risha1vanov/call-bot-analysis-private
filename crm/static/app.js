@@ -410,7 +410,7 @@ function shell() {
         ${S.me.test ? '<a class="ghost" href="/test-exit">Сменить вход</a>' : '<button class="ghost" type="button" data-logout>Выйти</button>'}</div></div>
     </aside>
     <div class="main">
-      ${S.me.test ? `<div class="banner"><b>Просмотр · ${esc(ROLE_NAME[S.me.role] || '')}</b><span>Только смотреть: звонки и изменения работают по личной ссылке.</span><a href="/test-exit">Сменить вход</a></div>` : ''}
+      ${S.me.test ? `<div class="banner"><b>Просмотр · ${esc(ROLE_NAME[S.me.role] || '')}</b><span>Только смотреть: звонки и изменения работают под своим логином.</span><a href="/test-exit">Сменить вход</a></div>` : ''}
       <header class="top"><div class="top-in" id="top"></div></header>
       <main class="content" id="view"></main>
     </div></div>

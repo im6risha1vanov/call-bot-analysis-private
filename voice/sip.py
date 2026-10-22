@@ -214,7 +214,11 @@ async def dial(phone: str, operator: str = "kitchen", *, meta: dict | None = Non
     asyncio.create_task(_warm_up_greeting(op))
     call_id = str(uuidlib.uuid4())
     pending = PENDING[call_id] = Pending(phone, operator, dict(meta or {}))
-    await originate(call_id, phone)
+    try:
+        await originate(call_id, phone)
+    except BaseException:
+        PENDING.pop(call_id, None)  # иначе /status навсегда «занят» и кампании CRM встают до перезапуска робота
+        raise
     asyncio.create_task(_no_answer_watch(call_id, pending))
     log.info("звоню %s, id %s", phone, call_id)
     return call_id
@@ -467,8 +471,11 @@ async def serve() -> None:
         meta = {k: data[k] for k in ("campaign_id", "owner", "target_id") if data.get(k) not in (None, "")}
         try:
             call_id = await dial(str(data.get("phone", "")), str(data.get("operator") or "kitchen"), meta=meta)
-        except Exception as e:
+        except ValueError as e:  # номер или оператор не годятся: повторять бесполезно
             return web.json_response({"error": str(e)}, status=400)
+        except Exception as e:  # Asterisk или связь с ним: CRM повторит номер позже
+            log.warning("звонок %s не заказан: %s", data.get("phone"), e)
+            return web.json_response({"error": str(e) or type(e).__name__}, status=503)
         return web.json_response({"id": call_id})
 
     async def api_status(request: web.Request) -> web.Response:
