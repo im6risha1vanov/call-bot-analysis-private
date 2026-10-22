@@ -387,8 +387,9 @@ RB_VIEW.settings = async el => {
       <div class="r"><b class="num">${a.value == null ? '—' : money(a.value)}</b><div class="s">${unit}</div></div></div>`;
   };
   const pt = econ.parts;
+  const FRESH_MIN = 10;
   const minuteNote = econ.sample_minutes
-    ? `Mango ${money(pt.mango)} + распознавание ${money(pt.asr)} + синтез ${money(pt.synth)} + модель ${money(pt.llm)}. Расход на минуту по звонкам робота за 30 дней: ${fmt(econ.chars_min)} символов и ${fmt(econ.tokens_min)} токенов.`
+    ? `Mango ${money(pt.mango)} + распознавание ${money(pt.asr)} + синтез ${money(pt.synth)} + модель ${money(pt.llm)}. ${econ.estimate ? `Расход на минуту: ${fmt(econ.chars_min)} символов и ${fmt(econ.tokens_min)} токенов. Токены — оценка: с 22.10 простые ответы идут без модели, по автотесту это втрое меньше; точная цифра появится после ${FRESH_MIN} минут новых звонков.` : `Расход на минуту по звонкам робота с 22.10 (заготовки без модели), не старше 30 дней: ${fmt(econ.chars_min)} символов и ${fmt(econ.tokens_min)} токенов.`}`
     : `Пока только Mango: у робота ещё нет разговоров за 30 дней, чтобы посчитать расход синтеза и модели на минуту.`;
   const ty = econ.typical;
   const firstPrice = Object.values(p.client_min || {})[0];
