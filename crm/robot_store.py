@@ -36,6 +36,12 @@ COST_KEYS = ('mango_min', 'eleven_1k_chars', 'llm_1k_tokens')
 MAX_CLIENT_MIN = 1000.0  # цена минуты для клиента выше этого — опечатка
 ASR_15S = 0.1626  # ₽ с НДС за 15 с потокового распознавания SpeechKit (прайс AI Studio на 21.10.2026)
 CALC_DAYS = 30  # сколько дней звонков робота брать для расхода символов и токенов на минуту
+# 22.10 простые ответы по анкете пошли по заготовкам без модели: звонки до этого тратили токенов втрое больше.
+# Расход считаем по звонкам после изменения; пока их меньше FRESH_MINUTES минут — по старым звонкам,
+# а токены умножаем на долю из автотеста (обычный звонок: 4 319 токенов вместо 12 840).
+QUICK_SINCE = datetime(2026, 10, 22, 7, 0, tzinfo=timezone.utc)
+QUICK_TOKEN_RATIO = round(4319 / 12840, 2)
+FRESH_MINUTES = 10
 STATUSES = {'draft': 'Черновик', 'running': 'Идёт', 'paused': 'На паузе', 'done': 'Завершена'}
 TIMEZONES = [('Europe/Kaliningrad', 'Калининград, МСК−1'), ('Europe/Moscow', 'Москва, МСК'), ('Europe/Samara', 'Самара, МСК+1'),
              ('Asia/Yekaterinburg', 'Екатеринбург, МСК+2'), ('Asia/Omsk', 'Омск, МСК+3'), ('Asia/Novosibirsk', 'Новосибирск, МСК+4'),
@@ -697,9 +703,18 @@ async def economics(pool) -> dict:
     за последние 30 дней."""
     p = await prices(pool)
     since = datetime.now(timezone.utc) - timedelta(days=CALC_DAYS)
-    use = await pool.fetchrow('SELECT count(*) AS calls, count(*) FILTER (WHERE outcome <> $2) AS reached, '
-                              'coalesce(sum(duration_s), 0) AS seconds, coalesce(sum(tts_chars), 0) AS chars, '
-                              'coalesce(sum(llm_tokens), 0) AS tokens FROM robot_calls WHERE at > $1', since, 'ndz')
+    query = ('SELECT count(*) AS calls, count(*) FILTER (WHERE outcome <> $3) AS reached, '
+             'coalesce(sum(duration_s), 0) AS seconds, coalesce(sum(tts_chars), 0) AS chars, '
+             'coalesce(sum(llm_tokens), 0) AS tokens FROM robot_calls WHERE at > $1 AND at <= $2')
+    now = datetime.now(timezone.utc)
+    fresh = dict(await pool.fetchrow(query, max(since, QUICK_SINCE), now, 'ndz'))
+    estimate = fresh['seconds'] / 60 < FRESH_MINUTES and since < QUICK_SINCE
+    use = fresh
+    if estimate:  # новых звонков мало: добавляем старые, их токены — с поправкой на заготовки
+        old = await pool.fetchrow(query, since, QUICK_SINCE, 'ndz')
+        use = {k: fresh[k] + old[k] for k in fresh}
+        use['tokens'] = fresh['tokens'] + old['tokens'] * QUICK_TOKEN_RATIO
+        estimate = old['seconds'] > 0
     minutes = use['seconds'] / 60
     chars_min = use['chars'] / minutes if minutes else None
     tokens_min = use['tokens'] / minutes if minutes else None
@@ -721,6 +736,6 @@ async def economics(pool) -> dict:
     reach = use['reached'] / use['calls'] if use['calls'] else None
     return {'cost_min': round(cost_min, 2), 'presets': preset_costs(p, parts, chars_min, tokens_min), 'parts': {k: None if v is None else round(v, 2) for k, v in parts.items()},
             'chars_min': None if chars_min is None else round(chars_min), 'tokens_min': None if tokens_min is None else round(tokens_min),
-            'sample_minutes': round(minutes), 'month': month.date().isoformat(), 'clients': clients,
+            'sample_minutes': round(minutes), 'estimate': estimate, 'month': month.date().isoformat(), 'clients': clients,
             'typical': {'calls': use['calls'], 'reach': None if reach is None else round(reach * 100),
                         'minutes_per_talk': round(minutes / use['reached'], 1) if use['reached'] and minutes else None}}

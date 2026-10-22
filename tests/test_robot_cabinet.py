@@ -9,7 +9,7 @@ import os
 import tempfile
 import unittest
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -215,6 +215,27 @@ class CabinetTests(DBCase):
         self.assertEqual(a['cost'], 27.3)  # 2 мин × 1,5 + 2000 симв. × 10/1000 + 3000 ток. × 1/1000 + 8 × 0,1626 распознавание
         self.assertEqual(a['lead_cost'], 27.3)
         self.assertEqual({e['key']: e['count'] for e in a['ends']}['do_not_call'], 1)
+
+    async def test_minute_cost_after_quick_replies(self):
+        await robot_store.set_option(self.pool, 'prices_auto', {'mango_min': {'value': 1.5}, 'eleven_1k_chars': {'value': 10},
+                                                                'llm_1k_tokens': {'value': 1}})
+        now = datetime.now(timezone.utc)
+        change = now - timedelta(days=2)
+
+        async def add(call_id, at, seconds, tokens, chars):
+            await self.pool.execute('INSERT INTO robot_calls(call_id, at, outcome, duration_s, llm_tokens, tts_chars) '
+                                    "VALUES ($1, $2, 'callback', $3, $4, $5)", call_id, at, seconds, tokens, chars)
+
+        await add('old', change - timedelta(days=1), 120, 3000, 2000)  # до заготовок: токенов втрое больше
+        await add('new', now - timedelta(hours=1), 60, 500, 1000)
+        with patch.object(robot_store, 'QUICK_SINCE', change):
+            econ = await robot_store.economics(self.pool)
+            # новых звонков меньше 10 минут: старые токены × 0,34 + новые
+            self.assertEqual((econ['estimate'], econ['chars_min'], econ['tokens_min']), (True, 1000, 507))
+            await add('new2', now - timedelta(minutes=30), 600, 1000, 6000)
+            econ = await robot_store.economics(self.pool)
+            # 11 минут новых звонков: считаем только по ним
+            self.assertEqual((econ['estimate'], econ['chars_min'], econ['tokens_min']), (False, 636, 136))
 
     async def test_client_paid_option(self):
         token = await auth.invite_create(self.pool, 1, 'client', client_key='Кухни')
