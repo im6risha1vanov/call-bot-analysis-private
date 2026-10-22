@@ -52,7 +52,8 @@ class Operator:
     voice_role: str = ""
     voice_speed: float = 1.0
     transfer_to: str = ""
-    # быстрые ответы без модели: после вопроса робота (after) на ожидаемый короткий ответ (answers) — reply
+    # быстрые ответы без модели: после вопроса робота (after) на ожидаемый короткий ответ (answers
+    # целиком или match/exclude — выражения) — reply; {answer} в reply — слова клиента
     quick: list[dict] = field(default_factory=list)
     owner: str = ""  # чей оператор в CRM: "" — наш (директор), иначе лист клиента
     # образец живого разговора: модель берёт из него тон и длину реплик (правила одни этого не дают)
@@ -75,8 +76,16 @@ class Operator:
         if self.gender not in ("female", "male"):
             raise OperatorError(f"{self.id}: gender должен быть female или male")
         for item in self.quick:
-            if not (str(item.get("after", "")).strip() and item.get("answers") and str(item.get("reply", "")).strip()):
-                raise OperatorError(f"{self.id}: в быстром ответе нужны after, answers и reply")
+            after = item.get("after", "")
+            afters = [after] if isinstance(after, str) else after
+            if not (isinstance(afters, list) and afters and all(str(a).strip() for a in afters)
+                    and (item.get("answers") or item.get("match")) and str(item.get("reply", "")).strip()):
+                raise OperatorError(f"{self.id}: в быстром ответе нужны after, answers или match и reply")
+            for key in ("match", "exclude", "strip"):
+                try:
+                    re.compile(item.get(key) or "")
+                except re.error as e:
+                    raise OperatorError(f"{self.id}: в быстром ответе неверное выражение {key}: {e}") from None
         for key in self.fields:
             if not key.isidentifier():
                 raise OperatorError(f"{self.id}: ключ поля {key!r} должен быть латиницей без пробелов")
@@ -155,7 +164,22 @@ def load(operator_id: str, directory: Path | None = None) -> Operator:
         raise OperatorError(f"нет анкеты {path}") from None
     except tomllib.TOMLDecodeError as e:
         raise OperatorError(f"{path.name}: ошибка в TOML: {e}") from None
-    return from_dict(operator_id, data)
+    return from_dict(operator_id, _builtin_quick(operator_id, path, data))
+
+
+def _builtin_quick(operator_id: str, path: Path, data: dict) -> dict:
+    """Копия встроенной анкеты из CRM берёт быстрые ответы из встроенной, пока приветствие и план те же:
+    новые заготовки из репозитория доходят до звонков и без пересохранения в CRM."""
+    own = OPERATORS_DIR / f"{operator_id}.toml"
+    if path == own or not own.is_file():
+        return data
+    try:
+        base = tomllib.loads(own.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError:
+        return data
+    if base.get("quick") and (data.get("greeting"), data.get("plan")) == (base.get("greeting"), base.get("plan")):
+        data = {**data, "quick": base["quick"]}
+    return data
 
 
 def _numbered(items: list[str]) -> str:

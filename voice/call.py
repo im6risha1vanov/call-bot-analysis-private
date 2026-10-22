@@ -15,7 +15,7 @@ import time
 from typing import Awaitable, Callable
 
 from voice import llm, results, speech
-from voice.dialog import SILENCE, Dialog
+from voice.dialog import SILENCE, Dialog, quick_static
 
 log = logging.getLogger("voice.call")
 
@@ -248,7 +248,8 @@ class CallSession:
         if fast:  # ожидаемый ответ клиента: заготовка из анкеты, без ожидания модели
             log.info("быстрый ответ без модели: «%s»", fast)
             self.quick_said = fast
-            await self._say(fast)
+            for part in getattr(self.dialog, "quick_parts", None) or [fast]:
+                await self._say(part)
             await self.send_event({"type": "transcript", "role": "robot", "text": fast, "first_text_ms": 0})
             self._arm_silence()
             return
@@ -365,7 +366,8 @@ class CallSession:
     async def _warm_up_voice(self) -> None:
         """Соединение с синтезом и «так…», «угу…» в кэше заранее: в разговоре они звучат без задержки."""
         await speech.warm_up_tts(self.voice)
-        for word in FILLERS + NOTE_FILLERS + BACKCHANNELS + list(PARTING.values()) + [item["reply"] for item in self.dialog.op.quick]:
+        quick = [quick_static(item["reply"]) for item in self.dialog.op.quick]
+        for word in FILLERS + NOTE_FILLERS + BACKCHANNELS + list(PARTING.values()) + [q for q in quick if q]:
             try:
                 await self.synthesize(word, self.voice)
             except Exception as e:

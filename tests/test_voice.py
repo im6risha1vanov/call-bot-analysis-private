@@ -3,6 +3,7 @@ import asyncio
 import json
 import os
 import tempfile
+import tomllib
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -14,7 +15,7 @@ from voice import results, speech
 from voice.call import CallSession
 from voice.dialog import Dialog, build_tools, parse_result
 from voice.llm import AnthropicBackend, CvcBackend, OpenRouterBackend, YandexBackend
-from voice.operator import MAX_ITEMS, OperatorError, load
+from voice.operator import MAX_ITEMS, OPERATORS_DIR, OperatorError, dump, from_dict, load
 
 
 def text_block(text):
@@ -860,11 +861,81 @@ class CallSessionTest(unittest.IsolatedAsyncioTestCase):
             if not session.is_speaking():
                 break
             await asyncio.sleep(0.01)
-        await session.heard("Москва", True)  # дальше — модель, и она видит весь обмен
+        await session.heard("Москва, а сколько стоит?", True)  # вопрос клиента — уже модель, и она видит весь обмен
         await session.reply_task
         self.assertEqual(len(client.requests), 1)
         self.assertIn(quick, json.dumps(client.requests[0], ensure_ascii=False))
         await session.hangup()
+
+    async def test_questionnaire_answers_go_by_quick_replies(self):
+        client = FakeClient([say("Завтра после обеда, записала. Ждите звонка.")])
+        said = []
+
+        async def nothing(_):
+            pass
+
+        async def synth(text, voice):
+            said.append(text)
+            return b"\x00\x00" * 160
+
+        async def save(dialog, **kw):
+            return results.record(dialog, **kw)
+
+        session = CallSession(Dialog(load("kitchen"), AnthropicBackend(client=client)), nothing, nothing,
+                              synthesize=synth, save=save)
+        await session.start()
+        for answer in ("Да, актуально.", "Да", "Ну, в Сыктывкаре", "Наверное, плёнку", "Тысяч триста", "Меня зовут Ольга"):
+            await session.heard(answer, True)
+            await session.reply_task
+            for _ in range(100):
+                if not session.is_speaking():
+                    break
+                await asyncio.sleep(0.01)
+        self.assertEqual(client.requests, [])  # вся анкета до времени звонка — без модели
+        self.assertIn("В Сыктывкаре, поняла.", said)  # повтор слов клиента — отдельной фразой
+        self.assertIn("Ольга,", said)
+        robot = [m["content"] for m in session.dialog.messages if m["role"] == "assistant"]
+        self.assertEqual(robot[-1], "Ольга, когда удобно, чтобы специалист перезвонил?")
+        await session.heard("Завтра после обеда", True)
+        await session.reply_task
+        self.assertEqual(len(client.requests), 1)
+        await session.hangup()
+
+    def test_quick_reply_leaves_unusual_answers_to_model(self):
+        op = load("kitchen")
+        dialog = Dialog(op, AnthropicBackend(client=FakeClient([])))
+        cases = {
+            "А в каком городе или районе будет стоять кухня?": ["Не знаю пока", "А зачем?", "Москва, а сколько стоит?"],
+            "По фасадам что смотрите: плёнку, эмаль, пластик?": ["Плёнку или эмаль", "А что лучше?", "Не плёнку"],
+            "На какой бюджет примерно ориентируетесь?": ["Двести тридцать", "Двести-триста", "До трёхсот", "Не больше миллиона"],
+            "Как к вам обращаться?": ["А зачем?", "Завтра после обеда", "Неважно"],
+        }
+        for asked, answers in cases.items():
+            for answer in answers:
+                dialog.messages = [{"role": "assistant", "content": asked}]
+                self.assertIsNone(dialog.quick_reply(answer), answer)
+        dialog.messages = [{"role": "assistant", "content": "На какой бюджет примерно ориентируетесь?"}]
+        self.assertEqual(dialog.quick_reply("двести пятьдесят тысяч"), "Хорошо. Как к вам обращаться?")
+
+    def test_crm_copy_of_builtin_operator_gets_new_quick_replies(self):
+        data = tomllib.loads((OPERATORS_DIR / "kitchen.toml").read_text())
+        data.pop("quick")
+        data["example"] = "Клиент: Да.\nМария: Хорошо."
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "kitchen.toml").write_text(dump(data), encoding="utf-8")
+            self.assertEqual(load("kitchen", Path(tmp)).quick, load("kitchen").quick)
+            data["plan"] = data["plan"][:-1]
+            (Path(tmp) / "kitchen.toml").write_text(dump(data), encoding="utf-8")
+            self.assertEqual(load("kitchen", Path(tmp)).quick, [])  # план поменяли в CRM: заготовки уже не к месту
+
+    def test_quick_reply_needs_answers_or_match(self):
+        data = tomllib.loads((OPERATORS_DIR / "kitchen.toml").read_text())
+        data["quick"] = [{"after": "бюджет", "reply": "Хорошо."}]
+        with self.assertRaises(OperatorError):
+            from_dict("kitchen", data)
+        data["quick"] = [{"after": ["бюджет"], "match": "(", "reply": "Хорошо."}]
+        with self.assertRaises(OperatorError):
+            from_dict("kitchen", data)
 
     async def test_client_continuing_over_quick_reply_undoes_it(self):
         client = FakeClient([say("Поняла, перезвоню после семи.")])
@@ -938,7 +1009,7 @@ class CallSessionTest(unittest.IsolatedAsyncioTestCase):
         await session.heard("Да, планирую в этом месяце", True)
         await session.reply_task
         session.client_done_at -= 3  # клиент ответил через три секунды: это новая реплика
-        await session.heard("Сочи", True)
+        await session.heard("Сочи, а замер платный?", True)
         await session.reply_task
         self.assertEqual(client.requests[1]["messages"][-2]["content"], "В каком городе будет кухня?")
         await session.hangup()

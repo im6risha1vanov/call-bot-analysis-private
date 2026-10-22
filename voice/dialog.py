@@ -106,6 +106,56 @@ def _norm(text: str) -> str:
     return " ".join(re.sub(r"[^\w ]", " ", text.lower().replace("ё", "е")).split())
 
 
+QUICK_ECHO = "{answer}"  # в reply быстрого ответа: слова клиента («Сыктывкар, поняла.»)
+
+
+def _afters(item: dict) -> list[str]:
+    after = item.get("after", "")
+    return [after] if isinstance(after, str) else list(after)
+
+
+def quick_answer(item: dict, asked: str, client_text: str) -> str | None:
+    """Подходит ли ответ клиента к быстрому ответу item после вопроса робота asked (нормализован).
+    Возвращает слова клиента для повтора (без «ну», «меня зовут»), None — не подходит, отвечает модель."""
+    if not any(_norm(a) and _norm(a) in asked for a in _afters(item)):
+        return None
+    answer = _norm(client_text)
+    if not answer:
+        return None
+    if item.get("answers") and answer in {_norm(a) for a in item["answers"]}:
+        return answer
+    if not item.get("match"):
+        return None
+    words = re.findall(r"\w+", client_text)
+    if item.get("strip"):
+        cut = re.match(item["strip"], answer)
+        if cut and cut.end():
+            dropped = len(answer[:cut.end()].split())
+            answer, words = answer[cut.end():].strip(), words[dropped:]
+    if not answer or len(answer.split()) > int(item.get("max_words", 6)):
+        return None
+    if not re.search(item["match"], answer) or (item.get("exclude") and re.search(item["exclude"], answer)):
+        return None
+    echo = " ".join(words) or answer
+    return echo[:1].upper() + echo[1:]
+
+
+def split_echo(reply: str) -> tuple[str, str]:
+    """Реплика с {answer}: повтор до конца первого предложения (или до запятой, если предложение одно)
+    и остальное — его синтезируем заранее."""
+    at = reply.index(QUICK_ECHO) + len(QUICK_ECHO)
+    stop = re.search(r"[.!?](\s|$)", reply[at:])
+    if not stop or not reply[at + stop.end():].strip():
+        stop = re.search(r",", reply[at:])
+    cut = at + stop.end() if stop else len(reply)
+    return reply[:cut].strip(), reply[cut:].strip()
+
+
+def quick_static(reply: str) -> str:
+    """Неизменная часть быстрого ответа: её синтезируем, пока идут гудки."""
+    return split_echo(reply)[1] if QUICK_ECHO in reply else reply
+
+
 class Dialog:
     def __init__(self, operator: Operator, backend=None):
         self.op = operator
@@ -113,6 +163,7 @@ class Dialog:
         self.model = self.backend.model
         self.system = operator.system_prompt()
         self.tools = build_tools(operator)
+        self.quick_parts: list[str] = []
         self.messages: list[dict] = []
         self.transcript: list[tuple[str, str]] = []  # ("client" | "robot", текст)
         self.result: CallResult | None = None
@@ -151,17 +202,27 @@ class Dialog:
         return Turn(self.op.farewell, result, fallback=True)
 
     def quick_reply(self, client_text: str) -> str | None:
-        """Ожидаемый короткий ответ на вопрос робота («да», «актуально»): заготовка из анкеты, без модели.
-        Модель увидит этот обмен в истории и продолжит с него."""
+        """Ожидаемый простой ответ на вопрос робота («да», город, имя): заготовка из анкеты, без модели.
+        Модель увидит этот обмен в истории и продолжит с него. Части реплики для озвучки — в quick_parts:
+        повтор слов клиента отдельно, остальное заранее синтезировано."""
+        self.quick_parts = []
         if self.finished or not self.messages or self.messages[-1]["role"] != "assistant":
             return None
         asked = _norm(self.messages[-1]["content"])
-        answer = _norm(client_text)
         for item in self.op.quick:
-            if _norm(item["after"]) in asked and answer in {_norm(a) for a in item["answers"]}:
-                self._add_client(client_text)
-                self._add_robot(item["reply"])
-                return item["reply"]
+            answer = quick_answer(item, asked, client_text)
+            if answer is None:
+                continue
+            reply = item["reply"]
+            if QUICK_ECHO in reply:
+                echo, rest = split_echo(reply)
+                self.quick_parts = [echo.replace(QUICK_ECHO, answer), rest]
+                reply = " ".join(p for p in self.quick_parts if p)
+            else:
+                self.quick_parts = [reply]
+            self._add_client(client_text)
+            self._add_robot(reply)
+            return reply
         return None
 
     def undo_quick(self, reply: str) -> bool:
