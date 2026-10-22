@@ -83,8 +83,12 @@ class CabinetTests(DBCase):
         self.log = self.tmp / 'calls.jsonl'
         self.dialed, self.busy = [], {'active': 0, 'pending': 0}
 
+        self.dial_fail = None  # (статус, ошибка): робот отказал в звонке
+
         async def fake_dial(request):
             self.dialed.append(await request.json())
+            if self.dial_fail:
+                return aweb.json_response({'error': self.dial_fail[1]}, status=self.dial_fail[0])
             return aweb.json_response({'id': f'call-{len(self.dialed)}'})
 
         async def fake_status(request):
@@ -215,6 +219,32 @@ class CabinetTests(DBCase):
         self.assertEqual(a['cost'], 27.3)  # 2 мин × 1,5 + 2000 симв. × 10/1000 + 3000 ток. × 1/1000 + 8 × 0,1626 распознавание
         self.assertEqual(a['lead_cost'], 27.3)
         self.assertEqual({e['key']: e['count'] for e in a['ends']}['do_not_call'], 1)
+
+    async def test_dial_failures_keep_or_close_numbers(self):
+        """Сбой Asterisk номер не теряет; плохой номер закрывается; потерянный итог последней попытки не крутит номер по кругу."""
+        await self.as_director()
+        await self.http.post('/api/robot/cab/contacts/upload', json={'name': 'b.csv', 'text': '89990000021\n89990000022\n'}, headers=H)
+        r = await self.http.post('/api/robot/cab/campaigns', json={'name': 'Сбои', 'operator': 'kitchen', 'days': [1, 2, 3, 4, 5, 6, 7],
+                                                                     'start_time': '00:00', 'end_time': '23:59', 'attempts': 1,
+                                                                     'contacts': 'all'}, headers=H)
+        camp = await r.json()
+        await self.http.post(f"/api/robot/cab/campaigns/{camp['id']}/start", json={}, headers=H)
+        targets = lambda: self.pool.fetch('SELECT phone, done, outcome, attempts FROM robot_targets ORDER BY id')  # noqa: E731
+        now = datetime.now(timezone.utc)
+        for status, error in ((503, 'All connection attempts failed'), (400, 'Asterisk ARI 500: internal')):
+            self.dial_fail = (status, error)
+            self.assertIsNone(await robot_runner.tick(self.pool, now))
+            self.assertEqual([tuple(r) for r in await targets()][0], ('79990000021', False, None, 0))
+            now += timedelta(minutes=robot_runner.DOWN_MIN)
+        self.dial_fail = (400, 'номер слишком короткий')
+        self.assertIsNone(await robot_runner.tick(self.pool, now))
+        self.assertEqual([tuple(r) for r in await targets()][0], ('79990000021', True, 'error', 0))
+        self.dial_fail = None
+        self.assertEqual((await robot_runner.tick(self.pool, now))['phone'], '79990000022')
+        later = now + timedelta(minutes=robot_runner.HOLD_MIN + 1)  # итог звонка потерялся, а попытка была последней
+        self.assertIsNone(await robot_runner.tick(self.pool, later))
+        self.assertEqual([tuple(r) for r in await targets()][1], ('79990000022', True, 'error', 1))
+        self.assertEqual(await self.pool.fetchval('SELECT status FROM robot_campaigns WHERE id=$1', camp['id']), 'done')
 
     async def test_minute_cost_after_quick_replies(self):
         await robot_store.set_option(self.pool, 'prices_auto', {'mango_min': {'value': 1.5}, 'eleven_1k_chars': {'value': 10},

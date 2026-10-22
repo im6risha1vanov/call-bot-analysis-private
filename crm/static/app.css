@@ -622,3 +622,5 @@ audio.rec{display:block;width:100%;max-width:420px;height:36px;margin-top:6px}
 .acc-pass{display:inline-flex;gap:6px;align-items:center;white-space:nowrap}
 .acc-pass code,.acc-done code{font-family:var(--mono);font-size:13px}
 .acc-done{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;margin-top:12px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2)}
+/* на телефоне вкладки не влезают (у робота их шесть): край тает, видно, что ряд листается */
+@media (max-width:640px){.tabs{-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 32px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 32px),transparent);padding-right:24px}}

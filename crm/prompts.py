@@ -35,8 +35,8 @@ def editor(who) -> int:
         raise Forbidden('Раздел директора.')
     tg = who.actor.telegram_user_id
     if not tg:
-        raise Forbidden('Промты правятся под вашим Telegram. Создайте себе в «Доступах» ссылку руководителя, '
-                        'привязанную к вам, и войдите по ней.')
+        raise Forbidden('Промты правятся под вашим Telegram. Создайте себе в «Доступах» учётную запись руководителя, '
+                        'привязанную к вам, и войдите под ней.')
     if not prompts.is_editor(tg):
         raise Forbidden('Режим промта вам не подключён.')
     return tg

@@ -905,10 +905,12 @@ class CallSessionTest(unittest.IsolatedAsyncioTestCase):
         op = load("kitchen")
         dialog = Dialog(op, AnthropicBackend(client=FakeClient([])))
         cases = {
-            "А в каком городе или районе будет стоять кухня?": ["Не знаю пока", "А зачем?", "Москва, а сколько стоит?"],
-            "По фасадам что смотрите: плёнку, эмаль, пластик?": ["Плёнку или эмаль", "А что лучше?", "Не плёнку"],
+            # «Сейчас», «Минуту» — не город и не имя: робот не должен ответить «Сейчас, поняла»
+            "А в каком городе или районе будет стоять кухня?": ["Не знаю пока", "А зачем?", "Москва, а сколько стоит?", "Сейчас",
+                                                               "Минуточку", "На даче", "Квартира"],
+            "По фасадам что смотрите: плёнку, эмаль, пластик?": ["Плёнку или эмаль", "А что лучше?", "Не плёнку", "Без плёнки"],
             "На какой бюджет примерно ориентируетесь?": ["Двести тридцать", "Двести-триста", "До трёхсот", "Не больше миллиона"],
-            "Как к вам обращаться?": ["А зачем?", "Завтра после обеда", "Неважно"],
+            "Как к вам обращаться?": ["А зачем?", "Завтра после обеда", "Неважно", "Нормально", "Сейчас", "Спасибо"],
         }
         for asked, answers in cases.items():
             for answer in answers:
@@ -1238,6 +1240,13 @@ class PhoneTest(unittest.IsolatedAsyncioTestCase):
         sip.PENDING.clear()
         with self.assertRaises(ValueError):
             await sip.dial("123", originate=originate)
+
+        async def asterisk_down(call_id, phone):
+            raise RuntimeError("Asterisk ARI 500")
+
+        with self.assertRaises(RuntimeError):
+            await sip.dial("79990001122", originate=asterisk_down)
+        self.assertEqual(sip.PENDING, {})  # иначе робот навсегда «занят» для кампаний CRM
 
     def test_downsample(self):
         import array

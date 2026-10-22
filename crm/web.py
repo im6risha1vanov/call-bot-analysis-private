@@ -41,7 +41,7 @@ HEADERS = {
     'Referrer-Policy': 'no-referrer',
 }
 TEST_READONLY = 'Тестовый вход только для просмотра: звонки и отметки работают во входе самого менеджера.'
-VIEW_ONLY = 'Это вход только для просмотра. Менять, звонить и спрашивать можно по личной ссылке.'
+VIEW_ONLY = 'Это вход только для просмотра. Менять, звонить и спрашивать можно под своим логином.'
 # Запросы, которые ничего не меняют и разрешены входу для просмотра; остальные POST ему закрыты.
 VIEW_ONLY_POSTS = {'/api/logout', '/api/test/login', '/api/login'}
 
@@ -86,7 +86,7 @@ async def guard(request: web.Request, handler):
 async def viewer(request: web.Request) -> auth.Viewer:
     who = await auth.viewer_for(request.app[POOL], request.cookies.get(COOKIE))
     if who is None:
-        raise web.HTTPUnauthorized(reason='Откройте CRM по своей ссылке.')
+        raise web.HTTPUnauthorized(reason='Войдите в CRM по логину и паролю.')
     return who
 
 
@@ -135,6 +135,13 @@ def parse_time(value) -> time | None:
         return time.fromisoformat(str(value)[:5])
     except ValueError:
         raise ValueError('Неверное время.')
+
+
+def days_arg(request, default: int = 7) -> int:
+    value = request.query.get('days') or str(default)
+    if not value.isdigit():
+        raise ValueError('Неверный период.')
+    return min(max(int(value), 1), 31)
 
 
 def int_id(value) -> int:
@@ -776,13 +783,13 @@ async def api_outcome(request):
 
 async def api_calls(request):
     who = await actor(request)
-    days = min(max(int(request.query.get('days') or 7), 1), 31)
+    days = days_arg(request)
     return web.json_response(await store.my_calls(request.app[POOL], who, who.client_id, await ext_of(request, who), days))
 
 
 async def api_stats(request):
     who = await actor(request)
-    days = min(max(int(request.query.get('days') or 7), 1), 31)
+    days = days_arg(request)
     ext = await ext_of(request, who) if (not is_privileged(who) or request.query.get('ext')) else None
     return web.json_response(await store.stats(request.app[POOL], who.client_id, ext, days))
 
