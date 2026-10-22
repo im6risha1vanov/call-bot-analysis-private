@@ -12,6 +12,7 @@
 #   bash scripts/crm_setup.sh public-on        — открыть сайт всем только на просмотр: без ссылки сразу выбор входа
 #   bash scripts/crm_setup.sh public-off       — закрыть: снова только личные и тестовая ссылки, входы для просмотра гаснут
 #   bash scripts/crm_setup.sh director-link [TG] — личная ссылка директора (по умолчанию владельца из бота): с ней можно всё менять
+#   bash scripts/crm_setup.sh domain NAME      — перевести CRM на свой домен (A-запись NAME уже должна смотреть на этот сервер)
 #   bash scripts/crm_setup.sh accounts         — логины и пароли всем, у кого их ещё нет: руководителям, менеджерам, клиентам (печатает их)
 #   bash scripts/crm_setup.sh demo-off         — выключить демо: тестовую ссылку и открытый просмотр, вход только по логину
 #   bash scripts/crm_setup.sh dadata-key       — ключ DaData для поиска реквизитов по ИНН в «Договорах» (спросит ключ, на экран не выводит)
@@ -161,6 +162,46 @@ public-off)
   psql "$DATABASE_URL" -q -c "DELETE FROM crm_sessions WHERE is_test"
   systemctl restart callbot-crm
   echo 'public access is off; personal links keep working'
+  ;;
+domain)
+  # Свой домен вместо адреса sslip.io: дописываем сайт в Caddy (чужие сайты не трогаем), меняем CRM_URL.
+  # Старый адрес продолжает работать. Сертификат Caddy получает сам, если домен уже смотрит на сервер.
+  DOMAIN="${2:-}"
+  [[ "$DOMAIN" =~ ^[a-z0-9.-]+\.[a-z]{2,}$ ]] || { echo 'usage: domain averonleads.ru'; exit 1; }
+  IP=$(curl -4 -s --max-time 5 https://ifconfig.me || hostname -I | awk '{print $1}')
+  DNS=$(getent ahostsv4 "$DOMAIN" | awk 'NR==1{print $1}')
+  if [ "$DNS" != "$IP" ]; then
+    echo "$DOMAIN points to ${DNS:-nothing}, this server is $IP: set an A record $DOMAIN -> $IP at the registrar, wait, run again. nothing changed"; exit 1
+  fi
+  NAMES="$DOMAIN"
+  WWW=$(getent ahostsv4 "www.$DOMAIN" | awk 'NR==1{print $1}')
+  [ "$WWW" = "$IP" ] && NAMES="$DOMAIN, www.$DOMAIN"
+  CF=/etc/caddy/Caddyfile
+  mkdir -p "$STATE"; chmod 700 "$STATE"
+  cp "$CF" "$STATE/Caddyfile.before.$(date +%s)"
+  cp .env "$STATE/env.before.$(date +%s)"
+  if ! grep -q "^$DOMAIN[ ,{]" "$CF"; then
+    printf '\n%s\n' "# callbot-crm: CRM on its own domain (scripts/crm_setup.sh domain)
+$NAMES {
+	encode gzip
+	reverse_proxy 127.0.0.1:$PORT
+	header Strict-Transport-Security \"max-age=31536000\"
+	log {
+		output discard
+	}
+}" >> "$CF"
+  fi
+  if ! caddy validate --config "$CF" --adapter caddyfile >/dev/null 2>&1; then
+    echo "Caddyfile is invalid after the change, restoring it:"; caddy validate --config "$CF" --adapter caddyfile 2>&1 | tail -3
+    cp "$(ls -t "$STATE"/Caddyfile.before.* | head -1)" "$CF"; exit 1
+  fi
+  systemctl reload caddy
+  if grep -q '^CRM_URL=' .env; then sed -i "s|^CRM_URL=.*|CRM_URL=https://$DOMAIN|" .env; else echo "CRM_URL=https://$DOMAIN" >> .env; fi
+  systemctl restart callbot-crm
+  sleep 15
+  systemctl is-active callbot-crm caddy
+  echo "https: $(curl -s -o /dev/null -w '%{http_code}' --max-time 60 https://$DOMAIN/api/me)  (401 is correct; 000 = certificate still coming, run: curl -sI https://$DOMAIN in a minute)"
+  echo "CRM_URL=https://$DOMAIN ($NAMES)"
   ;;
 demo-off)
   sed -i '/^CRM_PUBLIC=/d; /^CRM_TEST_KEY=/d' .env
