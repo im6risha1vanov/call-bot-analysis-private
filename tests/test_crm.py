@@ -17,7 +17,7 @@ os.environ.setdefault('CVC_API_KEY', 'test')
 os.environ.setdefault('ANTHROPIC_API_KEY', 'test')
 os.environ.setdefault('ENCRYPTION_KEY', 'q7m8b4gN0bO2PZqvG6b0yC3rA1D5pYc8tW2XkL9uQeE=')
 
-from crm import auth, cabinet, dial, gsheets, journal, overview, recording, robot_store, staff, store
+from crm import accounts, auth, cabinet, dial, gsheets, journal, overview, recording, robot_store, staff, store
 from review import callbacks, engine
 from review import store as review_store
 from tests.test_review import CALLBACK, LOST, TRANSCRIPT, WON
@@ -133,7 +133,7 @@ class DBCase(unittest.IsolatedAsyncioTestCase):
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS assigned_by_telegram_user_id BIGINT;""")
         for name in ('008_call_reviews.sql', '009_callback_tasks.sql', '012_prompt_versions.sql', '013_employee_invites.sql',
                      '014_crm.sql', '015_crm_roles.sql', '016_crm_access.sql', '017_crm_reports.sql', '018_crm_questions.sql',
-                     '019_crm_staff.sql', '020_robot.sql', '021_manager_memory.sql', '022_presentations.sql', '024_deals.sql', '025_contracts.sql', '026_presentation_client.sql', '027_sources.sql'):
+                     '019_crm_staff.sql', '020_robot.sql', '021_manager_memory.sql', '022_presentations.sql', '024_deals.sql', '025_contracts.sql', '026_presentation_client.sql', '027_sources.sql', '028_crm_logins.sql'):
             await self.pool.execute((root / 'migrations' / name).read_text())
         await self.pool.execute('TRUNCATE clients, crm_login_tokens, crm_sessions, crm_docs, crm_invites, crm_reports, crm_questions, '
                                 'employee_invites, manager_memory, deal_events, contracts, source_selections, prompt_active, prompt_versions, prompt_drafts, astra_daily_spend, robot_options CASCADE')
@@ -669,28 +669,33 @@ class WebTests(DBCase):
         await self.login(901)
         self.assertEqual((await self.http.get(f'/api/review/{call_id}')).status, 200)
 
-    async def test_personal_links(self):
+    async def test_login_accounts(self):
         h = {'X-CRM': '1'}
         with patch.dict(os.environ, {'CRM_TEST_KEY': TEST_KEY, 'KITCHEN_SHEET_ID': 'leads', 'CRM_URL': 'https://crm.example'}), \
                 patch('crm.gsheets.values', fake_values):
             await self.director()
             r = await self.http.post('/api/access', json={'role': 'manager', 'person_ext': '101', 'ext': '102'}, headers=h)
-            link = (await r.json())['link']
-            self.assertTrue(link.startswith('https://crm.example/p/'))
-            r = await self.http.post('/api/access', json={'role': 'client', 'client': 'Кухни'}, headers=h)
-            client_link = (await r.json())['link']
-            r = await self.http.post('/api/access', json={'role': 'client', 'client': 'Чужой'}, headers=h)
-            self.assertEqual(r.status, 400)
-            r = await self.http.post('/api/access', json={'role': 'manager', 'person_ext': '999'}, headers=h)
-            self.assertEqual(r.status, 400)
+            self.assertEqual(r.status, 200)
+            r = await self.http.post('/api/access', json={'role': 'client', 'client': 'Кухни', 'login': 'kukhni', 'password': 'kitchen-2026'},
+                                     headers=h)
+            self.assertEqual(r.status, 200)
+            for bad in ({'role': 'client', 'client': 'Чужой'}, {'role': 'manager', 'person_ext': '999'},
+                        {'role': 'client', 'client': 'Кухни', 'login': 'kukhni'},  # логин занят
+                        {'role': 'client', 'client': 'Кухни', 'login': 'Кухни'}, {'role': 'client', 'client': 'Кухни', 'password': 'short1'}):
+                r = await self.http.post('/api/access', json=bad, headers=h)
+                self.assertEqual(r.status, 400, bad)
             listed = (await (await self.http.get('/api/access')).json())['invites']
-            self.assertEqual([(i['role'], i['name']) for i in listed], [('client', 'Кухни'), ('manager', 'Первый')])
+            self.assertEqual([(i['role'], i['name'], i['login']) for i in listed], [('client', 'Кухни', 'kukhni'), ('manager', 'Первый', 'pervyi')])
+            manager = next(i for i in listed if i['role'] == 'manager')
+            self.assertRegex(manager['password'], r'^[a-z2-9]{4}-[a-z2-9]{4}-[a-z2-9]{4}$')  # директор видит пароль
+            self.assertNotIn(manager['password'], str(await self.pool.fetch('SELECT * FROM crm_invites')))  # в базе его нет открытым
             await self.http.get('/test-exit')
 
-            # менеджер по личной ссылке: свой добавочный, звонить можно
-            token = link.rsplit('/', 1)[1]
-            r = await self.http.get('/p/' + token, allow_redirects=False)
-            self.assertEqual((r.status, r.headers['Location']), (302, '/'))
+            # менеджер входит по логину и паролю: свой добавочный, звонить можно
+            r = await self.http.post('/api/login', json={'login': 'pervyi', 'password': 'wrong-pass'}, headers=h)
+            self.assertEqual((r.status, (await r.json())['error']), (400, 'Неверный логин или пароль.'))
+            r = await self.http.post('/api/login', json={'login': ' Pervyi ', 'password': manager['password']}, headers=h)
+            self.assertEqual(r.status, 200)
             self.assertIn('SameSite=Lax', r.headers['Set-Cookie'])
             me = await (await self.http.get('/api/me')).json()
             self.assertEqual((me['role'], me['name'], me['ext'], me['test'], me['can_dial'], me['readonly']),
@@ -698,20 +703,39 @@ class WebTests(DBCase):
             r = await self.http.post('/api/leads', json={'text': '89991112233'}, headers=h)
             self.assertEqual((await r.json())['added'], 1)
             self.assertEqual((await self.http.get('/api/access')).status, 403)
-            self.assertEqual((await self.http.get('/p/wrong')).status, 404)
 
-            # отзыв ссылки выкидывает сразу
-            invite_id = next(i['id'] for i in listed if i['role'] == 'manager')
-            await self.pool.execute('UPDATE crm_invites SET revoked_at=now() WHERE id=$1', invite_id)
+            # директор меняет пароль: старый вход закрывается, новый пароль подходит
+            got = await auth.account_change(self.pool, 1, manager['id'], login='luzin', password='new-secret-1')
+            self.assertEqual((got['login'], got['password']), ('luzin', 'new-secret-1'))
             self.assertEqual((await self.http.get('/api/me')).status, 401)
-            self.assertEqual((await self.http.get('/p/' + token)).status, 404)
+            r = await self.http.post('/api/login', json={'login': 'pervyi', 'password': 'new-secret-1'}, headers=h)
+            self.assertEqual(r.status, 400)
+            r = await self.http.post('/api/login', json={'login': 'luzin', 'password': 'new-secret-1'}, headers=h)
+            self.assertEqual(r.status, 200)
 
-            # клиент по своей ссылке видит только свой кабинет
-            r = await self.http.get('/p/' + client_link.rsplit('/', 1)[1], allow_redirects=False)
-            self.assertEqual(r.status, 302)
+            # закрытый доступ выкидывает сразу
+            await self.pool.execute('UPDATE crm_invites SET revoked_at=now() WHERE id=$1', manager['id'])
+            self.assertEqual((await self.http.get('/api/me')).status, 401)
+
+            # клиент видит только свой кабинет
+            r = await self.http.post('/api/login', json={'login': 'kukhni', 'password': 'kitchen-2026'}, headers=h)
+            self.assertEqual(r.status, 200)
             cab = await (await self.http.get('/api/cabinet')).json()
             self.assertEqual(cab['name'], 'Кухни')
             self.assertEqual((await self.http.get('/api/queue')).status, 403)
+
+    async def test_login_lockout_and_bulk_accounts(self):
+        with patch.dict(auth._fails, clear=True), patch.dict(os.environ, {'KITCHEN_SHEET_ID': 'leads'}), \
+                patch('crm.gsheets.values', fake_values):
+            made = await accounts.create_all(self.pool)
+            self.assertEqual({(a['role'], a['login']) for a in made} >= {('director', 'rukovoditel'), ('client', 'kukhni')}, True)
+            self.assertEqual(await accounts.create_all(self.pool), [])  # второй раз никого не заводит
+            one = made[0]
+            for _ in range(auth.MAX_FAILS):
+                with self.assertRaises(ValueError):
+                    await auth.password_login(self.pool, one['login'], 'wrong')
+            with self.assertRaisesRegex(ValueError, 'Подождите'):
+                await auth.password_login(self.pool, one['login'], one['password'])
 
     async def add_review(self, ext, data, ago, number='79990001122'):
         call_id = await self.pool.fetchval(
@@ -1036,13 +1060,14 @@ class WebTests(DBCase):
             self.assertEqual(access['directors'], [{'tg': '901', 'name': 'Руководитель'}])
             r = await self.http.post('/api/access', json={'role': 'director', 'tg': '124'}, headers=h)
             self.assertEqual(r.status, 400)  # менеджер, не руководитель
-            r = await self.http.post('/api/access', json={'role': 'director', 'tg': '901'}, headers=h)
-            token = (await r.json())['link'].rsplit('/', 1)[1]
+            r = await self.http.post('/api/access', json={'role': 'director', 'tg': '901', 'login': 'boss', 'password': 'boss-pass-1'},
+                                     headers=h)
+            self.assertEqual(r.status, 200)
             await self.http.get('/test-exit')
         with patch.dict(os.environ, {'PROMPT_EDITORS': '901, 905'}), \
                 patch('crm.telegram.send', AsyncMock(return_value=True)) as send:
-            r = await self.http.get('/p/' + token, allow_redirects=False)
-            self.assertEqual(r.headers['Location'], '/')
+            r = await self.http.post('/api/login', json={'login': 'boss', 'password': 'boss-pass-1'}, headers=h)
+            self.assertEqual(r.status, 200)
             me = await (await self.http.get('/api/me')).json()
             self.assertEqual((me['role'], me['name']), ('director', 'Руководитель'))
             o = await (await self.http.get('/api/prompts')).json()

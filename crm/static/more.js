@@ -143,30 +143,53 @@ async function accessView(box) {
   const d = await api('/api/access');
   const roleName = {director: 'Руководитель', manager: 'Менеджер', client: 'Клиент'};
   const who = i => i.role === 'manager' ? `${esc(i.name)} <span class="s">· доб. ${esc(i.ext)}</span>` : esc(i.name || roleName[i.role]) + (i.tg ? ' <span class="s">· с Telegram</span>' : '');
-  box.innerHTML = `<section class="card blk"><div class="card-h"><h2>Действующие ссылки</h2><span class="hint">${d.invites.length}</span><span class="sp"></span>
-      ${S.me.readonly ? '' : '<button class="btn primary" type="button" data-new>Выдать ссылку</button>'}</div>
-    ${d.invites.length ? `<div class="tbl-wrap"><table class="tbl anim"><thead><tr><th>Кто</th><th class="hide-m">Вход</th><th class="hide-m">Создана</th><th>Последний вход</th><th></th></tr></thead><tbody>
-      ${d.invites.map((i, r) => `<tr data-css="--r:${Math.min(r, 30)}"><td>${who(i)}</td><td class="hide-m">${roleName[i.role]}</td><td class="hide-m nw">${fmtWhen(i.created)}</td><td class="nw">${i.used ? fmtWhen(i.used) : '<span class="s">ещё не входил</span>'}</td>
-        <td>${S.me.readonly ? '' : `<button class="btn small" type="button" data-revoke="${i.id}">Отозвать</button>`}</td></tr>`).join('')}</tbody></table></div>`
-      : '<div class="empty">Ссылок ещё нет.</div>'}
-    <p class="hint" data-css="margin:12px 0 0">По ссылке человек входит в CRM без пароля. Отозванная ссылка сразу перестаёт работать на всех устройствах.</p></section>`;
-  $('[data-new]', box)?.addEventListener('click', () => newLink(d, () => accessView(box)));
+  const ro = S.me.readonly;
+  const pass = i => i.password ? `<span class="acc-pass" data-pass="${i.id}"><code>••••••••</code><button class="ghost small" type="button" data-show="${i.id}">Показать</button></span>`
+    : '<span class="s">задайте новый</span>';
+  const rows = d.invites.map((i, r) => `<tr data-css="--r:${Math.min(r, 30)}"><td>${who(i)}</td><td class="hide-m">${roleName[i.role]}</td>
+    <td>${i.login ? `<code>${esc(i.login)}</code>` : '<span class="s">старая ссылка</span>'}</td><td>${i.login ? pass(i) : ''}</td>
+    <td class="nw hide-m">${i.used ? fmtWhen(i.used) : '<span class="s">ещё не входил</span>'}</td>
+    <td class="nw">${ro ? '' : `${i.login ? `<button class="btn small" type="button" data-edit="${i.id}">Изменить</button> ` : ''}<button class="btn small" type="button" data-revoke="${i.id}">${i.login ? 'Удалить' : 'Отозвать'}</button>`}</td></tr>`).join('');
+  box.innerHTML = `<section class="card blk"><div class="card-h"><h2>Учётные записи</h2><span class="hint">${d.invites.length}</span><span class="sp"></span>
+      ${ro ? '' : '<button class="btn primary" type="button" data-new>Новая учётная запись</button>'}</div>
+    ${d.invites.length ? `<div class="tbl-wrap"><table class="tbl anim"><thead><tr><th>Кто</th><th class="hide-m">Вход</th><th>Логин</th><th>Пароль</th><th class="hide-m">Последний вход</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
+      : '<div class="empty">Учётных записей ещё нет.</div>'}
+    <p class="hint" data-css="margin:12px 0 0">Человек входит на главной странице CRM по логину и паролю. Смена пароля и удаление сразу закрывают его входы на всех устройствах.</p></section>`;
+  const byId = id => d.invites.find(i => i.id === +id);
+  $('[data-new]', box)?.addEventListener('click', () => newAccount(d, () => accessView(box)));
+  $$('[data-show]', box).forEach(b => b.addEventListener('click', () => {
+    const code = $(`[data-pass="${b.dataset.show}"] code`, box), open = b.textContent === 'Показать';
+    code.textContent = open ? byId(b.dataset.show).password : '••••••••';
+    b.textContent = open ? 'Скрыть' : 'Показать';
+  }));
+  $$('[data-edit]', box).forEach(b => b.addEventListener('click', () => editAccount(byId(b.dataset.edit), () => accessView(box))));
   $$('[data-revoke]', box).forEach(b => b.addEventListener('click', async () => {
-    if (!await askConfirm('Отозвать ссылку? Человек сразу выйдет из CRM.', 'Отозвать', true)) return;
-    try { await api(`/api/access/${b.dataset.revoke}/revoke`, {method: 'POST', body: {}}); toast('Ссылка отозвана'); accessView(box); }
+    if (!await askConfirm('Закрыть доступ? Человек сразу выйдет из CRM.', 'Закрыть доступ', true)) return;
+    try { await api(`/api/access/${b.dataset.revoke}/revoke`, {method: 'POST', body: {}}); toast('Доступ закрыт'); accessView(box); }
     catch (e) { toast(e.message, true); }
   }));
 }
 
-function newLink(d, onDone) {
-  const box = modal(`${modalHead('Выдать личную ссылку', 'Ссылку видно только сейчас: скопируйте и отправьте лично. Ссылка руководителя, привязанная к его Telegram, открывает ему и «Промты».')}
+function accountBox(out, login, password) {
+  const text = `Адрес: ${location.origin}\nЛогин: ${login}\nПароль: ${password}`;
+  out.innerHTML = `<div class="acc-done"><div>Логин <code>${esc(login)}</code></div><div>Пароль <code>${esc(password)}</code></div>
+    <button class="btn small" type="button">Скопировать для отправки</button></div>`;
+  $('button', out).addEventListener('click', async e => {
+    try { await navigator.clipboard.writeText(text); doneBtn(e.currentTarget, 'Скопировано'); } catch (err) { toast(text); }
+  });
+}
+
+function newAccount(d, onDone) {
+  const box = modal(`${modalHead('Новая учётная запись', 'Логин и пароль можно не заполнять: придумаем сами. Их всегда видно здесь, в «Доступах».')}
     <div class="rvm-body"><div class="outform">
       <label class="field">Кому<select data-v="role"><option value="manager">Менеджеру</option><option value="client">Клиенту колл-центра</option><option value="director">Руководителю</option></select></label>
       <label class="field" data-for="manager">Менеджер<select data-v="ext">${d.managers.map(m => `<option value="${esc(m.ext)}">${esc(m.name)} · доб. ${esc(m.ext)}</option>`).join('')}</select></label>
       <label class="field" data-for="client" hidden>Клиент<select data-v="client">${d.clients.map(c => `<option>${esc(c)}</option>`).join('')}</select></label>
-      <label class="field" data-for="director" hidden>Чья ссылка<select data-v="tg">${d.directors.map(p => `<option value="${esc(p.tg)}">${esc(p.name)}</option>`).join('')}<option value="">Другой человек, без Telegram</option></select></label>
+      <label class="field" data-for="director" hidden>Кто<select data-v="tg">${d.directors.map(p => `<option value="${esc(p.tg)}">${esc(p.name)}</option>`).join('')}<option value="">Другой человек, без Telegram</option></select></label>
       <label class="field" data-for="name" hidden>Имя<input data-v="name" maxlength="80" placeholder="Например, Евгений"></label>
-      <div class="row wide"><button class="btn primary" type="button" data-go>Создать ссылку</button></div></div><div data-out></div></div>`);
+      <label class="field">Логин<input data-v="login" maxlength="40" autocapitalize="none" spellcheck="false" placeholder="придумаем из имени"></label>
+      <label class="field">Пароль<input data-v="password" maxlength="64" autocapitalize="none" spellcheck="false" placeholder="придумаем сами"></label>
+      <div class="row wide"><button class="btn primary" type="button" data-go>Создать</button></div></div><div data-out></div></div>`);
   const v = k => $(`[data-v="${k}"]`, box);
   const sync = () => {
     const r = v('role').value;
@@ -176,13 +199,36 @@ function newLink(d, onDone) {
   $('[data-go]', box).addEventListener('click', async e => {
     busy(e.currentTarget, true);
     try {
+      const before = new Set(d.invites.map(i => i.id));
       const r = await api('/api/access', {method: 'POST', body: {role: v('role').value, person_ext: v('ext').value, client: v('client').value,
-        name: v('tg').value ? '' : v('name').value, tg: v('tg').value}});
-      linkBox($('[data-out]', box), r.link);
-      doneBtn(e.currentTarget, 'Ссылка создана');
+        name: v('tg').value ? '' : v('name').value, tg: v('tg').value, login: v('login').value, password: v('password').value}});
+      const made = r.invites.find(i => !before.has(i.id));
+      if (made) accountBox($('[data-out]', box), made.login, made.password);
+      doneBtn(e.currentTarget, 'Создано');
       onDone && onDone();
     } catch (err) { busy(e.currentTarget, false); toast(err.message, true); }
   });
+}
+
+function editAccount(acc, onDone) {
+  const box = modal(`${modalHead('Логин и пароль', esc(acc.name || ''))}
+    <div class="rvm-body"><div class="outform">
+      <label class="field">Логин<input data-v="login" maxlength="40" autocapitalize="none" spellcheck="false" value="${esc(acc.login)}"></label>
+      <label class="field">Новый пароль<input data-v="password" maxlength="64" autocapitalize="none" spellcheck="false" placeholder="оставьте пустым, чтобы не менять"></label>
+      <div class="row wide"><button class="btn primary" type="button" data-go>Сохранить</button><button class="btn" type="button" data-gen>Придумать новый пароль</button></div>
+      <p class="hint">После смены пароля человеку нужно войти заново.</p></div><div data-out></div></div>`);
+  const v = k => $(`[data-v="${k}"]`, box);
+  const send = async (btn, extra) => {
+    busy(btn, true);
+    try {
+      const r = await api(`/api/access/${acc.id}/account`, {method: 'POST', body: {login: v('login').value, ...extra}});
+      accountBox($('[data-out]', box), r.login, r.password || '');
+      busy(btn, false); toast('Сохранено');
+      onDone && onDone();
+    } catch (err) { busy(btn, false); toast(err.message, true); }
+  };
+  $('[data-go]', box).addEventListener('click', e => send(e.currentTarget, {password: v('password').value}));
+  $('[data-gen]', box).addEventListener('click', e => send(e.currentTarget, {new: true}));
 }
 
 // Режим промта: черновик живёт на странице, сохраняется только текст, по которому собран пример.

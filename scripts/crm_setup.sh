@@ -12,6 +12,8 @@
 #   bash scripts/crm_setup.sh public-on        — открыть сайт всем только на просмотр: без ссылки сразу выбор входа
 #   bash scripts/crm_setup.sh public-off       — закрыть: снова только личные и тестовая ссылки, входы для просмотра гаснут
 #   bash scripts/crm_setup.sh director-link [TG] — личная ссылка директора (по умолчанию владельца из бота): с ней можно всё менять
+#   bash scripts/crm_setup.sh accounts         — логины и пароли всем, у кого их ещё нет: руководителям, менеджерам, клиентам (печатает их)
+#   bash scripts/crm_setup.sh demo-off         — выключить демо: тестовую ссылку и открытый просмотр, вход только по логину
 #   bash scripts/crm_setup.sh dadata-key       — ключ DaData для поиска реквизитов по ИНН в «Договорах» (спросит ключ, на экран не выводит)
 #   bash scripts/crm_setup.sh prices           — пересчитать себестоимость звонка робота сейчас и показать, откуда взялись цены
 #   bash scripts/crm_setup.sh yandex-key       — подключить yandex-sa-key.json (ключ сервисного аккаунта Яндекса для цены YandexGPT)
@@ -40,7 +42,7 @@ test_link() {
 }
 
 # Все миграции CRM; каждая только добавляет и повторный запуск ничего не ломает.
-migrate() { for f in migrations/014_crm.sql migrations/015_crm_roles.sql migrations/016_crm_access.sql migrations/017_crm_reports.sql migrations/018_crm_questions.sql migrations/019_crm_staff.sql migrations/020_robot.sql migrations/021_manager_memory.sql migrations/022_presentations.sql migrations/023_tg_chats.sql migrations/024_deals.sql migrations/025_contracts.sql migrations/026_presentation_client.sql migrations/027_sources.sql; do
+migrate() { for f in migrations/014_crm.sql migrations/015_crm_roles.sql migrations/016_crm_access.sql migrations/017_crm_reports.sql migrations/018_crm_questions.sql migrations/019_crm_staff.sql migrations/020_robot.sql migrations/021_manager_memory.sql migrations/022_presentations.sql migrations/023_tg_chats.sql migrations/024_deals.sql migrations/025_contracts.sql migrations/026_presentation_client.sql migrations/027_sources.sql migrations/028_crm_logins.sql; do
   psql "$DATABASE_URL" -q -v ON_ERROR_STOP=1 -f "$f"; done; }
 
 listeners() { ss -ltnpH "( sport = :80 or sport = :443 )" || true; }
@@ -159,6 +161,33 @@ public-off)
   psql "$DATABASE_URL" -q -c "DELETE FROM crm_sessions WHERE is_test"
   systemctl restart callbot-crm
   echo 'public access is off; personal links keep working'
+  ;;
+demo-off)
+  sed -i '/^CRM_PUBLIC=/d; /^CRM_TEST_KEY=/d' .env
+  psql "$DATABASE_URL" -q -c "DELETE FROM crm_sessions WHERE is_test"
+  systemctl restart callbot-crm
+  echo 'demo is off: no test link, no public view; sign in with login and password'
+  ;;
+accounts)
+  # Пароли видно только здесь и в «Доступах» у директора; в базе — хэш и зашифрованная копия.
+  DATABASE_URL="$DATABASE_URL" .venv/bin/python - <<'PY'
+import asyncio, os
+import asyncpg
+from dotenv import load_dotenv
+load_dotenv('.env')
+from crm import accounts
+
+async def main():
+    pool = await asyncpg.create_pool(os.environ['DATABASE_URL'], min_size=1, max_size=2)
+    made = await accounts.create_all(pool)
+    names = {'director': 'руководитель', 'manager': 'менеджер', 'client': 'клиент'}
+    for a in made:
+        print(f"{names[a['role']]:12} {a['name'][:30]:30} {a['login']:24} {a['password']}")
+    print(f'created: {len(made)}; everyone else already has a login (see «Доступы»)')
+    await pool.close()
+
+asyncio.run(main())
+PY
   ;;
 director-link)
   # Ссылка привязана к Telegram руководителя: под ней работают промты, а если его отключат от бота, она погаснет.
