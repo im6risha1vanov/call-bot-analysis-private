@@ -916,6 +916,8 @@ class CallSessionTest(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNone(dialog.quick_reply(answer), answer)
         dialog.messages = [{"role": "assistant", "content": "На какой бюджет примерно ориентируетесь?"}]
         self.assertEqual(dialog.quick_reply("двести пятьдесят тысяч"), "Хорошо. Как к вам обращаться?")
+        dialog.messages = [{"role": "assistant", "content": "Как к вам обращаться?"}]
+        self.assertEqual(dialog.quick_reply("ирина петровна"), "Ирина Петровна, когда удобно, чтобы специалист перезвонил?")
 
     def test_crm_copy_of_builtin_operator_gets_new_quick_replies(self):
         data = tomllib.loads((OPERATORS_DIR / "kitchen.toml").read_text())

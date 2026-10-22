@@ -136,8 +136,9 @@ def quick_answer(item: dict, asked: str, client_text: str) -> str | None:
         return None
     if not re.search(item["match"], answer) or (item.get("exclude") and re.search(item["exclude"], answer)):
         return None
-    echo = " ".join(words) or answer
-    return echo[:1].upper() + echo[1:]
+    # распознавание часто пишет «ирина петровна»: имена и города с большой, предлоги («в», «из») как есть
+    words = [w if (i and len(w) <= 2) or w[:1].isupper() else w[:1].upper() + w[1:] for i, w in enumerate(words)]
+    return " ".join(words) or answer.capitalize()
 
 
 def split_echo(reply: str) -> tuple[str, str]:
