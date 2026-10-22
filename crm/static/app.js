@@ -375,11 +375,26 @@ const menu = () => {
   return {nav: m.nav.filter(allowed), more: m.more.filter(allowed), tabs: m.tabs.filter(allowed)};
 };
 
-function showLogin(reason) {
-  root.innerHTML = `<div class="login panel">
+function showLogin() {
+  root.innerHTML = `<form class="login panel" autocomplete="on">
     <div class="logo"><i></i>Averon <b>CRM</b></div>
     <h1>Вход в CRM</h1>
-    <p class="muted">${esc(reason || 'Откройте CRM по своей ссылке.')}</p></div>`;
+    <label class="field">Логин<input name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>
+    <label class="field">Пароль<input name="password" type="password" autocomplete="current-password" required></label>
+    <p class="login-err bad-text" hidden></p>
+    <button class="btn primary" type="submit">Войти</button>
+    <p class="muted">Логин и пароль выдаёт руководитель.</p></form>`;
+  const form = $('form', root), err = $('.login-err', form);
+  $('[name="username"]', form).focus();
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const btn = $('button', form);
+    busy(btn, true); err.hidden = true;
+    try {
+      await api('/api/login', {method: 'POST', body: {login: form.username.value, password: form.password.value}});
+      location.reload();
+    } catch (ex) { busy(btn, false); err.textContent = ex.message; err.hidden = false; }
+  });
 }
 
 let moreOpen = false;

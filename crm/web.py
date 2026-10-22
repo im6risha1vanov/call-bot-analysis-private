@@ -22,7 +22,7 @@ from aiohttp import web  # noqa: E402
 
 import mango_client  # noqa: E402
 from tools import Forbidden, is_privileged  # noqa: E402
-from . import ask as asking, auth, cabinet, contracts, deals, journal, overview, people, recording, reviews, sources, staff, store, training  # noqa: E402
+from . import accounts, ask as asking, auth, cabinet, contracts, deals, journal, overview, people, recording, reviews, sources, staff, store, training  # noqa: E402
 from . import prompts as prompt_mode, robot, robot_api, robot_prices, robot_runner, robot_store  # noqa: E402
 from review import store as review_store  # noqa: E402
 from .dial import dial  # noqa: E402
@@ -43,7 +43,7 @@ HEADERS = {
 TEST_READONLY = 'Тестовый вход только для просмотра: звонки и отметки работают во входе самого менеджера.'
 VIEW_ONLY = 'Это вход только для просмотра. Менять, звонить и спрашивать можно по личной ссылке.'
 # Запросы, которые ничего не меняют и разрешены входу для просмотра; остальные POST ему закрыты.
-VIEW_ONLY_POSTS = {'/api/logout', '/api/test/login'}
+VIEW_ONLY_POSTS = {'/api/logout', '/api/test/login', '/api/login'}
 
 
 def fail(status: int, text: str) -> web.Response:
@@ -403,14 +403,42 @@ async def api_access(request):
 
 
 async def api_access_create(request):
+    """Новая учётная запись: логин (или придумаем из имени) и пароль (или придумаем сами)."""
     who = await director(request)
+    pool = request.app[POOL]
     data = await body(request)
     role = str(data.get('role') or '')
     if role == 'client' and str(data.get('client') or '') not in [c['name'] for c in (await cabinet.summary())['clients']]:
         raise ValueError('Такого клиента нет.')
-    token = await auth.invite_create(request.app[POOL], who.actor.client_id, role, data.get('person_ext'), data.get('client'),
-                                     data.get('name'), data.get('tg'))
-    return web.json_response({'link': f'{base_url(request)}/p/{token}'})
+    login = str(data.get('login') or '').strip()
+    if not login:
+        team = {m['ext']: m['name'] for m in await store.team(pool, who.actor.client_id)}
+        heads = {d['tg']: d['name'] for d in await auth.directors(pool, who.actor.client_id)}
+        name = {'manager': team.get(str(data.get('person_ext') or '')), 'client': data.get('client'),
+                'director': heads.get(str(data.get('tg') or '')) or data.get('name')}.get(role)
+        login = await accounts.free_login(pool, accounts.slug(name or '') or role)
+    await auth.account_create(pool, who.actor.client_id, role, login, data.get('person_ext'), data.get('client'),
+                              data.get('name'), data.get('tg'), data.get('password') or None)
+    return web.json_response({'invites': await auth.invites(pool, who.actor.client_id)})
+
+
+async def api_access_account(request):
+    """Директор меняет логин или пароль учётной записи."""
+    who = await director(request)
+    data = await body(request)
+    item = await auth.account_change(request.app[POOL], who.actor.client_id, int_id(request.match_info['id']),
+                                     data.get('login'), data.get('password') or None, bool(data.get('new')))
+    return web.json_response(item)
+
+
+async def api_login(request):
+    data = await body(request)
+    session, role = await auth.password_login(request.app[POOL], data.get('login'), data.get('password'))
+    await auth.logout(request.app[POOL], request.cookies.get(COOKIE))
+    response = web.json_response({'ok': True, 'role': role})
+    response.set_cookie(COOKIE, session, max_age=int(auth.PERSONAL_TTL.total_seconds()), httponly=True,
+                        secure=SECURE_COOKIE, samesite='Lax', path='/')
+    return response
 
 
 async def api_access_revoke(request):
@@ -816,6 +844,8 @@ def build(pool) -> web.Application:
     app.router.add_get('/api/access', api_access)
     app.router.add_post('/api/access', api_access_create)
     app.router.add_post('/api/access/{id}/revoke', api_access_revoke)
+    app.router.add_post('/api/access/{id}/account', api_access_account)
+    app.router.add_post('/api/login', api_login)
     app.router.add_get('/api/staff', api_staff)
     app.router.add_get('/api/person', api_person)
     app.router.add_get('/api/deals', api_deals)
