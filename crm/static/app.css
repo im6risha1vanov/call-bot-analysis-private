@@ -445,11 +445,6 @@ audio.rec{display:block;width:100%;max-width:420px;height:36px;margin-top:6px}
 .report:not(.open) .rep-body{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:normal}
 .rep-calls{display:flex;flex-wrap:wrap;gap:6px}
 .report:not(.open) .rep-calls{display:none}
-.ask-box textarea{width:100%;font:inherit;padding:10px 12px;border:1px solid var(--line);border-radius:11px;background:var(--surface);color:var(--fg);resize:vertical;min-height:52px}
-.ask-box textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
-.qa .q{font-weight:600;display:flex;flex-direction:column;gap:2px;margin-bottom:8px}
-.qa .q .muted{font-weight:400;font-size:12px}
-.qa .a{white-space:pre-wrap;line-height:1.5}
 .feed{display:flex;flex-direction:column;gap:10px}
 .feed>article{animation:rise .4s var(--ease) both;animation-delay:calc(var(--i,0) * 40ms)}
 .feed .tag{font-size:11px;font-weight:600;color:var(--accent);background:var(--accent-soft);border-radius:999px;padding:2px 8px}
@@ -592,7 +587,6 @@ audio.rec{display:block;width:100%;max-width:420px;height:36px;margin-top:6px}
 .rb-filters .field{display:flex;flex-direction:row;align-items:center;gap:6px;font-size:13px;color:var(--muted)}
 .rb-check{display:flex;gap:8px;align-items:center;margin:4px 0}
 .rb-check input{width:auto}
-.ask-box [data-ex]{white-space:normal;text-align:left;max-width:100%;height:auto;line-height:1.35;padding-block:6px}
 .list .more-l{margin:0;padding:10px 4px 0}
 .item .s.wrap-s{white-space:normal}
 .bad-text,.item .s.bad-text{color:var(--bad)}

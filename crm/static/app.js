@@ -405,6 +405,7 @@ function shell() {
     <aside class="side">
       <div class="logo"><i></i><span>Averon <b>CRM</b></span></div>
       <nav class="nav" id="nav" aria-label="Разделы"></nav>
+      ${gptButton()}
       <div class="side-foot"><span>${esc(S.me.name || '')} · ${esc(ROLE_NAME[S.me.role] || '')}${S.me.ext ? ', доб. ' + esc(S.me.ext) : ''}</span>
         <div class="row"><button class="ghost" type="button" data-theme-btn>${themeLabel()}</button>
         ${S.me.test ? '<a class="ghost" href="/test-exit">Сменить вход</a>' : '<button class="ghost" type="button" data-logout>Выйти</button>'}</div></div>
@@ -418,6 +419,8 @@ function shell() {
     <div class="scrim" id="scrim"></div>
     <aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="dr-title"></aside>`;
   $('#scrim').onclick = closeDrawer;
+  GPT.open = false; GPT.items = null;
+  gptShell();
 }
 function navButton(id) {
   const p = PAGES[id];
@@ -469,6 +472,7 @@ async function go(target, arg = null, opts = {}) {
     if (location.hash !== hash) history[same || opts.replace ? 'replaceState' : 'pushState'](null, '', hash);
   }
   store.set('crm-page', page);
+  if (!same) gptPageChanged();
   if (m().more.includes(page)) moreOpen = true;
   renderNav();
   closeDrawer();
@@ -553,6 +557,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   go(page || store.get('crm-page', '') || HOME[S.me.role], arg, {replace: true});
   addEventListener('popstate', () => { const [p, a] = fromHash(); go(p || HOME[S.me.role], a, {push: false}); });
   refreshCounts();
+  gptFirstVisit();
   // Раз в минуту обновляем счётчики, а очередь менеджера, если он ничего не заполняет.
   setInterval(() => {
     if (document.hidden) return;

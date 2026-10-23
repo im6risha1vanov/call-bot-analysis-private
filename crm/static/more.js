@@ -68,8 +68,6 @@ async function leadsView(box) {
 
 // ---------- отчёты и вопросы ----------
 S.repFilter = 'all';
-const qaHtml = (q, i = 0) => `<article class="card qa" data-css="--i:${i}"><div class="q"><span class="hint">${fmtWhen(q.at)} · вопрос</span>${esc(q.question)}</div>
-  <div class="a">${q.html || '<span class="hint">Ответа нет.</span>'}</div></article>`;
 const reportHtml = (r, i) => `<article class="card report click" tabindex="0" data-css="--i:${i}">
   <div class="rep-head"><b>${esc(r.title)}</b>${r.who ? `<span>${esc(r.who)}</span>` : ''}<span class="hint">${fmtWhen(r.at)}</span>${r.note ? `<span class="chip">${esc(r.note)}</span>` : ''}</div>
   <div class="rep-body">${r.html}</div>
@@ -77,52 +75,27 @@ const reportHtml = (r, i) => `<article class="card report click" tabindex="0" da
 
 VIEWS.reports = async view => {
   const dir = S.me.role === 'director';
-  const groups = dir ? [['all', 'Всё'], ['rop', 'Отделу'], ['day_manager', 'Итоги менеджеров'], ['qa', 'Вопросы']] : [['all', 'Всё'], ['qa', 'Вопросы']];
-  setHead({filters: seg('rep', groups, S.repFilter, 'Что показать')});
-  const [rep, asked] = await loading(view, Promise.all([api('/api/reports'), api('/api/ask')]), 'cards');
-  const examples = dir
-    ? ['Кто из менеджеров чаще всего теряет клиента на возражении «пришлите на почту»?', 'Что общего у звонков с результатом за неделю?', 'Какие три темы взять на планёрку завтра?']
-    : ['Где я чаще всего теряю клиента?', 'Что у меня получилось лучше всего на этой неделе?', 'Какие перезвоны я обещал на эту неделю?'];
-  const canAsk = !(S.me.readonly && !dir);
-  view.innerHTML = `<div class="page">
-    ${canAsk ? `<section class="card ask-box blk"><div class="card-h"><h2>Спросить про звонки</h2><span class="hint">отвечает агент РОПа по разобранным звонкам${dir ? '' : ' (видит только ваши)'}, до минуты</span></div>
-      <textarea data-q rows="2" maxlength="2000" placeholder="${esc(examples[0])}"></textarea>
-      <div class="row" data-css="margin-top:10px"><button class="btn primary" type="button" data-ask>Спросить</button>${examples.map(x => `<button class="btn small ghost" type="button" data-ex="${esc(x)}">${esc(x)}</button>`).join('')}</div></section>` : ''}
+  const groups = dir ? [['all', 'Всё'], ['rop', 'Отделу'], ['day_manager', 'Итоги менеджеров']] : null;
+  if (!groups || !groups.some(g => g[0] === S.repFilter)) S.repFilter = 'all';
+  if (groups) setHead({filters: seg('rep', groups, S.repFilter, 'Что показать')});
+  const rep = await loading(view, api('/api/reports'), 'cards');
+  // Вопросы про звонки переехали в AveronGPT (кнопка внизу меню), здесь только лента отчётов бота.
+  view.innerHTML = `<div class="page"><p class="hint blk">Вопрос про звонки задайте ${S.me.readonly ? 'AveronGPT' : '<button class="linkish" type="button" data-gpt>AveronGPT</button>'}: он отвечает по разборам и подсказывает по сайту.</p>
     <div class="feed" data-feed></div></div>`;
   const feed = $('[data-feed]', view);
   const draw = () => {
     const f = S.repFilter;
-    const list = [
-      ...(f === 'qa' ? [] : rep.items.filter(r => f === 'all' || (f === 'rop' ? r.kind !== 'day_manager' : r.kind === f)).map(r => ({at: r.at, html: i => reportHtml(r, i)}))),
-      ...(f === 'all' || f === 'qa' ? asked.items.map(q => ({at: q.at, html: i => qaHtml(q, i)})) : []),
-    ].sort((a, b) => String(b.at).localeCompare(String(a.at)));
-    feed.innerHTML = list.length ? list.slice(0, 120).map((x, i) => x.html(Math.min(i, 10))).join('')
-      : emptyCard(rep.items.length || asked.items.length ? 'Здесь пока пусто.' : 'Отчёты появятся здесь, когда бот пришлёт следующий: итоги дня вечером, сводки утром, по понедельникам и 1 числа.');
+    const list = rep.items.filter(r => f === 'all' || (f === 'rop' ? r.kind !== 'day_manager' : r.kind === f));
+    feed.innerHTML = list.length ? list.slice(0, 120).map((r, i) => reportHtml(r, Math.min(i, 10))).join('')
+      : emptyCard(rep.items.length ? 'Здесь пока пусто.' : 'Отчёты появятся здесь, когда бот пришлёт следующий: итоги дня вечером, сводки утром, по понедельникам и 1 числа.');
   };
   draw();
-  bindSeg($('#top'), {rep: v => { S.repFilter = v; draw(); }});
+  if (groups) bindSeg($('#top'), {rep: v => { S.repFilter = v; draw(); }});
   feed.addEventListener('click', e => {
     if (e.target.closest('button,a')) return;
     const r = e.target.closest('.report'); if (r) r.classList.toggle('open');
   });
   feed.addEventListener('keydown', e => { const r = e.target.closest('.report'); if (r && e.key === 'Enter') r.classList.toggle('open'); });
-  const ta = $('[data-q]', view);
-  $$('[data-ex]', view).forEach(b => b.addEventListener('click', () => { ta.value = b.dataset.ex; ta.focus(); }));
-  $('[data-ask]', view)?.addEventListener('click', async e => {
-    const btn = e.currentTarget;
-    if (!ta.value.trim()) { ta.focus(); return; }
-    busy(btn, true); btn.firstChild.textContent = 'Смотрю данные';
-    try {
-      const q = await api('/api/ask', {method: 'POST', body: {question: ta.value}});
-      const item = {...q, at: q.at || new Date().toISOString()};
-      asked.items.unshift(item);
-      if (S.repFilter !== 'all' && S.repFilter !== 'qa') { S.repFilter = 'all'; setHead({filters: seg('rep', groups, 'all', 'Что показать')}); bindSeg($('#top'), {rep: v => { S.repFilter = v; draw(); }}); }
-      feed.insertAdjacentHTML('afterbegin', qaHtml(item));
-      $('.empty', feed)?.remove();
-      ta.value = '';
-    } catch (err) { toast(err.message, true); }
-    busy(btn, false); btn.firstChild.textContent = 'Спросить';
-  });
 };
 
 // ---------- настройки: промты и доступы ----------
