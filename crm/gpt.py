@@ -193,6 +193,16 @@ def change(now: dict, before: dict, keys: list[tuple[str, str]]) -> dict:
     return {label: {'сейчас': now.get(k, 0), 'было': before.get(k, 0), 'разница': now.get(k, 0) - before.get(k, 0)} for k, label in keys}
 
 
+def change_lines(diff: dict) -> list[str]:
+    """То же готовыми фразами: YandexGPT путает строки таблицы, а фразу пересказывает верно."""
+    out = []
+    for label, v in diff.items():
+        d = v['разница']
+        how = 'столько же' if d == 0 else f'больше на {d}' if d > 0 else f'меньше на {-d}'
+        out.append(f"{label}: {v['сейчас']}, было {v['было']} ({how})")
+    return out
+
+
 def cabinet_view(c: dict) -> dict:
     """Кабинет без длинных списков: модели хватает цифр, телефонов пятерых."""
     short = lambda items: {'всего': len(items), 'первые': [{k: x.get(k) for k in ('phone', 'last', 'remind', 'source', 'comment')} for x in items[:5]]}
@@ -246,10 +256,15 @@ async def run_tool(pool, who, name: str, args: dict) -> str:
                      'дозвон, %': pct(m['live'], m['dials']), 'с результатом': m['result'], 'встречи и КП': m['meet'],
                      'потеряно с шансом': m['lost'], 'на линии, мин': round(m['seconds'] / 60),
                      'частая ошибка': (m.get('mistake') or {}).get('label')} for m in d['managers']]
+        rate, rate_was = pct(cur['live'], cur['dials']), pct(prev['live'], prev['dials'])
+        lines = change_lines(change(cur, prev, keys))
+        if rate is not None and rate_was is not None:
+            lines.insert(2, f'дозвон: {rate}%, было {rate_was}%')
         return trim({'период': d['period'], 'сравнение с': d['vs'], 'живой разговор = исходящий от секунд': d['live_seconds'],
-                     'итог и изменение': change(cur, prev, keys),
-                     'дозвон, %': {'сейчас': pct(cur['live'], cur['dials']), 'было': pct(prev['live'], prev['dials'])},
-                     'по дням или часам': d['series'], 'менеджеры': managers,
+                     'итог (бери эти фразы как есть)': lines,
+                     'по дням или часам (за один день или час, не за период)': [
+                         {'день или час': x['key'], 'наборов': x['dials'], 'живых': x['live'], 'с результатом': x['result']} for x in d['series']],
+                     'менеджеры': managers,
                      'пропущенные входящие без перезвона': len(d['missed'])})
     if name == 'deals_funnel' and who.actor is not None:
         days = args.get('days')
