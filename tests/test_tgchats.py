@@ -84,6 +84,67 @@ class KeysTests(unittest.TestCase):
             self.assertEqual(os.environ['TG_API_ID'], '123')
 
 
+APPS_PAGE = """<form class="form-horizontal" role="form">
+<div class="form-group"><label for="app_id" class="col-md-4 text-right control-label">App api_id:</label>
+<div class="col-md-7"><span class="form-control input-xlarge uneditable-input" onclick="this.select();"><strong>1234567</strong></span></div></div>
+<div class="form-group"><label for="app_hash" class="col-md-4 text-right control-label">App api_hash:</label>
+<div class="col-md-7"><span class="form-control input-xlarge uneditable-input" onclick="this.select();">0123456789abcdef0123456789abcdef</span></div></div>
+</form>"""
+CREATE_PAGE = '''<form id="app_create_form"><input type="hidden" name="hash" value="f00&amp;d"/>
+<input name="app_title"/><input name="app_shortname"/></form>'''
+
+
+class TgAppTests(unittest.TestCase):
+    def site(self, app_exists=True, send=None, login='true'):
+        import httpx
+        state = {'app': app_exists, 'requests': []}
+
+        def handler(request):
+            body = request.content.decode()
+            state['requests'].append((request.url.path, body, request.headers.get('cookie')))
+            if request.url.path == '/auth/send_password':
+                return httpx.Response(200, text=send) if send else httpx.Response(200, json={'random_hash': 'rh1'})
+            if request.url.path == '/auth/login':
+                return httpx.Response(200, text=login, headers={'set-cookie': 'stel_token=tok; path=/'})
+            if request.url.path == '/apps':
+                return httpx.Response(200, text=APPS_PAGE if state['app'] else CREATE_PAGE)
+            if request.url.path == '/apps/create':
+                state['app'] = True
+                return httpx.Response(200, text='')
+            return httpx.Response(404)
+        client = httpx.Client(base_url='https://my.telegram.org', transport=httpx.MockTransport(handler))
+        return client, state
+
+    def test_existing_app(self):
+        from review import tgapp
+        client, state = self.site()
+        self.assertEqual(tgapp.fetch_keys('+79001112233', lambda: 'Ab1Cd2', client),
+                         ('1234567', '0123456789abcdef0123456789abcdef'))
+        self.assertIn('random_hash=rh1', state['requests'][1][1])
+        self.assertIn('password=Ab1Cd2', state['requests'][1][1])
+        self.assertEqual(state['requests'][2][2], 'stel_token=tok')
+
+    def test_creates_app(self):
+        from review import tgapp
+        client, state = self.site(app_exists=False)
+        self.assertEqual(tgapp.fetch_keys('+79001112233', lambda: 'x', client)[0], '1234567')
+        create = next(body for path, body, _ in state['requests'] if path == '/apps/create')
+        self.assertIn('hash=f00%26d', create)
+        self.assertIn('app_shortname=averoncrm', create)
+
+    def test_errors(self):
+        from review import tgapp
+        client, _ = self.site(send='Too many attempts. Please try again later.')
+        with self.assertRaisesRegex(tgapp.TgAppError, 'Too many attempts'):
+            tgapp.fetch_keys('+79001112233', lambda: 'x', client)
+        client, _ = self.site(login='Invalid confirmation code!')
+        with self.assertRaisesRegex(tgapp.TgAppError, 'Invalid confirmation code'):
+            tgapp.fetch_keys('+79001112233', lambda: 'x', client)
+        self.assertEqual(tgapp.site_phone('8 951 727-22-86'), '+79517272286')
+        with self.assertRaises(tgapp.TgAppError):
+            tgapp.site_phone('727-22-86')
+
+
 class SyncTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.pool = await asyncpg.create_pool(DSN, min_size=1, max_size=4)
