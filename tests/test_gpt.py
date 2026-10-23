@@ -115,7 +115,11 @@ class GptTests(DBCase):
         self.assertEqual(await gpt.history(self.pool, auth.Viewer('client', None, 'Окна')), [])
 
     async def test_page_data_by_role(self):
-        self.assertIn('(my_card)', await gpt.page_data(self.pool, STAFF, 'me', {}))
+        me = await gpt.page_data(self.pool, STAFF, 'me', {})
+        self.assertIn('(my_card)', me)
+        self.assertIn('(sales_summary)', me)  # дозвон менеджера из той же сводки, что у директора
+        self.assertEqual(gpt.pct(1, 3), 33.3)
+        self.assertEqual(gpt.change({'lost': 33}, {'lost': 38}, [('lost', 'потеряно')])['потеряно']['разница'], -5)
         self.assertIn('(sales_summary)', await gpt.page_data(self.pool, DIRECTOR, 'summary', {'period': '30', 'ext': '102'}))
         self.assertEqual(await gpt.page_data(self.pool, CLIENT, 'summary', {}), '')  # чужой раздел: ничего
         self.assertEqual(await gpt.page_data(self.pool, STAFF, 'callcenter', {}), '')
@@ -151,7 +155,7 @@ class GptTests(DBCase):
         with self.assertRaises(Forbidden):
             await gpt.run_tool(self.pool, STAFF, 'callcenter', {})
         summary = json.loads(await gpt.run_tool(self.pool, STAFF, 'sales_summary', {'period': '7', 'manager_ext': '102'}))
-        self.assertEqual([m['ext'] for m in summary['менеджеры']], ['101'])  # менеджеру только свои цифры
+        self.assertEqual([m['доб.'] for m in summary['менеджеры']], ['101'])  # менеджеру только свои цифры
         await robot_store.set_option(self.pool, 'clients', ['Кухни'])
         stats = json.loads(await gpt.run_tool(self.pool, CLIENT, 'robot_stats', {'owner': ''}))
         self.assertEqual(stats['total'], 0)
