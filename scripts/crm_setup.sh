@@ -17,6 +17,7 @@
 #   bash scripts/crm_setup.sh demo-off         — выключить демо: тестовую ссылку и открытый просмотр, вход только по логину
 #   bash scripts/crm_setup.sh dadata-key       — ключ DaData для поиска реквизитов по ИНН в «Договорах» (спросит ключ, на экран не выводит)
 #   bash scripts/crm_setup.sh prices           — пересчитать себестоимость звонка робота сейчас и показать, откуда взялись цены
+#   bash scripts/crm_setup.sh gpt-check [dreamn] — AveronGPT: типовые вопросы директора, менеджера и клиента, ответы на экран (ничего не меняет)
 #   bash scripts/crm_setup.sh yandex-key       — подключить yandex-sa-key.json (ключ сервисного аккаунта Яндекса для цены YandexGPT)
 #   bash scripts/crm_setup.sh rollback         — выключить сайт и убрать CRM_URL (таблицы CRM остаются, они ничему не мешают)
 set -euo pipefail
@@ -43,7 +44,7 @@ test_link() {
 }
 
 # Все миграции CRM; каждая только добавляет и повторный запуск ничего не ломает.
-migrate() { for f in migrations/014_crm.sql migrations/015_crm_roles.sql migrations/016_crm_access.sql migrations/017_crm_reports.sql migrations/018_crm_questions.sql migrations/019_crm_staff.sql migrations/020_robot.sql migrations/021_manager_memory.sql migrations/022_presentations.sql migrations/023_tg_chats.sql migrations/024_deals.sql migrations/025_contracts.sql migrations/026_presentation_client.sql migrations/027_sources.sql migrations/028_crm_logins.sql; do
+migrate() { for f in migrations/014_crm.sql migrations/015_crm_roles.sql migrations/016_crm_access.sql migrations/017_crm_reports.sql migrations/018_crm_questions.sql migrations/019_crm_staff.sql migrations/020_robot.sql migrations/021_manager_memory.sql migrations/022_presentations.sql migrations/023_tg_chats.sql migrations/024_deals.sql migrations/025_contracts.sql migrations/026_presentation_client.sql migrations/027_sources.sql migrations/028_crm_logins.sql migrations/029_averongpt.sql; do
   psql "$DATABASE_URL" -q -v ON_ERROR_STOP=1 -f "$f"; done; }
 
 listeners() { ss -ltnpH "( sport = :80 or sport = :443 )" || true; }
@@ -209,6 +210,10 @@ demo-off)
   systemctl restart callbot-crm
   echo 'demo is off: no test link, no public view; sign in with login and password'
   ;;
+gpt-check)
+  # AveronGPT: типовые вопросы от директора, менеджера и клиента; ничего не пишет и не меняет на сайте.
+  DATABASE_URL="$DATABASE_URL" .venv/bin/python scripts/gpt_check.py "${2:-yandex}"
+  ;;
 accounts)
   # Пароли видно только здесь и в «Доступах» у директора; в базе — хэш и зашифрованная копия.
   DATABASE_URL="$DATABASE_URL" .venv/bin/python - <<'PY'
@@ -316,7 +321,7 @@ rollback)
   echo "CRM is off. Caddy keeps running but has nothing behind it; stop it with: systemctl disable --now caddy"
   ;;
 *)
-  sed -n '2,18p' "$0"
+  sed -n '2,22p' "$0"
   exit 1
   ;;
 esac
