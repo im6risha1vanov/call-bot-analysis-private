@@ -695,7 +695,11 @@ async def main():
     # Динамические куски по всему файлу экранируются html.escape/esc.
     bot=Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode='HTML'))
     dp=Dispatcher(); dp.include_router(router)
+    # Переписка рабочего Telegram через Telegram Business: только сохраняем, ничего не отправляем.
+    from review import tgbusiness
+    dp.include_router(tgbusiness.router)
     PG_POOL = await asyncpg.create_pool(os.environ['DATABASE_URL'], min_size=1, max_size=5)
+    tgbusiness.POOL = PG_POOL
     try: await dp.start_polling(bot,allowed_updates=dp.resolve_used_update_types())
     finally:
         await bot.session.close(); await PG_POOL.close()
