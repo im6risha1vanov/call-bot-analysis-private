@@ -211,8 +211,13 @@ def save_operator(owner: str, data: dict, op_id: str | None = None, copy_from: s
         if not key.isidentifier() or key in fields:
             key = f'f{i + 1}'
         fields[key] = text
-    # быстрые ответы привязаны к фразам оператора: если приветствие или план поменялись, они уже не к месту
-    if base.get('quick') and (new.get('greeting') != base.get('greeting') or new.get('plan') != base.get('plan')):
+    # быстрые ответы копия встроенного оператора берёт у него при каждом звонке (voice.operator._builtin_quick),
+    # своих не храним: так до неё доходят новые заготовки
+    if copy_from and vop.builtin(copy_from):
+        new['copy_of'] = copy_from
+    if new.get('copy_of'):
+        new.pop('quick', None)
+    elif base.get('quick') and (new.get('greeting') != base.get('greeting') or new.get('plan') != base.get('plan')):
         new.pop('quick', None)
     if owner:
         new['owner'] = owner

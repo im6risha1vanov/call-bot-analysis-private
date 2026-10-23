@@ -493,6 +493,19 @@ class CasualTextTest(unittest.TestCase):
         speech.settings_override.reset(token)
         self.assertEqual(speech.casual_text("Так…"), "Так…")
 
+    def test_no_tak_before_phrases(self):
+        # 23.10: «Так, алло, добрый день…» и «Так, а кухня…» Григорий назвал сырым
+        token = speech.settings_override.set({"casual": 1})
+        try:
+            greeting = "Алло, добрый день, это Мария, кухни на заказ. Вы оставляли заявку на расчёт кухни. Вопрос ещё актуален?"
+            self.assertEqual(speech.casual_text(greeting), greeting)
+            for n in range(40):
+                self.assertFalse(speech.casual_text(f"А кухня в каком городе будет стоять, вариант {n}?").startswith("Так"))
+        finally:
+            speech.settings_override.reset(token)
+        from voice import call
+        self.assertFalse([w for w in call.FILLERS + call.NOTE_FILLERS if w.lower().startswith("так")])
+
     def test_no_word_repeat_stutter(self):
         # на звонке 21.10 «Угу, поняла. Специалист…» прозвучало как «поняла, поняла, специалист, поняла…»
         token = speech.settings_override.set({"casual": 1})
@@ -928,9 +941,16 @@ class CallSessionTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / "kitchen.toml").write_text(dump(data), encoding="utf-8")
             self.assertEqual(load("kitchen", Path(tmp)).quick, load("kitchen").quick)
-            data["plan"] = data["plan"][:-1]
-            (Path(tmp) / "kitchen.toml").write_text(dump(data), encoding="utf-8")
-            self.assertEqual(load("kitchen", Path(tmp)).quick, [])  # план поменяли в CRM: заготовки уже не к месту
+            # копия из CRM со своим id и другим приветствием: заготовки всё равно от встроенной (по copy_of или компании)
+            data["greeting"] = "Алло, добрый день. Это Мария, кухни на заказ. Вопрос ещё актуален?"
+            (Path(tmp) / "op-1a2b3c4d.toml").write_text(dump(data), encoding="utf-8")
+            self.assertEqual(load("op-1a2b3c4d", Path(tmp)).quick, load("kitchen").quick)
+            data["company"] = "окна"
+            (Path(tmp) / "op-1a2b3c4d.toml").write_text(dump(data), encoding="utf-8")
+            self.assertEqual(load("op-1a2b3c4d", Path(tmp)).quick, [])  # чужая компания: заготовки кухни не к месту
+            data["copy_of"] = "kitchen"
+            (Path(tmp) / "op-1a2b3c4d.toml").write_text(dump(data), encoding="utf-8")
+            self.assertEqual(load("op-1a2b3c4d", Path(tmp)).quick, load("kitchen").quick)
 
     def test_quick_reply_needs_answers_or_match(self):
         data = tomllib.loads((OPERATORS_DIR / "kitchen.toml").read_text())
@@ -1411,8 +1431,8 @@ class NoiseAndFillerTest(unittest.IsolatedAsyncioTestCase):
         from voice import call
         audio, events, said = [], [], []
         session = self.session(FakeClient([say("Хорошо, записала.")], delay=0.6), audio, events, said)
-        old = call.FILLER_CHANCE, call.FILLER_AFTER_S
-        call.FILLER_CHANCE, call.FILLER_AFTER_S = 1.0, 0.1
+        old = call.FILLER_CHANCE, call.FILLER_AFTER_S, call.MIN_FILLER_AFTER_S
+        call.FILLER_CHANCE, call.FILLER_AFTER_S, call.MIN_FILLER_AFTER_S = 1.0, 0.1, 0.1
         try:
             await session.start()
             await self.wait_audio(audio)
@@ -1424,7 +1444,7 @@ class NoiseAndFillerTest(unittest.IsolatedAsyncioTestCase):
                     break
                 await asyncio.sleep(0.01)
         finally:
-            call.FILLER_CHANCE, call.FILLER_AFTER_S = old
+            call.FILLER_CHANCE, call.FILLER_AFTER_S, call.MIN_FILLER_AFTER_S = old
         self.assertIn(said[1], call.NOTE_FILLERS)  # клиент назвал город: «так, записываю…», а не «угу…»
         self.assertEqual(said[-1], "Хорошо, записала.")
         robot = [e["text"] for e in events if e.get("role") == "robot"]
