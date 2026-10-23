@@ -44,8 +44,25 @@
 .gpt-send svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
 .gpt-note{margin:0;padding:0 16px 10px;font-size:11px;color:var(--muted)}
 .linkish{border:0;background:none;padding:0;color:var(--accent);font:inherit;font-weight:600;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
-/* Тур: подсвеченное место на странице */
-.gpt-spot{position:relative;z-index:4;outline:3px solid var(--accent);outline-offset:4px;border-radius:var(--r);box-shadow:0 0 0 9999px color-mix(in oklab, var(--scrim) 60%, transparent);transition:outline-color .2s}
+/* Экскурсия: затемнение с «дыркой» над блоком, дырка плавно переезжает от шага к шагу */
+.tour{position:fixed;inset:0;z-index:60}
+.tour-hole{position:fixed;border-radius:14px;box-shadow:0 0 0 200vmax color-mix(in oklab, var(--scrim) 72%, transparent), 0 0 0 3px var(--accent);
+  transition:top .45s var(--ease), left .45s var(--ease), width .45s var(--ease), height .45s var(--ease);pointer-events:none;animation:tour-in .3s var(--ease) both}
+.tour-hole::after{content:"";position:absolute;inset:-3px;border-radius:inherit;border:2px solid var(--accent);animation:tour-pulse 1.8s ease-out infinite}
+.tour-card{position:fixed;background:var(--surface);color:var(--fg);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow-lg);padding:14px 16px 12px;
+  transition:top .45s var(--ease), left .45s var(--ease)}
+.tour-card.in{animation:tour-card .35s var(--ease) both}
+.tour-top{display:flex;align-items:center;justify-content:space-between;margin:-4px -6px 4px 0}
+.tour-card h3{margin:0 0 6px;font-size:16px}
+.tour-card p{margin:0 0 10px;font-size:14px;line-height:1.5;color:var(--fg)}
+.tour-card .row{display:flex;align-items:center;gap:8px}
+.tour-card .sp{flex:1}
+.tour-dots{display:flex;gap:5px;margin:0 0 12px}
+.tour-dots i{width:6px;height:6px;border-radius:3px;background:var(--line);transition:width .3s, background .3s}
+.tour-dots i.on{width:18px;background:var(--accent)}
+@keyframes tour-in{from{opacity:0}to{opacity:1}}
+@keyframes tour-card{from{opacity:0;transform:translateY(8px) scale(.98)}to{opacity:1;transform:none}}
+@keyframes tour-pulse{0%{opacity:.9;transform:scale(1)}70%,100%{opacity:0;transform:scale(1.04)}}
 
 @media (max-width: 900px){
   .gpt-fab{display:grid;place-items:center;position:fixed;z-index:16;right:max(16px, env(safe-area-inset-right, 0px));bottom:calc(72px + env(safe-area-inset-bottom,0px));
@@ -54,8 +71,6 @@
   .tabbar[hidden]~.gpt-fab{bottom:calc(16px + env(safe-area-inset-bottom,0px))}
   body.gpt-on .gpt-fab{display:none}
   .gpt{inset:0;width:auto;border-radius:0;border:0;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);z-index:22}
-  .gpt.touring{top:auto;height:46vh;border-radius:18px 18px 0 0;border-top:1px solid var(--line)}
-  .gpt.touring .gpt-chips,.gpt.touring .gpt-note{display:none}
   .gpt-h{padding-left:max(16px, env(safe-area-inset-left, 0px));padding-right:max(12px, env(safe-area-inset-right, 0px))}
 }
-@media (prefers-reduced-motion: reduce){.gpt,.gpt-m{animation:none}.gpt-dots i{animation:none;opacity:.6}}
+@media (prefers-reduced-motion: reduce){.gpt,.gpt-m,.tour-hole,.tour-hole::after,.tour-card.in{animation:none}.tour-hole,.tour-card{transition:none}.gpt-dots i{animation:none;opacity:.6}}
