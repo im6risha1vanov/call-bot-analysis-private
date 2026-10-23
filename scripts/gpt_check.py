@@ -85,7 +85,7 @@ async def main():
     ok = failed = 0
     total_rub = 0.0
     for role, who in (await viewers(pool)).items():
-        label = who.client_key if role == 'client' else (who.actor.extension or '')
+        label = who.client_key if role == 'client' else (who.actor.extension or who.actor.role)
         print('=' * 70, f'\n{NAMES[role]} ({label})\n' + '=' * 70)
         for page, q in QUESTIONS[role]:
             start = time.monotonic()

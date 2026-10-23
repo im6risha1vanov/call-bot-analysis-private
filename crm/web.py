@@ -731,7 +731,8 @@ async def api_gpt(request):
     if who.test:
         raise Forbidden(VIEW_ONLY)
     data = await body(request)
-    return web.json_response(await gpt.ask(request.app[POOL], who, data.get('question'), data.get('page'), data.get('page_text')))
+    return web.json_response(await gpt.ask(request.app[POOL], who, data.get('question'), data.get('page'),
+                                             data.get('page_text'), filters=data.get('filters')))
 
 
 async def api_gpt_clear(request):

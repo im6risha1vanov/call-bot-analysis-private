@@ -121,7 +121,8 @@ async function gptAsk(text) {
   gptDraw();
   try {
     const page = S.page + (S.arg ? '/' + S.arg : '');
-    const r = await api('/api/gpt', {method: 'POST', body: {question: q, page, page_text: gptPageText()}});
+    const r = await api('/api/gpt', {method: 'POST', body: {question: q, page, page_text: gptPageText(),
+      filters: {period: S.f.period, ext: S.f.ext, owner: typeof RB === 'object' ? RB.owner : ''}}});
     Object.assign(pending, r);
   } catch (e) {
     pending.html = `<p class="bad-text">${esc(e.message)}</p>`;

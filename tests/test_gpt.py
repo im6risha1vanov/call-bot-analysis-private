@@ -33,6 +33,13 @@ class PureTests(unittest.TestCase):
         self.assertIn('Сводка', html)
         self.assertIn('data-arg="contracts"', gpt.render('[[Договоры|deals/contracts]]', {'deals'}))
 
+    def test_yandex_text_tool_call_and_cleanup(self):
+        text, calls = gpt.text_call('Сейчас посмотрю.\nsales_summary {"period": "30"}', ['sales_summary', 'deals_funnel'])
+        self.assertEqual((text, calls[0]['name'], calls[0]['args']), ('Сейчас посмотрю.', 'sales_summary', {'period': '30'}))
+        self.assertEqual(gpt.text_call('Просто ответ', ['sales_summary']), ('Просто ответ', []))
+        self.assertEqual(gpt.clean('Откройте «Кабинет» (cab).\n```\n{"days":30}\n```\n{"a": 1}\nГотово'), 'Откройте «Кабинет».\n\nГотово')
+        self.assertIn('data-go="me"', gpt.render('[[Моя карточка|me] тут', {'me'}))  # потерянная скобка
+
     def test_guide_by_role(self):
         client = gpt.guide('client', robot=False)
         self.assertIn('Кабинет (cab)', client)
@@ -100,11 +107,18 @@ class GptTests(DBCase):
         self.assertIn('data-go="cab"', got['html'])
         self.assertNotIn('data-go="summary"', got['html'])
         self.assertIn('Номеров передано 4', seen[0]['text'])  # текст с экрана ушёл вместе с вопросом
+        self.assertIn('Данные этой страницы из CRM (my_cabinet)', seen[0]['text'])  # и цифры кабинета сразу
         row = await self.pool.fetchrow('SELECT * FROM crm_questions')
         self.assertEqual((row['role'], row['client_key'], row['page'], row['model']), ('client', 'Кухни', 'cab', 'yandex:yandexgpt-5.1'))
         self.assertAlmostEqual(await gpt.spent_today(self.pool, 'client:Кухни'), 1.6, places=2)  # 2 обращения × 1000 токенов × 0,8 ₽
         self.assertEqual([x['question'] for x in await gpt.history(self.pool, CLIENT)], ['Сколько номеров?'])
         self.assertEqual(await gpt.history(self.pool, auth.Viewer('client', None, 'Окна')), [])
+
+    async def test_page_data_by_role(self):
+        self.assertIn('(my_card)', await gpt.page_data(self.pool, STAFF, 'me', {}))
+        self.assertIn('(sales_summary)', await gpt.page_data(self.pool, DIRECTOR, 'summary', {'period': '30', 'ext': '102'}))
+        self.assertEqual(await gpt.page_data(self.pool, CLIENT, 'summary', {}), '')  # чужой раздел: ничего
+        self.assertEqual(await gpt.page_data(self.pool, STAFF, 'callcenter', {}), '')
 
     async def test_fallback_model_continues(self):
         async def down(*a):
