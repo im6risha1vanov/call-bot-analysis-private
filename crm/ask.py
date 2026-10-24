@@ -27,7 +27,8 @@ async def history(pool, actor, limit: int = 30) -> list[dict]:
              'at': r['created_at'].isoformat()} for r in rows]
 
 
-async def ask(pool, actor, question: str, answer=None) -> dict:
+async def ask(pool, actor, question: str, answer=None, save: bool = True):
+    """save=False: только текст ответа, без записи (так спрашивает AveronGPT, у него своя история)."""
     question = str(question or '').strip()
     if not question:
         raise ValueError('Напишите вопрос.')
@@ -36,6 +37,8 @@ async def ask(pool, actor, question: str, answer=None) -> dict:
     if answer is None:
         import rop_agent  # тяжёлый импорт (клиент модели) только когда спрашивают
         answer = rop_agent.answer
+    if not save:
+        return await answer(pool, actor, question, allow_course=True)
     role, ext = owner_of(actor)
     qid = await pool.fetchval('INSERT INTO crm_questions(client_id,role,extension,question) VALUES($1,$2,$3,$4) RETURNING id',
                               actor.client_id, role, ext, question)

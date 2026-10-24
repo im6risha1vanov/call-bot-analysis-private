@@ -22,7 +22,7 @@ from aiohttp import web  # noqa: E402
 
 import mango_client  # noqa: E402
 from tools import Forbidden, is_privileged  # noqa: E402
-from . import accounts, ask as asking, auth, cabinet, contracts, deals, journal, overview, people, recording, reviews, sources, staff, store, training  # noqa: E402
+from . import accounts, ask as asking, auth, cabinet, contracts, deals, gpt, journal, overview, people, recording, reviews, sources, staff, store, training  # noqa: E402
 from . import prompts as prompt_mode, robot, robot_api, robot_prices, robot_runner, robot_store  # noqa: E402
 from review import store as review_store  # noqa: E402
 from .dial import dial  # noqa: E402
@@ -720,6 +720,26 @@ async def api_queue(request):
     return web.json_response(await store.queue(request.app[POOL], who.client_id, await ext_of(request, who)))
 
 
+async def api_gpt_history(request):
+    who = await viewer(request)
+    return web.json_response({'name': gpt.NAME, 'items': await gpt.history(request.app[POOL], who)})
+
+
+async def api_gpt(request):
+    """AveronGPT: вопрос со страницы. page и page_text — где человек сейчас и что у него на экране."""
+    who = await viewer(request)
+    if who.test:
+        raise Forbidden(VIEW_ONLY)
+    data = await body(request)
+    return web.json_response(await gpt.ask(request.app[POOL], who, data.get('question'), data.get('page'),
+                                             data.get('page_text'), filters=data.get('filters')))
+
+
+async def api_gpt_clear(request):
+    await gpt.clear(request.app[POOL], await viewer(request))
+    return web.json_response({'ok': True})
+
+
 async def api_tasks(request):
     who = await actor(request)
     return web.json_response(await store.tasks(request.app[POOL], who.client_id, await ext_of(request, who)))
@@ -844,6 +864,9 @@ def build(pool) -> web.Application:
     app.router.add_get('/api/reports', api_reports)
     app.router.add_get('/api/ask', api_ask_history)
     app.router.add_post('/api/ask', api_ask)
+    app.router.add_get('/api/gpt', api_gpt_history)
+    app.router.add_post('/api/gpt', api_gpt)
+    app.router.add_post('/api/gpt/clear', api_gpt_clear)
     app.router.add_post('/api/review/{id}/train', api_review_train)
     app.router.add_get('/api/trainings', api_trainings)
     app.router.add_post('/api/trainings', api_training_assign)
