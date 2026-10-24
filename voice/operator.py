@@ -118,6 +118,12 @@ def builtin(operator_id: str) -> bool:
     return (OPERATORS_DIR / f"{operator_id}.toml").is_file() and not (EXTRA_DIR / f"{operator_id}.toml").is_file()
 
 
+def shipped(operator_id: str) -> bool:
+    """Анкета есть в репозитории (встроенная), даже если директор поправил её в CRM: правка лежит в EXTRA_DIR
+    под тем же id, звонки и кампании берут её, «Вернуть исходный» удаляет правку."""
+    return bool(ID_RE.fullmatch(operator_id or "")) and (OPERATORS_DIR / f"{operator_id}.toml").is_file()
+
+
 def _toml_value(value) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"

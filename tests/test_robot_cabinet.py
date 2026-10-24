@@ -124,15 +124,27 @@ class CabinetTests(DBCase):
         self.assertTrue(st['enabled'])
         self.assertIn('kitchen', [o['id'] for o in st['operators']])
 
-        # оператор: встроенный не правится, копия правится и пишется TOML для робота
+        # встроенного директор правит прямо: правка под тем же id, заготовки остаются, «Вернуть исходный» её убирает
+        from voice.operator import load
         r = await self.http.post('/api/robot/cab/operators/kitchen', json={'name': 'Ольга'}, headers=H)
+        self.assertEqual(r.status, 200, await r.text())
+        self.assertEqual(((await r.json())['builtin'], (await r.json())['edited']), (True, True))
+        self.assertEqual(load('kitchen').name, 'Ольга')
+        self.assertTrue(load('kitchen').quick)
+        st = await (await self.http.get('/api/robot/cab')).json()
+        self.assertEqual([o['edited'] for o in st['operators'] if o['id'] == 'kitchen'], [True])
+        r = await self.http.post('/api/robot/cab/operators/kitchen/delete', json={}, headers=H)
+        self.assertEqual(r.status, 200, await r.text())
+        self.assertEqual(load('kitchen').name, 'Мария')
+        r = await self.http.post('/api/robot/cab/operators/kitchen/delete', json={}, headers=H)
         self.assertEqual(r.status, 400)
+
+        # копия правится и пишется TOML для робота
         r = await self.http.post('/api/robot/cab/operators', json={'copy_from': 'kitchen', 'name': 'Ольга', 'rules': ['Не называй цены.'],
                                                                      'fields': [{'key': '', 'text': 'Город: где кухня'}]}, headers=H)
         self.assertEqual(r.status, 200, await r.text())
         op = await r.json()
         self.assertEqual((op['name'], op['rules'], op['fields']), ('Ольга', ['Не называй цены.'], [{'key': 'f1', 'text': 'Город: где кухня'}]))
-        from voice.operator import load
         self.assertEqual(load(op['id']).name, 'Ольга')
         r = await self.http.post('/api/robot/cab/operators', json={'copy_from': 'kitchen', 'plan': []}, headers=H)
         self.assertIn('план', (await r.json())['error'])
