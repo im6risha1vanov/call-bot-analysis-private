@@ -115,6 +115,7 @@ const ICON = {
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6 7 7M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4"/>',
   building: '<path d="M5 20V5a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v15M15 9h3a1 1 0 0 1 1 1v10M3 20h18M8.5 8h3M8.5 12h3M8.5 16h3"/>',
   out: '<path d="M14 4h5v16h-5M10 8l-4 4 4 4M6 12h10"/>',
+  flow: '<rect x="3.5" y="4" width="7" height="5" rx="1.5"/><rect x="13.5" y="15" width="7" height="5" rx="1.5"/><path d="M7 9v3.5a2 2 0 0 0 2 2h4.5"/>',
 };
 const svg = (k, cls = 'ico') => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICON[k] || ''}</svg>`;
 const ARROW = {up: '<svg viewBox="0 0 12 12"><path d="M6 2.5 10 8H2z"/></svg>', down: '<svg viewBox="0 0 12 12"><path d="M6 9.5 2 4h8z"/></svg>'};
@@ -347,12 +348,13 @@ const PAGES = {
   robot: {name: 'Робот', icon: 'bot', roles: ['director', 'client']},
   sources: {name: 'Источники', icon: 'source', roles: ['director', 'manager']},
   reports: {name: 'Отчёты', icon: 'report', roles: ['director', 'manager']},
+  auto: {name: 'Автоматизации', icon: 'flow', roles: ['director']},
   settings: {name: 'Настройки', icon: 'gear', roles: ['director']},
   cab: {name: 'Кабинет', icon: 'home', roles: ['client']},
   companies: {name: 'Компании', icon: 'building', roles: ['director']},
 };
 const MENU = {
-  director: {nav: ['summary', 'calls', 'callbacks', 'deals', 'staff', 'callcenter', 'robot'], more: ['sources', 'reports', 'settings', 'companies'], tabs: ['summary', 'calls', 'callbacks', 'deals']},
+  director: {nav: ['summary', 'calls', 'callbacks', 'deals', 'staff', 'callcenter', 'robot'], more: ['sources', 'reports', 'auto', 'settings', 'companies'], tabs: ['summary', 'calls', 'callbacks', 'deals']},
   manager: {nav: ['queue', 'callbacks', 'deals', 'calls', 'me'], more: ['callcenter', 'sources', 'reports'], tabs: ['queue', 'callbacks', 'deals', 'calls']},
   client: {nav: ['cab', 'robot'], more: [], tabs: ['cab', 'robot']},
 };
@@ -366,7 +368,7 @@ const ALIAS = {
 };
 // Модули компании (crm/company.py): без модуля раздела нет в меню, а его адреса сервер закрывает сам.
 const hasModule = m => !S.me.modules || S.me.modules.includes(m);
-const PAGE_MODULE = {callcenter: 'callcenter', robot: 'robot', sources: 'sources'};
+const PAGE_MODULE = {callcenter: 'callcenter', robot: 'robot', sources: 'sources', auto: 'automations'};
 const allowed = p => !!PAGES[p] && PAGES[p].roles.includes(S.me.role) && (!PAGE_MODULE[p] || hasModule(PAGE_MODULE[p]))
   && (p !== 'companies' || !!S.me.platform) && (p !== 'callcenter' || S.me.role !== 'manager' || S.me.callcenter_mode === 'db')
   && (p !== 'robot' || S.me.role !== 'client' || S.me.robot);

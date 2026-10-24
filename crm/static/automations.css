@@ -1,0 +1,23 @@
+/* Страница «Автоматизации» (static/automations.js). Классы с префиксом au-. */
+.au-list{display:flex;flex-direction:column;gap:10px}
+.au-card{border:1px solid var(--line);border-radius:var(--r);padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+.au-card .hint{margin:0}
+.au-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.au-tpls{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
+.au-tpl{display:flex;flex-direction:column;gap:4px;text-align:left;border:1px solid var(--line);border-radius:var(--r);background:var(--surface);color:var(--fg);padding:12px 14px;cursor:pointer;font:inherit;transition:border-color .15s, background .15s}
+.au-tpl:hover{border-color:var(--accent);background:var(--accent-soft)}
+.au-tpl span{font-size:12.5px;color:var(--muted)}
+.au-h{font-size:13.5px;font-weight:650;margin:18px 0 8px}
+.au-cond{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr) minmax(0,1fr) auto;gap:6px;align-items:center;margin-bottom:6px}
+.au-act{border:1px solid var(--line);border-radius:var(--r);padding:10px 12px;margin-bottom:10px;display:flex;flex-direction:column;gap:8px}
+.au-field{cursor:pointer;border:0}
+.au-field:hover{background:var(--accent-soft);color:var(--accent)}
+.au-save{margin-top:18px}
+.au-step{display:flex;gap:10px;align-items:flex-start;margin:8px 0}
+.au-pre{white-space:pre-wrap;word-break:break-word;font:12.5px/1.45 var(--mono);background:var(--surface-2);border-radius:8px;padding:8px 10px;margin:6px 0 0;max-height:220px;overflow:auto}
+.au-run{border-bottom:1px solid var(--line);padding:10px 0}
+.au-run:last-child{border-bottom:0}
+@media (max-width:640px){
+  .au-cond{grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto}
+  .au-cond [data-ck="value"]{grid-column:1/3}
+}

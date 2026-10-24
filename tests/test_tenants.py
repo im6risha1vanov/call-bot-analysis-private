@@ -29,14 +29,14 @@ SKIP = {'/api/login', '/api/logout', '/api/test/login', '/api/ask', '/api/gpt', 
 # Таблицы с данными компании: снимок строк первой компании до и после чужих запросов на запись.
 TABLES = ('prompt_versions', 'prompt_active', 'calls', 'call_reviews', 'callback_tasks', 'crm_leads', 'crm_outcomes', 'crm_reports', 'crm_questions',
           'crm_invites', 'employees', 'manager_memory', 'presentations', 'deal_events', 'contracts',
-          'source_selections', 'training_sessions', 'review_copy_lists', 'cc_clients', 'cc_leads')
+          'source_selections', 'training_sessions', 'review_copy_lists', 'cc_clients', 'cc_leads', 'automations', 'automation_accounts')
 
 
 @unittest.skipUnless(DSN, 'METHODOLOGY_TEST_DATABASE_URL не задан')
 class TenantIsolationTests(DBCase):
     async def asyncSetUp(self):
         await super().asyncSetUp()
-        for name in ('020_robot.sql', '029_averongpt.sql', '030_company_settings.sql', '031_company_prompts.sql'):
+        for name in ('020_robot.sql', '029_averongpt.sql', '030_automations.sql', '030_company_settings.sql', '031_company_prompts.sql'):
             await self.pool.execute((ROOT / 'migrations' / name).read_text())
         await self.pool.execute('TRUNCATE robot_contacts, robot_stoplist, robot_campaigns, robot_targets, robot_calls CASCADE')
         from aiohttp.test_utils import TestClient, TestServer
@@ -108,6 +108,9 @@ class TenantIsolationTests(DBCase):
         self.ids['prompt'] = await prompts.save(p, 'review', SECRET + ' промт', SECRET, 0, 'all', company=1)
         cc = await p.fetchval("INSERT INTO cc_clients(client_id,name) VALUES(1,$1) RETURNING id", SECRET)
         await p.execute("INSERT INTO cc_leads(client_id,cc_client_id,phone,note) VALUES(1,$1,$2,$3)", cc, PHONE, SECRET)
+        auto = await p.fetchval("INSERT INTO automations(client_id,name,spec,hook_token) VALUES(1,$1,'{}'::jsonb,'tok-secret') RETURNING id", SECRET)
+        self.ids['automation'] = auto
+        await p.execute("INSERT INTO automation_accounts(client_id,kind,title) VALUES(1,'telegram',$1)", SECRET)
         # робот нашей компании: кабинет '' (наш) и кабинет клиента с меткой в имени
         await p.execute("INSERT INTO robot_options(key,value) VALUES('clients',$1::jsonb) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value",
                         json.dumps([SECRET]))
@@ -149,7 +152,7 @@ class TenantIsolationTests(DBCase):
         any_id = {'/api/prompts/version/': 'prompt', '/api/recording/': 'call', '/api/review/': 'call', '/api/trainings/': 'training',
                   '/api/sources/': 'selection', '/api/presentations/': 'presentation', '/api/access/': 'invite',
                   '/api/tasks/': 'task', '/api/leads/': 'lead', '/api/robot/cab/campaigns/': 'campaign',
-                  '/api/robot/cab/recording/': 'robot_call'}
+                  '/api/robot/cab/recording/': 'robot_call', '/api/automations/': 'automation'}
         rid = next((self.ids[v] for k, v in any_id.items() if path.startswith(k)), self.ids['call'])
         path = re.sub(r'\{id(:[^}]*)?\}', str(rid), path)
         return (path.replace('{phone}', PHONE[-10:]).replace('{kind}', 'review').replace('{action}', 'delete'))

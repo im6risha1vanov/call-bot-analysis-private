@@ -20,6 +20,7 @@ MODULES = {
     'sources': 'Источники',
     'presentations': 'Презентации',
     'gpt': 'AveronGPT',
+    'automations': 'Автоматизации',  # отдельный тариф
 }
 DEFAULT_MODULES = ('sources', 'gpt')  # новой компании сразу; остальное включаем, когда настроено
 
@@ -37,6 +38,7 @@ API_MODULES = (
     ('/api/sources', 'sources'),
     ('/api/presentations', 'presentations'),
     ('/api/gpt', 'gpt'),
+    ('/api/automations', 'automations'),
 )
 
 
