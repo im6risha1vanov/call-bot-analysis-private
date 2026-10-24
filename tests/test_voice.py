@@ -897,7 +897,7 @@ class CallSessionTest(unittest.IsolatedAsyncioTestCase):
         session = CallSession(Dialog(load("kitchen"), AnthropicBackend(client=client)), nothing, nothing,
                               synthesize=synth, save=save)
         await session.start()
-        for answer in ("Да, актуально.", "Да", "Ну, в Сыктывкаре", "Наверное, плёнку", "Тысяч триста", "Меня зовут Ольга"):
+        for answer in ("Да, актуально.", "Да", "Меня зовут Ольга", "Ну, в Сыктывкаре", "Наверное, плёнку", "Тысяч триста"):
             await session.heard(answer, True)
             await session.reply_task
             for _ in range(100):
@@ -906,9 +906,9 @@ class CallSessionTest(unittest.IsolatedAsyncioTestCase):
                 await asyncio.sleep(0.01)
         self.assertEqual(client.requests, [])  # вся анкета до времени звонка — без модели
         self.assertIn("В Сыктывкаре, поняла.", said)  # повтор слов клиента — отдельной фразой
-        self.assertIn("Ольга,", said)
+        self.assertIn("Ольга, приятно.", said)
         robot = [m["content"] for m in session.dialog.messages if m["role"] == "assistant"]
-        self.assertEqual(robot[-1], "Ольга, когда удобно, чтобы специалист перезвонил?")
+        self.assertEqual(robot[-1], "Хорошо. Когда удобно, чтобы специалист перезвонил?")
         await session.heard("Завтра после обеда", True)
         await session.reply_task
         self.assertEqual(len(client.requests), 1)
@@ -932,6 +932,13 @@ class CallSessionTest(unittest.IsolatedAsyncioTestCase):
         dialog.messages = [{"role": "assistant", "content": "На какой бюджет примерно ориентируетесь?"}]
         self.assertEqual(dialog.quick_reply("двести пятьдесят тысяч"), "Хорошо. Как к вам обращаться?")
         dialog.messages = [{"role": "assistant", "content": "Как к вам обращаться?"}]
+        self.assertEqual(dialog.quick_reply("ирина петровна"), "Ирина Петровна, приятно. А в каком городе или районе будет стоять кухня?")
+        # имя уже спросили в начале: после бюджета сразу время, после имени в конце — тоже время
+        dialog.messages = [{"role": "assistant", "content": "Угу. Как к вам обращаться?"}, {"role": "user", "content": "Ольга"},
+                           {"role": "assistant", "content": "На какой бюджет примерно ориентируетесь?"}]
+        self.assertEqual(dialog.quick_reply("триста тысяч"), "Хорошо. Когда удобно, чтобы специалист перезвонил?")
+        dialog.messages = [{"role": "assistant", "content": "А в каком городе или районе будет стоять кухня?"},
+                           {"role": "user", "content": "Сочи"}, {"role": "assistant", "content": "Как к вам обращаться?"}]
         self.assertEqual(dialog.quick_reply("ирина петровна"), "Ирина Петровна, когда удобно, чтобы специалист перезвонил?")
 
     def test_crm_copy_of_builtin_operator_gets_new_quick_replies(self):

@@ -109,8 +109,8 @@ def _norm(text: str) -> str:
 QUICK_ECHO = "{answer}"  # в reply быстрого ответа: слова клиента («Сыктывкар, поняла.»)
 
 
-def _afters(item: dict) -> list[str]:
-    after = item.get("after", "")
+def _afters(item: dict, key: str = "after") -> list[str]:
+    after = item.get(key, "")
     return [after] if isinstance(after, str) else list(after)
 
 
@@ -210,7 +210,11 @@ class Dialog:
         if self.finished or not self.messages or self.messages[-1]["role"] != "assistant":
             return None
         asked = _norm(self.messages[-1]["content"])
+        earlier = " | ".join(_norm(m["content"]) for m in self.messages[:-1]
+                             if m["role"] == "assistant" and isinstance(m["content"], str))
         for item in self.op.quick:
+            if any(_norm(u) and _norm(u) in earlier for u in _afters(item, "unless")):
+                continue  # этот вопрос робот уже задавал раньше: следующий по заготовке был бы повтором
             answer = quick_answer(item, asked, client_text)
             if answer is None:
                 continue
