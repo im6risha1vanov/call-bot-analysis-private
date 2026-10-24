@@ -152,9 +152,10 @@ def operators(owner: str) -> list[dict]:
             op = vop.load(op_id)
         except vop.OperatorError:
             continue
-        if op.owner != owner and not (owner == '' and vop.builtin(op_id)):
+        if op.owner != owner and not (owner == '' and vop.shipped(op_id)):
             continue
-        out.append({'id': op.id, 'name': op.name, 'company': op.company, 'goal': op.goal, 'builtin': vop.builtin(op_id),
+        out.append({'id': op.id, 'name': op.name, 'company': op.company, 'goal': op.goal, 'builtin': vop.shipped(op_id),
+                    'edited': vop.shipped(op_id) and not vop.builtin(op_id),
                     'plan': len(op.plan), 'rules': len(op.rules), 'facts': len(op.facts)})
     return out
 
@@ -165,18 +166,20 @@ def _owned(op_id: str, owner: str, write: bool = False):
     if path is None:
         raise ValueError('Нет такого оператора.')
     data = _read(path)
-    builtin = vop.builtin(op_id)
+    builtin = vop.shipped(op_id)
     if (data.get('owner') or '') != owner and not (owner == '' and builtin):
         raise Forbidden('Это оператор другого кабинета.')
     if write and builtin:
-        raise ValueError('Встроенный оператор не правится. Сделайте копию и правьте её.')
+        # встроенного правит только директор (кабинеты клиентов их не видят): правка ложится рядом под тем же id
+        path = vop.EXTRA_DIR / f'{op_id}.toml'
     return path, data, builtin
 
 
 def operator(owner: str, op_id: str) -> dict:
+    from voice import operator as vop
     _, data, builtin = _owned(op_id, owner)
     fields = data.get('fields') or {}
-    return {'id': op_id, 'builtin': builtin, **{k: data.get(k, '') for k in TEXT_FIELDS},
+    return {'id': op_id, 'builtin': builtin, 'edited': builtin and not vop.builtin(op_id), **{k: data.get(k, '') for k in TEXT_FIELDS},
             **{k: list(data.get(k) or []) for k in LIST_FIELDS},
             'fields': [{'key': k, 'text': v} for k, v in fields.items()], 'max_items': 10}
 
@@ -213,9 +216,9 @@ def save_operator(owner: str, data: dict, op_id: str | None = None, copy_from: s
         fields[key] = text
     # быстрые ответы копия встроенного оператора берёт у него при каждом звонке (voice.operator._builtin_quick),
     # своих не храним: так до неё доходят новые заготовки
-    if copy_from and vop.builtin(copy_from):
+    if copy_from and vop.shipped(copy_from):
         new['copy_of'] = copy_from
-    if new.get('copy_of'):
+    if new.get('copy_of') or vop.shipped(op_id):
         new.pop('quick', None)
     elif base.get('quick') and (new.get('greeting') != base.get('greeting') or new.get('plan') != base.get('plan')):
         new.pop('quick', None)
@@ -247,7 +250,14 @@ def _human_error(text: str) -> str:
 
 
 async def delete_operator(pool, owner: str, op_id: str) -> None:
-    path, _, _ = _owned(op_id, owner, write=True)
+    """Свой оператор удаляем, у встроенного удаляем правку из CRM: он снова как в репозитории."""
+    from voice import operator as vop
+    path, _, builtin = _owned(op_id, owner, write=True)
+    if builtin:
+        if not path.is_file():
+            raise ValueError('Встроенный оператор не правили: возвращать нечего.')
+        path.unlink()
+        return
     if await pool.fetchval("SELECT 1 FROM robot_campaigns WHERE operator=$1 AND status IN ('running','paused')", op_id):
         raise ValueError('Оператор работает в кампании. Сначала завершите её.')
     path.unlink()
