@@ -17,6 +17,7 @@ VIEWS.auto = async view => {
   view.innerHTML = `<div class="page">
     <p class="hint blk">Запусков в этом месяце: <b>${used}</b> · включено сценариев: <b>${u.active}${u.max_active ? ' из ' + u.max_active : ''}</b>.
       Сценарий включается только после пробного запуска, а любая правка его выключает.</p>
+    ${ro ? '' : '<section class="card blk au-agent" data-css="--i:1" data-agent></section>'}
     <section class="card blk" data-css="--i:1"><div class="card-h"><h2>Сценарии</h2><span class="hint">${list.length}</span></div>
       ${list.length ? `<div class="au-list">${list.map(auCard).join('')}</div>` : '<div class="empty">Сценариев пока нет. Начните с шаблона ниже.</div>'}</section>
     ${ro ? '' : `<section class="card blk" data-css="--i:2"><div class="card-h"><h2>Готовые шаблоны</h2><span class="hint">откроется редактор, останется выбрать чат или таблицу</span></div>
@@ -30,7 +31,49 @@ VIEWS.auto = async view => {
         : '<div class="empty">Подключите чат Telegram или Google-таблицу, чтобы сценарии могли туда писать.</div>'}
       ${auCat().email_ready ? '' : '<p class="hint">Почта CRM ещё не настроена: сценарии с письмами можно собрать, но письма не уйдут.</p>'}</section></div>`;
   bindAuto(view);
+  if (!ro) auAgent($('[data-agent]', view));
 };
+
+// ---------- помощник: «Что вы хотите сделать?» ----------
+// Разговор живёт до перезагрузки страницы; черновик открывается в редакторе, сохраняет человек.
+AU.chat = [];
+const AU_EXAMPLES = ['Присылай в Telegram каждую оплату больше 100 000 ₽', 'Каждый вечер в 19:00 итоги дня в чат',
+  'Записывай новые номера из базы в Google-таблицу', 'Сообщай в чат, когда менеджер назначил встречу'];
+function auAgent(box) {
+  const msg = m => m.role === 'user' ? `<div class="au-say me">${esc(m.text)}</div>`
+    : `<div class="au-say">${esc(m.text)}${m.draft ? `<div class="au-draft"><b>${esc(m.draft.name)}</b><span class="hint">${esc(m.desc || '')}</span>
+        ${m.missing?.length ? `<span class="hint bad-text">Нужно подключить: ${m.missing.map(k => k === 'telegram' ? 'чат Telegram' : 'Google-таблицу').join(', ')}.</span>` : ''}
+        <div class="row"><button class="btn small primary" type="button" data-open="${m.n}">Открыть в редакторе</button></div></div>` : ''}</div>`;
+  const draw = () => {
+    box.innerHTML = `<div class="card-h"><h2>Что вы хотите сделать?</h2><span class="hint">помощник соберёт сценарий, а вы проверите и включите</span></div>
+      ${AU.chat.length ? `<div class="au-chat">${AU.chat.map(msg).join('')}</div>` : `<div class="chips au-ex">${AU_EXAMPLES.map(t => `<button class="chip au-field" type="button" data-ex="${esc(t)}">${esc(t)}</button>`).join('')}</div>`}
+      <div class="au-ask"><textarea class="inp" data-q rows="2" maxlength="1500" placeholder="Например: когда подписан договор, напиши в группу «Продажи» имя клиента и менеджера"></textarea>
+        <button class="btn primary" type="button" data-send>Собрать</button></div>
+      ${AU.chat.length ? '<button class="btn small ghost" type="button" data-reset>Начать заново</button>' : ''}`;
+    const chat = $('.au-chat', box); if (chat) chat.scrollTop = chat.scrollHeight;
+  };
+  const send = async () => {
+    const q = $('[data-q]', box), text = q.value.trim();
+    if (!text) { q.focus(); return; }
+    const btn = $('[data-send]', box);
+    busy(btn, true);
+    const history = AU.chat.map(m => ({role: m.role, text: m.text}));
+    try {
+      const r = await api('/api/automations/agent', {method: 'POST', body: {text, history}});
+      AU.chat.push({role: 'user', text}, {role: 'assistant', text: r.reply, draft: r.draft, desc: r.text, missing: r.missing, n: AU.chat.length + 1});
+      draw();
+    } catch (err) { busy(btn, false); toast(err.message, true); }
+  };
+  draw();
+  box.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.ex) { $('[data-q]', box).value = b.dataset.ex; send(); }
+    else if ('send' in b.dataset) send();
+    else if ('reset' in b.dataset) { AU.chat = []; draw(); }
+    else if (b.dataset.open) { const m = AU.chat[+b.dataset.open]; auEditor({name: m.draft.name, spec: JSON.parse(JSON.stringify(m.draft.spec))}); }
+  });
+  box.addEventListener('keydown', e => { if (e.target.matches('[data-q]') && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+}
 
 function auCard(a, i) {
   const ro = S.me.readonly;
