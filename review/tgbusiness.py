@@ -56,6 +56,15 @@ async def save(pool, message: Message) -> bool:
            ON CONFLICT(client_id, peer_id, message_id) DO UPDATE SET text=EXCLUDED.text, media=EXCLUDED.media""",
         _client_id, peer_id, message.message_id, message.date, outgoing, message.text or message.caption,
         media_kind(message))
+    contact = message.contact
+    if contact and not outgoing and contact.user_id == peer_id and contact.phone_number:
+        # Клиент поделился своим номером: по нему чат попадает в сделку (tgreview.py, «Сделки»).
+        from .presentations import phone_digits
+        if phone := phone_digits(contact.phone_number):
+            await pool.execute(
+                """UPDATE tg_chats SET phone=$3, updated_at=now(),
+                     analysis=coalesce(analysis, '{}'::jsonb) || jsonb_build_object('link', jsonb_build_object('by', 'contact'))
+                   WHERE client_id=$1 AND peer_id=$2 AND phone IS NULL""", _client_id, peer_id, phone)
     return True
 
 
