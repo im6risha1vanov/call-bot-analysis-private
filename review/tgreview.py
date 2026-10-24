@@ -256,3 +256,31 @@ async def maybe_run(pool, now: datetime | None = None, call=None) -> dict | None
     if stats['linked'] or stats['reviewed']:
         log.info('Telegram: привязано к клиентам %s, разобрано переписок %s', stats['linked'], stats['reviewed'])
     return stats
+
+
+if __name__ == '__main__':
+    # python -m review.tgreview status — сколько переписок привязано к клиентам и разобрано.
+    import asyncio
+    import sys
+
+    async def _status():
+        import asyncpg
+        from scripts.kitchen_backfill import load_env
+        load_env(Path(__file__).resolve().parents[1] / '.env')
+        pool = await asyncpg.create_pool(os.environ['DATABASE_URL'], min_size=1, max_size=1)
+        try:
+            row = await pool.fetchrow(
+                """SELECT count(*) AS chats, count(*) FILTER (WHERE phone IS NOT NULL) AS linked,
+                          count(*) FILTER (WHERE analysis->>'reviewed' = 'true') AS reviewed,
+                          count(*) FILTER (WHERE analysis->>'kind' = 'not_client') AS not_client,
+                          max(analyzed_at) AS last
+                     FROM tg_chats WHERE kind='user'""")
+            print(f"чатов {row['chats']}, с номером клиента {row['linked']}, разобрано {row['reviewed']}, "
+                  f"не клиенты {row['not_client']}"
+                  + (f", последний разбор {row['last']:%d.%m %H:%M} UTC" if row['last'] else ', разборов пока нет')
+                  + ('' if enabled() else ' (разбор выключен: TG_REVIEW=off)'))
+        finally:
+            await pool.close()
+
+    if sys.argv[1:2] == ['status']:
+        asyncio.run(_status())
