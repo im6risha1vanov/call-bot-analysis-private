@@ -44,7 +44,7 @@ test_link() {
 }
 
 # Все миграции CRM; каждая только добавляет и повторный запуск ничего не ломает.
-migrate() { for f in migrations/014_crm.sql migrations/015_crm_roles.sql migrations/016_crm_access.sql migrations/017_crm_reports.sql migrations/018_crm_questions.sql migrations/019_crm_staff.sql migrations/020_robot.sql migrations/021_manager_memory.sql migrations/022_presentations.sql migrations/023_tg_chats.sql migrations/024_deals.sql migrations/025_contracts.sql migrations/026_presentation_client.sql migrations/027_sources.sql migrations/028_crm_logins.sql migrations/029_averongpt.sql; do
+migrate() { for f in migrations/014_crm.sql migrations/015_crm_roles.sql migrations/016_crm_access.sql migrations/017_crm_reports.sql migrations/018_crm_questions.sql migrations/019_crm_staff.sql migrations/020_robot.sql migrations/021_manager_memory.sql migrations/022_presentations.sql migrations/023_tg_chats.sql migrations/024_deals.sql migrations/025_contracts.sql migrations/026_presentation_client.sql migrations/027_sources.sql migrations/028_crm_logins.sql migrations/029_averongpt.sql migrations/030_automations.sql; do
   psql "$DATABASE_URL" -q -v ON_ERROR_STOP=1 -f "$f"; done; }
 
 listeners() { ss -ltnpH "( sport = :80 or sport = :443 )" || true; }

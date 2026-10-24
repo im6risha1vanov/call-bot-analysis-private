@@ -22,7 +22,7 @@ from aiohttp import web  # noqa: E402
 
 import mango_client  # noqa: E402
 from tools import Forbidden, is_privileged  # noqa: E402
-from . import accounts, ask as asking, auth, cabinet, contracts, deals, gpt, journal, overview, people, recording, reviews, sources, staff, store, training  # noqa: E402
+from . import accounts, ask as asking, auth, automations, cabinet, contracts, deals, gpt, journal, overview, people, recording, reviews, sources, staff, store, training  # noqa: E402
 from . import prompts as prompt_mode, robot, robot_api, robot_prices, robot_runner, robot_store  # noqa: E402
 from review import store as review_store  # noqa: E402
 from .dial import dial  # noqa: E402
@@ -53,7 +53,9 @@ def fail(status: int, text: str) -> web.Response:
 @web.middleware
 async def guard(request: web.Request, handler):
     # Запросы с другого сайта не могут поставить свой заголовок без CORS, а CORS мы не разрешаем.
-    if request.method not in ('GET', 'HEAD') and request.headers.get('X-CRM') != '1':
+    # /hook/<token> — вебхук другой системы для автоматизаций: без cookie и заголовка, доступ по токену.
+    hook = request.path.startswith('/hook/')
+    if request.method not in ('GET', 'HEAD') and request.headers.get('X-CRM') != '1' and not hook:
         return fail(403, 'Запрос отклонён.')
     if request.method not in ('GET', 'HEAD') and request.path not in VIEW_ONLY_POSTS:
         # Тестовая ссылка и открытый сайт: смотреть можно всё, менять ничего (а не по списку разделов).
@@ -508,6 +510,85 @@ async def api_deal_event(request):
                                                    await author_name(pool, who)))
 
 
+# Автоматизации (crm/automations.py): настраивает директор; агент и редактор работают через эти же запросы.
+async def automation_admin(request, write: bool = False):
+    who = await actor(request, write=write)
+    if not is_privileged(who):
+        raise Forbidden('Автоматизации настраивает директор.')
+    return who
+
+
+def path_id(request, name: str = 'id') -> int:
+    try:
+        return int(request.match_info[name])
+    except ValueError:
+        raise web.HTTPNotFound()
+
+
+async def api_automations(request):
+    who = await automation_admin(request)
+    return web.json_response(await automations.overview(request.app[POOL], who.client_id))
+
+
+async def api_automation_save(request):
+    who = await automation_admin(request, write=True)
+    pool = request.app[POOL]
+    data = await body(request)
+    automation_id = int(data['id']) if str(data.get('id') or '').isdigit() else None
+    return web.json_response(await automations.save(pool, who.client_id, automation_id, str(data.get('name') or ''),
+                                                    data.get('spec'), await author_name(pool, who)))
+
+
+async def api_automation_test(request):
+    who = await automation_admin(request, write=True)
+    return web.json_response(await automations.test_run(request.app[POOL], who.client_id, path_id(request)))
+
+
+async def api_automation_enable(request):
+    who = await automation_admin(request, write=True)
+    data = await body(request)
+    return web.json_response(await automations.set_enabled(request.app[POOL], who.client_id, path_id(request),
+                                                           bool(data.get('on'))))
+
+
+async def api_automation_delete(request):
+    who = await automation_admin(request, write=True)
+    return web.json_response(await automations.delete(request.app[POOL], who.client_id, path_id(request)))
+
+
+async def api_automation_runs(request):
+    who = await automation_admin(request)
+    return web.json_response(await automations.runs(request.app[POOL], who.client_id, path_id(request)))
+
+
+async def api_automation_telegram(request):
+    who = await automation_admin(request, write=True)
+    pool = request.app[POOL]
+    return web.json_response(await automations.telegram_link(pool, who.client_id, await author_name(pool, who)))
+
+
+async def api_automation_sheets(request):
+    who = await automation_admin(request, write=True)
+    pool = request.app[POOL]
+    data = await body(request)
+    return web.json_response(await automations.connect_sheet(pool, who.client_id, str(data.get('url') or ''),
+                                                             data.get('sheet'), await author_name(pool, who)))
+
+
+async def api_automation_account_delete(request):
+    who = await automation_admin(request, write=True)
+    return web.json_response(await automations.delete_account(request.app[POOL], who.client_id, path_id(request)))
+
+
+async def hook(request):
+    """Вебхук другой системы: событие для сценария с этим токеном."""
+    if request.content_length and request.content_length > automations.MAX_HOOK_BYTES:
+        return fail(413, 'Слишком большой запрос.')
+    if not await automations.incoming(request.app[POOL], request.match_info['token'], await request.read()):
+        return fail(404, 'Сценарий не найден или выключен.')
+    return web.json_response({'ok': True})
+
+
 async def api_presentation_link(request):
     """«Привязать к клиенту»: номер клиента для презентации, которая шла не через Mango."""
     who = await actor(request, write=True)
@@ -886,6 +967,16 @@ def build(pool) -> web.Application:
     app.router.add_get('/api/sources/selections/{id}', api_source)
     app.router.add_post('/api/sources/selections/{id}/delete', api_source_delete)
     app.router.add_post('/api/presentations/{id}/link', api_presentation_link)
+    app.router.add_get('/api/automations', api_automations)
+    app.router.add_post('/api/automations', api_automation_save)
+    app.router.add_post(r'/api/automations/{id:\d+}/test', api_automation_test)
+    app.router.add_post(r'/api/automations/{id:\d+}/enable', api_automation_enable)
+    app.router.add_post(r'/api/automations/{id:\d+}/delete', api_automation_delete)
+    app.router.add_get(r'/api/automations/{id:\d+}/runs', api_automation_runs)
+    app.router.add_post('/api/automations/accounts/telegram', api_automation_telegram)
+    app.router.add_post('/api/automations/accounts/sheets', api_automation_sheets)
+    app.router.add_post(r'/api/automations/accounts/{id:\d+}/delete', api_automation_account_delete)
+    app.router.add_post('/hook/{token}', hook)
     app.router.add_get('/api/contracts', api_contracts)
     app.router.add_get('/api/contracts/config', api_contracts_config)
     app.router.add_get('/api/contracts/next-number', api_contracts_next)
@@ -937,6 +1028,8 @@ async def make_app() -> web.Application:
     async def robot_cabinet(_app):  # кампании робота по расписанию, перенос итогов его звонков и себестоимость
         tasks = [asyncio.create_task(robot_runner.loop(pool))] if robot_runner.enabled() else []
         tasks.append(asyncio.create_task(robot_prices.loop(pool)))
+        if os.getenv('AUTOMATIONS', 'on') != 'off':  # сценарии конструктора автоматизаций
+            tasks.append(asyncio.create_task(automations.loop(pool)))
         yield
         for task in tasks:
             task.cancel()

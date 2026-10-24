@@ -69,6 +69,13 @@ def head_menu(tg_id: int) -> ReplyKeyboardMarkup:
 @router.message(CommandStart())
 async def start_command(message):
     import invites
+    from crm import automations
+    hook_code = automations.telegram_code(message.text)
+    if hook_code and PG_POOL is not None:
+        # чат для уведомлений конструктора автоматизаций CRM: личный или группа
+        title = message.chat.title or ' '.join(filter(None, [message.from_user.first_name, message.from_user.last_name]))
+        await message.answer(await automations.bind_telegram(PG_POOL, hook_code, message.chat.id, title), parse_mode=None)
+        return
     code = invites.code_from(message.text)
     if code and PG_POOL is not None and message.chat.type == 'private':
         name = ' '.join(filter(None, [message.from_user.first_name, message.from_user.last_name]))
