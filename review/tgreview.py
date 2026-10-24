@@ -279,6 +279,25 @@ if __name__ == '__main__':
                   f"не клиенты {row['not_client']}"
                   + (f", последний разбор {row['last']:%d.%m %H:%M} UTC" if row['last'] else ', разборов пока нет')
                   + ('' if enabled() else ' (разбор выключен: TG_REVIEW=off)'))
+            # По последним чатам: почему разобран или нет (имён и текстов не печатаем).
+            now = datetime.now(timezone.utc)
+            for c in await pool.fetch(
+                    """SELECT c.peer_id, c.phone IS NOT NULL AS linked, c.last_message_at, c.analyzed_at, c.analysis->>'kind' AS kind,
+                              count(m.message_id) AS messages,
+                              count(m.message_id) FILTER (WHERE NOT m.outgoing AND m.text IS NOT NULL) AS client_texts
+                         FROM tg_chats c LEFT JOIN tg_messages m ON m.client_id=c.client_id AND m.peer_id=c.peer_id
+                        WHERE c.kind='user' GROUP BY c.id ORDER BY c.last_message_at DESC NULLS LAST LIMIT 10"""):
+                quiet = c['last_message_at'] and c['last_message_at'] + timedelta(hours=QUIET_HOURS)
+                if not c['client_texts']:
+                    state = 'клиент не писал текстом, разбирать нечего'
+                elif c['analyzed_at'] and c['analyzed_at'] >= c['last_message_at']:
+                    state = ('не клиент' if c['kind'] == 'not_client' else 'разобран') + f" {c['analyzed_at']:%d.%m %H:%M} UTC"
+                elif quiet and quiet > now:
+                    state = f'ждёт тишины до {quiet:%d.%m %H:%M} UTC'
+                else:
+                    state = 'в очереди на разбор'
+                print(f"  чат {c['peer_id']}: сообщений {c['messages']}, от клиента с текстом {c['client_texts']}, "
+                      f"{'номер есть' if c['linked'] else 'без номера'}, {state}")
         finally:
             await pool.close()
 
