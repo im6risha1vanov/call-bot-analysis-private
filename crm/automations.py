@@ -235,8 +235,8 @@ def validate(spec, accounts: dict[int, dict]) -> dict:
             raise ValueError(f'Условие описано неверно. Операции: {", ".join(OPS)}.')
         item = {'field': c['field'], 'op': c['op']}
         if c['op'] not in ('empty', 'not_empty'):
-            if c.get('value') is None or isinstance(c.get('value'), (dict, list)):
-                raise ValueError(f'В условии по «{c["field"]}» нет значения.')
+            if c.get('value') is None or isinstance(c.get('value'), (dict, list)) or str(c['value']).strip() == '':
+                raise ValueError(f'В условии по «{FIELD_LABELS.get(c["field"], c["field"])}» нет значения.')
             item['value'] = c['value']
         clean_if.append(item)
     actions = spec.get('actions') or []
@@ -247,11 +247,24 @@ def validate(spec, accounts: dict[int, dict]) -> dict:
     return {'trigger': clean_trigger, 'if': clean_if, 'actions': [blocks.check_action(a, accounts) for a in actions]}
 
 
+def choices() -> dict[str, dict[str, str]]:
+    """Поля с готовым набором значений: редактор показывает их списком, а не пустой строкой."""
+    from .store import OUTCOMES
+    return {'call.outcome_code': dict(OUTCOMES), 'call.success': {'да': 'да', 'нет': 'нет'}}
+
+
+def condition_text(c: dict) -> str:
+    value = c.get('value', '')
+    value = choices().get(c['field'], {}).get(str(value), value)
+    text = f'{FIELD_LABELS.get(c["field"], c["field"])} {OP_LABELS[c["op"]]}'
+    return text if c['op'] in ('empty', 'not_empty') else f'{text} «{value}»'
+
+
 def describe(spec: dict, accounts: dict[int, dict]) -> str:
     """Сценарий человеческим языком: так его пересказывает агент и показывает список."""
     t = spec['trigger']
     head = TRIGGERS[t['type']]['title'] + (f' в {t["time"]}' if t.get('time') else '')
-    conds = [f'{c["field"]} {c["op"]} {c.get("value", "")}'.strip() for c in spec.get('if', [])]
+    conds = [condition_text(c) for c in spec.get('if', [])]
     acts = []
     for a in spec['actions']:
         title = blocks.ACTIONS[a['type']]['title']
@@ -373,7 +386,7 @@ def catalog() -> dict:
     return {'triggers': {k: {'title': v['title'], 'group': v['group'], 'fields': sorted(fields(v['sample']))}
                          for k, v in TRIGGERS.items()},
             'actions': {k: {x: v[x] for x in ('title', 'about', 'account', 'fields')} for k, v in blocks.ACTIONS.items()},
-            'ops': list(OPS), 'op_labels': OP_LABELS, 'labels': FIELD_LABELS, 'templates': TEMPLATES,
+            'ops': list(OPS), 'op_labels': OP_LABELS, 'labels': FIELD_LABELS, 'choices': choices(), 'templates': TEMPLATES,
             'email_ready': blocks.smtp_ready(), 'proxy_ready': bool(blocks.proxy_url()),
             'sheets_email': blocks.service_email()}
 

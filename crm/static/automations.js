@@ -93,7 +93,8 @@ async function auTest(btn, id, after) {
   const box = modal(`${modalHead(ok ? 'Пробный запуск прошёл' : 'Пробный запуск с ошибкой', r.real_data ? 'на последнем настоящем событии' : 'на примере данных: настоящих событий этого вида ещё не было')}
     <div class="rvm-body">${r.conditions_pass ? '' : '<p class="hint">На этих данных условия не выполнились бы. Для пробы действия всё равно выполнены.</p>'}
     ${r.steps.map(auStep).join('')}
-    <div class="row" data-css="margin-top:14px">${ok ? `<button class="btn primary" type="button" data-en>Включить сценарий</button>` : ''}<button class="btn rvm-x" type="button">Закрыть</button></div></div>`, true);
+    <div class="row" data-css="margin-top:14px">${ok ? `<button class="btn primary" type="button" data-en>Включить сценарий</button>` : ''}<button class="btn" type="button" data-shut>Закрыть</button></div></div>`, true);
+  $('[data-shut]', box).onclick = () => box.close();
   $('[data-en]', box)?.addEventListener('click', async e => {
     busy(e.currentTarget, true);
     try { await api(`/api/automations/${id}/enable`, {method: 'POST', body: {on: true}}); box.close(); toast('Сценарий включён'); after?.(); reload(); }
@@ -140,7 +141,8 @@ function auSheet() {
     ${mail ? `<p>Сначала откройте в таблице доступ «Редактор» для адреса <code>${esc(mail)}</code>.</p>` : '<p class="bad-text">У CRM нет сервисного аккаунта Google: таблицу подключить нельзя.</p>'}
     <label class="field">Ссылка на таблицу<input data-url placeholder="https://docs.google.com/spreadsheets/d/..."></label>
     <label class="field" data-css="margin-top:10px">Лист<input data-sheet placeholder="первый лист, если пусто"></label>
-    <div class="row" data-css="margin-top:14px"><button class="btn primary" type="button" data-go-sheet>Подключить</button><button class="btn rvm-x" type="button">Отмена</button></div></div>`);
+    <div class="row" data-css="margin-top:14px"><button class="btn primary" type="button" data-go-sheet>Подключить</button><button class="btn" type="button" data-shut>Отмена</button></div></div>`);
+  $('[data-shut]', box).onclick = () => box.close();
   $('[data-url]', box).focus();
   $('[data-go-sheet]', box).addEventListener('click', async e => {
     busy(e.currentTarget, true);
@@ -185,10 +187,15 @@ function auEditor(draft) {
     return `<div class="au-act" data-i="${i}"><div class="au-top"><b>${i + 1}. ${esc(meta.title)}</b><span class="sp"></span>
       <button class="x" type="button" data-rm-act="${i}" aria-label="Убрать действие" data-css="width:28px;height:28px">${svg('x', '')}</button></div>${inner}</div>`;
   };
+  const valueInput = c => {
+    const hide = ['empty', 'not_empty'].includes(c.op) ? ' hidden' : '', opts = cat.choices[c.field];
+    return opts ? `<select class="inp" data-ck="value"${hide}>${Object.entries(opts).map(([v, l]) => `<option value="${esc(v)}"${String(c.value) === v ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>`
+      : `<input class="inp" data-ck="value" value="${esc(c.value ?? '')}"${hide}>`;
+  };
   const condHtml = (c, i) => `<div class="au-cond" data-c="${i}">
     <select class="inp" data-ck="field">${fieldsOf().map(f => `<option value="${esc(f)}"${f === c.field ? ' selected' : ''}>${esc(auLabel(f))}</option>`).join('')}</select>
     <select class="inp" data-ck="op">${cat.ops.map(o => `<option value="${esc(o)}"${o === c.op ? ' selected' : ''}>${esc(cat.op_labels[o] || o)}</option>`).join('')}</select>
-    <input class="inp" data-ck="value" value="${esc(c.value ?? '')}"${['empty', 'not_empty'].includes(c.op) ? ' hidden' : ''}>
+    ${valueInput(c)}
     <button class="x" type="button" data-rm-cond="${i}" aria-label="Убрать условие" data-css="width:28px;height:28px">${svg('x', '')}</button></div>`;
   const draw = () => {
     const t = draft.spec.trigger;
@@ -233,6 +240,11 @@ function auEditor(draft) {
       draft.spec.trigger = {type: e.target.value, ...(e.target.value === 'schedule.daily' ? {time: '19:00'} : {})};
       draft.spec.if = draft.spec.if.filter(c => fieldsOf().includes(c.field));
       draw();
+    } else if (e.target.matches('[data-ck="field"]')) {
+      read();
+      const c = draft.spec.if[+e.target.closest('[data-c]').dataset.c];
+      const opts = cat.choices[c.field]; c.value = opts ? Object.keys(opts)[0] : '';
+      draw();
     } else if (e.target.matches('[data-ck="op"]')) {
       $('[data-ck="value"]', e.target.closest('[data-c]')).hidden = ['empty', 'not_empty'].includes(e.target.value);
     }
@@ -243,8 +255,8 @@ function auEditor(draft) {
     if (d.field) {
       const el = lastTpl && box.contains(lastTpl) ? lastTpl : $('[data-tpl]', box);
       if (!el) return;
-      const ins = `{${d.field}}`, s = el.selectionStart ?? el.value.length;
-      el.value = el.value.slice(0, s) + ins + el.value.slice(el.selectionEnd ?? s);
+      const ins = `{${d.field}}`, s = el === lastTpl ? el.selectionStart : el.value.length; // ещё не ставили курсор: в конец
+      el.value = el.value.slice(0, s) + ins + el.value.slice(el === lastTpl ? el.selectionEnd : s);
       el.focus(); el.selectionStart = el.selectionEnd = s + ins.length;
       return;
     }
