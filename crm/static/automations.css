@@ -17,7 +17,16 @@
 .au-pre{white-space:pre-wrap;word-break:break-word;font:12.5px/1.45 var(--mono);background:var(--surface-2);border-radius:8px;padding:8px 10px;margin:6px 0 0;max-height:220px;overflow:auto}
 .au-run{border-bottom:1px solid var(--line);padding:10px 0}
 .au-run:last-child{border-bottom:0}
+/* помощник */
+.au-chat{display:flex;flex-direction:column;gap:8px;max-height:380px;overflow:auto;margin-bottom:10px}
+.au-say{align-self:flex-start;max-width:85%;background:var(--surface-2);border-radius:12px;padding:8px 12px;white-space:pre-wrap}
+.au-say.me{align-self:flex-end;background:var(--accent-soft);color:var(--fg)}
+.au-draft{display:flex;flex-direction:column;gap:4px;margin-top:8px;padding:10px 12px;border:1px solid var(--line);border-radius:var(--r);background:var(--surface);white-space:normal}
+.au-ask{display:flex;gap:8px;align-items:flex-end}
+.au-ask textarea{flex:1;resize:vertical;min-height:44px;font:inherit}
+.au-ex{margin-bottom:10px}
 @media (max-width:640px){
+  .au-ask{flex-direction:column;align-items:stretch}
   .au-cond{grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto}
   .au-cond [data-ck="value"]{grid-column:1/3}
 }
