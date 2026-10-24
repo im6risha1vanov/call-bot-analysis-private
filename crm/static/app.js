@@ -343,7 +343,7 @@ const PAGES = {
   deals: {name: 'Сделки', icon: 'deal', roles: ['director', 'manager']},
   staff: {name: 'Сотрудники', icon: 'team', roles: ['director']},
   me: {name: 'Моя карточка', icon: 'person', roles: ['manager']},
-  callcenter: {name: 'Колл-центр', icon: 'head', roles: ['director']},
+  callcenter: {name: 'Колл-центр', icon: 'head', roles: ['director', 'manager']},
   robot: {name: 'Робот', icon: 'bot', roles: ['director', 'client']},
   sources: {name: 'Источники', icon: 'source', roles: ['director', 'manager']},
   reports: {name: 'Отчёты', icon: 'report', roles: ['director', 'manager']},
@@ -353,7 +353,7 @@ const PAGES = {
 };
 const MENU = {
   director: {nav: ['summary', 'calls', 'callbacks', 'deals', 'staff', 'callcenter', 'robot'], more: ['sources', 'reports', 'settings', 'companies'], tabs: ['summary', 'calls', 'callbacks', 'deals']},
-  manager: {nav: ['queue', 'callbacks', 'deals', 'calls', 'me'], more: ['sources', 'reports'], tabs: ['queue', 'callbacks', 'deals', 'calls']},
+  manager: {nav: ['queue', 'callbacks', 'deals', 'calls', 'me'], more: ['callcenter', 'sources', 'reports'], tabs: ['queue', 'callbacks', 'deals', 'calls']},
   client: {nav: ['cab', 'robot'], more: [], tabs: ['cab', 'robot']},
 };
 const HOME = {director: 'summary', manager: 'queue', client: 'cab'};
@@ -368,7 +368,7 @@ const ALIAS = {
 const hasModule = m => !S.me.modules || S.me.modules.includes(m);
 const PAGE_MODULE = {callcenter: 'callcenter', robot: 'robot', sources: 'sources'};
 const allowed = p => !!PAGES[p] && PAGES[p].roles.includes(S.me.role) && (!PAGE_MODULE[p] || hasModule(PAGE_MODULE[p]))
-  && (p !== 'companies' || !!S.me.platform)
+  && (p !== 'companies' || !!S.me.platform) && (p !== 'callcenter' || S.me.role !== 'manager' || S.me.callcenter_mode === 'db')
   && (p !== 'robot' || S.me.role !== 'client' || S.me.robot);
 function resolve(page, arg) {
   page = String(page || '').replace(/^[aw]:/, '');

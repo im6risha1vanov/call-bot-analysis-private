@@ -29,7 +29,7 @@ SKIP = {'/api/login', '/api/logout', '/api/test/login', '/api/ask', '/api/gpt', 
 # Таблицы с данными компании: снимок строк первой компании до и после чужих запросов на запись.
 TABLES = ('prompt_versions', 'prompt_active', 'calls', 'call_reviews', 'callback_tasks', 'crm_leads', 'crm_outcomes', 'crm_reports', 'crm_questions',
           'crm_invites', 'employees', 'manager_memory', 'presentations', 'deal_events', 'contracts',
-          'source_selections', 'training_sessions', 'review_copy_lists')
+          'source_selections', 'training_sessions', 'review_copy_lists', 'cc_clients', 'cc_leads')
 
 
 @unittest.skipUnless(DSN, 'METHODOLOGY_TEST_DATABASE_URL не задан')
@@ -106,6 +106,8 @@ class TenantIsolationTests(DBCase):
                         json.dumps({'stage': 'contract', 'note': SECRET}))
         from review import prompts
         self.ids['prompt'] = await prompts.save(p, 'review', SECRET + ' промт', SECRET, 0, 'all', company=1)
+        cc = await p.fetchval("INSERT INTO cc_clients(client_id,name) VALUES(1,$1) RETURNING id", SECRET)
+        await p.execute("INSERT INTO cc_leads(client_id,cc_client_id,phone,note) VALUES(1,$1,$2,$3)", cc, PHONE, SECRET)
 
     async def enter(self, who):
         """Сессия второй компании: директор и клиент по учётке, менеджер по Telegram."""
@@ -413,3 +415,91 @@ class PlatformTests(DBCase):
         self.assertEqual(actions, ['create', 'update', 'mango', 'support'])
         r = await self.http.post('/api/platform/companies/1/enter', json={}, headers=self.H)
         self.assertEqual(r.status, 400)
+
+
+@unittest.skipUnless(DSN, 'METHODOLOGY_TEST_DATABASE_URL не задан')
+class CallcenterDbTests(DBCase):
+    """Колл-центр без Google Таблицы: клиенты и номера в базе, кабинет и сводка как по таблице."""
+    H = {'X-CRM': '1'}
+
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        await self.pool.execute((ROOT / 'migrations' / '030_company_settings.sql').read_text())
+        await self.pool.execute('TRUNCATE company_settings')
+        await self.pool.execute("INSERT INTO clients(id,timezone,processing_enabled) VALUES(3,'Europe/Moscow',true)")
+        await self.pool.execute("INSERT INTO company_settings(client_id,name,modules) VALUES(3,'Окна Юг',$1)", ['callcenter'])
+        await self.pool.execute("INSERT INTO employees VALUES(3,'201',323,'manager','Оператор')")
+        from aiohttp.test_utils import TestClient, TestServer
+        from crm import web
+        web.SECURE_COOKIE = False
+        self.http = TestClient(TestServer(web.build(self.pool)))
+        await self.http.start_server()
+        self.addAsyncCleanup(self.http.close)
+
+    async def enter(self, who):
+        token = 'cc-' + who
+        if who == 'director':
+            await self.pool.execute("INSERT INTO crm_sessions(token_hash,expires_at,role,client_id,is_test) "
+                                    "VALUES($1,now()+'1 day','director',3,false) ON CONFLICT DO NOTHING", auth.digest(token))
+        elif who == 'client':
+            await self.pool.execute("INSERT INTO crm_sessions(token_hash,expires_at,role,client_id,client_key,is_test) "
+                                    "VALUES($1,now()+'1 day','client',3,'Кухни',false) ON CONFLICT DO NOTHING", auth.digest(token))
+        else:
+            await self.pool.execute("INSERT INTO crm_sessions(token_hash,telegram_user_id,expires_at) VALUES($1,323,now()+'1 day') "
+                                    "ON CONFLICT DO NOTHING", auth.digest(token))
+        self.http.session.cookie_jar.clear()
+        self.http.session.cookie_jar.update_cookies({'crm_session': token})
+
+    async def post(self, path, data):
+        r = await self.http.post(path, json=data, headers=self.H)
+        return r.status, await r.json()
+
+    async def test_clients_numbers_calls_and_cabinet(self):
+        await self.enter('director')
+        me = await (await self.http.get('/api/me')).json()
+        self.assertEqual(me['callcenter_mode'], 'db')
+        self.assertEqual((await self.post('/api/callcenter/clients', {'name': 'Кухни'}))[0], 200)
+        self.assertEqual((await self.post('/api/callcenter/clients', {'name': 'Кухни'}))[0], 400)
+        st, r = await self.post('/api/callcenter/leads', {'client': 'Кухни', 'tag': 'МПП',
+                                                          'text': '89991112233; Иван\n+7 999 111-22-33\n89994445566\nмусор'})
+        self.assertEqual((st, r['added'], r['duplicates'], r['invalid']), (200, 2, 1, 1))
+        await self.post('/api/callcenter/prices', {'first': 10, 'repeat': 5, 'interested': 150})
+
+        await self.enter('manager')  # оператор — менеджер компании
+        w = await (await self.http.get('/api/callcenter/work')).json()
+        self.assertEqual([x['phone'] for x in w['items']], ['79991112233', '79994445566'])
+        a, b = w['items'][0]['id'], w['items'][1]['id']
+        st, r = await self.post(f'/api/callcenter/leads/{a}/attempt', {'result': 'no_answer', 'comment': 'не берёт'})
+        self.assertEqual((st, r['attempts']), (200, ['НДЗ']))
+        await self.post(f'/api/callcenter/leads/{b}/attempt', {'result': 'interested', 'comment': 'ждёт замер'})
+        st, r = await self.post(f'/api/callcenter/leads/{b}/attempt', {'result': 'no_answer'})
+        self.assertEqual(st, 400)  # номер закрыт
+        w = await (await self.http.get('/api/callcenter/work')).json()
+        self.assertEqual(w['items'], [])  # недозвон вернётся завтра
+        self.assertEqual((await self.post('/api/callcenter/clients', {'name': 'Окна'}))[0], 403)  # клиентов заводит директор
+        await self.pool.execute("UPDATE cc_leads SET attempts=jsonb_set(attempts,'{0,d}','\"2020-01-01\"') WHERE id=$1", a)
+        w = await (await self.http.get('/api/callcenter/work')).json()
+        self.assertEqual([x['id'] for x in w['items']], [a])
+        st, r = await self.post(f'/api/callcenter/leads/{a}/attempt', {'result': 'no_answer'})
+        self.assertEqual(r['attempts'], ['НДЗ', 'НДЗ 2'])
+        st, r = await self.post(f'/api/callcenter/leads/{a}/attempt', {'result': 'callback', 'remind': 'завтра'})
+        self.assertEqual((st, r['attempts'], r['open']), (200, ['НДЗ', 'НДЗ 2', 'Перезвон'], False))
+
+        await self.enter('client')
+        c = await (await self.http.get('/api/cabinet')).json()
+        self.assertEqual((c['counts']['total'], c['counts']['interested'], c['counts']['callback']), (2, 1, 1))
+        self.assertEqual((c['summary']['first'], c['summary']['repeat'], c['summary']['sum']), (2, 2, 170.0))
+        self.assertEqual(c['interested'][0]['comment'], 'ждёт замер')
+
+        await self.enter('director')
+        d = await (await self.http.get('/api/callcenter')).json()
+        self.assertEqual((d['mode'], d['clients'][0]['name'], d['total']['sum']), ('db', 'Кухни', 170.0))
+        r = await self.http.get('/api/callcenter/export', params={'client': 'Кухни'})
+        text = await r.text()
+        self.assertEqual(r.status, 200)
+        self.assertIn('Звонок 1 (первичный)', text)
+        self.assertIn('79991112233', text)
+
+        # компания со своей таблицей меняет номера в таблице, а не здесь
+        await self.pool.execute("""UPDATE company_settings SET settings='{"callcenter_sheet": "their-sheet"}' WHERE client_id=3""")
+        self.assertEqual((await self.post('/api/callcenter/clients', {'name': 'Ещё'}))[0], 400)

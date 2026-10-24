@@ -148,6 +148,9 @@ async def update(pool, who, client_id: int, data: dict) -> dict:
     name = clean_name(data.get('name', current['name']))
     modules = clean_modules(data.get('modules', current['modules']))
     settings = clean_settings(data.get('settings', {k: current['settings'].get(k) for k in SETTING_KEYS}))
+    raw = await pool.fetchval('SELECT settings FROM company_settings WHERE client_id=$1', client_id)
+    raw = json.loads(raw) if isinstance(raw, str) else dict(raw or {})
+    settings = {**{k: v for k, v in raw.items() if k not in SETTING_KEYS}, **settings}  # цены колл-центра и прочее не трогаем
     await pool.execute(
         """INSERT INTO company_settings(client_id,name,modules,settings,updated_at) VALUES($1,$2,$3,$4::jsonb,now())
            ON CONFLICT(client_id) DO UPDATE SET name=EXCLUDED.name, modules=EXCLUDED.modules, settings=EXCLUDED.settings,

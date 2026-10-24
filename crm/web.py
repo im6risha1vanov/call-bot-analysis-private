@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import os
+import urllib.parse
 from datetime import date, time
 from pathlib import Path
 
@@ -22,7 +23,7 @@ from aiohttp import web  # noqa: E402
 
 import mango_client  # noqa: E402
 from tools import Forbidden, home_client_id, is_privileged  # noqa: E402
-from . import accounts, ask as asking, auth, cabinet, company, contracts, deals, gpt, journal, overview, people, platform, recording, reviews, sources, staff, store, training  # noqa: E402
+from . import accounts, ask as asking, auth, cabinet, callcenter_db, company, contracts, deals, gpt, journal, overview, people, platform, recording, reviews, sources, staff, store, training  # noqa: E402
 from . import prompts as prompt_mode, robot, robot_api, robot_prices, robot_runner, robot_store  # noqa: E402
 from review import store as review_store  # noqa: E402
 from .dial import dial  # noqa: E402
@@ -247,7 +248,8 @@ async def api_me(request):
     who = await viewer(request)
     pool = request.app[POOL]
     firm = await company.info(pool, who.company)
-    firm = {'company': firm['name'], 'modules': firm['modules'], 'support': who.support,
+    cc_mode = ('sheet' if firm['settings'].get('callcenter_sheet') else 'db') if 'callcenter' in firm['modules'] else None
+    firm = {'company': firm['name'], 'modules': firm['modules'], 'support': who.support, 'callcenter_mode': cc_mode,
             'platform': who.platform and not who.support and firm['home']}
     if who.role == 'client':
         return web.json_response({'name': who.client_key, 'role': 'client', 'test': who.test, 'client': who.client_key,
@@ -362,7 +364,7 @@ async def api_cabinet(request):
     if who.role not in ('client', 'director'):
         raise Forbidden('Кабинет клиента недоступен.')
     try:
-        sheet = await cabinet.sheet_of(request.app[POOL], who.company)
+        sheet = await cabinet.source_of(request.app[POOL], who.company)
         if who.role == 'client':
             name = who.client_key
         else:
@@ -377,9 +379,63 @@ async def api_cabinet(request):
 async def api_callcenter(request):
     who = await director(request)
     try:
-        return web.json_response(await cabinet.callcenter(await cabinet.sheet_of(request.app[POOL], who.company)))
+        return web.json_response(await cabinet.callcenter(await cabinet.source_of(request.app[POOL], who.company)))
     except LookupError as exc:
         raise ValueError(str(exc))
+
+
+async def cc_db(request, roles=('director',)):
+    """Колл-центр в базе (без Google Таблицы): кто пишет и его компания."""
+    who = await viewer(request)
+    if who.role not in roles or who.actor is None:
+        raise Forbidden('Раздел недоступен.')
+    try:
+        src = await cabinet.source_of(request.app[POOL], who.company)
+    except LookupError as exc:
+        raise ValueError(str(exc))
+    if src.mode != 'db':
+        raise ValueError('Колл-центр компании ведётся в Google Таблице: номера и звонки меняются там.')
+    return who
+
+
+async def api_cc_work(request):
+    who = await cc_db(request, ('director', 'manager'))
+    pool = request.app[POOL]
+    return web.json_response({**await callcenter_db.work(pool, who.company, request.query.get('client') or None),
+                              'prices': await callcenter_db.prices(pool, who.company)})
+
+
+async def api_cc_client_add(request):
+    who = await cc_db(request)
+    return web.json_response(await callcenter_db.add_client(request.app[POOL], who.company, (await body(request)).get('name')))
+
+
+async def api_cc_leads_add(request):
+    who = await cc_db(request)
+    data = await body(request)
+    return web.json_response(await callcenter_db.add_leads(request.app[POOL], who.company, str(data.get('client') or ''),
+                                                           str(data.get('text') or ''), data.get('tag')))
+
+
+async def api_cc_attempt(request):
+    who = await cc_db(request, ('director', 'manager'))
+    data = await body(request)
+    return web.json_response(await callcenter_db.attempt(
+        request.app[POOL], who.company, int_id(request.match_info['id']), str(data.get('result') or ''),
+        data.get('comment'), data.get('remind'), who.actor.extension))
+
+
+async def api_cc_prices(request):
+    who = await cc_db(request)
+    return web.json_response(await callcenter_db.save_prices(request.app[POOL], who.company, await body(request)))
+
+
+async def api_cc_export(request):
+    who = await cc_db(request)
+    name = str(request.query.get('client') or '')
+    text = await callcenter_db.export_csv(request.app[POOL], who.company, name)
+    return web.Response(body=text.encode('utf-8'), content_type='text/csv', charset='utf-8', headers={
+        'Content-Disposition': "attachment; filename*=UTF-8''" + urllib.parse.quote(name + '.csv')})
 
 
 async def api_recording(request):
@@ -942,6 +998,12 @@ def build(pool) -> web.Application:
     app.router.add_post('/api/docs', api_docs_write)
     app.router.add_get('/api/cabinet', api_cabinet)
     app.router.add_get('/api/callcenter', api_callcenter)
+    app.router.add_get('/api/callcenter/work', api_cc_work)
+    app.router.add_get('/api/callcenter/export', api_cc_export)
+    app.router.add_post('/api/callcenter/clients', api_cc_client_add)
+    app.router.add_post('/api/callcenter/leads', api_cc_leads_add)
+    app.router.add_post('/api/callcenter/leads/{id}/attempt', api_cc_attempt)
+    app.router.add_post('/api/callcenter/prices', api_cc_prices)
     app.router.add_get('/api/recording/{id}', api_recording)
     app.router.add_get('/api/review/{id}', api_review)
     app.router.add_get('/api/reports', api_reports)
