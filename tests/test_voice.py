@@ -153,6 +153,19 @@ class DialogTest(unittest.IsolatedAsyncioTestCase):
         turn = await dialog.reply("(молчание)")
         self.assertEqual((turn.text, turn.fallback, turn.result.outcome), ("", False, "ndz"))
 
+    async def test_finish_after_question_waits_for_answer(self):
+        done = {"outcome": "interested", "comment": "Завтра после шести", "facts": {"callback_time": "завтра после шести"}}
+        client = FakeClient([finish(done, "Ирина, тогда завтра после шести позвонит специалист. Договорились?"),
+                             finish(done, "Передаю специалисту, ждите звонка. Всего доброго.")])
+        dialog = Dialog(load("kitchen"), AnthropicBackend(client=client))
+        dialog.greet()
+        turn = await dialog.reply("Завтра после шести")
+        self.assertIsNone(turn.result)  # спросила «Договорились?» — трубку не кладёт
+        self.assertFalse(dialog.finished)
+        self.assertEqual(dialog.messages[-1]["content"], turn.text)
+        turn = await dialog.reply("Да, договорились")
+        self.assertEqual(turn.result.outcome, "interested")
+
     async def test_bad_tool_input_is_retried_once(self):
         client = FakeClient([
             finish({"outcome": "maybe", "comment": "x"}),

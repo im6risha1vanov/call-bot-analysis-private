@@ -69,7 +69,8 @@ def build_tools(op: Operator) -> list[dict]:
     if op.transfer_to:
         tools.append({
             "name": TRANSFER,
-            "description": "Перевести клиента на живого специалиста прямо сейчас. Только если клиент подходит и сам хочет говорить с человеком.",
+            "description": "Перевести клиента на живого специалиста прямо сейчас. Только если клиент подходит и сам просит соединить с человеком. "
+                           "Вопрос «вы робот?» — не просьба соединить: ответь и продолжай по плану.",
                 "input_schema": {
                 "type": "object",
                 # описания полей уже есть в finish_call: здесь только имена, инструменты уходят модели в каждом запросе
@@ -311,6 +312,11 @@ class Dialog:
                     continue
                 return self._finish(CallResult("callback", "Сбой записи итога, проверить вручную", error=str(e)),
                                     " ".join(s for s in said if s))
+            if result.outcome != "ndz" and not result.transfer and text.endswith("?"):
+                # «…Договорились?» и тут же finish_call: трубку не кладём, ждём ответа, итог запишет следующий ход
+                self.transcript.pop()
+                self._add_robot(text)
+                return Turn(text, None, first_ms)
             turn = self._finish(result, " ".join(s for s in said if s))
             turn.first_text_ms = first_ms
             return turn
