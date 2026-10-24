@@ -70,9 +70,9 @@ def owner_of(who) -> tuple[str, str | None, str | None]:
 
 
 async def client_id_of(pool, who) -> int:
-    if who.actor is not None:
-        return who.actor.client_id
-    return await pool.fetchval('SELECT id FROM clients WHERE processing_enabled ORDER BY id LIMIT 1')
+    if who.company is None:
+        raise Forbidden('Войдите в CRM заново.')
+    return who.company
 
 
 def spend_scope(who) -> str | None:

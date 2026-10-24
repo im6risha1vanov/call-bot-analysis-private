@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 import crypto_util
-from tools import Actor, resolve_actor
+from tools import Actor, home_client_id, resolve_actor
 
 TEST_TTL = timedelta(days=7)
 PERSONAL_TTL = timedelta(days=90)
@@ -36,6 +36,11 @@ class Viewer:
     actor: Actor | None  # у клиента нет: он не сотрудник отдела
     client_key: str | None = None  # лист клиента в «Прозвон лидов»
     test: bool = False
+    client_id: int | None = None  # компания (clients.id); у клиента компании actor нет, поэтому храним отдельно
+
+    @property
+    def company(self) -> int | None:
+        return self.actor.client_id if self.actor is not None else self.client_id
 
 
 def digest(token: str) -> str:
@@ -58,7 +63,7 @@ def test_key_ok(key: str | None) -> bool:
 
 
 async def test_login(pool, role: str, extension: str | None = None, client_key: str | None = None) -> str:
-    client_id = await pool.fetchval('SELECT id FROM clients WHERE processing_enabled ORDER BY id LIMIT 1')
+    client_id = await home_client_id(pool)
     if client_id is None:
         raise ValueError('В базе нет отдела продаж.')
     extension, client_key = await check_target(pool, client_id, role, extension, client_key)
@@ -277,11 +282,11 @@ async def viewer_for(pool, session: str | None) -> Viewer | None:
             if tg is None:
                 return None
             actor = Actor(tg['telegram_user_id'] or 0, row['client_id'], 'manager', row['extension'])
-        return Viewer(row['role'], actor, row['client_key'], row['is_test'])
+        return Viewer(row['role'], actor, row['client_key'], row['is_test'], row['client_id'])
     actor = await resolve_actor(pool, row['telegram_user_id']) if row['telegram_user_id'] is not None else None
     if actor is None:
         return None
-    return Viewer(ROLE_OF.get(actor.role, 'manager'), actor)
+    return Viewer(ROLE_OF.get(actor.role, 'manager'), actor, client_id=actor.client_id)
 
 
 async def actor_for(pool, session: str | None) -> Actor | None:

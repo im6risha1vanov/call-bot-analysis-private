@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 
 from crm import auth, cabinet
+from tools import home_client_id
 
 ROBOT_EXTENSIONS = {'13'}  # добавочный голосового робота: входа в CRM ему не нужно
 
@@ -37,7 +38,7 @@ async def free_login(pool, base: str, taken: set[str] | None = None) -> str:
 
 
 async def create_all(pool) -> list[dict]:
-    client_id = await pool.fetchval('SELECT id FROM clients WHERE processing_enabled ORDER BY id LIMIT 1')
+    client_id = await home_client_id(pool)  # клиенты колл-центра пока только у нас
     have = await pool.fetch('SELECT role, extension, client_key, telegram_user_id FROM crm_invites '
                             'WHERE client_id=$1 AND login IS NOT NULL AND revoked_at IS NULL', client_id)
     done_tg = {r['telegram_user_id'] for r in have if r['telegram_user_id']}

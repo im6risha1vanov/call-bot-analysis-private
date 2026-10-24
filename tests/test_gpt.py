@@ -13,7 +13,7 @@ from crm import auth, gpt, robot_store
 from tests.test_crm import DSN, HEAD, MANAGER, DBCase, fake_values
 from tools import Forbidden
 
-CLIENT = auth.Viewer('client', None, 'Кухни')
+CLIENT = auth.Viewer('client', None, 'Кухни', client_id=1)
 DIRECTOR = auth.Viewer('director', HEAD)
 STAFF = auth.Viewer('manager', MANAGER)
 
@@ -112,7 +112,7 @@ class GptTests(DBCase):
         self.assertEqual((row['role'], row['client_key'], row['page'], row['model']), ('client', 'Кухни', 'cab', 'yandex:yandexgpt-5.1'))
         self.assertAlmostEqual(await gpt.spent_today(self.pool, 'client:Кухни'), 1.6, places=2)  # 2 обращения × 1000 токенов × 0,8 ₽
         self.assertEqual([x['question'] for x in await gpt.history(self.pool, CLIENT)], ['Сколько номеров?'])
-        self.assertEqual(await gpt.history(self.pool, auth.Viewer('client', None, 'Окна')), [])
+        self.assertEqual(await gpt.history(self.pool, auth.Viewer('client', None, 'Окна', client_id=1)), [])
 
     async def test_page_data_by_role(self):
         me = await gpt.page_data(self.pool, STAFF, 'me', {})

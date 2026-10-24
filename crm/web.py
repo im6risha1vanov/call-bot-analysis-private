@@ -21,7 +21,7 @@ import asyncpg  # noqa: E402
 from aiohttp import web  # noqa: E402
 
 import mango_client  # noqa: E402
-from tools import Forbidden, is_privileged  # noqa: E402
+from tools import Forbidden, home_client_id, is_privileged  # noqa: E402
 from . import accounts, ask as asking, auth, cabinet, contracts, deals, gpt, journal, overview, people, recording, reviews, sources, staff, store, training  # noqa: E402
 from . import prompts as prompt_mode, robot, robot_api, robot_prices, robot_runner, robot_store  # noqa: E402
 from review import store as review_store  # noqa: E402
@@ -246,7 +246,7 @@ async def api_test_options(request):
     if not auth.test_key_ok(request.query.get('key')):
         raise web.HTTPNotFound()
     pool = request.app[POOL]
-    client_id = await pool.fetchval('SELECT id FROM clients WHERE processing_enabled ORDER BY id LIMIT 1')
+    client_id = await home_client_id(pool)
     try:
         clients = [c['name'] for c in (await cabinet.summary())['clients']]
     except Exception:

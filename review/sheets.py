@@ -24,6 +24,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from reports import fmt_phone
+from tools import home_client_id
 from . import kitchen, memory
 from .callbacks import KIND_LABELS, STATUS_LABELS
 from .render import CATEGORY_LABELS, OUTCOME_LABELS
@@ -373,22 +374,23 @@ def presentations_table(rows, tz) -> Table:
 
 
 async def collect(pool, now: datetime | None = None) -> list[Table]:
+    """Листы таблицы бота. Таблица одна на сервер (GOOGLE_SHEET_ID) и наша, поэтому только звонки нашей компании."""
     now = now or datetime.now(timezone.utc)
     since = now - timedelta(days=HISTORY_DAYS)
+    home = await home_client_id(pool)
+    client = await pool.fetchrow('SELECT * FROM clients WHERE id=$1', home) if home is not None else None
     calls = await pool.fetch(
         """SELECT r.call_id, r.extension, r.data, c.client_number, c.call_started_at, cl.timezone,
                   (SELECT full_name FROM employees e WHERE e.client_id=r.client_id AND e.extension=r.extension AND e.role='manager' LIMIT 1) AS manager
            FROM call_reviews r JOIN calls c ON c.id=r.call_id JOIN clients cl ON cl.id=r.client_id
-           WHERE r.created_at >= $1 AND (r.data->>'reviewed')::boolean IS TRUE
-           ORDER BY coalesce(c.call_started_at, r.created_at) DESC""", since)
+           WHERE r.created_at >= $1 AND (r.data->>'reviewed')::boolean IS TRUE AND r.client_id=$2
+           ORDER BY coalesce(c.call_started_at, r.created_at) DESC""", since, home)
     tasks = await pool.fetch(
         """SELECT t.*, (SELECT full_name FROM employees e WHERE e.client_id=t.client_id AND e.extension=t.extension AND e.role='manager' LIMIT 1) AS manager
-           FROM callback_tasks t WHERE t.status='open' OR t.updated_at >= $1
-           ORDER BY t.due_date, t.due_time NULLS LAST""", since)
-    zone = await pool.fetchval('SELECT timezone FROM clients WHERE processing_enabled ORDER BY id LIMIT 1')
-    tz = ZoneInfo(calls[0]['timezone'] if calls else zone or 'Europe/Moscow')
+           FROM callback_tasks t WHERE (t.status='open' OR t.updated_at >= $1) AND t.client_id=$2
+           ORDER BY t.due_date, t.due_time NULLS LAST""", since, home)
+    tz = ZoneInfo(calls[0]['timezone'] if calls else (client['timezone'] if client else None) or 'Europe/Moscow')
     today = now.astimezone(tz).date()
-    client = await pool.fetchrow('SELECT * FROM clients WHERE processing_enabled ORDER BY id LIMIT 1')
     min_seconds = (client.get('min_call_seconds') if client else None) or 30
     everything = await pool.fetch(
         """SELECT c.extension, c.direction, c.duration_seconds, c.call_started_at,
