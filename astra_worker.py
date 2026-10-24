@@ -245,8 +245,8 @@ async def poll_all_clients(pool: asyncpg.Pool, next_poll_at: dict[int, float]) -
     now = time.monotonic()
     clients = await pool.fetch("SELECT * FROM clients")
     for client in clients:
-        if now < next_poll_at.get(client["id"], 0):
-            continue
+        if now < next_poll_at.get(client["id"], 0) or not client["vpbx_api_key_enc"]:
+            continue  # компания из вкладки «Компании» без ключей Манго: опрашивать нечего
         next_poll_at[client["id"]] = now + client["mango_poll_interval_sec"]
         try:
             found, to_analyze = await poll_client_calls(pool, client)

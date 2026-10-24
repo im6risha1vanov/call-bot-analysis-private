@@ -315,3 +315,101 @@ class AiLimitTests(DBCase):
             from crm import gpt
             who = auth.Viewer('director', None, client_id=3)
             self.assertTrue(await gpt.over_limit(self.pool, who))
+
+
+@unittest.skipUnless(DSN, 'METHODOLOGY_TEST_DATABASE_URL не задан')
+class PlatformTests(DBCase):
+    """Вкладка «Компании»: только наши учётки с отметкой platform; вход в компанию — только просмотр."""
+    H = {'X-CRM': '1'}
+
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        for name in ('029_averongpt.sql', '030_company_settings.sql'):
+            await self.pool.execute((ROOT / 'migrations' / name).read_text())
+        await self.pool.execute('TRUNCATE company_settings')
+        from aiohttp.test_utils import TestClient, TestServer
+        from crm import web
+        web.SECURE_COOKIE = False
+        self.http = TestClient(TestServer(web.build(self.pool)))
+        await self.http.start_server()
+        self.addAsyncCleanup(self.http.close)
+        await auth.account_create(self.pool, 1, 'director', 'grisha', name='Григорий', password='grisha-pass-1')
+        await auth.account_create(self.pool, 1, 'director', 'boss', name='Директор', password='boss-pass-12')
+        await self.pool.execute("UPDATE crm_invites SET platform=true WHERE login='grisha'")
+
+    async def login(self, login, password):
+        self.http.session.cookie_jar.clear()
+        r = await self.http.post('/api/login', json={'login': login, 'password': password}, headers=self.H)
+        self.assertEqual(r.status, 200, await r.text())
+
+    async def test_only_platform_accounts_see_companies(self):
+        await self.login('boss', 'boss-pass-12')
+        self.assertFalse((await (await self.http.get('/api/me')).json())['platform'])
+        self.assertEqual((await self.http.get('/api/platform/companies')).status, 403)
+        r = await self.http.post('/api/platform/companies', json={'name': 'Окна Юг'}, headers=self.H)
+        self.assertEqual(r.status, 403)
+        await self.login('grisha', 'grisha-pass-1')
+        self.assertTrue((await (await self.http.get('/api/me')).json())['platform'])
+        d = await (await self.http.get('/api/platform/companies')).json()
+        self.assertEqual([(c['id'], c['home']) for c in d['companies']], [(1, True)])
+
+    async def test_create_configure_connect_and_look(self):
+        await self.login('grisha', 'grisha-pass-1')
+        r = await self.http.post('/api/platform/companies', headers=self.H, json={
+            'name': ' Окна  Юг ', 'director': 'Пётр', 'login': 'okna', 'modules': ['robot', 'gpt', 'nonsense'],
+            'settings': {'ai_day_limit_rub': '300', 'callcenter_sheet': 'https://docs.google.com/spreadsheets/d/abc_DEF-1/edit'}})
+        self.assertEqual(r.status, 200, await r.text())
+        made = await r.json()
+        cid = made['id']
+        self.assertEqual(made['login'], 'okna')
+        info = await company.info(self.pool, cid)
+        self.assertEqual((info['name'], sorted(info['modules'])), ('Окна Юг', ['gpt', 'robot']))
+        self.assertEqual(info['settings'], {'ai_day_limit_rub': 300.0, 'callcenter_sheet': 'abc_DEF-1'})
+        self.assertFalse(await self.pool.fetchval('SELECT processing_enabled FROM clients WHERE id=$1', cid))
+
+        r = await self.http.post(f'/api/platform/companies/{cid}', headers=self.H,
+                                 json={'name': 'Окна Юг', 'modules': ['contracts'], 'settings': {'contract_email': 'okna@example.ru'}})
+        self.assertEqual(r.status, 200, await r.text())
+        self.assertEqual((await r.json())['modules'], ['contracts'])
+
+        # Манго: неверные ключи не сохраняются, верные включают компанию
+        bad = patch('mango_client.call', AsyncMock(side_effect=RuntimeError('401 Service disabled')))
+        with bad:
+            r = await self.http.post(f'/api/platform/companies/{cid}/mango', json={'key': 'k', 'salt': 's'}, headers=self.H)
+        self.assertEqual(r.status, 400)
+        self.assertIsNone(await self.pool.fetchval('SELECT vpbx_api_key_enc FROM clients WHERE id=$1', cid))
+        with patch('mango_client.call', AsyncMock(return_value={'balance': 1500})):
+            r = await self.http.post(f'/api/platform/companies/{cid}/mango', json={'key': 'k', 'salt': 's'}, headers=self.H)
+        self.assertEqual((r.status, (await r.json())['balance']), (200, 1500))
+        row = await self.pool.fetchrow('SELECT processing_enabled, vpbx_api_key_enc FROM clients WHERE id=$1', cid)
+        self.assertTrue(row['processing_enabled'])
+        from crypto_util import decrypt
+        self.assertEqual(decrypt(row['vpbx_api_key_enc']), 'k')
+        r = await self.http.post('/api/platform/companies/1/mango', json={'key': 'k', 'salt': 's'}, headers=self.H)
+        self.assertEqual(r.status, 400)  # нашу Манго отсюда не трогаем
+
+        # директор новой компании входит своим логином и видит свою компанию, без «Компаний»
+        own = self.http.session.cookie_jar.filter_cookies(self.http.make_url('/'))['crm_session'].value
+        await self.login('okna', made['password'])
+        me = await (await self.http.get('/api/me')).json()
+        self.assertEqual((me['company'], me['platform']), ('Окна Юг', False))
+        self.assertEqual((await self.http.get('/api/platform/companies')).status, 403)
+
+        # «Посмотреть»: сессия директора компании только для просмотра, обратно — в свою
+        self.http.session.cookie_jar.clear()
+        self.http.session.cookie_jar.update_cookies({'crm_session': own})
+        r = await self.http.post(f'/api/platform/companies/{cid}/enter', json={}, headers=self.H)
+        self.assertEqual(r.status, 200, await r.text())
+        me = await (await self.http.get('/api/me')).json()
+        self.assertEqual((me['company'], me['support'], me['platform'], me['readonly']), ('Окна Юг', True, False, True))
+        self.assertEqual((await self.http.get('/api/platform/companies')).status, 403)
+        r = await self.http.post('/api/access', json={'role': 'director', 'name': 'x'}, headers=self.H)
+        self.assertEqual(r.status, 403)
+        r = await self.http.get('/support-exit', allow_redirects=False)
+        self.assertEqual(r.status, 302)
+        me = await (await self.http.get('/api/me')).json()
+        self.assertEqual((me['company'], me['platform'], me['support']), ('Averon', True, False))
+        actions = [a for (a,) in await self.pool.fetch('SELECT action FROM platform_log ORDER BY id')]
+        self.assertEqual(actions, ['create', 'update', 'mango', 'support'])
+        r = await self.http.post('/api/platform/companies/1/enter', json={}, headers=self.H)
+        self.assertEqual(r.status, 400)

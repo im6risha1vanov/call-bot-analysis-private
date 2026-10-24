@@ -37,6 +37,9 @@ class Viewer:
     client_key: str | None = None  # лист клиента в «Прозвон лидов»
     test: bool = False
     client_id: int | None = None  # компания (clients.id); у клиента компании actor нет, поэтому храним отдельно
+    platform: bool = False  # наша учётка с отметкой platform: вкладка «Компании» (crm/platform.py)
+    support: bool = False  # вход в чужую компанию для поддержки, только просмотр
+    invite_id: int | None = None  # учётная запись, под которой вошли
 
     @property
     def company(self) -> int | None:
@@ -263,9 +266,12 @@ async def viewer_for(pool, session: str | None) -> Viewer | None:
     row = await pool.fetchrow(
         """UPDATE crm_sessions s SET last_seen_at=now() WHERE token_hash=$1 AND expires_at>now()
              AND (invite_id IS NULL OR EXISTS(SELECT 1 FROM crm_invites i WHERE i.id=s.invite_id AND i.revoked_at IS NULL))
-           RETURNING telegram_user_id, role, client_id, extension, client_key, is_test""", digest(session))
+           RETURNING telegram_user_id, role, client_id, extension, client_key, is_test, invite_id, support_by""", digest(session))
     if row is None:
         return None
+    extra = {'support': row['support_by'] is not None, 'invite_id': row['invite_id']}
+    if row['invite_id'] is not None:
+        extra['platform'] = bool(await pool.fetchval('SELECT platform FROM crm_invites WHERE id=$1', row['invite_id']))
     if row['role']:
         actor = None
         if row['role'] == 'director' and row['telegram_user_id']:
@@ -282,11 +288,11 @@ async def viewer_for(pool, session: str | None) -> Viewer | None:
             if tg is None:
                 return None
             actor = Actor(tg['telegram_user_id'] or 0, row['client_id'], 'manager', row['extension'])
-        return Viewer(row['role'], actor, row['client_key'], row['is_test'], row['client_id'])
+        return Viewer(row['role'], actor, row['client_key'], row['is_test'], row['client_id'], **extra)
     actor = await resolve_actor(pool, row['telegram_user_id']) if row['telegram_user_id'] is not None else None
     if actor is None:
         return None
-    return Viewer(ROLE_OF.get(actor.role, 'manager'), actor, client_id=actor.client_id)
+    return Viewer(ROLE_OF.get(actor.role, 'manager'), actor, client_id=actor.client_id, **extra)
 
 
 async def actor_for(pool, session: str | None) -> Actor | None:

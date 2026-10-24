@@ -113,6 +113,7 @@ const ICON = {
   x: '<path d="M6 6l12 12M18 6 6 18"/>',
   in: '<path d="M17 7 7 17M7 9v8h8"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6 7 7M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4"/>',
+  building: '<path d="M5 20V5a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v15M15 9h3a1 1 0 0 1 1 1v10M3 20h18M8.5 8h3M8.5 12h3M8.5 16h3"/>',
   out: '<path d="M14 4h5v16h-5M10 8l-4 4 4 4M6 12h10"/>',
 };
 const svg = (k, cls = 'ico') => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICON[k] || ''}</svg>`;
@@ -348,9 +349,10 @@ const PAGES = {
   reports: {name: 'Отчёты', icon: 'report', roles: ['director', 'manager']},
   settings: {name: 'Настройки', icon: 'gear', roles: ['director']},
   cab: {name: 'Кабинет', icon: 'home', roles: ['client']},
+  companies: {name: 'Компании', icon: 'building', roles: ['director']},
 };
 const MENU = {
-  director: {nav: ['summary', 'calls', 'callbacks', 'deals', 'staff', 'callcenter', 'robot'], more: ['sources', 'reports', 'settings'], tabs: ['summary', 'calls', 'callbacks', 'deals']},
+  director: {nav: ['summary', 'calls', 'callbacks', 'deals', 'staff', 'callcenter', 'robot'], more: ['sources', 'reports', 'settings', 'companies'], tabs: ['summary', 'calls', 'callbacks', 'deals']},
   manager: {nav: ['queue', 'callbacks', 'deals', 'calls', 'me'], more: ['sources', 'reports'], tabs: ['queue', 'callbacks', 'deals', 'calls']},
   client: {nav: ['cab', 'robot'], more: [], tabs: ['cab', 'robot']},
 };
@@ -366,6 +368,7 @@ const ALIAS = {
 const hasModule = m => !S.me.modules || S.me.modules.includes(m);
 const PAGE_MODULE = {callcenter: 'callcenter', robot: 'robot', sources: 'sources'};
 const allowed = p => !!PAGES[p] && PAGES[p].roles.includes(S.me.role) && (!PAGE_MODULE[p] || hasModule(PAGE_MODULE[p]))
+  && (p !== 'companies' || !!S.me.platform)
   && (p !== 'robot' || S.me.role !== 'client' || S.me.robot);
 function resolve(page, arg) {
   page = String(page || '').replace(/^[aw]:/, '');
@@ -402,6 +405,8 @@ function showLogin() {
 }
 
 let moreOpen = false;
+const exitLink = () => S.me.support ? '<a class="ghost" href="/support-exit">Вернуться к себе</a>'
+  : S.me.test ? '<a class="ghost" href="/test-exit">Сменить вход</a>' : '<button class="ghost" type="button" data-logout>Выйти</button>';
 function shell() {
   const m = menu();
   moreOpen = m.more.includes(S.page);
@@ -412,10 +417,11 @@ function shell() {
       ${window.gptButton && hasModule('gpt') ? gptButton() : ''}
       <div class="side-foot"><span>${esc(S.me.name || '')} · ${esc(ROLE_NAME[S.me.role] || '')}${S.me.ext ? ', доб. ' + esc(S.me.ext) : ''}</span>
         <div class="row"><button class="ghost" type="button" data-theme-btn>${themeLabel()}</button>
-        ${S.me.test ? '<a class="ghost" href="/test-exit">Сменить вход</a>' : '<button class="ghost" type="button" data-logout>Выйти</button>'}</div></div>
+        ${exitLink()}</div></div>
     </aside>
     <div class="main">
-      ${S.me.test ? `<div class="banner"><b>Просмотр · ${esc(ROLE_NAME[S.me.role] || '')}</b><span>Только смотреть: звонки и изменения работают под своим логином.</span><a href="/test-exit">Сменить вход</a></div>` : ''}
+      ${S.me.support ? `<div class="banner"><b>Просмотр компании «${esc(S.me.company || '')}»</b><span>Глазами директора, только смотреть.</span><a href="/support-exit">Вернуться к себе</a></div>`
+        : S.me.test ? `<div class="banner"><b>Просмотр · ${esc(ROLE_NAME[S.me.role] || '')}</b><span>Только смотреть: звонки и изменения работают под своим логином.</span><a href="/test-exit">Сменить вход</a></div>` : ''}
       <header class="top"><div class="top-in" id="top"></div></header>
       <main class="content" id="view"></main>
     </div></div>
@@ -444,7 +450,7 @@ function moreSheet() {
   const m = menu();
   const rest = [...m.nav, ...m.more].filter(id => !m.tabs.includes(id));
   openDrawer({title: 'Ещё', html: `<div class="sheet-list">${rest.map(id => `<button type="button" data-go="${id}"${S.page === id ? ' aria-current="page"' : ''}>${svg(PAGES[id].icon)}<span>${esc(PAGES[id].name)}</span>${svg('chev')}</button>`).join('')}</div>
-    <div class="row"><button class="ghost" type="button" data-theme-btn>${themeLabel()}</button>${S.me.test ? '<a class="ghost" href="/test-exit">Сменить вход</a>' : '<button class="ghost" type="button" data-logout>Выйти</button>'}</div>
+    <div class="row"><button class="ghost" type="button" data-theme-btn>${themeLabel()}</button>${exitLink()}</div>
     <p class="hint">${esc(S.me.name || '')} · ${esc(ROLE_NAME[S.me.role] || '')}</p>`});
 }
 function setCount(page, n) {

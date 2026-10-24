@@ -22,7 +22,7 @@ from aiohttp import web  # noqa: E402
 
 import mango_client  # noqa: E402
 from tools import Forbidden, home_client_id, is_privileged  # noqa: E402
-from . import accounts, ask as asking, auth, cabinet, company, contracts, deals, gpt, journal, overview, people, recording, reviews, sources, staff, store, training  # noqa: E402
+from . import accounts, ask as asking, auth, cabinet, company, contracts, deals, gpt, journal, overview, people, platform, recording, reviews, sources, staff, store, training  # noqa: E402
 from . import prompts as prompt_mode, robot, robot_api, robot_prices, robot_runner, robot_store  # noqa: E402
 from review import store as review_store  # noqa: E402
 from .dial import dial  # noqa: E402
@@ -31,6 +31,7 @@ log = logging.getLogger('crm')
 STATIC = Path(__file__).resolve().parent / 'static'
 COOKIE = 'crm_session'
 TEST_COOKIE = 'crm_test'
+BACK_COOKIE = 'crm_back'  # своя сессия, пока смотрим чужую компанию (вкладка «Компании»)
 POOL = web.AppKey('pool', asyncpg.Pool)
 SECURE_COOKIE = os.getenv('CRM_COOKIE_SECURE', '1') != '0'
 HEADERS = {
@@ -204,6 +205,22 @@ async def test_exit(request):
     raise response
 
 
+async def support_exit(request):
+    """Из чужой компании обратно в свою сессию."""
+    who = await auth.viewer_for(request.app[POOL], request.cookies.get(COOKIE))
+    back = request.cookies.get(BACK_COOKIE)
+    if who is not None and who.support:
+        await auth.logout(request.app[POOL], request.cookies.get(COOKIE))
+    response = web.HTTPFound('/#companies')
+    if back and await auth.viewer_for(request.app[POOL], back) is not None:
+        response.set_cookie(COOKIE, back, max_age=int(auth.PERSONAL_TTL.total_seconds()), httponly=True,
+                            secure=SECURE_COOKIE, samesite='Lax', path='/')
+    else:
+        response.del_cookie(COOKIE, path='/')
+    response.del_cookie(BACK_COOKIE, path='/')
+    raise response
+
+
 async def logout_page(request):
     await auth.logout(request.app[POOL], request.cookies.get(COOKIE))
     response = web.HTTPFound('/')
@@ -230,7 +247,8 @@ async def api_me(request):
     who = await viewer(request)
     pool = request.app[POOL]
     firm = await company.info(pool, who.company)
-    firm = {'company': firm['name'], 'modules': firm['modules']}
+    firm = {'company': firm['name'], 'modules': firm['modules'], 'support': who.support,
+            'platform': who.platform and not who.support and firm['home']}
     if who.role == 'client':
         return web.json_response({'name': who.client_key, 'role': 'client', 'test': who.test, 'client': who.client_key,
                                   'privileged': False, 'can_dial': False, 'team': [], **firm,
@@ -464,6 +482,51 @@ async def api_login(request):
     response = web.json_response({'ok': True, 'role': role})
     response.set_cookie(COOKIE, session, max_age=int(auth.PERSONAL_TTL.total_seconds()), httponly=True,
                         secure=SECURE_COOKIE, samesite='Lax', path='/')
+    return response
+
+
+async def platform_viewer(request) -> auth.Viewer:
+    who = await viewer(request)
+    await platform.require(request.app[POOL], who)
+    return who
+
+
+async def api_companies(request):
+    await platform_viewer(request)
+    return web.json_response({'companies': await platform.companies(request.app[POOL]),
+                              'modules': company.MODULES, 'default_modules': company.DEFAULT_MODULES})
+
+
+async def api_company_create(request):
+    who = await platform_viewer(request)
+    return web.json_response(await platform.create(request.app[POOL], who, await body(request)))
+
+
+def company_id(request) -> int:
+    try:
+        return int(request.match_info['id'])
+    except ValueError:
+        raise ValueError('Такой компании нет.')
+
+
+async def api_company_update(request):
+    who = await platform_viewer(request)
+    return web.json_response(await platform.update(request.app[POOL], who, company_id(request), await body(request)))
+
+
+async def api_company_mango(request):
+    who = await platform_viewer(request)
+    return web.json_response(await platform.connect_mango(request.app[POOL], who, company_id(request), await body(request)))
+
+
+async def api_company_enter(request):
+    """Посмотреть компанию её глазами (только просмотр); своя сессия ждёт в BACK_COOKIE."""
+    who = await platform_viewer(request)
+    session = await platform.support_session(request.app[POOL], who, company_id(request))
+    response = web.json_response({'go': '/'})
+    response.set_cookie(BACK_COOKIE, request.cookies.get(COOKIE), max_age=4 * 3600, httponly=True,
+                        secure=SECURE_COOKIE, samesite='Lax', path='/')
+    response.set_cookie(COOKIE, session, max_age=4 * 3600, httponly=True, secure=SECURE_COOKIE, samesite='Lax', path='/')
     return response
 
 
@@ -867,6 +930,7 @@ def build(pool) -> web.Application:
     app.router.add_get('/p/{token}', personal_page)
     app.router.add_get('/test-exit', test_exit)
     app.router.add_get('/logout', logout_page)
+    app.router.add_get('/support-exit', support_exit)
     app.router.add_get('/director', old_director)
     app.router.add_get('/director/{name}', old_director)
     app.router.add_static('/static/', STATIC, show_index=False)
@@ -896,6 +960,11 @@ def build(pool) -> web.Application:
     app.router.add_post('/api/access/{id}/account', api_access_account)
     app.router.add_post('/api/login', api_login)
     app.router.add_get('/api/staff', api_staff)
+    app.router.add_get('/api/platform/companies', api_companies)
+    app.router.add_post('/api/platform/companies', api_company_create)
+    app.router.add_post('/api/platform/companies/{id}', api_company_update)
+    app.router.add_post('/api/platform/companies/{id}/mango', api_company_mango)
+    app.router.add_post('/api/platform/companies/{id}/enter', api_company_enter)
     app.router.add_get('/api/person', api_person)
     app.router.add_get('/api/deals', api_deals)
     app.router.add_get('/api/deals/{phone}', api_deal)
