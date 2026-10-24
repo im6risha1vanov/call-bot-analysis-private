@@ -34,7 +34,7 @@ _SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
 _LONG = 140
 
 
-_FILLER_WORDS = {"Так…", "Угу…", "Ага…", "Так-так…"}
+_FILLER_WORDS = {"Так…", "Угу…", "Ага…", "Так-так…", "Записываю…", "Секундочку…"}
 
 
 class PhraseSplitter:
@@ -133,6 +133,100 @@ async def load_eleven_voices() -> dict[str, str]:
     except Exception as e:
         log.warning("не получил голоса ElevenLabs: %s", e)
     return dict(_eleven_direct)
+
+
+# Библиотека голосов ElevenLabs (Voice Library): поиск русских голосов, добавление в аккаунт, клон по образцу.
+LIBRARY_USE_CASES = {"conversational": "разговорный", "narrative_story": "рассказчик", "characters_animation": "персонажи",
+                     "social_media": "соцсети", "entertainment_tv": "ТВ", "advertisement": "реклама",
+                     "informative_educational": "обучение"}
+
+
+class ElevenError(Exception):
+    pass
+
+
+def _eleven_key() -> str:
+    key = os.getenv("ELEVENLABS_API_KEY", "").strip()
+    if not key:
+        raise ElevenError("нет ключа ElevenLabs (ELEVENLABS_API_KEY)")
+    return key
+
+
+def _eleven_fail(r: httpx.Response, what: str) -> ElevenError:
+    try:
+        detail = r.json().get("detail")
+        detail = detail.get("message") or detail.get("status") if isinstance(detail, dict) else detail
+    except Exception:
+        detail = r.text[:200]
+    return ElevenError(f"{what}: ElevenLabs ответил {r.status_code} {str(detail or '')[:200]}".strip())
+
+
+async def search_library(query: str = "", gender: str = "", use_case: str = "", page: int = 0) -> dict:
+    """Русские голоса из библиотеки ElevenLabs, по 24 на страницу."""
+    params = {"language": "ru", "page_size": 24, "page": max(int(page), 0)}
+    if query.strip():
+        params["search"] = query.strip()[:80]
+    if gender in ("female", "male", "neutral"):
+        params["gender"] = gender
+    if use_case in LIBRARY_USE_CASES:
+        params["use_cases"] = use_case
+    r = await _client().get(ELEVEN_API + "/shared-voices", params=params, headers={"xi-api-key": _eleven_key()})
+    if r.status_code >= 300:
+        raise _eleven_fail(r, "поиск голосов")
+    data = r.json()
+    items = []
+    for v in data.get("voices", []):
+        if not v.get("voice_id") or not v.get("public_owner_id"):
+            continue
+        items.append({"voice_id": v["voice_id"], "owner": v["public_owner_id"], "name": str(v.get("name") or "").strip(),
+                      "description": str(v.get("description") or "").strip()[:300], "gender": v.get("gender") or "",
+                      "age": v.get("age") or "", "accent": v.get("accent") or "", "use_case": v.get("use_case") or "",
+                      "descriptive": v.get("descriptive") or "", "preview_url": v.get("preview_url") or "",
+                      "users": v.get("cloned_by_count") or 0})
+    return {"items": items, "more": bool(data.get("has_more"))}
+
+
+async def add_library_voice(owner: str, voice_id: str, name: str) -> str:
+    """Голос из библиотеки в «My Voices» аккаунта (без этого синтез им не работает). Возвращает voice_id в аккаунте."""
+    if not re.fullmatch(r"[A-Za-z0-9]{6,80}", owner or "") or not re.fullmatch(r"[A-Za-z0-9]{10,40}", voice_id or ""):
+        raise ElevenError("неверный голос")
+    name = (name or "Голос").strip()[:60]
+    r = await _client().post(f"{ELEVEN_API}/voices/add/{owner}/{voice_id}", json={"new_name": name},
+                             headers={"xi-api-key": _eleven_key()})
+    if r.status_code >= 300:
+        raise _eleven_fail(r, "добавление голоса")
+    new_id = r.json().get("voice_id") or voice_id
+    await load_eleven_voices()
+    return new_id
+
+
+async def clone_voice(name: str, files: list[tuple[str, bytes]], description: str = "") -> str:
+    """Мгновенный клон голоса (Instant Voice Cloning) по записям одного человека. Возвращает voice_id."""
+    if not files:
+        raise ElevenError("нет записей для клона")
+    data = {"name": (name or "Клон").strip()[:60], "remove_background_noise": "true"}
+    if description:
+        data["description"] = description[:300]
+    upload = [("files", (fname, content, "application/octet-stream")) for fname, content in files]
+    r = await _client().post(ELEVEN_API + "/voices/add", data=data, files=upload, headers={"xi-api-key": _eleven_key()},
+                             timeout=120.0)
+    if r.status_code >= 300:
+        raise _eleven_fail(r, "клон голоса")
+    await load_eleven_voices()
+    return r.json()["voice_id"]
+
+
+PREVIEW_HOSTS = ("https://storage.googleapis.com/", "https://cdn.elevenlabs.io/")
+
+
+async def library_preview(url: str) -> tuple[bytes, str]:
+    """Образец голоса из библиотеки: браузер CRM не может грузить чужие адреса, отдаём через сервер."""
+    if not url.startswith(PREVIEW_HOSTS):
+        raise ElevenError("неверный адрес образца")
+    r = await _client().get(url)
+    if r.status_code >= 300:
+        raise ElevenError(f"образец не скачался: {r.status_code}")
+    return r.content[:5_000_000], r.headers.get("content-type", "audio/mpeg")
 
 
 def voices() -> dict[str, list[str]]:
@@ -307,7 +401,13 @@ settings_override: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
 SETTING_KEYS = {"voice_id": str, "model": str, "stability": float, "similarity": float, "style": float,
                 "speed": float, "speaker_boost": bool, "calm": bool, "tail_ms": int, "filler_after_ms": int,
                 "fillers": bool, "casual": float, "pause_ms": int, "fewer_commas": bool,
-                "inner_pause_ms": int, "whole_reply": bool}
+                "inner_pause_ms": int, "whole_reply": bool, "bg_noise": float, "tempo_vary": float,
+                "one_breath": bool, "backchannel": bool, "goodbye_wait": bool, "pronounce": str, "preset": str}
+
+
+# Яндекс присылает промежуточный текст раз в 0,25–0,4 с, пока клиент говорит. При 300 мс реплика закрывалась
+# между двумя кусками одной фразы, и робот отвечал на обрывки («пожалуйста», «я передам»; звонок 21.10 14:42)
+TAIL_MIN_MS = 600
 
 
 def clean_settings(data: dict) -> dict:
@@ -323,13 +423,19 @@ def clean_settings(data: dict) -> dict:
             continue
         out[key] = value
     for key, low, high in (("casual", 0, 1), ("stability", 0, 1), ("similarity", 0, 1), ("style", 0, 1), ("speed", 0.7, 1.2),
-                           ("tail_ms", 300, 2000), ("filler_after_ms", 100, 3000), ("pause_ms", 0, 600), ("inner_pause_ms", 40, 600)):
+                           ("tail_ms", TAIL_MIN_MS, 2000), ("filler_after_ms", 100, 3000), ("pause_ms", 0, 600), ("inner_pause_ms", 40, 600),
+                           ("bg_noise", 0, 1), ("tempo_vary", 0, 0.3)):
         if key in out:
             out[key] = min(max(out[key], low), high)
+    if "pronounce" in out:
+        out["pronounce"] = out["pronounce"][:4000]
     if "voice_id" in out and not re.fullmatch(r"[A-Za-z0-9]{10,40}", out["voice_id"]):
         del out["voice_id"]
     if "model" in out and not re.fullmatch(r"eleven_[a-z0-9_]{2,40}", out["model"]):
         del out["model"]
+    from voice.presets import PRESETS
+    if "preset" in out and out["preset"] not in PRESETS:
+        del out["preset"]
     return out
 
 
@@ -366,8 +472,10 @@ def save_settings(data: dict) -> dict:
 
 
 def eleven_params() -> tuple[str, dict]:
-    """Модель и ползунки ElevenLabs с учётом страницы настроек."""
-    return setting("model", ELEVEN_DIRECT_MODEL), {
+    """Модель и ползунки ElevenLabs с учётом страницы настроек. Модель задаёт выбранный набор, если он есть."""
+    from voice import presets
+    tts = presets.tts_model() or ""
+    return tts if tts.startswith("eleven_") else setting("model", ELEVEN_DIRECT_MODEL), {
         "stability": setting("stability", ELEVEN_SETTINGS["stability"]),
         "similarity_boost": setting("similarity", ELEVEN_SETTINGS["similarity_boost"]),
         "style": setting("style", ELEVEN_SETTINGS["style"]),
@@ -375,12 +483,19 @@ def eleven_params() -> tuple[str, dict]:
     }
 
 
-def effective_voice(voice: Voice) -> Voice:
-    """Голос ElevenLabs и темп со страницы настроек. Голоса Яндекса (автотест) не трогаем."""
+YANDEX_PRESET_VOICE = os.getenv("VOICE_YANDEX_VOICE", "dasha")
+YANDEX_PRESET_ROLE = os.getenv("VOICE_YANDEX_ROLE", "friendly")
+
+
+def effective_voice(voice: Voice, text: str = "") -> Voice:
+    """Голос ElevenLabs и темп со страницы настроек, темп с поправкой на фразу. Голоса Яндекса (автотест) не трогаем."""
     if not voice.name.startswith("11:"):
         return voice
+    from voice import presets
+    if presets.tts_model() == "yandex":  # набор «Эконом»: голос Яндекса вместо ElevenLabs
+        return Voice(YANDEX_PRESET_VOICE, YANDEX_PRESET_ROLE, phrase_speed(text, setting("speed", voice.speed)))
     voice_id = setting("voice_id", "")
-    return Voice(f"11:{voice_id}" if voice_id else voice.name, voice.role, setting("speed", voice.speed))
+    return Voice(f"11:{voice_id}" if voice_id else voice.name, voice.role, phrase_speed(text, setting("speed", voice.speed)))
 
 
 async def _eleven_direct_tts(text: str, voice: Voice, on_pcm=None) -> bytes:
@@ -455,7 +570,7 @@ _REDUCTIONS = [
     (r"\b([Нн])ичего страшного\b", r"\1ичё страшного"),
     (r"\bсейчас\b", "щас"),
 ]
-_HESITATIONS = ["Ну, ", "Так, ", "Так, вот, ", "Ну вот, "]
+_HESITATIONS = ["Ну, "]  # 23.10: «Так, …» в начале фраз (и даже «Так, алло…») Григорий назвал сырым
 
 
 def casual_text(text: str) -> str:
@@ -469,20 +584,52 @@ def casual_text(text: str) -> str:
         if rng.random() < level:
             text = re.sub(pattern, repl, text, count=1)
     words = text.split()
-    if len(words) < 6 or "голосовой помощник" in text or rng.random() > level * 0.5:  # запинка не в каждой фразе и не в коротких
+    if len(words) < 6 or "голосовой помощник" in text or re.match(r"(Алло|Здравствуйте|Добрый)", text) \
+            or rng.random() > level * 0.5:  # запинка не в каждой фразе, не в коротких и не в приветствии
         return text
-    # повтор слова («подскажите, подскажите…») на звонке звучал как сбой: оставляем только «ну» и «э-э»
+    # повтор слова («поняла… поняла, специалист…») на звонке звучал как заикание: только «ну», «так» и «э-э»
     kind = rng.choice(["prefix", "prefix", "uh"])
     if kind == "prefix" and not re.match(r"(Ну|Так|Угу|Ага)\b", text):
         return rng.choice(_HESITATIONS) + text[0].lower() + text[1:]
     if kind == "uh" and ", " in text:
         head, tail = text.split(", ", 1)
         return f"{head}, э-э, {tail}"
-    # повтор слова, как будто подбирает слово: «в каком… в каком городе»
-    for i in range(1, len(words) - 2):
-        if len(words[i]) >= 4 and words[i].isalpha():
-            return " ".join(words[:i] + [words[i - 1] + " " + words[i] + "…"] + words[i - 1:])
     return text
+
+
+# «Скажите, пожалуйста, …?» три раза за минуту выдаёт робота: живой менеджер спрашивает сразу
+_ASK_LEAD = re.compile(r"(^|[.?!…]\s+)(?:[Пп]од)?[Сс]кажите(?:,? пожалуйста)?,\s+([^.?!…]*\?)")
+
+
+def plain_questions(text: str) -> str:
+    return _ASK_LEAD.sub(lambda m: m.group(1) + m.group(2)[:1].upper() + m.group(2)[1:], text)
+
+
+# Темп. Ольга заученное проговаривает быстро, а главный вопрос задаёт медленнее; робот всё читал одним темпом.
+# tempo_vary 0.1: вопрос на 10 % медленнее темпа со страницы, длинное утверждение на 5 % быстрее (не выше 1,2).
+TEMPO_VARY = float(os.getenv("VOICE_TEMPO_VARY", "0.1"))
+
+
+def phrase_speed(text: str, base: float) -> float:
+    vary = setting("tempo_vary", TEMPO_VARY)
+    if vary <= 0 or not text.strip():
+        return base
+    if text.rstrip(" .…").endswith("?"):
+        return round(max(base * (1 - vary), 0.7), 2)
+    if len(text.split()) >= 5:
+        return round(min(base * (1 + vary / 2), 1.2), 2)
+    return base
+
+
+def split_for_tempo(text: str) -> list[str]:
+    """Реплика целиком, но вопрос в конце отдельным куском: его синтезатор читает медленнее."""
+    if setting("tempo_vary", TEMPO_VARY) <= 0 or not text.rstrip().endswith("?"):
+        return [text]
+    parts = re.split(r"(?<=[.!…])\s+(?=[А-ЯЁA-Z])", text.strip())
+    head = " ".join(parts[:-1])
+    if len(parts) < 2 or len(head.split()) < 4:
+        return [text]
+    return [head, parts[-1]]
 
 
 # Паузы. Ответ озвучивается по предложениям, и у каждого куска синтезатор оставляет тишину в начале и в конце:
@@ -566,7 +713,19 @@ def shorten_pauses(pcm: bytes, rate: int, max_ms: int) -> bytes:
 _INTRO_COMMA = re.compile(r"\b(Хорошо|Понятно|Поняла|Понял|Ага|Угу|Ну|Так|Подскажите|Скажите|Отлично|Да|Вот)(,)\s", re.IGNORECASE)
 
 
+# Одно дыхание: на каждой запятой синтезатор делал одинаковую паузу и подъём тона, фраза звучала как стих.
+# Ольга говорит фразу слитно, поэтому внутри предложения убираем запятые, двоеточия и тире.
+_INNER_MARKS = re.compile(r"\s*(?:,|:|;|\s[—–-])\s+")
+
+
+def one_breath(text: str) -> str:
+    if not setting("one_breath", True):
+        return text
+    return _INNER_MARKS.sub(" ", text)
+
+
 def fewer_pauses(text: str) -> str:
+    text = one_breath(text)
     if not setting("fewer_commas", True):
         return text
     text = _INTRO_COMMA.sub(lambda m: m.group(1) + " ", text)
@@ -580,8 +739,49 @@ async def synthesize_pcm(text: str, voice: Voice) -> bytes:
     return shape_pauses(pcm, TTS_RATE, setting("inner_pause_ms", INNER_PAUSE_MS), setting("pause_ms", PAUSE_MS))
 
 
+# Произношение. Синтез ставит ударения сам и ошибается: «зАмеры», «плёнка пэвэхаа» (звонок 21.10).
+# Строка словаря: «слово = как читать», «+» после ударной гласной ставит ударение. «замер* = заме+р» —
+# все формы слова: окончание до трёх букв сохраняется. Словарь со страницы «Голос и тест» дополняет и правит этот.
+PRONOUNCE = """замер* = заме+р
+ПВХ = пэ-вэ-ха+
+эмал* = эма+л
+позвонит = позвони+т
+перезвонит = перезвони+т
+позвоним = позвони+м
+перезвоним = перезвони+м
+звонит = звони+т"""
+STRESS = "\u0301"  # знак ударения после гласной: так ударение понимает ElevenLabs
+
+
+def pronounce_rules(text: str) -> list[tuple[re.Pattern, str]]:
+    rules: dict[str, tuple[re.Pattern, str]] = {}
+    for line in text.splitlines():
+        word, sep, say = line.partition("=")
+        word, say = word.strip(), say.strip()
+        if not sep or not say or not re.fullmatch(r"[\wё-]+\*?", word):
+            continue
+        stem = word.rstrip("*")
+        tail = r"([а-яё]{0,3})" if word.endswith("*") else "()"  # окончание, но не другое слово: «замерзать»
+        pattern = re.compile(r"(?<![\wё])" + re.escape(stem) + tail + r"(?![\wё])", re.IGNORECASE)
+        rules[stem.lower()] = (pattern, say.replace("+", STRESS))
+    return list(rules.values())
+
+
+def pronounce(text: str) -> str:
+    def put(say: str):
+        def repl(m: re.Match) -> str:
+            word = say + m.group(1)
+            first = m.group(0)[:1]
+            title = first.isupper() and not m.group(0).isupper()  # «Замеры» с большой, но не «ПВХ»
+            return word[:1].upper() + word[1:] if title else word
+        return repl
+    for pattern, say in pronounce_rules(PRONOUNCE + "\n" + setting("pronounce", "")):
+        text = pattern.sub(put(say), text)
+    return text
+
+
 def spoken_text(text: str) -> str:
-    return fewer_pauses(casual_text(calm_text(text)))
+    return pronounce(fewer_pauses(casual_text(plain_questions(calm_text(text)))))
 
 
 # Потоковый синтез ElevenLabs: первые звуки фразы приходят через 0,3–0,6 с вместо 1,3–2,2 с за всю фразу
@@ -591,11 +791,11 @@ ELEVEN_STREAM = os.getenv("VOICE_ELEVEN_STREAM", "1") != "0"
 async def stream_pcm(text: str, voice: Voice, on_audio) -> bytes:
     """Как synthesize_pcm, но отдаёт звук в on_audio кусками по мере синтеза. Возвращает весь звук."""
     text = spoken_text(text)
-    voice = effective_voice(voice)
+    asked, voice = voice, effective_voice(voice, text)
     shaper = PauseShaper(TTS_RATE, setting("inner_pause_ms", INNER_PAUSE_MS), setting("pause_ms", PAUSE_MS))
     path = _cache_path(text, voice)
     if path is not None and path.exists() or not (ELEVEN_STREAM and voice.name.startswith("11:")):
-        pcm = await _synthesize_cached(text, voice)
+        pcm = await _synthesize_cached(text, asked)
         out = shape_pauses(pcm, TTS_RATE, setting("inner_pause_ms", INNER_PAUSE_MS), setting("pause_ms", PAUSE_MS))
         await on_audio(out)
         return out
@@ -626,7 +826,7 @@ async def stream_pcm(text: str, voice: Voice, on_audio) -> bytes:
 
 
 async def _synthesize_cached(text: str, voice: Voice) -> bytes:
-    voice = effective_voice(voice)
+    voice = effective_voice(voice, text)
     path = _cache_path(text, voice)
     if path is not None and path.exists():
         return path.read_bytes()
@@ -677,6 +877,9 @@ async def _synthesize_one(text: str, voice: Voice) -> bytes:
         return await _eleven(text, voice)
     if voice.name.startswith("11:"):
         return await _eleven_direct_tts(text, voice)
+    usage = tts_usage.get()
+    if usage is not None:  # синтез Яндекса тоже платный: символы считаются, как у ElevenLabs
+        usage["chars"] = usage.get("chars", 0) + len(text)
     if os.getenv("VOICE_TTS_API", "v3") == "v3":
         try:
             return await _yandex_v3(text, voice)

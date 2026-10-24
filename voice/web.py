@@ -89,8 +89,15 @@ def _current_voice() -> dict:
         "casual": speech.setting("casual", speech.CASUAL),
         "pause_ms": speech.setting("pause_ms", speech.PAUSE_MS),
         "fewer_commas": speech.setting("fewer_commas", True),
+        "one_breath": speech.setting("one_breath", True),
+        "backchannel": speech.setting("backchannel", True),
+        "goodbye_wait": speech.setting("goodbye_wait", True),
         "inner_pause_ms": speech.setting("inner_pause_ms", speech.INNER_PAUSE_MS),
         "whole_reply": speech.setting("whole_reply", WHOLE_REPLY),
+        "bg_noise": speech.setting("bg_noise", float(os.getenv("VOICE_BG_NOISE", "0.3"))),
+        "tempo_vary": speech.setting("tempo_vary", speech.TEMPO_VARY),
+        "pronounce": speech.setting("pronounce", ""),
+        "pronounce_default": speech.PRONOUNCE,
     }
 
 

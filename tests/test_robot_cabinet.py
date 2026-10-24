@@ -9,7 +9,7 @@ import os
 import tempfile
 import unittest
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -83,8 +83,12 @@ class CabinetTests(DBCase):
         self.log = self.tmp / 'calls.jsonl'
         self.dialed, self.busy = [], {'active': 0, 'pending': 0}
 
+        self.dial_fail = None  # (статус, ошибка): робот отказал в звонке
+
         async def fake_dial(request):
             self.dialed.append(await request.json())
+            if self.dial_fail:
+                return aweb.json_response({'error': self.dial_fail[1]}, status=self.dial_fail[0])
             return aweb.json_response({'id': f'call-{len(self.dialed)}'})
 
         async def fake_status(request):
@@ -188,15 +192,80 @@ class CabinetTests(DBCase):
         r = await self.http.get('/api/robot/cab/recording/a2')
         self.assertEqual(r.status, 200)
 
-        # аналитика и цены: директор видит себестоимость
-        r = await self.http.post('/api/robot/cab/options', json={'prices': {'mango_min': '1,5', 'eleven_1k_chars': 10, 'llm_1k_tokens': 1}},
-                                 headers=H)
-        self.assertEqual((await r.json())['prices']['multiplier'], 3.0)
+        # аналитика и цены: себестоимость считает CRM, директор задаёт только цену минуты каждому клиенту
+        await robot_store.set_option(self.pool, 'prices_auto', {'mango_min': {'value': 1.5}, 'eleven_1k_chars': {'value': 10},
+                                                                'llm_1k_tokens': {'value': 1}})
+        r = await self.http.post('/api/robot/cab/options', json={'clients': ['Кухни'], 'prices': {
+            'mango_min': 99, 'client_min': {'Кухни': '12,5', 'Окна': ''}}}, headers=H)
+        got = await r.json()
+        self.assertEqual(got['prices'], {'mango_min': 1.5, 'eleven_1k_chars': 10.0, 'llm_1k_tokens': 1.0, 'tts_1k_chars': 10.0,
+                                         'client_min': {'Кухни': 12.5}})
+        for bad in (-1, 'дорого', 5000):
+            r = await self.http.post('/api/robot/cab/options', json={'prices': {'client_min': {'Кухни': bad}}}, headers=H)
+            self.assertEqual(r.status, 400)
+        st = await (await self.http.get('/api/robot/cab')).json()
+        self.assertEqual(st['options']['auto']['mango_min']['value'], 1.5)
+        econ = st['options']['econ']
+        # 2 минуты разговора, 2000 символов и 3000 токенов: 1000 симв. и 1500 ток. на минуту;
+        # распознавание: два звонка по 60 с = 8 кусков по 15 с × 0,1626 ₽ на 2 минуты
+        self.assertEqual((econ['cost_min'], econ['parts'], econ['chars_min'], econ['tokens_min']),
+                         (13.65, {'mango': 1.5, 'synth': 10.0, 'llm': 1.5, 'asr': 0.65}, 1000, 1500))
+        # наборы: модель везде Pro 0,8; синтез v4 по 10, v4 Turbo вдвое дешевле, Яндекс 0,1626 ₽ за фразу ~60 симв.
+        self.assertEqual(econ['presets'], {'quality': 13.35, 'balance': 8.35, 'economy': 6.06})
+        self.assertEqual(econ['typical'], {'calls': 3, 'reach': 67, 'minutes_per_talk': 1.0})
+        self.assertEqual(econ['clients'], [{'name': 'Кухни', 'price': 12.5, 'calls': 0, 'minutes': 0.0, 'cost': 0, 'charge': 0.0, 'profit': 0.0}])
         a = await (await self.http.get('/api/robot/cab/analytics')).json()
         self.assertEqual((a['total'], a['reached'], a['leads'], a['dial_rate'], a['conversion']), (3, 2, 1, 66.7, 33.3))
-        self.assertEqual(a['cost'], 26.0)  # 2 мин × 1,5 + 2000 симв. × 10/1000 + 3000 ток. × 1/1000
-        self.assertEqual(a['lead_cost'], 26.0)
+        self.assertEqual(a['cost'], 27.3)  # 2 мин × 1,5 + 2000 симв. × 10/1000 + 3000 ток. × 1/1000 + 8 × 0,1626 распознавание
+        self.assertEqual(a['lead_cost'], 27.3)
         self.assertEqual({e['key']: e['count'] for e in a['ends']}['do_not_call'], 1)
+
+    async def test_dial_failures_keep_or_close_numbers(self):
+        """Сбой Asterisk номер не теряет; плохой номер закрывается; потерянный итог последней попытки не крутит номер по кругу."""
+        await self.as_director()
+        await self.http.post('/api/robot/cab/contacts/upload', json={'name': 'b.csv', 'text': '89990000021\n89990000022\n'}, headers=H)
+        r = await self.http.post('/api/robot/cab/campaigns', json={'name': 'Сбои', 'operator': 'kitchen', 'days': [1, 2, 3, 4, 5, 6, 7],
+                                                                     'start_time': '00:00', 'end_time': '23:59', 'attempts': 1,
+                                                                     'contacts': 'all'}, headers=H)
+        camp = await r.json()
+        await self.http.post(f"/api/robot/cab/campaigns/{camp['id']}/start", json={}, headers=H)
+        targets = lambda: self.pool.fetch('SELECT phone, done, outcome, attempts FROM robot_targets ORDER BY id')  # noqa: E731
+        now = datetime.now(timezone.utc)
+        for status, error in ((503, 'All connection attempts failed'), (400, 'Asterisk ARI 500: internal')):
+            self.dial_fail = (status, error)
+            self.assertIsNone(await robot_runner.tick(self.pool, now))
+            self.assertEqual([tuple(r) for r in await targets()][0], ('79990000021', False, None, 0))
+            now += timedelta(minutes=robot_runner.DOWN_MIN)
+        self.dial_fail = (400, 'номер слишком короткий')
+        self.assertIsNone(await robot_runner.tick(self.pool, now))
+        self.assertEqual([tuple(r) for r in await targets()][0], ('79990000021', True, 'error', 0))
+        self.dial_fail = None
+        self.assertEqual((await robot_runner.tick(self.pool, now))['phone'], '79990000022')
+        later = now + timedelta(minutes=robot_runner.HOLD_MIN + 1)  # итог звонка потерялся, а попытка была последней
+        self.assertIsNone(await robot_runner.tick(self.pool, later))
+        self.assertEqual([tuple(r) for r in await targets()][1], ('79990000022', True, 'error', 1))
+        self.assertEqual(await self.pool.fetchval('SELECT status FROM robot_campaigns WHERE id=$1', camp['id']), 'done')
+
+    async def test_minute_cost_after_quick_replies(self):
+        await robot_store.set_option(self.pool, 'prices_auto', {'mango_min': {'value': 1.5}, 'eleven_1k_chars': {'value': 10},
+                                                                'llm_1k_tokens': {'value': 1}})
+        now = datetime.now(timezone.utc)
+        change = now - timedelta(days=2)
+
+        async def add(call_id, at, seconds, tokens, chars):
+            await self.pool.execute('INSERT INTO robot_calls(call_id, at, outcome, duration_s, llm_tokens, tts_chars) '
+                                    "VALUES ($1, $2, 'callback', $3, $4, $5)", call_id, at, seconds, tokens, chars)
+
+        await add('old', change - timedelta(days=1), 120, 3000, 2000)  # до заготовок: токенов втрое больше
+        await add('new', now - timedelta(hours=1), 60, 500, 1000)
+        with patch.object(robot_store, 'QUICK_SINCE', change):
+            econ = await robot_store.economics(self.pool)
+            # новых звонков меньше 10 минут: старые токены × 0,34 + новые
+            self.assertEqual((econ['estimate'], econ['chars_min'], econ['tokens_min']), (True, 1000, 507))
+            await add('new2', now - timedelta(minutes=30), 600, 1000, 6000)
+            econ = await robot_store.economics(self.pool)
+            # 11 минут новых звонков: считаем только по ним
+            self.assertEqual((econ['estimate'], econ['chars_min'], econ['tokens_min']), (False, 636, 136))
 
     async def test_client_paid_option(self):
         token = await auth.invite_create(self.pool, 1, 'client', client_key='Кухни')
@@ -205,7 +274,8 @@ class CabinetTests(DBCase):
         self.assertFalse(st['enabled'])
         self.assertEqual((await self.http.get('/api/robot/cab/calls')).status, 403)
         await robot_store.set_option(self.pool, 'clients', ['Кухни'])
-        await robot_store.set_option(self.pool, 'prices', {'mango_min': 1, 'multiplier': 3})
+        await robot_store.set_option(self.pool, 'prices_auto', {'mango_min': {'value': 1}})
+        await robot_store.set_option(self.pool, 'prices', {'client_min': {'Кухни': 3}})
         self.call_line(call_id='c1', phone='79990000001', outcome='interested', duration_s=60, owner='Кухни')
         self.call_line(call_id='d1', phone='79990000002', outcome='interested', duration_s=60)
         await robot_runner.ingest(self.pool)
@@ -213,7 +283,10 @@ class CabinetTests(DBCase):
         self.assertEqual((st['enabled'], st['owner'], st['owners']), (True, 'Кухни', []))
         self.assertNotIn('kitchen', [o['id'] for o in st['operators']])  # встроенные операторы — нашего кабинета
         calls = (await (await self.http.get('/api/robot/cab/calls')).json())['items']
-        self.assertEqual([(c['id'], c['cost']) for c in calls], [('c1', 3.0)])  # только свои, по цене ×3
+        self.assertEqual([(c['id'], c['cost']) for c in calls], [('c1', 3.0)])  # только свои, минута по 3 ₽
+        a = await (await self.http.get('/api/robot/cab/analytics')).json()
+        self.assertEqual((a['cost'], a['lead_cost'], a['priced']), (3.0, 3.0, True))
+        self.assertNotIn('client_cost', a)
         tabs = await (await self.http.get('/api/robot/cab/contacts/tabs')).json()
         self.assertEqual(tabs['tabs'], ['Кухни'])
         r = await self.http.post('/api/robot/cab/contacts/sheet', json={'tab': 'Кухни'}, headers=H)

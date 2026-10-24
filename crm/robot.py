@@ -29,6 +29,7 @@ DIAL_GAP_S = 20  # не чаще одного звонка в 20 секунд: �
 OUTCOMES = {'interested': 'Заинтересованный', 'callback': 'Перезвон', 'not_relevant': 'Неактуально', 'ndz': 'Не взял трубку',
             'do_not_call': 'Просил не звонить'}
 _last_dial = {'at': 0.0}
+_tasks: set = set()  # фоновые пересчёты цен: ссылка, чтобы задачу не собрал сборщик мусора
 
 
 def check(who, write: bool = False) -> None:
@@ -69,10 +70,20 @@ def operators() -> list[dict]:
     return out
 
 
-async def overview(who) -> dict:
+def preset_list(costs: dict, v4_price: float) -> list[dict]:
+    """Наборы робота для выбора в CRM: что внутри, цена синтеза, оценка минуты и чем отличаются."""
+    from voice import presets
+    return [{'key': key, 'name': ps['name'], 'llm': presets.LLM[ps['llm']]['name'], 'tts': presets.TTS[ps['tts']]['name'],
+             'tts_price': round(presets.tts_rub_1k(ps['tts'], v4_price), 2) if v4_price or ps['tts'] == 'yandex' else None,
+             'cost_min': costs.get(key), 'quality': ps['quality']}
+            for key, ps in presets.PRESETS.items()]
+
+
+async def overview(who, pool=None) -> dict:
     check(who)
-    from voice import speech
+    from voice import presets, speech
     from voice.web import _current_voice
+    from . import robot_store
     if os.getenv('ELEVENLABS_API_KEY') and not speech._eleven_direct:
         try:
             await speech.load_eleven_voices()
@@ -80,17 +91,27 @@ async def overview(who) -> dict:
             pass
     return {'up': await robot_up(), 'operators': operators(), 'test_phones': test_phones(),
             'settings': _current_voice(), 'voices': speech._eleven_direct,
-            'can_save': bool(speech.SETTINGS_FILE) and DATA.is_dir(), 'readonly': who.test}
+            'can_save': bool(speech.SETTINGS_FILE) and DATA.is_dir(), 'readonly': who.test,
+            'presets': preset_list((await robot_store.economics(pool))['presets'] if pool is not None else {},
+                                   (await robot_store.prices(pool))['eleven_1k_chars'] if pool is not None else 0),
+            'preset': presets.current() or presets.DEFAULT}
 
 
-async def save_settings(who, data) -> dict:
+async def save_settings(who, data, pool=None) -> dict:
     check(who, write=True)
     from voice import speech
     if not isinstance(data, dict):
         raise ValueError('Неверные настройки.')
     if not DATA.is_dir():
         raise ValueError('Робот не установлен на этом сервере.')
-    return {'saved': speech.save_settings(data)}
+    before = speech.live_settings().get('preset')
+    saved = speech.save_settings(data)
+    if pool is not None and saved.get('preset') != before:  # другой набор: цены модели и синтеза пересчитать сразу
+        from . import robot_prices
+        task = asyncio.get_running_loop().create_task(robot_prices.refresh(pool))
+        _tasks.add(task)
+        task.add_done_callback(_tasks.discard)
+    return {'saved': saved}
 
 
 async def preview(who, data) -> tuple[bytes, int]:
@@ -108,6 +129,53 @@ async def preview(who, data) -> tuple[bytes, int]:
     except Exception as exc:
         raise ValueError(f'Синтез не получился: {str(exc)[:200]}') from exc
     return pcm, speech.TTS_RATE
+
+
+async def voices_search(who, query: str, gender: str, use_case: str, page) -> dict:
+    """Поиск русских голосов в библиотеке ElevenLabs."""
+    check(who)
+    from voice import speech
+    try:
+        return await speech.search_library(query or '', gender or '', use_case or '', int(page or 0))
+    except (speech.ElevenError, httpx.HTTPError) as exc:
+        raise ValueError(f'Поиск голосов не получился: {exc}') from exc
+
+
+async def voices_add(who, data) -> dict:
+    """Голос из библиотеки в аккаунт ElevenLabs; после этого его можно прослушать и сохранить для звонков."""
+    check(who, write=True)
+    from voice import speech
+    try:
+        voice_id = await speech.add_library_voice(str(data.get('owner') or ''), str(data.get('voice_id') or ''),
+                                                  str(data.get('name') or ''))
+    except (speech.ElevenError, httpx.HTTPError) as exc:
+        raise ValueError(f'Голос не добавился: {exc}') from exc
+    return {'voice_id': voice_id, 'voices': speech._eleven_direct}
+
+
+async def voices_preview(who, url: str) -> tuple[bytes, str]:
+    check(who)
+    from voice import speech
+    try:
+        return await speech.library_preview(str(url or ''))
+    except (speech.ElevenError, httpx.HTTPError) as exc:
+        raise ValueError(str(exc)) from exc
+
+
+CLONE_MAX_BYTES = 20 * 1024 * 1024
+
+
+async def voices_clone(who, name: str, files: list[tuple[str, bytes]]) -> dict:
+    """Клон голоса по записям одного человека (только с его согласия)."""
+    check(who, write=True)
+    from voice import speech
+    if not files:
+        raise ValueError('Приложите записи голоса.')
+    try:
+        voice_id = await speech.clone_voice(name, files, 'Клон из CRM')
+    except (speech.ElevenError, httpx.HTTPError) as exc:
+        raise ValueError(f'Клон не получился: {exc}') from exc
+    return {'voice_id': voice_id, 'voices': speech._eleven_direct}
 
 
 async def call(who, phone, operator) -> dict:

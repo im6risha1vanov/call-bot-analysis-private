@@ -22,16 +22,13 @@ from aiohttp import web  # noqa: E402
 
 import mango_client  # noqa: E402
 from tools import Forbidden, is_privileged  # noqa: E402
-from . import ask as asking, auth, cabinet, gsheets, journal, recording, reviews, staff, store, training  # noqa: E402
-from . import prompts as prompt_mode, robot, robot_api, robot_runner  # noqa: E402
+from . import accounts, ask as asking, auth, cabinet, contracts, deals, journal, overview, people, recording, reviews, sources, staff, store, training  # noqa: E402
+from . import prompts as prompt_mode, robot, robot_api, robot_prices, robot_runner, robot_store  # noqa: E402
 from review import store as review_store  # noqa: E402
 from .dial import dial  # noqa: E402
 
 log = logging.getLogger('crm')
 STATIC = Path(__file__).resolve().parent / 'static'
-DIRECTOR = Path(__file__).resolve().parent / 'director'
-# Снимок разобранных звонков до 07.10 с номерами клиентов: лежит только на сервере, не в git.
-DIRECTOR_DATA = Path(os.getenv('CRM_DIRECTOR_DATA', str(ROOT / 'crm_private' / 'team-data.js')))
 COOKIE = 'crm_session'
 TEST_COOKIE = 'crm_test'
 POOL = web.AppKey('pool', asyncpg.Pool)
@@ -43,14 +40,10 @@ HEADERS = {
     'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'no-referrer',
 }
-# Страница директора перенесена из claude.ai как есть: встроенные скрипты и шрифты Google.
-DIRECTOR_CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' "
-                "https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; "
-                "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 TEST_READONLY = 'Тестовый вход только для просмотра: звонки и отметки работают во входе самого менеджера.'
-VIEW_ONLY = 'Это вход только для просмотра. Менять, звонить и спрашивать можно по личной ссылке.'
+VIEW_ONLY = 'Это вход только для просмотра. Менять, звонить и спрашивать можно под своим логином.'
 # Запросы, которые ничего не меняют и разрешены входу для просмотра; остальные POST ему закрыты.
-VIEW_ONLY_POSTS = {'/api/logout', '/api/test/login', '/api/gs'}
+VIEW_ONLY_POSTS = {'/api/logout', '/api/test/login', '/api/login'}
 
 
 def fail(status: int, text: str) -> web.Response:
@@ -83,17 +76,17 @@ async def guard(request: web.Request, handler):
         log.exception('ошибка CRM: %s %s', request.method, request.path)
         response = fail(500, 'Что-то пошло не так. Попробуйте ещё раз.')
     response.headers.update(HEADERS)
-    if request.path.startswith('/director'):
-        response.headers['Content-Security-Policy'] = DIRECTOR_CSP
     if request.path.startswith('/api/'):
         response.headers['Cache-Control'] = 'no-store'
+    else:  # страница и её файлы: браузер сверяется с сервером, чтобы после выкатки не смешать старые и новые скрипты
+        response.headers.setdefault('Cache-Control', 'no-cache')
     return response
 
 
 async def viewer(request: web.Request) -> auth.Viewer:
     who = await auth.viewer_for(request.app[POOL], request.cookies.get(COOKIE))
     if who is None:
-        raise web.HTTPUnauthorized(reason='Откройте CRM по своей ссылке.')
+        raise web.HTTPUnauthorized(reason='Войдите в CRM по логину и паролю.')
     return who
 
 
@@ -144,6 +137,13 @@ def parse_time(value) -> time | None:
         raise ValueError('Неверное время.')
 
 
+def days_arg(request, default: int = 7) -> int:
+    value = request.query.get('days') or str(default)
+    if not value.isdigit():
+        raise ValueError('Неверный период.')
+    return min(max(int(value), 1), 31)
+
+
 def int_id(value) -> int:
     text = str(value or '')
     if not text.isdigit() or len(text) > 18:
@@ -161,8 +161,6 @@ async def index(request):
     who = await auth.viewer_for(request.app[POOL], request.cookies.get(COOKIE))
     if who is None and auth.public_on():
         raise web.HTTPFound('/t/' + auth.PUBLIC_KEY)  # открытый сайт: сразу выбор входа
-    if who is not None and who.role == 'director' and 'work' not in request.query:
-        raise web.HTTPFound('/director')
     return web.FileResponse(STATIC / 'index.html')
 
 
@@ -184,7 +182,7 @@ async def personal_page(request):
             '<h1>Ссылка не действует</h1><p>Её отозвали или в ней ошибка. Попросите у руководителя новую.</p></body>'))
     session, role = got
     await auth.logout(request.app[POOL], request.cookies.get(COOKIE))
-    response = web.HTTPFound('/director' if role == 'director' else '/')
+    response = web.HTTPFound('/')
     response.set_cookie(COOKIE, session, max_age=int(auth.PERSONAL_TTL.total_seconds()), httponly=True,
                         secure=SECURE_COOKIE, samesite='Lax', path='/')
     raise response
@@ -205,22 +203,10 @@ async def logout_page(request):
     raise response
 
 
-async def director_page(request):
-    await director(request)
-    return web.FileResponse(DIRECTOR / 'index.html')
-
-
-async def director_file(request):
-    await director(request)
-    name = request.match_info['name']
-    if name == 'data.js':
-        if DIRECTOR_DATA.is_file():
-            return web.FileResponse(DIRECTOR_DATA, headers={'Content-Type': 'text/javascript; charset=utf-8'})
-        # Без снимка страница работает на живых данных из таблиц, только без истории до 07.10.
-        return web.FileResponse(DIRECTOR / 'empty-data.js', headers={'Content-Type': 'text/javascript; charset=utf-8'})
-    if name not in ('shim.js',):
-        raise web.HTTPNotFound()
-    return web.FileResponse(DIRECTOR / name)
+async def old_director(request):
+    # Отдельной страницы директора больше нет: всё в одной CRM. Старые закладки ведут на главную,
+    # а #раздел из ссылки браузер переносит сам, CRM откроет нужный раздел по старому имени.
+    raise web.HTTPFound('/')
 
 
 # ---- API ----
@@ -237,7 +223,8 @@ async def api_me(request):
     pool = request.app[POOL]
     if who.role == 'client':
         return web.json_response({'name': who.client_key, 'role': 'client', 'test': who.test, 'client': who.client_key,
-                                  'privileged': False, 'can_dial': False, 'team': []})
+                                  'privileged': False, 'can_dial': False, 'team': [],
+                                  'robot': who.client_key in await robot_store.enabled_clients(pool)})
     a = who.actor
     name = await pool.fetchval('SELECT full_name FROM employees WHERE client_id=$1 AND telegram_user_id=$2 LIMIT 1',
                                a.client_id, a.telegram_user_id) if a.telegram_user_id else None
@@ -280,22 +267,10 @@ async def api_test_login(request):
         if client_key not in names:
             raise ValueError('Такого клиента нет.')
     session = await auth.test_login(request.app[POOL], role, data.get('ext'), client_key)
-    response = web.json_response({'ok': True, 'go': '/director' if role == 'director' else '/'})
+    response = web.json_response({'ok': True, 'go': '/'})
     response.set_cookie(COOKIE, session, max_age=int(auth.TEST_TTL.total_seconds()), httponly=True,
                         secure=SECURE_COOKIE, samesite='Lax', path='/')
     return response
-
-
-async def api_gs(request):
-    await director(request)
-    data = await body(request)
-    try:
-        rows = await gsheets.values(str(data.get('spreadsheetId') or ''), str(data.get('range') or ''))
-    except PermissionError as exc:
-        raise Forbidden(str(exc))
-    except LookupError as exc:
-        raise ValueError(str(exc))
-    return web.json_response({'values': rows})
 
 
 def doc_path(value) -> str:
@@ -358,6 +333,14 @@ async def api_cabinet(request):
         raise Forbidden('Кабинет клиента недоступен.')
     try:
         return web.json_response(await cabinet.cabinet(name))
+    except LookupError as exc:
+        raise ValueError(str(exc))
+
+
+async def api_callcenter(request):
+    await director(request)
+    try:
+        return web.json_response(await cabinet.callcenter())
     except LookupError as exc:
         raise ValueError(str(exc))
 
@@ -427,14 +410,42 @@ async def api_access(request):
 
 
 async def api_access_create(request):
+    """Новая учётная запись: логин (или придумаем из имени) и пароль (или придумаем сами)."""
     who = await director(request)
+    pool = request.app[POOL]
     data = await body(request)
     role = str(data.get('role') or '')
     if role == 'client' and str(data.get('client') or '') not in [c['name'] for c in (await cabinet.summary())['clients']]:
         raise ValueError('Такого клиента нет.')
-    token = await auth.invite_create(request.app[POOL], who.actor.client_id, role, data.get('person_ext'), data.get('client'),
-                                     data.get('name'), data.get('tg'))
-    return web.json_response({'link': f'{base_url(request)}/p/{token}'})
+    login = str(data.get('login') or '').strip()
+    if not login:
+        team = {m['ext']: m['name'] for m in await store.team(pool, who.actor.client_id)}
+        heads = {d['tg']: d['name'] for d in await auth.directors(pool, who.actor.client_id)}
+        name = {'manager': team.get(str(data.get('person_ext') or '')), 'client': data.get('client'),
+                'director': heads.get(str(data.get('tg') or '')) or data.get('name')}.get(role)
+        login = await accounts.free_login(pool, accounts.slug(name or '') or role)
+    await auth.account_create(pool, who.actor.client_id, role, login, data.get('person_ext'), data.get('client'),
+                              data.get('name'), data.get('tg'), data.get('password') or None)
+    return web.json_response({'invites': await auth.invites(pool, who.actor.client_id)})
+
+
+async def api_access_account(request):
+    """Директор меняет логин или пароль учётной записи."""
+    who = await director(request)
+    data = await body(request)
+    item = await auth.account_change(request.app[POOL], who.actor.client_id, int_id(request.match_info['id']),
+                                     data.get('login'), data.get('password') or None, bool(data.get('new')))
+    return web.json_response(item)
+
+
+async def api_login(request):
+    data = await body(request)
+    session, role = await auth.password_login(request.app[POOL], data.get('login'), data.get('password'))
+    await auth.logout(request.app[POOL], request.cookies.get(COOKIE))
+    response = web.json_response({'ok': True, 'role': role})
+    response.set_cookie(COOKIE, session, max_age=int(auth.PERSONAL_TTL.total_seconds()), httponly=True,
+                        secure=SECURE_COOKIE, samesite='Lax', path='/')
+    return response
 
 
 async def api_access_revoke(request):
@@ -445,7 +456,141 @@ async def api_access_revoke(request):
 
 async def api_staff(request):
     who = await director(request)
-    return web.json_response(await staff.listing(request.app[POOL], who.actor))
+    pool = request.app[POOL]
+    data = await staff.listing(pool, who.actor)
+    stats = await people.summary(pool, who.actor.client_id)
+    # Вход в CRM: сколько действующих личных ссылок и когда входил последний раз.
+    tg = {p['ext']: p['tg'] for p in await staff._people(pool, who.actor.client_id)}
+    links = await pool.fetch('SELECT extension, telegram_user_id, last_used_at FROM crm_invites WHERE client_id=$1 AND revoked_at IS NULL',
+                             who.actor.client_id)
+    for item in data['items']:
+        item['stats'] = stats.get(item['ext']) if item['role'] == 'manager' else None
+        item['kitchen'] = people.review_kitchen.handles(item['ext'])
+        own = [r for r in links if r['extension'] == item['ext'] or (tg.get(item['ext']) and r['telegram_user_id'] == tg[item['ext']])]
+        used = max((r['last_used_at'] for r in own if r['last_used_at']), default=None)
+        item['crm_links'], item['crm_used'] = len(own), used.isoformat() if used else None
+    return web.json_response(data)
+
+
+async def api_person(request):
+    """Карточка сотрудника. Директор выбирает человека (?person=), менеджер видит только себя."""
+    who = await actor(request)
+    return web.json_response(await people.card(request.app[POOL], who, request.query.get('person')))
+
+
+async def api_deals(request):
+    """Сделки: директор видит всех (?person= — одного менеджера), менеджер только свои."""
+    who = await actor(request)
+    days = request.query.get('days')
+    return web.json_response(await deals.listing(request.app[POOL], who, request.query.get('person') or None,
+                                                 int(days) if days and days.isdigit() else None))
+
+
+async def api_deal(request):
+    who = await actor(request)
+    pool = request.app[POOL]
+    deal = await deals.one(pool, who, request.match_info['phone'])
+    return web.json_response({**deal, 'contracts': await contracts.for_deal(pool, who.client_id, deal['phone'])})
+
+
+async def author_name(pool, who) -> str | None:
+    name = await pool.fetchval('SELECT full_name FROM employees WHERE client_id=$1 AND telegram_user_id=$2 LIMIT 1',
+                               who.client_id, who.telegram_user_id) if who.telegram_user_id else None
+    return name or ('Директор' if who.role == 'owner' else None)
+
+
+async def api_deal_event(request):
+    who = await actor(request, write=True)
+    pool = request.app[POOL]
+    data = await body(request)
+    return web.json_response(await deals.add_event(pool, who, request.match_info['phone'], str(data.get('kind') or ''),
+                                                   data.get('note'), data.get('reason'), data.get('amount'),
+                                                   await author_name(pool, who)))
+
+
+async def api_presentation_link(request):
+    """«Привязать к клиенту»: номер клиента для презентации, которая шла не через Mango."""
+    who = await actor(request, write=True)
+    pool = request.app[POOL]
+    data = await body(request)
+    try:
+        presentation_id = int(request.match_info['id'])
+    except ValueError:
+        raise web.HTTPNotFound()
+    return web.json_response(await deals.link_presentation(pool, who, presentation_id, str(data.get('phone') or ''),
+                                                           await author_name(pool, who)))
+
+
+def peer_id(request) -> int:
+    try:
+        return int(request.match_info['peer'])
+    except ValueError:
+        raise web.HTTPNotFound()
+
+
+async def api_tgchat(request):
+    """Переписка рабочего Telegram с клиентом: для карточки сделки."""
+    who = await actor(request)
+    return web.json_response(await deals.chat_messages(request.app[POOL], who, peer_id(request)))
+
+
+async def api_tgchat_link(request):
+    """«Привязать к клиенту» для переписки Telegram: номер клиента."""
+    who = await actor(request, write=True)
+    pool = request.app[POOL]
+    data = await body(request)
+    return web.json_response(await deals.link_chat(pool, who, peer_id(request), str(data.get('phone') or ''),
+                                                   await author_name(pool, who)))
+
+
+# Генератор договоров (static/contracts/): пути — те, что ждёт страница генератора.
+async def api_contracts_config(request):
+    await actor(request)
+    return web.json_response(contracts.config())
+
+
+async def api_contracts_next(request):
+    who = await actor(request)
+    return web.json_response({'num': await contracts.next_number(request.app[POOL], who.client_id)})
+
+
+async def api_contracts_register(request):
+    who = await actor(request, write=True)
+    pool = request.app[POOL]
+    return web.json_response(await contracts.register(pool, who, await body(request), await author_name(pool, who)))
+
+
+async def api_contracts(request):
+    who = await actor(request)
+    return web.json_response({'items': await contracts.listing(request.app[POOL], who),
+                              'types': contracts.TYPES})
+
+
+async def api_contracts_lookup(request):
+    await actor(request)
+    kind = {'inn': 'party', 'bik': 'bank'}.get(request.match_info['kind'])
+    if not kind:
+        raise web.HTTPNotFound()
+    return web.json_response(await contracts.lookup(kind, request.match_info['value']))
+
+
+async def api_sources(request):
+    """Сохранённые подборки доноров отдела (страница «Источники»)."""
+    return web.json_response({'items': await sources.listing(request.app[POOL], await actor(request))})
+
+
+async def api_source(request):
+    return web.json_response(await sources.one(request.app[POOL], await actor(request), int_id(request.match_info['id'])))
+
+
+async def api_source_save(request):
+    who = await actor(request, write=True)
+    return web.json_response(await sources.save(request.app[POOL], who, await body(request)))
+
+
+async def api_source_delete(request):
+    await sources.delete(request.app[POOL], await actor(request, write=True), int_id(request.match_info['id']))
+    return web.json_response({'ok': True})
 
 
 async def api_staff_add(request):
@@ -511,7 +656,7 @@ async def api_prompt_use(request):
 
 
 async def api_robot(request):
-    return web.json_response(await robot.overview(await director(request)))
+    return web.json_response(await robot.overview(await director(request), request.app[POOL]))
 
 
 async def api_robot_calls(request):
@@ -520,13 +665,54 @@ async def api_robot_calls(request):
 
 async def api_robot_settings(request):
     who = await director(request)
-    return web.json_response(await robot.save_settings(who, await body(request)))
+    return web.json_response(await robot.save_settings(who, await body(request), request.app[POOL]))
 
 
 async def api_robot_preview(request):
     who = await director(request)
     pcm, rate = await robot.preview(who, await body(request))
     return web.Response(body=pcm, content_type='application/octet-stream', headers={'X-Rate': str(rate)})
+
+
+async def api_robot_voices(request):
+    who = await director(request)
+    q = request.query
+    return web.json_response(await robot.voices_search(who, q.get('q', ''), q.get('gender', ''), q.get('use', ''),
+                                                       q.get('page', '0')))
+
+
+async def api_robot_voice_add(request):
+    who = await director(request)
+    return web.json_response(await robot.voices_add(who, await body(request)))
+
+
+async def api_robot_voice_sample(request):
+    who = await director(request)
+    audio, kind = await robot.voices_preview(who, request.query.get('url', ''))
+    return web.Response(body=audio, content_type=kind.split(';')[0] if kind.startswith('audio/') else 'audio/mpeg')
+
+
+async def api_robot_voice_clone(request):
+    """Записи для клона приходят формой multipart; читаем сами, общий предел запроса (512 КБ) для них мал."""
+    who = await director(request)
+    if not request.content_type.startswith('multipart/'):
+        raise ValueError('Неверный запрос.')
+    if request.content_length and request.content_length > robot.CLONE_MAX_BYTES:
+        raise ValueError('Записи больше 20 МБ: сократите или сожмите в mp3.')
+    reader = await request.multipart()
+    name, files, total = '', [], 0
+    while (part := await reader.next()) is not None:
+        if part.name == 'name':
+            name = (await part.text())[:60]
+        elif part.name == 'files' and part.filename:
+            chunks = []
+            while chunk := await part.read_chunk(256 * 1024):
+                total += len(chunk)
+                if total > robot.CLONE_MAX_BYTES:
+                    raise ValueError('Записи больше 20 МБ: сократите или сожмите в mp3.')
+                chunks.append(chunk)
+            files.append((part.filename[-80:], b''.join(chunks)))
+    return web.json_response(await robot.voices_clone(who, name, files))
 
 
 async def api_robot_call(request):
@@ -619,15 +805,41 @@ async def api_outcome(request):
 
 async def api_calls(request):
     who = await actor(request)
-    days = min(max(int(request.query.get('days') or 7), 1), 31)
+    days = days_arg(request)
     return web.json_response(await store.my_calls(request.app[POOL], who, who.client_id, await ext_of(request, who), days))
 
 
 async def api_stats(request):
     who = await actor(request)
-    days = min(max(int(request.query.get('days') or 7), 1), 31)
+    days = days_arg(request)
     ext = await ext_of(request, who) if (not is_privileged(who) or request.query.get('ext')) else None
     return web.json_response(await store.stats(request.app[POOL], who.client_id, ext, days))
+
+
+def period_arg(request) -> str:
+    return request.query.get('period') or '7'
+
+
+async def api_summary(request):
+    who = await actor(request)
+    return web.json_response(await overview.summary(request.app[POOL], who, period_arg(request), request.query.get('ext') or None))
+
+
+async def api_journal(request):
+    who = await actor(request)
+    q = request.query
+    try:
+        offset = int(q.get('offset') or 0)
+    except ValueError:
+        raise ValueError('Неверное смещение.')
+    return web.json_response(await overview.journal(
+        request.app[POOL], who, period_arg(request), q.get('ext') or None, q.get('result') or '', q.get('kind') or '',
+        (q.get('q') or '')[:80], offset))
+
+
+async def api_callbacks(request):
+    who = await actor(request)
+    return web.json_response(await overview.callbacks(request.app[POOL], who, request.query.get('ext') or None))
 
 
 def build(pool) -> web.Application:
@@ -638,17 +850,17 @@ def build(pool) -> web.Application:
     app.router.add_get('/p/{token}', personal_page)
     app.router.add_get('/test-exit', test_exit)
     app.router.add_get('/logout', logout_page)
-    app.router.add_get('/director', director_page)
-    app.router.add_get('/director/{name}', director_file)
+    app.router.add_get('/director', old_director)
+    app.router.add_get('/director/{name}', old_director)
     app.router.add_static('/static/', STATIC, show_index=False)
     app.router.add_post('/api/logout', api_logout)
     app.router.add_get('/api/me', api_me)
     app.router.add_get('/api/test/options', api_test_options)
     app.router.add_post('/api/test/login', api_test_login)
-    app.router.add_post('/api/gs', api_gs)
     app.router.add_get('/api/docs', api_docs)
     app.router.add_post('/api/docs', api_docs_write)
     app.router.add_get('/api/cabinet', api_cabinet)
+    app.router.add_get('/api/callcenter', api_callcenter)
     app.router.add_get('/api/recording/{id}', api_recording)
     app.router.add_get('/api/review/{id}', api_review)
     app.router.add_get('/api/reports', api_reports)
@@ -661,7 +873,25 @@ def build(pool) -> web.Application:
     app.router.add_get('/api/access', api_access)
     app.router.add_post('/api/access', api_access_create)
     app.router.add_post('/api/access/{id}/revoke', api_access_revoke)
+    app.router.add_post('/api/access/{id}/account', api_access_account)
+    app.router.add_post('/api/login', api_login)
     app.router.add_get('/api/staff', api_staff)
+    app.router.add_get('/api/person', api_person)
+    app.router.add_get('/api/deals', api_deals)
+    app.router.add_get('/api/deals/{phone}', api_deal)
+    app.router.add_post('/api/deals/{phone}/event', api_deal_event)
+    app.router.add_get('/api/tgchats/{peer}', api_tgchat)
+    app.router.add_post('/api/tgchats/{peer}/link', api_tgchat_link)
+    app.router.add_get('/api/sources/selections', api_sources)
+    app.router.add_post('/api/sources/selections', api_source_save)
+    app.router.add_get('/api/sources/selections/{id}', api_source)
+    app.router.add_post('/api/sources/selections/{id}/delete', api_source_delete)
+    app.router.add_post('/api/presentations/{id}/link', api_presentation_link)
+    app.router.add_get('/api/contracts', api_contracts)
+    app.router.add_get('/api/contracts/config', api_contracts_config)
+    app.router.add_get('/api/contracts/next-number', api_contracts_next)
+    app.router.add_post('/api/contracts/register', api_contracts_register)
+    app.router.add_get('/api/contracts/lookup/{kind}/{value}', api_contracts_lookup)
     app.router.add_post('/api/staff', api_staff_add)
     app.router.add_post('/api/staff/{action}', api_staff_action)
     app.router.add_get('/api/prompts', api_prompts)
@@ -670,11 +900,18 @@ def build(pool) -> web.Application:
     app.router.add_post('/api/robot/settings', api_robot_settings)
     app.router.add_post('/api/robot/preview', api_robot_preview)
     app.router.add_post('/api/robot/call', api_robot_call)
+    app.router.add_get('/api/robot/voices', api_robot_voices)
+    app.router.add_post('/api/robot/voices/add', api_robot_voice_add)
+    app.router.add_get('/api/robot/voices/sample', api_robot_voice_sample)
+    app.router.add_post('/api/robot/voices/clone', api_robot_voice_clone)
     app.router.add_routes(robot_api.routes(viewer, body, POOL))
     app.router.add_get('/api/prompts/version/{id}', api_prompt_version)
     app.router.add_post('/api/prompts/version/{id}/use', api_prompt_use)
     app.router.add_get('/api/prompts/{kind}', api_prompt)
     app.router.add_post('/api/prompts/{kind}/{action}', api_prompt_action)
+    app.router.add_get('/api/summary', api_summary)
+    app.router.add_get('/api/journal', api_journal)
+    app.router.add_get('/api/callbacks', api_callbacks)
     app.router.add_get('/api/queue', api_queue)
     app.router.add_get('/api/tasks', api_tasks)
     app.router.add_post('/api/tasks/{id}', api_task_change)
@@ -698,10 +935,11 @@ async def make_app() -> web.Application:
         await mango_client.close()
     app.on_cleanup.append(close)
 
-    async def robot_cabinet(_app):  # кампании робота по расписанию и перенос итогов его звонков
-        task = asyncio.create_task(robot_runner.loop(pool)) if robot_runner.enabled() else None
+    async def robot_cabinet(_app):  # кампании робота по расписанию, перенос итогов его звонков и себестоимость
+        tasks = [asyncio.create_task(robot_runner.loop(pool))] if robot_runner.enabled() else []
+        tasks.append(asyncio.create_task(robot_prices.loop(pool)))
         yield
-        if task:
+        for task in tasks:
             task.cancel()
     app.cleanup_ctx.append(robot_cabinet)
     return app

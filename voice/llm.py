@@ -340,6 +340,9 @@ class OpenRouterBackend(ChatBackend):
         return {"usage": {"include": True}, "reasoning": {"enabled": False}}
 
 
+NO_VERSION = ("aliceai-",)
+
+
 class YandexBackend(ChatBackend):
     """YandexGPT в Яндекс Облаке (AI Studio): российская оплата, серверы в России.
     Ключ YANDEX_GPT_API_KEY (или ключ озвучки YANDEX_TTS_API_KEY, если у сервисного аккаунта
@@ -354,7 +357,9 @@ class YandexBackend(ChatBackend):
             raise RuntimeError("нет YANDEX_FOLDER_ID: ID каталога из консоли Яндекс Облака (b1g…)")
         name = model or os.getenv("VOICE_MODEL", "yandexgpt-lite/latest")
         if not name.startswith("gpt://"):
-            name = f"gpt://{self.folder}/{name if '/' in name else name + '/latest'}"
+            # Новые модели (Alice AI) в документации записаны без версии, а /latest к ним не описан
+            bare = "/" in name or name.startswith(NO_VERSION)
+            name = f"gpt://{self.folder}/{name if bare else name + '/latest'}"
         super().__init__(name, (api_key or os.getenv("YANDEX_GPT_API_KEY") or os.environ["YANDEX_TTS_API_KEY"]).strip(),
                          http=http)
 

@@ -1,7 +1,7 @@
 """Входы в CRM: директор, менеджер, клиент.
 
-Личная ссылка /p/<token> (её выдаёт директор в разделе «Доступы») открывает
-CRM с ролью из ссылки на 90 дней; отзыв ссылки закрывает её сессии, а
+Личная ссылка /p/<token> или логин с паролем (их выдаёт директор в разделе
+«Доступы») открывают CRM с ролью доступа на 90 дней; отзыв ссылки закрывает её сессии, а
 менеджер, которого убрали из отдела, теряет доступ сразу. Тестовая ссылка
 /t/<CRM_TEST_KEY> даёт выбрать любую роль; менеджер и клиент там только
 смотрят. Сессия хранит роль в себе. В базе лежат только хэши токенов.
@@ -11,16 +11,23 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
+import re
 import secrets
+import time
 from dataclasses import dataclass
 from datetime import timedelta
 
+import crypto_util
 from tools import Actor, resolve_actor
 
 TEST_TTL = timedelta(days=7)
 PERSONAL_TTL = timedelta(days=90)
 ROLES = ('director', 'manager', 'client')
 ROLE_OF = {'owner': 'director', 'head': 'director', 'manager': 'manager'}
+LOGIN_RE = re.compile(r'[a-z0-9][a-z0-9._-]{2,39}')
+PASSWORD_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789'  # без l, i, o, 1, 0: не спутать при наборе
+MAX_FAILS, LOCK_SECONDS = 5, 600  # после 5 неверных паролей логин отдыхает 10 минут
+_fails: dict[str, tuple[int, float]] = {}
 
 
 @dataclass(frozen=True)
@@ -86,7 +93,99 @@ async def directors(pool, client_id: int) -> list[dict]:
     return [{'tg': str(r['telegram_user_id']), 'name': r['full_name'] or str(r['telegram_user_id'])} for r in rows]
 
 
-async def invite_create(pool, client_id: int, role: str, extension=None, client_key=None, name=None, tg=None) -> str:
+def new_password() -> str:
+    """Пароль вида kq7m-x3pa-9tdw: 12 случайных знаков, легко набрать на телефоне."""
+    return '-'.join(''.join(secrets.choice(PASSWORD_ALPHABET) for _ in range(4)) for _ in range(3))
+
+
+def hash_password(password: str) -> str:
+    salt = secrets.token_bytes(16)
+    return 'scrypt$' + salt.hex() + '$' + hashlib.scrypt(password.encode(), salt=salt, n=2 ** 14, r=8, p=1).hex()
+
+
+def password_ok(password: str, stored: str | None) -> bool:
+    try:
+        kind, salt, want = (stored or '').split('$')
+    except ValueError:
+        return False
+    got = hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt), n=2 ** 14, r=8, p=1).hex()
+    return kind == 'scrypt' and hmac.compare_digest(got, want)
+
+
+def clean_login(login) -> str:
+    login = str(login or '').strip().lower()
+    if not LOGIN_RE.fullmatch(login):
+        raise ValueError('Логин: от 3 до 40 латинских букв и цифр, можно точку, дефис и подчёркивание.')
+    return login
+
+
+async def login_free(pool, login: str) -> bool:
+    return not await pool.fetchval('SELECT 1 FROM crm_invites WHERE lower(login)=$1 AND revoked_at IS NULL', login)
+
+
+def clean_password(password) -> str:
+    password = str(password or '').strip()
+    if not 8 <= len(password) <= 64 or any(ch.isspace() for ch in password):
+        raise ValueError('Пароль: от 8 до 64 знаков, без пробелов.')
+    return password
+
+
+async def account_create(pool, client_id: int, role: str, login, extension=None, client_key=None, name=None, tg=None,
+                         password=None) -> str:
+    """Учётная запись с логином. Пароль, если не задан, придумываем сами."""
+    login = clean_login(login)
+    if not await login_free(pool, login):
+        raise ValueError('Такой логин уже есть.')
+    password = clean_password(password) if password else new_password()
+    await invite_create(pool, client_id, role, extension, client_key, name, tg, login=login,
+                        password_hash=hash_password(password), password_enc=crypto_util.encrypt(password))
+    return password
+
+
+async def account_change(pool, client_id: int, invite_id: int, login=None, password=None, new=False) -> dict:
+    """Директор меняет логин и/или пароль (new — придумать новый). Со сменой пароля открытые входы закрываются."""
+    row = await pool.fetchrow('SELECT login FROM crm_invites WHERE id=$1 AND client_id=$2 AND login IS NOT NULL AND revoked_at IS NULL',
+                              invite_id, client_id)
+    if row is None:
+        raise ValueError('Учётной записи нет или доступ отозван.')
+    if login is not None and clean_login(login) != row['login']:
+        login = clean_login(login)
+        if not await login_free(pool, login):
+            raise ValueError('Такой логин уже есть.')
+        await pool.execute('UPDATE crm_invites SET login=$2 WHERE id=$1', invite_id, login)
+    if new or password:
+        password = new_password() if new else clean_password(password)
+        await pool.execute('UPDATE crm_invites SET password_hash=$2, password_enc=$3 WHERE id=$1',
+                           invite_id, hash_password(password), crypto_util.encrypt(password))
+        await pool.execute('DELETE FROM crm_sessions WHERE invite_id=$1', invite_id)
+    return next(i for i in await invites(pool, client_id) if i['id'] == invite_id)
+
+
+def _shown_password(enc: str | None) -> str | None:
+    try:
+        return crypto_util.decrypt(enc) if enc else None
+    except Exception:  # ключ шифрования сменили: пароль видно не будет, его можно задать заново
+        return None
+
+
+async def password_login(pool, login, password) -> tuple[str, str]:
+    """Логин и пароль в (сессия, роль). Ошибку не уточняем: неверен логин или пароль."""
+    login, password = str(login or '').strip().lower()[:40], str(password or '').strip()[:100]
+    fails, until = _fails.get(login, (0, 0.0))
+    if until > time.monotonic():
+        raise ValueError('Слишком много неверных попыток. Подождите 10 минут.')
+    row = await pool.fetchrow('SELECT id, password_hash FROM crm_invites WHERE lower(login)=$1 AND revoked_at IS NULL', login) \
+        if login else None
+    if row is None or not password_ok(password, row['password_hash']):
+        fails += 1
+        _fails[login] = (0, time.monotonic() + LOCK_SECONDS) if fails >= MAX_FAILS else (fails, 0.0)
+        raise ValueError('Неверный логин или пароль.')
+    _fails.pop(login, None)
+    return await _open_session(pool, row['id'])
+
+
+async def invite_create(pool, client_id: int, role: str, extension=None, client_key=None, name=None, tg=None,
+                        login=None, password_hash=None, password_enc=None) -> str:
     """Личная ссылка. Токен показываем один раз, в базе только хэш.
 
     tg — чья это ссылка директора: тогда в CRM он работает под своим Telegram ID
@@ -103,8 +202,9 @@ async def invite_create(pool, client_id: int, role: str, extension=None, client_
         tg_id, name = int(person['tg']), name or person['name']
     token = secrets.token_urlsafe(24)
     await pool.execute(
-        'INSERT INTO crm_invites(token_hash,role,client_id,extension,client_key,name,telegram_user_id) VALUES($1,$2,$3,$4,$5,$6,$7)',
-        digest(token), role, client_id, extension, client_key, name, tg_id)
+        """INSERT INTO crm_invites(token_hash,role,client_id,extension,client_key,name,telegram_user_id,login,password_hash,password_enc)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)""",
+        digest(token), role, client_id, extension, client_key, name, tg_id, login, password_hash, password_enc)
     return token
 
 
@@ -112,11 +212,15 @@ async def invite_login(pool, token: str | None) -> tuple[str, str] | None:
     """Ссылка из «Доступов» в (сессия, роль) или None. Ссылку можно открыть на нескольких устройствах."""
     if not token or len(token) > 100:
         return None
+    invite_id = await pool.fetchval(
+        'SELECT id FROM crm_invites WHERE token_hash=$1 AND revoked_at IS NULL AND login IS NULL', digest(token))
+    return None if invite_id is None else await _open_session(pool, invite_id)
+
+
+async def _open_session(pool, invite_id: int) -> tuple[str, str]:
     row = await pool.fetchrow(
-        """UPDATE crm_invites SET last_used_at=now() WHERE token_hash=$1 AND revoked_at IS NULL
-           RETURNING id, role, client_id, extension, client_key, telegram_user_id""", digest(token))
-    if row is None:
-        return None
+        """UPDATE crm_invites SET last_used_at=now() WHERE id=$1
+           RETURNING id, role, client_id, extension, client_key, telegram_user_id""", invite_id)
     session = secrets.token_urlsafe(32)
     await pool.execute(
         """INSERT INTO crm_sessions(token_hash,telegram_user_id,expires_at,role,client_id,extension,client_key,is_test,invite_id)
@@ -132,7 +236,8 @@ async def invites(pool, client_id: int) -> list[dict]:
            LEFT JOIN employees e ON e.client_id=i.client_id AND e.extension=i.extension AND e.role='manager'
            WHERE i.client_id=$1 AND i.revoked_at IS NULL ORDER BY i.role, i.created_at""", client_id)
     fmt = lambda v: v.strftime('%Y-%m-%dT%H:%M:%S%z') if v else None  # noqa: E731
-    return [{'id': r['id'], 'role': r['role'], 'ext': r['extension'], 'client': r['client_key'],
+    return [{'id': r['id'], 'role': r['role'], 'ext': r['extension'], 'client': r['client_key'], 'login': r['login'],
+             'password': _shown_password(r['password_enc']),
              'name': r['name'] or r['full_name'] or r['client_key'] or '', 'tg': bool(r['telegram_user_id']),
              'created': fmt(r['created_at']),
              'used': fmt(r['last_used_at'])} for r in rows]

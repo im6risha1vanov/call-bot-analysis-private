@@ -22,6 +22,13 @@ from . import robot, robot_store
 log = logging.getLogger('crm.robot')
 TICK_S = 15
 HOLD_MIN = 15  # заказанный номер не берём снова, пока не придёт итог (или 15 минут, если итог потерялся)
+DOWN_MIN = 5  # робот не смог позвонить из-за Asterisk или связи: номер ждёт столько и пробует снова
+
+
+def transient(status: int, error: str) -> bool:
+    """Сбой не из-за номера: Asterisk, связь, перегрузка. Такой номер не закрываем, а повторяем позже.
+    Старый робот отвечал 400 и на сбой Asterisk, поэтому смотрим ещё на текст ошибки."""
+    return status >= 500 or 'asterisk' in error.lower()
 
 
 def record_id(rec: dict) -> str:
@@ -125,6 +132,11 @@ async def tick(pool, now: datetime | None = None) -> dict | None:
         """UPDATE robot_targets t SET done=true, outcome='stop' FROM robot_campaigns c
            WHERE c.id=t.campaign_id AND t.campaign_id=ANY($1) AND NOT t.done
              AND EXISTS (SELECT 1 FROM robot_stoplist s WHERE s.owner=c.owner AND s.phone=t.phone)""", live)
+    # попытки кончились, а итог последней так и не пришёл (робот перезапустили посреди звонка): не звоним по кругу
+    await pool.execute(
+        """UPDATE robot_targets t SET done=true, outcome='error' FROM robot_campaigns c
+           WHERE c.id=t.campaign_id AND t.campaign_id=ANY($1) AND NOT t.done AND t.attempts>=c.attempts
+             AND t.next_at<=$2""", live, now)
     target = await pool.fetchrow(
         """SELECT t.id, t.phone, c.id AS campaign_id, c.owner, c.operator FROM robot_targets t JOIN robot_campaigns c ON c.id=t.campaign_id
            WHERE t.campaign_id=ANY($1) AND NOT t.done AND (t.next_at IS NULL OR t.next_at<=$2)
@@ -145,9 +157,13 @@ async def tick(pool, now: datetime | None = None) -> dict | None:
     except httpx.HTTPError:
         return None
     data = r.json() if r.headers.get('content-type', '').startswith('application/json') else {}
-    if r.status_code >= 300:  # номер или оператор не годятся: закрываем номер, чтобы не звонить по кругу
-        log.warning('робот не позвонил %s: %s', target['phone'], data.get('error') or r.status_code)
-        await pool.execute("UPDATE robot_targets SET done=true, outcome='error' WHERE id=$1", target['id'])
+    if r.status_code >= 300:
+        error = str(data.get('error') or r.status_code)
+        log.warning('робот не позвонил %s: %s', target['phone'], error)
+        if transient(r.status_code, error):  # Asterisk лежит: номер не теряем, попробуем позже
+            await pool.execute('UPDATE robot_targets SET next_at=$2 WHERE id=$1', target['id'], now + timedelta(minutes=DOWN_MIN))
+        else:  # номер или оператор не годятся: закрываем номер, чтобы не звонить по кругу
+            await pool.execute("UPDATE robot_targets SET done=true, outcome='error' WHERE id=$1", target['id'])
         return None
     await pool.execute('UPDATE robot_targets SET attempts=attempts+1, last_at=$2, next_at=$3, call_id=$4 WHERE id=$1',
                        target['id'], now, now + timedelta(minutes=HOLD_MIN), data.get('id'))
