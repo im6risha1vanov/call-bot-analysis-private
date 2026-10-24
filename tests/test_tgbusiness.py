@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import asyncpg
 from aiogram import Dispatcher
-from aiogram.types import Chat, Message, User, Voice
+from aiogram.types import Chat, Contact, Message, User, Voice
 
 from review import tgbusiness as B
 
@@ -74,3 +74,14 @@ class SaveTests(unittest.IsolatedAsyncioTestCase):
             B.POOL = None
         self.assertEqual(bot.mock_calls, [])
         self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM tg_messages'), 1)
+
+    async def test_client_shares_own_contact(self):
+        other = Contact(phone_number='+79990000002', first_name='Директор', user_id=777)
+        own = Contact(phone_number='+7 999 000-00-01', first_name='Анна', user_id=555)
+        await B.save(self.pool, msg(20, CLIENT_USER, contact=other))  # чужой контакт: номер не берём
+        self.assertIsNone(await self.pool.fetchval('SELECT phone FROM tg_chats'))
+        await B.save(self.pool, msg(21, WORK, contact=Contact(phone_number='+79990000003', first_name='Мы', user_id=555)))
+        self.assertIsNone(await self.pool.fetchval('SELECT phone FROM tg_chats'))  # прислал менеджер
+        await B.save(self.pool, msg(22, CLIENT_USER, contact=own))
+        row = await self.pool.fetchrow('SELECT phone, analysis FROM tg_chats')
+        self.assertEqual((row['phone'], row['analysis']), ('79990000001', '{"link": {"by": "contact"}}'))
