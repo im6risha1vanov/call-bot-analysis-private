@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from crm import auth
+from crm import auth, company
 from tests.test_crm import DSN, TEST_KEY, DBCase
 
 SECRET, PHONE = 'СЕКРЕТ', '79115550001'
@@ -36,7 +36,7 @@ TABLES = ('calls', 'call_reviews', 'callback_tasks', 'crm_leads', 'crm_outcomes'
 class TenantIsolationTests(DBCase):
     async def asyncSetUp(self):
         await super().asyncSetUp()
-        for name in ('020_robot.sql', '029_averongpt.sql'):
+        for name in ('020_robot.sql', '029_averongpt.sql', '030_company_settings.sql'):
             await self.pool.execute((ROOT / 'migrations' / name).read_text())
         await self.pool.execute('TRUNCATE robot_contacts, robot_stoplist, robot_campaigns, robot_targets, robot_calls CASCADE')
         from aiohttp.test_utils import TestClient, TestServer
@@ -48,6 +48,8 @@ class TenantIsolationTests(DBCase):
         await self.seed_secret()
         # Вторая компания: тот же добавочный 101, чтобы поймать выборки по добавочному без компании.
         await self.pool.execute("INSERT INTO clients(id,timezone,processing_enabled) VALUES(2,'Europe/Moscow',true)")
+        # Все модули включены: закрытый модуль не должен прятать утечку от обхода.
+        await self.pool.execute("INSERT INTO company_settings(client_id,name,modules) VALUES(2,'Вторая',$1)", list(company.MODULES))
         await self.pool.execute("INSERT INTO employees VALUES(2,'101',223,'manager','Свой менеджер'),"
                                 "(2,'head',902,'head','Свой РОП')")
         await self.pool.execute("INSERT INTO calls(client_id,extension,call_started_at,client_number,duration_seconds) "
@@ -213,3 +215,63 @@ class TenantIsolationTests(DBCase):
         with patch.dict(os.environ, {'CRM_HOME_COMPANY': '1'}):
             tables = await sheets.collect(self.pool)
         self.assertIn(SECRET, json.dumps([t.rows for t in tables], ensure_ascii=False, default=str))
+
+
+@unittest.skipUnless(DSN, 'METHODOLOGY_TEST_DATABASE_URL не задан')
+class CompanySettingsTests(DBCase):
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        await self.pool.execute((ROOT / 'migrations' / '030_company_settings.sql').read_text())
+        await self.pool.execute('TRUNCATE company_settings')
+        await self.pool.execute("INSERT INTO clients(id,timezone,processing_enabled) VALUES(3,'Europe/Moscow',true)")
+        from aiohttp.test_utils import TestClient, TestServer
+        from crm import web
+        web.SECURE_COOKIE = False
+        self.http = TestClient(TestServer(web.build(self.pool)))
+        await self.http.start_server()
+        self.addAsyncCleanup(self.http.close)
+
+    async def enter(self, client_id):
+        token = f'company-{client_id}'
+        await self.pool.execute("INSERT INTO crm_sessions(token_hash,expires_at,role,client_id,is_test) "
+                                "VALUES($1,now()+'1 day','director',$2,false) ON CONFLICT DO NOTHING", auth.digest(token), client_id)
+        self.http.session.cookie_jar.update_cookies({'crm_session': token})
+
+    async def test_home_company_keeps_env_settings(self):
+        """Наша компания без строки настроек работает как раньше: все модули, таблица из .env."""
+        with patch.dict(os.environ, {'KITCHEN_SHEET_ID': 'leads-sheet', 'CONTRACT_OUR_EMAIL': 'we@example.ru'}):
+            info = await company.info(self.pool, 1)
+            self.assertEqual((info['home'], info['modules']), (True, list(company.MODULES)))
+            self.assertEqual(info['settings'], {'callcenter_sheet': 'leads-sheet', 'contract_email': 'we@example.ru'})
+            # другой компании .env не достаётся
+            other = await company.info(self.pool, 3)
+            self.assertEqual((other['home'], other['modules'], other['settings']), (False, list(company.DEFAULT_MODULES), {}))
+
+    async def test_modules_close_pages_and_api(self):
+        await self.enter(3)
+        me = await (await self.http.get('/api/me')).json()
+        self.assertEqual((me['company'], me['modules']), ('Компания 3', list(company.DEFAULT_MODULES)))
+        for path in ('/api/callcenter', '/api/robot', '/api/robot/cab/campaigns', '/api/contracts', '/api/contracts/config'):
+            r = await self.http.get(path)
+            self.assertEqual(r.status, 403, path)
+            self.assertIn('не подключён', (await r.json())['error'])
+        self.assertEqual((await self.http.get('/api/sources/selections')).status, 200)
+        await self.pool.execute("INSERT INTO company_settings(client_id,name,modules,settings) VALUES(3,'Окна Юг',$1,$2::jsonb)",
+                                ['contracts'], json.dumps({'contract_email': 'okna@example.ru'}))
+        me = await (await self.http.get('/api/me')).json()
+        self.assertEqual((me['company'], me['modules']), ('Окна Юг', ['contracts']))
+        cfg = await (await self.http.get('/api/contracts/config')).json()
+        self.assertEqual(cfg['ourEmail'], 'okna@example.ru')
+        self.assertEqual((await self.http.get('/api/sources/selections')).status, 403)
+
+    async def test_callcenter_sheet_per_company(self):
+        """Колл-центр читает таблицу своей компании; без таблицы — понятная ошибка, а не наша таблица."""
+        from crm import cabinet
+        await self.pool.execute("INSERT INTO company_settings(client_id,modules,settings) VALUES(3,$1,$2::jsonb)",
+                                ['callcenter'], json.dumps({'callcenter_sheet': 'their-sheet'}))
+        with patch.dict(os.environ, {'KITCHEN_SHEET_ID': 'our-sheet'}):
+            self.assertEqual(await cabinet.sheet_of(self.pool, 3), 'their-sheet')
+            self.assertEqual(await cabinet.sheet_of(self.pool, 1), 'our-sheet')
+            await self.pool.execute("UPDATE company_settings SET settings='{}' WHERE client_id=3")
+            with self.assertRaisesRegex(LookupError, 'не подключена'):
+                await cabinet.sheet_of(self.pool, 3)

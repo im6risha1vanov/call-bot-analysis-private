@@ -143,26 +143,40 @@ def parse_client(rows) -> dict:
     }
 
 
-async def summary() -> dict:
-    sheet = gsheets.leads_sheet()
+async def sheet_of(pool, client_id: int | None) -> str:
+    """Таблица колл-центра компании (у нашей — KITCHEN_SHEET_ID из .env)."""
+    from . import company
+    sheet = await company.setting(pool, client_id, 'callcenter_sheet')
     if not sheet:
         raise LookupError('Таблица колл-центра не подключена.')
+    gsheets.allow(sheet)
+    return sheet
+
+
+async def summary(sheet: str) -> dict:
     return parse_summary(await gsheets.values(sheet, 'Сводка!A1:F80'))
 
 
-async def cabinet(name: str) -> dict:
-    info = await summary()
+async def client_names(pool, client_id: int | None) -> list[str]:
+    """Клиенты колл-центра компании; нет таблицы — пусто."""
+    try:
+        return [c['name'] for c in (await summary(await sheet_of(pool, client_id)))['clients']]
+    except LookupError:
+        return []
+
+
+async def cabinet(sheet: str, name: str) -> dict:
+    info = await summary(sheet)
     row = next((c for c in info['clients'] if c['name'] == name), None)
     if row is None:
         raise LookupError('Такого клиента нет в таблице колл-центра.')
-    rows = await gsheets.values(gsheets.leads_sheet(), f"'{name.replace(chr(39), chr(39) * 2)}'!A1:P6000")
+    rows = await gsheets.values(sheet, f"'{name.replace(chr(39), chr(39) * 2)}'!A1:P6000")
     return {'name': name, 'summary': row, 'tariffs': info['tariffs'], **parse_client(rows)}
 
 
-async def callcenter() -> dict:
-    """Колл-центр целиком для директора: все клиенты из «Прозвон лидов» в одном ответе."""
-    info = await summary()
-    sheet = gsheets.leads_sheet()
+async def callcenter(sheet: str) -> dict:
+    """Колл-центр целиком для директора: все клиенты из таблицы колл-центра в одном ответе."""
+    info = await summary(sheet)
     sheets = await asyncio.gather(*(gsheets.values(sheet, f"'{c['name'].replace(chr(39), chr(39) * 2)}'!A1:P6000")
                                     for c in info['clients']), return_exceptions=True)
     clients, callbacks, sources = [], [], defaultdict(lambda: defaultdict(int))

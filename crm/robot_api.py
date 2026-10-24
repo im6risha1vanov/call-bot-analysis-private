@@ -43,7 +43,7 @@ def routes(viewer, body, pool_key) -> list:
             return web.json_response({'error': 'Раздел директора.'}, status=403)
         from . import cabinet
         try:
-            names = [c['name'] for c in (await cabinet.summary())['clients']]
+            names = await cabinet.client_names(request.app[pool_key], who.company)
         except Exception:
             names = []
         return web.json_response({'clients': names})
@@ -78,7 +78,7 @@ def routes(viewer, body, pool_key) -> list:
     async def contacts_tabs(request):
         _, who, _ = await ctx(request)
         try:
-            tabs = await rs.sheet_tabs(who)
+            tabs = await rs.sheet_tabs(request.app[pool_key], who)
         except Exception:
             tabs = []
         return web.json_response({'tabs': tabs})

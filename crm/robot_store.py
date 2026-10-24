@@ -379,11 +379,12 @@ async def upload_contacts(pool, owner: str, data: dict) -> dict:
     return {**result, 'skipped': bad}
 
 
-async def sheet_tabs(who) -> list[str]:
-    """Листы «Прозвон лидов», откуда можно взять номера. Клиенту только его лист."""
-    from . import gsheets
-    sheet = gsheets.leads_sheet()
-    if not sheet:
+async def sheet_tabs(pool, who) -> list[str]:
+    """Листы таблицы колл-центра компании, откуда можно взять номера. Клиенту только его лист."""
+    from . import cabinet, gsheets
+    try:
+        sheet = await cabinet.sheet_of(pool, who.company)
+    except LookupError:
         return []
     if who.role == 'client':
         return [who.client_key]
@@ -395,12 +396,13 @@ async def sheet_tabs(who) -> list[str]:
 
 
 async def sheet_contacts(pool, who, owner: str, tab: str) -> dict:
-    from . import gsheets
-    sheet = gsheets.leads_sheet()
-    if not sheet:
-        raise ValueError('Таблица «Прозвон лидов» не подключена.')
+    from . import cabinet, gsheets
+    try:
+        sheet = await cabinet.sheet_of(pool, who.company)
+    except LookupError:
+        raise ValueError('Таблица колл-центра не подключена.')
     tab = str(tab or '').strip()
-    if tab not in await sheet_tabs(who):
+    if tab not in await sheet_tabs(pool, who):
         raise ValueError('Такого листа нет.')
     rows = await gsheets.values(sheet, "'" + tab.replace("'", "''") + "'!A1:Z20000")
     contacts, bad = contacts_from_rows(rows)

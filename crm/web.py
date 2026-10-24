@@ -22,7 +22,7 @@ from aiohttp import web  # noqa: E402
 
 import mango_client  # noqa: E402
 from tools import Forbidden, home_client_id, is_privileged  # noqa: E402
-from . import accounts, ask as asking, auth, cabinet, contracts, deals, gpt, journal, overview, people, recording, reviews, sources, staff, store, training  # noqa: E402
+from . import accounts, ask as asking, auth, cabinet, company, contracts, deals, gpt, journal, overview, people, recording, reviews, sources, staff, store, training  # noqa: E402
 from . import prompts as prompt_mode, robot, robot_api, robot_prices, robot_runner, robot_store  # noqa: E402
 from review import store as review_store  # noqa: E402
 from .dial import dial  # noqa: E402
@@ -60,6 +60,14 @@ async def guard(request: web.Request, handler):
         who = await auth.viewer_for(request.app[POOL], request.cookies.get(COOKIE))
         if who is not None and who.test:
             response = fail(403, VIEW_ONLY)
+            response.headers.update(HEADERS)
+            return response
+    module = company.module_of(request.path)
+    if module:
+        # Модуль не подключён компании: его адреса закрыты для всех её входов.
+        who = await auth.viewer_for(request.app[POOL], request.cookies.get(COOKIE))
+        if who is not None and not await company.has_module(request.app[POOL], who.company, module):
+            response = fail(403, f'Модуль «{company.MODULES[module]}» не подключён.')
             response.headers.update(HEADERS)
             return response
     try:
@@ -221,10 +229,12 @@ async def api_logout(request):
 async def api_me(request):
     who = await viewer(request)
     pool = request.app[POOL]
+    firm = await company.info(pool, who.company)
+    firm = {'company': firm['name'], 'modules': firm['modules']}
     if who.role == 'client':
         return web.json_response({'name': who.client_key, 'role': 'client', 'test': who.test, 'client': who.client_key,
-                                  'privileged': False, 'can_dial': False, 'team': [],
-                                  'robot': who.client_key in await robot_store.enabled_clients(pool)})
+                                  'privileged': False, 'can_dial': False, 'team': [], **firm,
+                                  'robot': 'robot' in firm['modules'] and who.client_key in await robot_store.enabled_clients(pool)})
     a = who.actor
     name = await pool.fetchval('SELECT full_name FROM employees WHERE client_id=$1 AND telegram_user_id=$2 LIMIT 1',
                                a.client_id, a.telegram_user_id) if a.telegram_user_id else None
@@ -238,7 +248,7 @@ async def api_me(request):
         'ext': a.extension if str(a.extension or '').isdigit() else None,
         'can_dial': can_dial, 'privileged': privileged, 'readonly': who.test,
         'team': await store.team(pool, a.client_id) if privileged else [],
-        'outcomes': store.OUTCOMES, 'needs_date': sorted(store.NEEDS_DATE), 'lead_status': store.LEAD_STATUS,
+        'outcomes': store.OUTCOMES, 'needs_date': sorted(store.NEEDS_DATE), 'lead_status': store.LEAD_STATUS, **firm,
     })
 
 
@@ -248,7 +258,7 @@ async def api_test_options(request):
     pool = request.app[POOL]
     client_id = await home_client_id(pool)
     try:
-        clients = [c['name'] for c in (await cabinet.summary())['clients']]
+        clients = await cabinet.client_names(pool, client_id)
     except Exception:
         log.exception('список клиентов колл-центра не загрузился')
         clients = []
@@ -262,7 +272,7 @@ async def api_test_login(request):
     role = str(data.get('role') or '')
     client_key = None
     if role == 'client':
-        names = [c['name'] for c in (await cabinet.summary())['clients']]
+        names = await cabinet.client_names(request.app[POOL], await home_client_id(request.app[POOL]))
         client_key = str(data.get('client') or '')
         if client_key not in names:
             raise ValueError('Такого клиента нет.')
@@ -323,24 +333,25 @@ async def api_docs_write(request):
 
 async def api_cabinet(request):
     who = await viewer(request)
-    if who.role == 'client':
-        name = who.client_key
-    elif who.role == 'director':
-        name = request.query.get('client')
-        if not name:
-            return web.json_response({'clients': (await cabinet.summary())['clients']})
-    else:
+    if who.role not in ('client', 'director'):
         raise Forbidden('Кабинет клиента недоступен.')
     try:
-        return web.json_response(await cabinet.cabinet(name))
+        sheet = await cabinet.sheet_of(request.app[POOL], who.company)
+        if who.role == 'client':
+            name = who.client_key
+        else:
+            name = request.query.get('client')
+            if not name:
+                return web.json_response({'clients': (await cabinet.summary(sheet))['clients']})
+        return web.json_response(await cabinet.cabinet(sheet, name))
     except LookupError as exc:
         raise ValueError(str(exc))
 
 
 async def api_callcenter(request):
-    await director(request)
+    who = await director(request)
     try:
-        return web.json_response(await cabinet.callcenter())
+        return web.json_response(await cabinet.callcenter(await cabinet.sheet_of(request.app[POOL], who.company)))
     except LookupError as exc:
         raise ValueError(str(exc))
 
@@ -400,7 +411,7 @@ async def api_access(request):
     who = await director(request)
     pool = request.app[POOL]
     try:
-        clients = [c['name'] for c in (await cabinet.summary())['clients']]
+        clients = await cabinet.client_names(pool, who.company)
     except Exception:
         log.exception('список клиентов колл-центра не загрузился')
         clients = []
@@ -415,7 +426,7 @@ async def api_access_create(request):
     pool = request.app[POOL]
     data = await body(request)
     role = str(data.get('role') or '')
-    if role == 'client' and str(data.get('client') or '') not in [c['name'] for c in (await cabinet.summary())['clients']]:
+    if role == 'client' and str(data.get('client') or '') not in await cabinet.client_names(pool, who.company):
         raise ValueError('Такого клиента нет.')
     login = str(data.get('login') or '').strip()
     if not login:
@@ -523,8 +534,8 @@ async def api_presentation_link(request):
 
 # Генератор договоров (static/contracts/): пути — те, что ждёт страница генератора.
 async def api_contracts_config(request):
-    await actor(request)
-    return web.json_response(contracts.config())
+    who = await actor(request)
+    return web.json_response(contracts.config(await company.setting(request.app[POOL], who.client_id, 'contract_email')))
 
 
 async def api_contracts_next(request):

@@ -102,7 +102,7 @@ class PureTests(unittest.TestCase):
 class CallcenterTests(unittest.IsolatedAsyncioTestCase):
     async def test_all_clients_in_one_answer(self):
         with patch.dict(os.environ, {'KITCHEN_SHEET_ID': 'leads'}), patch.object(gsheets, 'values', fake_values):
-            cc = await cabinet.callcenter()
+            cc = await cabinet.callcenter('leads')
         self.assertEqual([c['name'] for c in cc['clients']], ['Кухни', 'Окна'])
         self.assertEqual({k: cc['clients'][0][k] for k in ('leads', 'called', 'reached', 'interested', 'callback', 'waiting', 'sum')},
                          {'leads': 4, 'called': 3, 'reached': 2, 'interested': 1, 'callback': 1, 'waiting': 1, 'sum': 190})

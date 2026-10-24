@@ -235,11 +235,11 @@ async def run_tool(pool, who, name: str, args: dict) -> str:
     from . import ask, cabinet, deals, overview, people, robot_store
     args = args if isinstance(args, dict) else {}
     if name == 'my_cabinet' and who.role == 'client':
-        return trim(cabinet_view(await cabinet.cabinet(who.client_key)))
+        return trim(cabinet_view(await cabinet.cabinet(await cabinet.sheet_of(pool, who.company), who.client_key)))
     if name == 'client_cabinet' and who.role == 'director':
-        return trim(cabinet_view(await cabinet.cabinet(str(args.get('client') or ''))))
+        return trim(cabinet_view(await cabinet.cabinet(await cabinet.sheet_of(pool, who.company), str(args.get('client') or ''))))
     if name == 'callcenter' and who.role == 'director':
-        d = await cabinet.callcenter()
+        d = await cabinet.callcenter(await cabinet.sheet_of(pool, who.company))
         clients = sorted(({**x, 'дозвон, %': pct(x['reached'], x['called'])} for x in d['clients']),
                          key=lambda x: -(x['дозвон, %'] or 0))
         return trim({'итого': {**d['total'], 'дозвон, %': pct(d['total'].get('reached', 0), d['total'].get('called', 0))},

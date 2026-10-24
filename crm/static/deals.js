@@ -21,13 +21,13 @@ function dealSteps(d) {
     return `<span class="${cls}">${esc(st.name)}</span>`;
   }).join('')}</div>`;
 }
-const dealTabs = cur => tabsHtml([['', 'Сделки'], ['contracts', 'Договоры']], cur);
+const dealTabs = cur => tabsHtml([['', 'Сделки'], ...(hasModule('contracts') ? [['contracts', 'Договоры']] : [])], cur);
 function bindDealTabs(view) {
   $$('[data-tab]', view).forEach(b => b.addEventListener('click', () => go('deals', b.dataset.tab || null)));
 }
 
 VIEWS.deals = async (view, arg) => {
-  if (arg === 'contracts') return contractsView(view);
+  if (arg === 'contracts' && hasModule('contracts')) return contractsView(view);
   const f = S.deal;
   const dir = S.me.role === 'director';
   const head = managers => setHead({filters: seg('show', DEAL_SHOW, f.show, 'Какие сделки') + seg('days', DEAL_PERIODS, f.days, 'Период') +
@@ -141,7 +141,7 @@ async function dealCard(ph, onChange) {
     <div class="rvm-body">
       ${dealSteps(d)}
       <div class="row">${S.me.role !== 'client' ? `<button class="btn small primary" type="button" data-dcall>${svg('phone', '')}${S.me.can_dial ? 'Позвонить' : 'Карточка клиента'}</button>` : ''}
-        ${ro ? '' : '<button class="btn small" type="button" data-contract>Составить договор</button>'}</div>
+        ${ro || !hasModule('contracts') ? '' : '<button class="btn small" type="button" data-contract>Составить договор</button>'}</div>
       ${d.status === 'lost' ? `<div class="rvm-item miss"><b>Отказ: ${esc(d.lost.reason)}</b>${d.lost.note ? `<div>${esc(d.lost.note)}</div>` : ''}
         <div class="rvm-q">${d.lost.auto ? 'CRM поставила сама по последнему разговору. Если это не так, нажмите «Снова в работе».' : 'Отмечено ' + esc(when(d.lost.at))}</div></div>` : ''}
       ${d.advice ? `<section><h3>Что дальше</h3><div class="rvm-say">${esc(d.advice)}</div></section>` : ''}
