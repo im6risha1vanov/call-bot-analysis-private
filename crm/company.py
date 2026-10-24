@@ -80,3 +80,51 @@ def module_of(path: str) -> str | None:
 
 async def _has_table(pool) -> bool:
     return bool(await pool.fetchval("SELECT to_regclass('company_settings') IS NOT NULL"))
+
+
+# ------------------------------------------------------------------ расход на ИИ
+
+# Разборы, память, презентации и агент РОПа копят расход в «единицах» провайдера (astra_daily_spend и др.):
+# (свежий вход + кеш·0,1 + выход) × множитель модели. Перевод в рубли приблизительный, сверять с кабинетом
+# провайдера: AI_RUB_PER_MILLION_UNITS, по умолчанию 50 ₽ (≈ $3,5 за миллион токенов при множителе 6,5).
+UNIT_TABLES = ('astra_daily_spend', 'methodology_daily_spend', 'automatic_call_spend')
+
+
+def rub_per_unit() -> float:
+    return float(os.getenv('AI_RUB_PER_MILLION_UNITS', '50')) / 1e6
+
+
+async def spent_today_rub(pool, client_id: int) -> float:
+    """Расход компании на ИИ за сегодня (по её часовому поясу), ₽: разборы и отчёты, AveronGPT, тренажёр."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo(await pool.fetchval('SELECT timezone FROM clients WHERE id=$1', client_id) or 'Europe/Moscow')
+    day = datetime.now(tz).date()
+    units = 0.0
+    for table in UNIT_TABLES:
+        if await pool.fetchval('SELECT to_regclass($1) IS NOT NULL', table):
+            units += float(await pool.fetchval(f'SELECT coalesce(sum(spent_units),0) FROM {table} WHERE client_id=$1 AND day=$2',
+                                               client_id, day) or 0)
+    rub = units * rub_per_unit()
+    if await pool.fetchval("SELECT to_regclass('crm_questions') IS NOT NULL") and \
+            await pool.fetchval("SELECT 1 FROM information_schema.columns WHERE table_name='crm_questions' AND column_name='cost_rub'"):
+        rub += float(await pool.fetchval(
+            "SELECT coalesce(sum(cost_rub),0) FROM crm_questions WHERE client_id=$1 AND (created_at AT TIME ZONE $2)::date=$3",
+            client_id, str(tz), day) or 0)
+    return rub
+
+
+async def ai_limit_rub(pool, client_id: int) -> float | None:
+    """Дневной лимит компании на ИИ, ₽ (настройка ai_day_limit_rub); None — без лимита."""
+    value = await setting(pool, client_id, 'ai_day_limit_rub')
+    try:
+        return float(value) if value not in (None, '') else None
+    except (TypeError, ValueError):
+        return None
+
+
+async def ai_over_limit(pool, client_id: int | None) -> bool:
+    if client_id is None:
+        return False
+    limit = await ai_limit_rub(pool, client_id)
+    return limit is not None and await spent_today_rub(pool, client_id) >= limit

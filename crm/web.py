@@ -292,8 +292,16 @@ def doc_path(value) -> str:
     return path
 
 
+async def home_director(request) -> auth.Viewer:
+    """Документы старой страницы директора (crm_docs) — только нашей компании."""
+    who = await director(request)
+    if who.company != await home_client_id(request.app[POOL]):
+        raise Forbidden('Раздел недоступен.')
+    return who
+
+
 async def api_docs(request):
-    await director(request)
+    await home_director(request)
     pool = request.app[POOL]
     if 'path' in request.query:
         row = await pool.fetchval('SELECT data FROM crm_docs WHERE path=$1', doc_path(request.query['path']))
@@ -312,7 +320,7 @@ def merge(old: dict, new: dict) -> dict:
 
 
 async def api_docs_write(request):
-    await director(request)
+    await home_director(request)
     data = await body(request)
     path, op, value = doc_path(data.get('path')), data.get('op'), data.get('data')
     pool = request.app[POOL]

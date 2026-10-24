@@ -23,7 +23,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from review import engine, kitchen as review_kitchen
 from review.render import CATEGORY_LABELS, OUTCOME_LABELS
-from tools import Forbidden, is_privileged
+from tools import Forbidden, home_client_id, is_privileged
 from . import store
 
 STAGES = [
@@ -102,8 +102,9 @@ async def load(pool, client_id: int, ext: str | None = None) -> dict:
     outcomes = await pool.fetch(
         """SELECT number, extension, outcome, comment, created_at FROM crm_outcomes WHERE client_id=$1 ORDER BY created_at""",
         client_id) if await has_table(pool, 'crm_outcomes') else []
+    # Отметки старой страницы «Воронка» (crm_docs) есть только у нашей компании.
     legacy = await pool.fetch("SELECT path, data, updated_at FROM crm_docs WHERE path LIKE 'pipe/%'") \
-        if await has_table(pool, 'crm_docs') else []
+        if await has_table(pool, 'crm_docs') and client_id == await home_client_id(pool) else []
     base = await pool.fetch('SELECT number, extension, created_at FROM crm_leads WHERE client_id=$1', client_id) \
         if await has_table(pool, 'crm_leads') else []
     names = {r['extension']: r['full_name'] for r in await pool.fetch(

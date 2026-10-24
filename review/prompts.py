@@ -140,107 +140,124 @@ def render_digest(template: str, values: dict) -> str:
 
 # ---------------------------------------------------------------- хранение
 
-async def seed(pool) -> int:
+async def company_of(pool, company: int | None) -> int | None:
+    """Чьи промты: компания (clients.id). Не указана — наша (tools.home_client_id), как до многоклиентности.
+    Общая версия у каждой компании своя; у новой компании действует исходный текст из кода."""
+    if company is not None:
+        return company
+    from tools import home_client_id
+    return await home_client_id(pool)
+
+
+async def seed(pool, company: int | None = None) -> int:
     """Исходные тексты первой общей версией каждого вида: точка отката «как было»."""
+    company = await company_of(pool, company)
     added = 0
     for kind in KINDS:
         exists = await pool.fetchval(
-            'SELECT 1 FROM prompt_versions WHERE kind=$1 AND owner_tg=0 AND note=$2', kind, ORIGINAL_NOTE)
+            'SELECT 1 FROM prompt_versions WHERE client_id=$1 AND kind=$2 AND owner_tg=0 AND note=$3', company, kind, ORIGINAL_NOTE)
         if not exists:
-            await pool.execute('INSERT INTO prompt_versions(kind, owner_tg, body, note) VALUES($1, 0, $2, $3)',
-                               kind, default(kind), ORIGINAL_NOTE)
+            await pool.execute('INSERT INTO prompt_versions(client_id, kind, owner_tg, body, note) VALUES($1, $2, 0, $3, $4)',
+                               company, kind, default(kind), ORIGINAL_NOTE)
             added += 1
     return added
 
 
-async def original_id(pool, kind: str) -> int:
-    await seed(pool)
+async def original_id(pool, kind: str, company: int | None = None) -> int:
+    company = await company_of(pool, company)
+    await seed(pool, company)
     return await pool.fetchval(
-        'SELECT id FROM prompt_versions WHERE kind=$1 AND owner_tg=0 AND note=$2 ORDER BY id LIMIT 1', kind, ORIGINAL_NOTE)
+        'SELECT id FROM prompt_versions WHERE client_id=$1 AND kind=$2 AND owner_tg=0 AND note=$3 ORDER BY id LIMIT 1',
+        company, kind, ORIGINAL_NOTE)
 
 
-async def active(pool, kind: str, owner: int):
+async def active(pool, kind: str, owner: int, company: int | None = None):
     """Действующее сохранение. До миграции 012 таблиц нет: тогда всё как раньше."""
     try:
-        return await _active(pool, kind, owner)
+        return await _active(pool, kind, owner, await company_of(pool, company))
     except Exception as exc:
         if exc.__class__.__name__ == 'UndefinedTableError':
             return None
         raise
 
 
-async def _active(pool, kind: str, owner: int):
+async def _active(pool, kind: str, owner: int, company: int):
     return await pool.fetchrow(
         """SELECT v.id, v.body, v.note, v.created_at, v.created_by, a.updated_by, a.updated_at
            FROM prompt_active a JOIN prompt_versions v ON v.id=a.version_id
-           WHERE a.kind=$1 AND a.owner_tg=$2""", kind, owner)
+           WHERE a.client_id=$1 AND a.kind=$2 AND a.owner_tg=$3""", company, kind, owner)
 
 
-async def common(pool, kind: str) -> tuple[str, int | None]:
-    """Текст для всех и номер версии (None — исходный из кода)."""
-    row = await active(pool, kind, 0)
+async def common(pool, kind: str, company: int | None = None) -> tuple[str, int | None]:
+    """Текст для всех в компании и номер версии (None — исходный из кода)."""
+    row = await active(pool, kind, 0, company)
     return (row['body'], row['id']) if row else (default(kind), None)
 
 
-async def resolve(pool, kind: str, tg_id: int) -> tuple[str, str, int | None]:
+async def resolve(pool, kind: str, tg_id: int, company: int | None = None) -> tuple[str, str, int | None]:
     """Что действует для человека: ('personal' | 'common' | 'default', номер версии)."""
-    row = await active(pool, kind, tg_id) if tg_id else None
+    row = await active(pool, kind, tg_id, company) if tg_id else None
     if row:
         return row['body'], 'personal', row['id']
-    body, version = await common(pool, kind)
+    body, version = await common(pool, kind, company)
     return body, 'common' if version else 'default', version
 
 
-async def _set_active(conn, kind: str, owner: int, version_id: int, by: int) -> None:
+async def _set_active(conn, company: int, kind: str, owner: int, version_id: int, by: int) -> None:
     await conn.execute(
-        """INSERT INTO prompt_active(kind, owner_tg, version_id, updated_by) VALUES($1,$2,$3,$4)
-           ON CONFLICT(kind, owner_tg) DO UPDATE SET version_id=EXCLUDED.version_id,
-             updated_by=EXCLUDED.updated_by, updated_at=now()""", kind, owner, version_id, by)
+        """INSERT INTO prompt_active(client_id, kind, owner_tg, version_id, updated_by) VALUES($1,$2,$3,$4,$5)
+           ON CONFLICT(client_id, kind, owner_tg) DO UPDATE SET version_id=EXCLUDED.version_id,
+             updated_by=EXCLUDED.updated_by, updated_at=now()""", company, kind, owner, version_id, by)
 
 
-async def save(pool, kind: str, body: str, note: str | None, by: int, scope: str) -> int:
-    """scope 'me' — личная версия; 'all' — общая (свою личную при этом снимает,
+async def save(pool, kind: str, body: str, note: str | None, by: int, scope: str, company: int | None = None) -> int:
+    """scope 'me' — личная версия; 'all' — общая для компании (свою личную при этом снимает,
     чтобы сохранивший видел то же, что все)."""
     if kind not in KINDS or scope not in {'me', 'all'}:
         raise ValueError('неизвестный вид или область')
     body = (body or '').strip()
     if not body or len(body) > MAX_BODY:
         raise ValueError('Пустой или слишком длинный текст промта.')
-    await seed(pool)
+    company = await company_of(pool, company)
+    await seed(pool, company)
     owner = by if scope == 'me' else 0
     async with pool.acquire() as conn, conn.transaction():
         version = await conn.fetchval(
-            'INSERT INTO prompt_versions(kind, owner_tg, body, note, created_by) VALUES($1,$2,$3,$4,$5) RETURNING id',
-            kind, owner, body, (note or '')[:300] or None, by)
-        await _set_active(conn, kind, owner, version, by)
+            'INSERT INTO prompt_versions(client_id, kind, owner_tg, body, note, created_by) VALUES($1,$2,$3,$4,$5,$6) RETURNING id',
+            company, kind, owner, body, (note or '')[:300] or None, by)
+        await _set_active(conn, company, kind, owner, version, by)
         if scope == 'all':
-            await conn.execute('DELETE FROM prompt_active WHERE kind=$1 AND owner_tg=$2', kind, by)
+            await conn.execute('DELETE FROM prompt_active WHERE client_id=$1 AND kind=$2 AND owner_tg=$3', company, kind, by)
     return version
 
 
-async def activate(pool, kind: str, version_id: int, by: int, scope: str) -> dict:
+async def activate(pool, kind: str, version_id: int, by: int, scope: str, company: int | None = None) -> dict:
     """Откат к сохранению: своему, общему или исходному."""
-    row = await pool.fetchrow('SELECT * FROM prompt_versions WHERE id=$1 AND kind=$2', version_id, kind)
+    company = await company_of(pool, company)
+    row = await pool.fetchrow('SELECT * FROM prompt_versions WHERE id=$1 AND kind=$2 AND client_id=$3', version_id, kind, company)
     if row is None or row['owner_tg'] not in (0, by) or scope not in {'me', 'all'}:
         raise ValueError('Сохранение не найдено.')
     async with pool.acquire() as conn, conn.transaction():
-        await _set_active(conn, kind, by if scope == 'me' else 0, version_id, by)
+        await _set_active(conn, company, kind, by if scope == 'me' else 0, version_id, by)
         if scope == 'all':
-            await conn.execute('DELETE FROM prompt_active WHERE kind=$1 AND owner_tg=$2', kind, by)
+            await conn.execute('DELETE FROM prompt_active WHERE client_id=$1 AND kind=$2 AND owner_tg=$3', company, kind, by)
     return dict(row)
 
 
-async def drop_personal(pool, kind: str, by: int) -> bool:
+async def drop_personal(pool, kind: str, by: int, company: int | None = None) -> bool:
     """Вернуться к общей версии."""
-    return (await pool.execute('DELETE FROM prompt_active WHERE kind=$1 AND owner_tg=$2', kind, by)) != 'DELETE 0'
+    company = await company_of(pool, company)
+    return (await pool.execute('DELETE FROM prompt_active WHERE client_id=$1 AND kind=$2 AND owner_tg=$3',
+                               company, kind, by)) != 'DELETE 0'
 
 
-async def versions(pool, kind: str, tg_id: int, limit: int = 10) -> list[dict]:
+async def versions(pool, kind: str, tg_id: int, limit: int = 10, company: int | None = None) -> list[dict]:
     """Последние сохранения (общие и свои) плюс исходная, даже если она старше."""
-    first = await original_id(pool, kind)
+    company = await company_of(pool, company)
+    first = await original_id(pool, kind, company)
     rows = await pool.fetch(
         """SELECT id, owner_tg, note, created_by, created_at FROM prompt_versions
-           WHERE kind=$1 AND owner_tg IN (0, $2) ORDER BY id DESC LIMIT $3""", kind, tg_id, limit)
+           WHERE client_id=$1 AND kind=$2 AND owner_tg IN (0, $3) ORDER BY id DESC LIMIT $4""", company, kind, tg_id, limit)
     out = [dict(r) for r in rows]
     if first not in {r['id'] for r in out}:
         out.append(dict(await pool.fetchrow(
@@ -248,8 +265,9 @@ async def versions(pool, kind: str, tg_id: int, limit: int = 10) -> list[dict]:
     return out
 
 
-async def version(pool, version_id: int):
-    return await pool.fetchrow('SELECT * FROM prompt_versions WHERE id=$1', version_id)
+async def version(pool, version_id: int, company: int | None = None):
+    return await pool.fetchrow('SELECT * FROM prompt_versions WHERE id=$1 AND client_id=$2',
+                               version_id, await company_of(pool, company))
 
 
 # ---------------------------------------------------------------- черновик
@@ -395,10 +413,11 @@ async def notify_editors(bot, text: str, key: str | None = None, every: int = 36
             log.exception('не удалось отправить уведомление о промте chat=%s', chat)
 
 
-async def run_common_review(pool, transcript: str, meta: dict, bot=None, run=None) -> tuple[dict, float]:
-    """Разбор для всех: общая версия, а если она сломалась — исходная из кода."""
+async def run_common_review(pool, transcript: str, meta: dict, bot=None, run=None,
+                            company: int | None = None) -> tuple[dict, float]:
+    """Разбор для всех: общая версия компании, а если она сломалась — исходная из кода."""
     run = run or engine.run
-    body, version_id = await common(pool, 'review')
+    body, version_id = await common(pool, 'review', company)
     if version_id is None or body == default('review'):
         return await run(transcript, meta)
     cost = 0.0
@@ -434,8 +453,8 @@ async def personal_review(pool, row: dict, chat: int, run=None) -> tuple[str | N
     """Копия разбора по личному промту: (текст или None, причина сбоя или None, стоимость).
     None, None — личного промта нет, отправляется стандартная копия."""
     from . import render
-    mine = await active(pool, 'review', chat)
-    if mine is None or mine['body'] == (await common(pool, 'review'))[0]:
+    mine = await active(pool, 'review', chat, row['client_id'])
+    if mine is None or mine['body'] == (await common(pool, 'review', row['client_id']))[0]:
         return None, None, 0.0  # стандартная копия уже по этому тексту
     run = run or engine.run
     transcript = await pool.fetchval('SELECT transcript FROM calls WHERE id=$1', row['call_id'])

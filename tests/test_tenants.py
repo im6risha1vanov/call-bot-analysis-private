@@ -18,8 +18,8 @@ from tests.test_crm import DSN, TEST_KEY, DBCase
 SECRET, PHONE = 'СЕКРЕТ', '79115550001'
 ROOT = Path(__file__).resolve().parents[1]
 
-# Пока общие на все компании; разделяются на этапе 3 плана (робот — этап 7). Убирать отсюда по мере разделения.
-SHARED_YET = ('/api/robot', '/api/prompts', '/api/docs')
+# Пока общий на все компании; разделяется на этапе 7 плана. Убрать отсюда, когда робот станет у каждой компании свой.
+SHARED_YET = ('/api/robot',)
 
 # Не обходим: вход и выход, внешние сервисы (LLM, ElevenLabs, DaData, Манго-звонок), страницы не API.
 SKIP = {'/api/login', '/api/logout', '/api/test/login', '/api/ask', '/api/gpt', '/api/robot/preview', '/api/robot/call',
@@ -27,7 +27,7 @@ SKIP = {'/api/login', '/api/logout', '/api/test/login', '/api/ask', '/api/gpt', 
         '/api/contracts/lookup/{kind}/{value}'}
 
 # Таблицы с данными компании: снимок строк первой компании до и после чужих запросов на запись.
-TABLES = ('calls', 'call_reviews', 'callback_tasks', 'crm_leads', 'crm_outcomes', 'crm_reports', 'crm_questions',
+TABLES = ('prompt_versions', 'prompt_active', 'calls', 'call_reviews', 'callback_tasks', 'crm_leads', 'crm_outcomes', 'crm_reports', 'crm_questions',
           'crm_invites', 'employees', 'manager_memory', 'presentations', 'deal_events', 'contracts',
           'source_selections', 'training_sessions', 'review_copy_lists')
 
@@ -36,7 +36,7 @@ TABLES = ('calls', 'call_reviews', 'callback_tasks', 'crm_leads', 'crm_outcomes'
 class TenantIsolationTests(DBCase):
     async def asyncSetUp(self):
         await super().asyncSetUp()
-        for name in ('020_robot.sql', '029_averongpt.sql', '030_company_settings.sql'):
+        for name in ('020_robot.sql', '029_averongpt.sql', '030_company_settings.sql', '031_company_prompts.sql'):
             await self.pool.execute((ROOT / 'migrations' / name).read_text())
         await self.pool.execute('TRUNCATE robot_contacts, robot_stoplist, robot_campaigns, robot_targets, robot_calls CASCADE')
         from aiohttp.test_utils import TestClient, TestServer
@@ -53,7 +53,8 @@ class TenantIsolationTests(DBCase):
         await self.pool.execute("INSERT INTO employees VALUES(2,'101',223,'manager','Свой менеджер'),"
                                 "(2,'head',902,'head','Свой РОП')")
         await self.pool.execute("INSERT INTO calls(client_id,extension,call_started_at,client_number,duration_seconds) "
-                                "VALUES(2,'101',now()-'1 hour'::interval,'79990002222',60)")
+                                "VALUES(2,'101',now()-'1 hour'::interval,'79990002222',60),"
+                                "(2,'101',now()-'2 hours'::interval,$1,60)", PHONE)  # тот же клиент звонил и им
 
     async def seed_secret(self):
         p = self.pool
@@ -101,14 +102,19 @@ class TenantIsolationTests(DBCase):
             "INSERT INTO training_sessions(client_id,extension,topic,status,transcript) "
             "VALUES(1,'101',$1,'completed',$2::jsonb) RETURNING id", SECRET, json.dumps([{'role': 'user', 'text': SECRET}]))
         await p.execute("INSERT INTO review_copy_lists(client_id,tokens) VALUES(1,ARRAY[$1])", SECRET)
+        await p.execute("INSERT INTO crm_docs(path,data) VALUES('pipe/' || $1, $2::jsonb)", PHONE[-10:],
+                        json.dumps({'stage': 'contract', 'note': SECRET}))
+        from review import prompts
+        self.ids['prompt'] = await prompts.save(p, 'review', SECRET + ' промт', SECRET, 0, 'all', company=1)
 
     async def enter(self, who):
         """Сессия второй компании: директор и клиент по учётке, менеджер по Telegram."""
         token = 'tenant2-' + who
         if who in ('director', 'client'):
-            await self.pool.execute("INSERT INTO crm_sessions(token_hash,expires_at,role,client_id,client_key,is_test) "
-                                    "VALUES($1,now()+'1 day',$2,2,$3,false) ON CONFLICT DO NOTHING", auth.digest(token), who,
-                                    'Свой клиент' if who == 'client' else None)
+            # Директор привязан к своему РОПу (tg 902): так ему открыты и промты.
+            await self.pool.execute("INSERT INTO crm_sessions(token_hash,telegram_user_id,expires_at,role,client_id,client_key,is_test) "
+                                    "VALUES($1,$2,now()+'1 day',$3,2,$4,false) ON CONFLICT DO NOTHING", auth.digest(token),
+                                    902 if who == 'director' else None, who, 'Свой клиент' if who == 'client' else None)
         else:
             await self.pool.execute("INSERT INTO crm_sessions(token_hash,telegram_user_id,expires_at) VALUES($1,223,now()+'1 day') ON CONFLICT DO NOTHING",
                                     auth.digest(token))
@@ -126,7 +132,7 @@ class TenantIsolationTests(DBCase):
 
     def fill(self, path):
         """Подставляет в адрес номера записей первой компании."""
-        any_id = {'/api/recording/': 'call', '/api/review/': 'call', '/api/trainings/': 'training',
+        any_id = {'/api/prompts/version/': 'prompt', '/api/recording/': 'call', '/api/review/': 'call', '/api/trainings/': 'training',
                   '/api/sources/': 'selection', '/api/presentations/': 'presentation', '/api/access/': 'invite',
                   '/api/tasks/': 'task', '/api/leads/': 'lead'}
         rid = next((self.ids[v] for k, v in any_id.items() if path.startswith(k)), self.ids['call'])
@@ -142,6 +148,10 @@ class TenantIsolationTests(DBCase):
             url = self.fill(path)
             r = await self.http.get(url, params=self.QUERY)
             text = (await r.read()).decode('utf-8', 'replace')
+            try:  # JSON отдаётся с \uXXXX: метку ищем в раскодированном тексте
+                text = json.dumps(json.loads(text), ensure_ascii=False)
+            except ValueError:
+                pass
             self.statuses.append((who, 'GET', url, r.status, text[:90]))
             if SECRET in text and not path.startswith(SHARED_YET):
                 leaks.append(f'{who} GET {url} → {r.status}: {text[:160]}')
@@ -173,7 +183,7 @@ class TenantIsolationTests(DBCase):
     async def test_second_company_sees_nothing_of_the_first(self):
         mango = patch('mango_client.fetch_recording', AsyncMock(return_value=(SECRET.encode(), 'audio/mpeg')))
         callback = patch('mango_client.callback', AsyncMock(return_value={'result': 1000}))
-        with mango, callback, patch.dict(os.environ, {'CRM_TEST_KEY': TEST_KEY}):
+        with mango, callback, patch.dict(os.environ, {'CRM_TEST_KEY': TEST_KEY, 'PROMPT_EDITORS': '902'}):
             leaks, self.statuses = [], []
             for who in ('director', 'manager', 'client'):
                 await self.enter(who)
@@ -275,3 +285,33 @@ class CompanySettingsTests(DBCase):
             await self.pool.execute("UPDATE company_settings SET settings='{}' WHERE client_id=3")
             with self.assertRaisesRegex(LookupError, 'не подключена'):
                 await cabinet.sheet_of(self.pool, 3)
+
+
+@unittest.skipUnless(DSN, 'METHODOLOGY_TEST_DATABASE_URL не задан')
+class AiLimitTests(DBCase):
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        for name in ('029_averongpt.sql', '030_company_settings.sql'):
+            await self.pool.execute((ROOT / 'migrations' / name).read_text())
+        await self.pool.execute('TRUNCATE company_settings')
+        await self.pool.execute("INSERT INTO clients(id,timezone,processing_enabled) VALUES(3,'Europe/Moscow',true)")
+
+    async def test_day_limit_counts_units_and_gpt(self):
+        """300 ₽ в день: разборы (единицы провайдера) и AveronGPT складываются; у нашей компании лимита нет."""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        day = datetime.now(ZoneInfo('Europe/Moscow')).date()
+        await self.pool.execute("INSERT INTO astra_daily_spend(client_id,day,spent_units) VALUES(3,$1,4000000),(1,$1,9e9)", day)
+        await self.pool.execute("INSERT INTO crm_questions(client_id,role,question,answer,cost_rub) VALUES(3,'director','q','a',50)")
+        with patch.dict(os.environ, {'AI_RUB_PER_MILLION_UNITS': '50'}):
+            self.assertAlmostEqual(await company.spent_today_rub(self.pool, 3), 250.0)
+            self.assertFalse(await company.ai_over_limit(self.pool, 3))  # лимит не задан
+            await self.pool.execute("INSERT INTO company_settings(client_id,settings) VALUES(3,'{\"ai_day_limit_rub\": 300}')")
+            self.assertFalse(await company.ai_over_limit(self.pool, 3))
+            await self.pool.execute("UPDATE crm_questions SET cost_rub=150")
+            self.assertTrue(await company.ai_over_limit(self.pool, 3))
+            self.assertFalse(await company.ai_over_limit(self.pool, 1))
+            # AveronGPT отвечает без модели, что на сегодня всё
+            from crm import gpt
+            who = auth.Viewer('director', None, client_id=3)
+            self.assertTrue(await gpt.over_limit(self.pool, who))

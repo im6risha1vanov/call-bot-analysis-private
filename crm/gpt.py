@@ -76,8 +76,8 @@ async def client_id_of(pool, who) -> int:
 
 
 def spend_scope(who) -> str | None:
-    """Лимит расходов только у клиентов, по их листу."""
-    return f'client:{who.client_key}' if who.role == 'client' else None
+    """Свой лимит у клиентов компании, по их листу; общий лимит компании считает crm/company.py."""
+    return f'client:{who.company}:{who.client_key}' if who.role == 'client' else None
 
 
 async def robot_on(pool, who) -> bool:
@@ -471,6 +471,9 @@ async def add_spend(pool, scope: str, rub: float) -> None:
 
 
 async def over_limit(pool, who) -> bool:
+    from . import company
+    if await company.ai_over_limit(pool, who.company):
+        return True
     scope = spend_scope(who)
     if scope is None:
         return False
