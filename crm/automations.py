@@ -46,16 +46,17 @@ DEAL_KINDS = {'presentation': 'Проведена презентация', 'mate
               'contract_sent': 'Отправлен договор', 'contract_edits': 'Клиент прислал правки',
               'contract_signed': 'Подписан договор', 'paid': 'Оплата (продажа)', 'lost': 'Отказ',
               'reopen': 'Сделка снова в работе', 'note': 'Заметка по сделке'}
-DEAL_SAMPLE = {'deal': {'phone': '79990000000', 'client': 'ООО Пример', 'manager': 'Иван Петров',
+DEAL_SAMPLE = {'deal': {'phone': '79990000000', 'client': 'ООО Пример', 'contact': 'Анна', 'manager': 'Иван Петров',
                         'event': 'Оплата получена', 'amount': 150000, 'reason': '', 'note': 'первый платёж',
-                        'author': 'Директор'}}
+                        'author': 'Директор', 'when': '24.10.2026 15:40'}}
 TRIGGERS = {
     **{f'deal.{k}': {'title': v, 'group': 'Сделки', 'sample': DEAL_SAMPLE} for k, v in DEAL_KINDS.items()},
     'lead.added': {'title': 'Новый номер в базе', 'group': 'База',
                    'sample': {'lead': {'phone': '79990000000', 'name': 'Анна', 'company': 'ООО Пример',
                                        'source': 'ГЦК', 'note': '', 'manager': 'Иван Петров'}}},
     'call.outcome': {'title': 'Менеджер отметил итог звонка', 'group': 'Звонки',
-                     'sample': {'call': {'phone': '79990000000', 'manager': 'Иван Петров', 'outcome': 'Назначил встречу',
+                     'sample': {'call': {'phone': '79990000000', 'client': 'ООО Пример', 'manager': 'Иван Петров',
+                                         'outcome': 'Назначил встречу',
                                          'outcome_code': 'meeting', 'comment': 'встреча в пятницу', 'due': '2026-10-30'}}},
     'call.reviewed': {'title': 'Звонок разобран', 'group': 'Звонки',
                       'sample': {'call': {'phone': '79990000000', 'manager': 'Иван Петров', 'success': True,
@@ -67,6 +68,66 @@ TRIGGERS = {
     'webhook.in': {'title': 'Входящий вебхук от другой системы', 'group': 'Другие системы',
                    'sample': {'data': {'example': 'поля, которые пришлёт ваша система'}}},
 }
+# Подписи полей для редактора и агента: человек видит «Сумма», в шаблоне пишется {deal.amount}.
+FIELD_LABELS = {
+    'deal.phone': 'Телефон', 'deal.client': 'Клиент', 'deal.contact': 'Контакт', 'deal.manager': 'Менеджер',
+    'deal.event': 'Событие', 'deal.amount': 'Сумма', 'deal.reason': 'Причина отказа', 'deal.note': 'Комментарий',
+    'deal.author': 'Кто отметил', 'deal.when': 'Когда',
+    'lead.phone': 'Телефон', 'lead.name': 'Имя', 'lead.company': 'Компания', 'lead.source': 'Источник',
+    'lead.note': 'Заметка', 'lead.manager': 'Менеджер',
+    'call.phone': 'Телефон', 'call.client': 'Клиент', 'call.manager': 'Менеджер', 'call.outcome': 'Итог',
+    'call.outcome_code': 'Код итога', 'call.comment': 'Комментарий', 'call.due': 'Дата встречи или перезвона',
+    'call.success': 'Успех', 'call.result': 'Результат', 'call.category': 'Категория', 'call.chance': 'Шанс сделки',
+    'call.started': 'Начало звонка', 'call.duration': 'Длительность, сек',
+    'date': 'Дата', 'day.reviewed': 'Разобрано звонков', 'day.successful': 'Успешных звонков',
+    'day.leads_added': 'Новых номеров', 'day.outcomes': 'Отмечено итогов', 'day.paid': 'Оплат', 'day.paid_sum': 'Сумма оплат',
+    'data.example': 'Поле из запроса',
+}
+OP_LABELS = {'=': 'равно', '!=': 'не равно', '>': 'больше', '>=': 'не меньше', '<': 'меньше', '<=': 'не больше',
+             'contains': 'содержит', 'empty': 'пусто', 'not_empty': 'заполнено'}
+
+# Готовые шаблоны для страницы «Автоматизации» и агента. account=None: подключение выбирает человек.
+TEMPLATES = [
+    {'id': 'paid_tg', 'title': 'Оплата в Telegram', 'about': 'Сообщение в чат, когда в сделке отмечена оплата.',
+     'spec': {'trigger': {'type': 'deal.paid'}, 'if': [], 'actions': [
+         {'type': 'telegram.send', 'account': None,
+          'text': '💰 Оплата {deal.amount} ₽\nКлиент: {deal.client}\nМенеджер: {deal.manager}'}]}},
+    {'id': 'signed_tg', 'title': 'Подписан договор', 'about': 'Сообщение в чат о подписанном договоре.',
+     'spec': {'trigger': {'type': 'deal.contract_signed'}, 'if': [], 'actions': [
+         {'type': 'telegram.send', 'account': None, 'text': '✍️ Подписан договор: {deal.client}\nМенеджер: {deal.manager}'}]}},
+    {'id': 'lost_tg', 'title': 'Отказ клиента', 'about': 'Сообщение в чат с причиной отказа.',
+     'spec': {'trigger': {'type': 'deal.lost'}, 'if': [], 'actions': [
+         {'type': 'telegram.send', 'account': None,
+          'text': 'Отказ: {deal.client}\nПричина: {deal.reason}\nМенеджер: {deal.manager}\n{deal.note}'}]}},
+    {'id': 'meeting_tg', 'title': 'Назначена встреча', 'about': 'Сообщение в чат, когда менеджер отметил встречу.',
+     'spec': {'trigger': {'type': 'call.outcome'}, 'if': [{'field': 'call.outcome_code', 'op': '=', 'value': 'meeting'}],
+              'actions': [{'type': 'telegram.send', 'account': None,
+                           'text': '📅 Встреча: {call.client} {call.phone}\nКогда: {call.due}\nМенеджер: {call.manager}\n{call.comment}'}]}},
+    {'id': 'success_tg', 'title': 'Успешный звонок', 'about': 'Сообщение в чат, когда разбор признал звонок успешным.',
+     'spec': {'trigger': {'type': 'call.reviewed'}, 'if': [{'field': 'call.success', 'op': '=', 'value': 'да'}],
+              'actions': [{'type': 'telegram.send', 'account': None,
+                           'text': '✅ Успешный звонок: {call.manager}, {call.phone}\nШанс сделки: {call.chance}'}]}},
+    {'id': 'daily_tg', 'title': 'Итоги дня', 'about': 'Каждый вечер цифры дня в чат.',
+     'spec': {'trigger': {'type': 'schedule.daily', 'time': '19:00'}, 'if': [], 'actions': [
+         {'type': 'telegram.send', 'account': None,
+          'text': 'Итоги дня {date}\nРазобрано звонков: {day.reviewed}, успешных: {day.successful}\n'
+                  'Новых номеров: {day.leads_added}\nОплат: {day.paid} на {day.paid_sum} ₽'}]}},
+    {'id': 'paid_sheet', 'title': 'Оплаты в Google-таблицу', 'about': 'Каждая оплата строкой в таблицу.',
+     'spec': {'trigger': {'type': 'deal.paid'}, 'if': [], 'actions': [
+         {'type': 'sheets.append', 'account': None,
+          'row': ['{deal.when}', '{deal.client}', '{deal.phone}', '{deal.manager}', '{deal.amount}', '{deal.note}']}]}},
+    {'id': 'leads_sheet', 'title': 'Новые номера в таблицу', 'about': 'Каждый номер, добавленный в базу, строкой в таблицу.',
+     'spec': {'trigger': {'type': 'lead.added'}, 'if': [], 'actions': [
+         {'type': 'sheets.append', 'account': None,
+          'row': ['{lead.phone}', '{lead.name}', '{lead.company}', '{lead.source}', '{lead.manager}']}]}},
+    {'id': 'lost_email', 'title': 'Отказ на почту', 'about': 'Письмо руководителю об отказе клиента.',
+     'spec': {'trigger': {'type': 'deal.lost'}, 'if': [], 'actions': [
+         {'type': 'email.send', 'to': [], 'subject': 'Отказ: {deal.client}',
+          'text': 'Клиент: {deal.client} ({deal.phone})\nПричина: {deal.reason}\nМенеджер: {deal.manager}\n{deal.note}'}]}},
+    {'id': 'paid_webhook', 'title': 'Оплата в другую систему', 'about': 'Отправляет оплату вебхуком, например в 1С или amoCRM.',
+     'spec': {'trigger': {'type': 'deal.paid'}, 'if': [], 'actions': [{'type': 'webhook.send', 'url': ''}]}},
+]
+
 OPS = {
     '=': lambda a, b: norm(a) == norm(b), '!=': lambda a, b: norm(a) != norm(b),
     '>': lambda a, b: num(a) is not None and num(b) is not None and num(a) > num(b),
@@ -93,6 +154,10 @@ def num(value):
 
 
 def norm(value):
+    if isinstance(value, bool):
+        return 'да' if value else 'нет'
+    if str(value).strip().lower() in ('true', 'false'):
+        return 'да' if str(value).strip().lower() == 'true' else 'нет'
     n = num(value)
     return n if n is not None else str(value if value is not None else '').strip().lower()
 
@@ -308,7 +373,8 @@ def catalog() -> dict:
     return {'triggers': {k: {'title': v['title'], 'group': v['group'], 'fields': sorted(fields(v['sample']))}
                          for k, v in TRIGGERS.items()},
             'actions': {k: {x: v[x] for x in ('title', 'about', 'account', 'fields')} for k, v in blocks.ACTIONS.items()},
-            'ops': list(OPS), 'email_ready': blocks.smtp_ready(), 'proxy_ready': bool(blocks.proxy_url()),
+            'ops': list(OPS), 'op_labels': OP_LABELS, 'labels': FIELD_LABELS, 'templates': TEMPLATES,
+            'email_ready': blocks.smtp_ready(), 'proxy_ready': bool(blocks.proxy_url()),
             'sheets_email': blocks.service_email()}
 
 
@@ -400,6 +466,10 @@ async def lead_card(pool, client_id: int, phone: str) -> dict:
     return {'name': row['name'] or '', 'company': row['company'] or ''} if row else {'name': '', 'company': ''}
 
 
+async def company_tz(pool, client_id: int) -> ZoneInfo:
+    return ZoneInfo(await pool.fetchval('SELECT timezone FROM clients WHERE id=$1', client_id) or 'Europe/Moscow')
+
+
 async def build_payload(pool, client_id: int, kind: str, ref_id: int | None) -> dict | None:
     """Поля события по строке-источнику. None — строки уже нет."""
     from .store import OUTCOMES
@@ -413,7 +483,8 @@ async def build_payload(pool, client_id: int, kind: str, ref_id: int | None) -> 
                          'manager': await manager_name(pool, client_id, r['extension']),
                          'event': EVENT_LABELS.get(r['kind'], r['kind']), 'amount': r['amount'],
                          'reason': LOST_REASONS.get(r['reason'] or '', r['reason'] or ''), 'note': r['note'] or '',
-                         'author': r['author_name'] or '', 'at': r['created_at']}}
+                         'author': r['author_name'] or '', 'at': r['created_at'],
+                         'when': r['created_at'].astimezone(await company_tz(pool, client_id)).strftime('%d.%m.%Y %H:%M')}}
     if kind == 'lead.added':
         r = await pool.fetchrow('SELECT * FROM crm_leads WHERE id=$1 AND client_id=$2', ref_id, client_id)
         if r is None:
@@ -438,7 +509,7 @@ async def build_payload(pool, client_id: int, kind: str, ref_id: int | None) -> 
         if r is None:
             return None
         from review.render import CATEGORY_LABELS
-        tz = ZoneInfo(await pool.fetchval('SELECT timezone FROM clients WHERE id=$1', client_id) or 'Europe/Moscow')
+        tz = await company_tz(pool, client_id)
         return {'call': {'phone': r['client_number'] or '', 'manager': await manager_name(pool, client_id, r['extension']),
                          'success': r['success'], 'result': 'успех' if r['success'] else 'без результата',
                          'category': CATEGORY_LABELS.get(r['category'] or '', r['category'] or ''), 'chance': r['chance'] or '',

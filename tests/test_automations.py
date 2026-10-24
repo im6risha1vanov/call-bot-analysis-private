@@ -49,6 +49,32 @@ class PureTests(unittest.TestCase):
             automations.validate({**PAID, 'actions': [{'type': 'shell.run'}]}, TG)
         self.assertIn('Telegram: Продажи', automations.describe(PAID, TG))
 
+    def test_templates_are_valid_once_accounts_chosen(self):
+        accs = {**TG, 2: {'id': 2, 'kind': 'sheets', 'title': 'Оплаты / Лист1', 'status': 'ready', 'error': None}}
+        fill = {'telegram.send': {'account': 1}, 'sheets.append': {'account': 2},
+                'email.send': {'to': ['boss@example.ru']}, 'webhook.send': {'url': 'https://example.ru/hook'}}
+        for t in automations.TEMPLATES:
+            spec = {**t['spec'], 'actions': [{**a, **fill[a['type']]} for a in t['spec']['actions']]}
+            clean = automations.validate(spec, accs)
+            sample = automations.TRIGGERS[clean['trigger']['type']]['sample']
+            for c in clean['if']:
+                self.assertIn(c['field'], automations.fields(sample), t['id'])
+            self.assertTrue(automations.matches(clean['if'], sample), t['id'])
+            for a in clean['actions']:
+                for text in [a.get('text', ''), a.get('subject', ''), *a.get('row', [])]:
+                    for path in automations.FIELD.findall(text):
+                        self.assertIn(path, automations.fields(sample), (t['id'], path))
+        labels = automations.catalog()['labels']
+        for v in automations.TRIGGERS.values():
+            for path in automations.fields(v['sample']):
+                self.assertIn(path, labels)
+
+    def test_yes_no_conditions(self):
+        payload = {'call': {'success': True}}
+        self.assertTrue(automations.matches([{'field': 'call.success', 'op': '=', 'value': 'да'}], payload))
+        self.assertTrue(automations.matches([{'field': 'call.success', 'op': '=', 'value': True}], payload))
+        self.assertFalse(automations.matches([{'field': 'call.success', 'op': '=', 'value': 'нет'}], payload))
+
     def test_telegram_code_and_sheet_id(self):
         self.assertEqual(automations.telegram_code('/start aut_abcdefABCDEF12'), 'abcdefABCDEF12')
         self.assertEqual(automations.telegram_code('/start@averon_bot aut_abcdefABCDEF12'), 'abcdefABCDEF12')
