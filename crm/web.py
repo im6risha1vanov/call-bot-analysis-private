@@ -254,7 +254,7 @@ async def api_me(request):
     if who.role == 'client':
         return web.json_response({'name': who.client_key, 'role': 'client', 'test': who.test, 'client': who.client_key,
                                   'privileged': False, 'can_dial': False, 'team': [], **firm,
-                                  'robot': 'robot' in firm['modules'] and who.client_key in await robot_store.enabled_clients(pool)})
+                                  'robot': 'robot' in firm['modules'] and await robot_store.company_owner(pool, who) == '' and who.client_key in await robot_store.enabled_clients(pool)})
     a = who.actor
     name = await pool.fetchval('SELECT full_name FROM employees WHERE client_id=$1 AND telegram_user_id=$2 LIMIT 1',
                                a.client_id, a.telegram_user_id) if a.telegram_user_id else None
@@ -771,46 +771,53 @@ async def api_prompt_use(request):
                                                    str(data.get('scope') or '')))
 
 
+async def robot_director(request) -> auth.Viewer:
+    """Голос и настройки нашего робота: только директор нашей компании."""
+    who = await director(request)
+    await robot_store.require_home(request.app[POOL], who)
+    return who
+
+
 async def api_robot(request):
-    return web.json_response(await robot.overview(await director(request), request.app[POOL]))
+    return web.json_response(await robot.overview(await robot_director(request), request.app[POOL]))
 
 
 async def api_robot_calls(request):
-    return web.json_response({'items': await robot.calls(await director(request))})
+    return web.json_response({'items': await robot.calls(await robot_director(request))})
 
 
 async def api_robot_settings(request):
-    who = await director(request)
+    who = await robot_director(request)
     return web.json_response(await robot.save_settings(who, await body(request), request.app[POOL]))
 
 
 async def api_robot_preview(request):
-    who = await director(request)
+    who = await robot_director(request)
     pcm, rate = await robot.preview(who, await body(request))
     return web.Response(body=pcm, content_type='application/octet-stream', headers={'X-Rate': str(rate)})
 
 
 async def api_robot_voices(request):
-    who = await director(request)
+    who = await robot_director(request)
     q = request.query
     return web.json_response(await robot.voices_search(who, q.get('q', ''), q.get('gender', ''), q.get('use', ''),
                                                        q.get('page', '0')))
 
 
 async def api_robot_voice_add(request):
-    who = await director(request)
+    who = await robot_director(request)
     return web.json_response(await robot.voices_add(who, await body(request)))
 
 
 async def api_robot_voice_sample(request):
-    who = await director(request)
+    who = await robot_director(request)
     audio, kind = await robot.voices_preview(who, request.query.get('url', ''))
     return web.Response(body=audio, content_type=kind.split(';')[0] if kind.startswith('audio/') else 'audio/mpeg')
 
 
 async def api_robot_voice_clone(request):
     """Записи для клона приходят формой multipart; читаем сами, общий предел запроса (512 КБ) для них мал."""
-    who = await director(request)
+    who = await robot_director(request)
     if not request.content_type.startswith('multipart/'):
         raise ValueError('Неверный запрос.')
     if request.content_length and request.content_length > robot.CLONE_MAX_BYTES:
@@ -832,7 +839,7 @@ async def api_robot_voice_clone(request):
 
 
 async def api_robot_call(request):
-    who = await director(request)
+    who = await robot_director(request)
     data = await body(request)
     return web.json_response(await robot.call(who, data.get('phone'), data.get('operator')))
 

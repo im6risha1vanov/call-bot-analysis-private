@@ -25,7 +25,7 @@ def routes(viewer, body, pool_key) -> list:
         if out['enabled']:
             out['owner'] = await rs.owner_for(pool, who, request.query.get('owner'))
             out['operators'] = rs.operators(out['owner'])
-        if who.role == 'director':
+        if who.role == 'director' and out['home']:
             from voice.results import SHEET_TITLE
             import os
             out['options'] = {'prices': await rs.prices(pool), 'auto': await rs.auto_prices(pool), 'clients': await rs.enabled_clients(pool),
@@ -41,6 +41,8 @@ def routes(viewer, body, pool_key) -> list:
         who = await viewer(request)
         if who.role != 'director':
             return web.json_response({'error': 'Раздел директора.'}, status=403)
+        if await rs.company_owner(request.app[pool_key], who):
+            return web.json_response({'clients': []})
         from . import cabinet
         try:
             names = await cabinet.client_names(request.app[pool_key], who.company)

@@ -32,7 +32,7 @@ VIEWS.robot = async (view, arg) => {
       <p class="hint">Робот сам обзванивает ваши номера по расписанию, выясняет интерес и записывает итог каждого звонка. Вы видите звонки, записи разговоров и аналитику здесь.</p></section></div>`;
     return;
   }
-  const tabs = RB_TABS.filter(t => !t[2] || t[2] === RB.st.role);
+  const tabs = RB_TABS.filter(t => !t[2] || (t[2] === RB.st.role && RB.st.home !== false)); // голос и настройки — нашего робота
   if (!tabs.some(t => t[0] === RB.tab)) RB.tab = 'campaigns';
   const owners = RB.st.owners.length > 1 && RB.tab !== 'voice' && RB.tab !== 'settings'
     ? `<select class="inp" id="rb-owner" aria-label="Чей кабинет">${RB.st.owners.map(o => `<option value="${esc(o.id)}"${o.id === RB.st.owner ? ' selected' : ''}>${esc(o.name)}</option>`).join('')}</select>` : '';

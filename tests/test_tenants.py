@@ -18,8 +18,8 @@ from tests.test_crm import DSN, TEST_KEY, DBCase
 SECRET, PHONE = 'СЕКРЕТ', '79115550001'
 ROOT = Path(__file__).resolve().parents[1]
 
-# Пока общий на все компании; разделяется на этапе 7 плана. Убрать отсюда, когда робот станет у каждой компании свой.
-SHARED_YET = ('/api/robot',)
+# Общего между компаниями не осталось: робот у каждой компании свой (кабинет '#N').
+SHARED_YET = ()
 
 # Не обходим: вход и выход, внешние сервисы (LLM, ElevenLabs, DaData, Манго-звонок), страницы не API.
 SKIP = {'/api/login', '/api/logout', '/api/test/login', '/api/ask', '/api/gpt', '/api/robot/preview', '/api/robot/call',
@@ -108,6 +108,18 @@ class TenantIsolationTests(DBCase):
         self.ids['prompt'] = await prompts.save(p, 'review', SECRET + ' промт', SECRET, 0, 'all', company=1)
         cc = await p.fetchval("INSERT INTO cc_clients(client_id,name) VALUES(1,$1) RETURNING id", SECRET)
         await p.execute("INSERT INTO cc_leads(client_id,cc_client_id,phone,note) VALUES(1,$1,$2,$3)", cc, PHONE, SECRET)
+        # робот нашей компании: кабинет '' (наш) и кабинет клиента с меткой в имени
+        await p.execute("INSERT INTO robot_options(key,value) VALUES('clients',$1::jsonb) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value",
+                        json.dumps([SECRET]))
+        for owner in ('', SECRET):
+            await p.execute("INSERT INTO robot_contacts(owner,phone,name) VALUES($1,$2,$3)", owner, PHONE, SECRET)
+            await p.execute("INSERT INTO robot_stoplist(owner,phone,reason) VALUES($1,$2,$3)", owner, '79115550009', SECRET)
+            camp = await p.fetchval("INSERT INTO robot_campaigns(owner,name,operator) VALUES($1,$2,'olga') RETURNING id", owner, SECRET)
+            self.ids.setdefault('campaign', camp)
+            self.ids.setdefault('robot_call', 'call-' + owner)
+            await p.execute("INSERT INTO robot_targets(campaign_id,phone,name) VALUES($1,$2,$3)", camp, PHONE, SECRET)
+            await p.execute("INSERT INTO robot_calls(call_id,owner,campaign_id,phone,at,outcome,comment,recording) "
+                            "VALUES($1,$2,$3,$4,now(),'interested',$5,'x.wav')", 'call-' + owner, owner, camp, PHONE, SECRET)
 
     async def enter(self, who):
         """Сессия второй компании: директор и клиент по учётке, менеджер по Telegram."""
@@ -136,7 +148,8 @@ class TenantIsolationTests(DBCase):
         """Подставляет в адрес номера записей первой компании."""
         any_id = {'/api/prompts/version/': 'prompt', '/api/recording/': 'call', '/api/review/': 'call', '/api/trainings/': 'training',
                   '/api/sources/': 'selection', '/api/presentations/': 'presentation', '/api/access/': 'invite',
-                  '/api/tasks/': 'task', '/api/leads/': 'lead'}
+                  '/api/tasks/': 'task', '/api/leads/': 'lead', '/api/robot/cab/campaigns/': 'campaign',
+                  '/api/robot/cab/recording/': 'robot_call'}
         rid = next((self.ids[v] for k, v in any_id.items() if path.startswith(k)), self.ids['call'])
         path = re.sub(r'\{id(:[^}]*)?\}', str(rid), path)
         return (path.replace('{phone}', PHONE[-10:]).replace('{kind}', 'review').replace('{action}', 'delete'))
@@ -148,19 +161,25 @@ class TenantIsolationTests(DBCase):
         leaks = []
         for path in self.routes('GET'):
             url = self.fill(path)
-            r = await self.http.get(url, params=self.QUERY)
-            text = (await r.read()).decode('utf-8', 'replace')
-            try:  # JSON отдаётся с \uXXXX: метку ищем в раскодированном тексте
-                text = json.dumps(json.loads(text), ensure_ascii=False)
-            except ValueError:
-                pass
-            self.statuses.append((who, 'GET', url, r.status, text[:90]))
-            if SECRET in text and not path.startswith(SHARED_YET):
-                leaks.append(f'{who} GET {url} → {r.status}: {text[:160]}')
+            # робот: и чужой кабинет клиента (owner=метка), и наш кабинет (owner пустой)
+            for query in ([self.QUERY, {**self.QUERY, 'owner': ''}] if path.startswith('/api/robot') else [self.QUERY]):
+                r = await self.http.get(url, params=query)
+                text = (await r.read()).decode('utf-8', 'replace')
+                try:  # JSON отдаётся с \uXXXX: метку ищем в раскодированном тексте
+                    text = json.dumps(json.loads(text), ensure_ascii=False)
+                except ValueError:
+                    pass
+                self.statuses.append((who, 'GET', url, r.status, text[:90]))
+                if (SECRET in text or 'x.wav' in text) and not (SHARED_YET and path.startswith(SHARED_YET)):
+                    leaks.append(f'{who} GET {url} → {r.status}: {text[:160]}')
         return leaks
 
     async def snapshot(self):
         out = {}
+        for table in ('robot_contacts', 'robot_stoplist', 'robot_campaigns', 'robot_calls'):
+            rows = await self.pool.fetch(f"SELECT to_jsonb(t) AS j FROM {table} t WHERE owner NOT LIKE '#%'")
+            out[table] = sorted(r['j'] for r in rows)
+        out['robot_targets'] = sorted(str(dict(r)) for r in await self.pool.fetch('SELECT * FROM robot_targets ORDER BY id'))
         for table in TABLES:
             rows = await self.pool.fetch(f'SELECT to_jsonb(t) AS j FROM {table} t WHERE client_id=1')
             out[table] = sorted(json.dumps(dict(json.loads(r['j'])), sort_keys=True, default=str) for r in rows)
@@ -174,13 +193,13 @@ class TenantIsolationTests(DBCase):
                    'phone_client': PHONE, 'reason': 'price', 'client': SECRET, 'tg': '123', 'role': 'manager'}
         for method in ('POST', 'DELETE'):
             for path in self.routes(method):
-                if path.startswith(SHARED_YET):
+                if SHARED_YET and path.startswith(SHARED_YET):
                     continue
                 url = self.fill(path)
                 r = await self.http.request(method, url, json=payload, headers=h)
                 self.statuses.append((who, method, url, r.status, (await r.text())[:90]))
         after = await self.snapshot()
-        return [f'{who}: изменилась таблица {t} первой компании' for t in TABLES if before[t] != after[t]]
+        return [f'{who}: изменилась таблица {t} первой компании' for t in before if before[t] != after[t]]
 
     async def test_second_company_sees_nothing_of_the_first(self):
         mango = patch('mango_client.fetch_recording', AsyncMock(return_value=(SECRET.encode(), 'audio/mpeg')))
