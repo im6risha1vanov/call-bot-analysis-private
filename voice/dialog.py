@@ -15,6 +15,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 
+from voice import presets
 from voice.llm import BadToolJSON, TextSink, make_backend
 from voice.operator import OUTCOMES, Operator
 
@@ -68,10 +69,12 @@ def build_tools(op: Operator) -> list[dict]:
     if op.transfer_to:
         tools.append({
             "name": TRANSFER,
-            "description": "Перевести клиента на живого специалиста прямо сейчас. Только если клиент подходит и сам хочет говорить с человеком.",
+            "description": "Перевести клиента на живого специалиста прямо сейчас. Только если клиент подходит и сам просит соединить с человеком. "
+                           "Вопрос «вы робот?» — не просьба соединить: ответь и продолжай по плану.",
                 "input_schema": {
                 "type": "object",
-                "properties": {"comment": comment, "facts": facts},
+                # описания полей уже есть в finish_call: здесь только имена, инструменты уходят модели в каждом запросе
+                "properties": {"comment": comment, "facts": {**facts, "properties": {key: {"type": "string"} for key in op.fields}}},
                 "required": ["comment"],
                 "additionalProperties": False,
             },
@@ -104,13 +107,65 @@ def _norm(text: str) -> str:
     return " ".join(re.sub(r"[^\w ]", " ", text.lower().replace("ё", "е")).split())
 
 
+QUICK_ECHO = "{answer}"  # в reply быстрого ответа: слова клиента («Сыктывкар, поняла.»)
+
+
+def _afters(item: dict, key: str = "after") -> list[str]:
+    after = item.get(key, "")
+    return [after] if isinstance(after, str) else list(after)
+
+
+def quick_answer(item: dict, asked: str, client_text: str) -> str | None:
+    """Подходит ли ответ клиента к быстрому ответу item после вопроса робота asked (нормализован).
+    Возвращает слова клиента для повтора (без «ну», «меня зовут»), None — не подходит, отвечает модель."""
+    if not any(_norm(a) and _norm(a) in asked for a in _afters(item)):
+        return None
+    answer = _norm(client_text)
+    if not answer:
+        return None
+    if item.get("answers") and answer in {_norm(a) for a in item["answers"]}:
+        return answer
+    if not item.get("match"):
+        return None
+    words = re.findall(r"\w+", client_text)
+    if item.get("strip"):
+        cut = re.match(item["strip"], answer)
+        if cut and cut.end():
+            dropped = len(answer[:cut.end()].split())
+            answer, words = answer[cut.end():].strip(), words[dropped:]
+    if not answer or len(answer.split()) > int(item.get("max_words", 6)):
+        return None
+    if not re.search(item["match"], answer) or (item.get("exclude") and re.search(item["exclude"], answer)):
+        return None
+    # распознавание часто пишет «ирина петровна»: имена и города с большой, предлоги («в», «из») как есть
+    words = [w if (i and len(w) <= 2) or w[:1].isupper() else w[:1].upper() + w[1:] for i, w in enumerate(words)]
+    return " ".join(words) or answer.capitalize()
+
+
+def split_echo(reply: str) -> tuple[str, str]:
+    """Реплика с {answer}: повтор до конца первого предложения (или до запятой, если предложение одно)
+    и остальное — его синтезируем заранее."""
+    at = reply.index(QUICK_ECHO) + len(QUICK_ECHO)
+    stop = re.search(r"[.!?](\s|$)", reply[at:])
+    if not stop or not reply[at + stop.end():].strip():
+        stop = re.search(r",", reply[at:])
+    cut = at + stop.end() if stop else len(reply)
+    return reply[:cut].strip(), reply[cut:].strip()
+
+
+def quick_static(reply: str) -> str:
+    """Неизменная часть быстрого ответа: её синтезируем, пока идут гудки."""
+    return split_echo(reply)[1] if QUICK_ECHO in reply else reply
+
+
 class Dialog:
     def __init__(self, operator: Operator, backend=None):
         self.op = operator
-        self.backend = backend or make_backend()
+        self.backend = backend or make_backend(model=presets.llm_model())  # модель выбранного набора, иначе из .env
         self.model = self.backend.model
         self.system = operator.system_prompt()
         self.tools = build_tools(operator)
+        self.quick_parts: list[str] = []
         self.messages: list[dict] = []
         self.transcript: list[tuple[str, str]] = []  # ("client" | "robot", текст)
         self.result: CallResult | None = None
@@ -149,17 +204,31 @@ class Dialog:
         return Turn(self.op.farewell, result, fallback=True)
 
     def quick_reply(self, client_text: str) -> str | None:
-        """Ожидаемый короткий ответ на вопрос робота («да», «актуально»): заготовка из анкеты, без модели.
-        Модель увидит этот обмен в истории и продолжит с него."""
+        """Ожидаемый простой ответ на вопрос робота («да», город, имя): заготовка из анкеты, без модели.
+        Модель увидит этот обмен в истории и продолжит с него. Части реплики для озвучки — в quick_parts:
+        повтор слов клиента отдельно, остальное заранее синтезировано."""
+        self.quick_parts = []
         if self.finished or not self.messages or self.messages[-1]["role"] != "assistant":
             return None
         asked = _norm(self.messages[-1]["content"])
-        answer = _norm(client_text)
+        earlier = " | ".join(_norm(m["content"]) for m in self.messages[:-1]
+                             if m["role"] == "assistant" and isinstance(m["content"], str))
         for item in self.op.quick:
-            if _norm(item["after"]) in asked and answer in {_norm(a) for a in item["answers"]}:
-                self._add_client(client_text)
-                self._add_robot(item["reply"])
-                return item["reply"]
+            if any(_norm(u) and _norm(u) in earlier for u in _afters(item, "unless")):
+                continue  # этот вопрос робот уже задавал раньше: следующий по заготовке был бы повтором
+            answer = quick_answer(item, asked, client_text)
+            if answer is None:
+                continue
+            reply = item["reply"]
+            if QUICK_ECHO in reply:
+                echo, rest = split_echo(reply)
+                self.quick_parts = [echo.replace(QUICK_ECHO, answer), rest]
+                reply = " ".join(p for p in self.quick_parts if p)
+            else:
+                self.quick_parts = [reply]
+            self._add_client(client_text)
+            self._add_robot(reply)
+            return reply
         return None
 
     def undo_quick(self, reply: str) -> bool:
@@ -171,6 +240,17 @@ class Dialog:
                 self.transcript.pop()
             return True
         return False
+
+    def undo_robot(self) -> bool:
+        """Клиент договаривал свою фразу, а робот уже ответил на её начало: ответ убираем из истории,
+        продолжение клиента приклеится к началу, и модель ответит на фразу целиком."""
+        if self.finished or len(self.messages) < 2 or self.messages[-1]["role"] != "assistant" \
+                or self.messages[-2]["role"] != "user":
+            return False
+        text = self.messages.pop()["content"]
+        if self.transcript and self.transcript[-1] == ("robot", text):
+            self.transcript.pop()
+        return True
 
     async def reply(self, client_text: str, on_text: TextSink | None = None) -> Turn:
         """Ответ робота на реплику клиента. on_text получает куски текста по мере генерации."""
@@ -232,6 +312,11 @@ class Dialog:
                     continue
                 return self._finish(CallResult("callback", "Сбой записи итога, проверить вручную", error=str(e)),
                                     " ".join(s for s in said if s))
+            if result.outcome != "ndz" and not result.transfer and text.endswith("?"):
+                # «…Договорились?» и тут же finish_call: трубку не кладём, ждём ответа, итог запишет следующий ход
+                self.transcript.pop()
+                self._add_robot(text)
+                return Turn(text, None, first_ms)
             turn = self._finish(result, " ".join(s for s in said if s))
             turn.first_text_ms = first_ms
             return turn

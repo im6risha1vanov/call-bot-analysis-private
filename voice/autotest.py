@@ -36,6 +36,7 @@ from datetime import datetime
 
 from voice import results, simulate, sip, speech
 from voice.dialog import SILENCE, Dialog
+from voice import presets
 from voice.llm import make_backend
 
 log = logging.getLogger("voice.autotest")
@@ -65,6 +66,7 @@ class AudioRun:
     reactions: list[int] = field(default_factory=list)  # мс от конца реплики абонента до голоса робота
     model_ms: list[int | None] = field(default_factory=list)  # мс до первых слов модели по репликам
     problems: list[str] = field(default_factory=list)
+    preset: str = ""  # набор робота (voice/presets.py), если прогон сравнивает наборы
 
     @property
     def outcome(self) -> str:
@@ -294,7 +296,8 @@ def rows(audio: list[AudioRun], text: list[simulate.Run], at: str, sha: str) -> 
     for run in audio:
         cost = f"{run.dialog.cost:.0f} {run.dialog.cost_unit}" if run.dialog else ""
         reaction = f"{sum(run.reactions) // len(run.reactions)}/{max(run.reactions)}" if run.reactions else ""
-        out.append([at, sha, "голос", run.persona.key, run.persona.expected, run.outcome, "да" if run.ok else "НЕТ",
+        kind = f"голос · {presets.PRESETS[run.preset]['name']}" if run.preset else "голос"
+        out.append([at, sha, kind, run.persona.key, run.persona.expected, run.outcome, "да" if run.ok else "НЕТ",
                     reaction, "; ".join(run.problems), cost, audio_text(run)[:45000]])
     for run in text:
         r = run.dialog.result
@@ -307,7 +310,7 @@ def rows(audio: list[AudioRun], text: list[simulate.Run], at: str, sha: str) -> 
 def markdown(audio: list[AudioRun], text: list[simulate.Run], sha: str) -> str:
     lines = [f"# Автотест {sha}\n"]
     for run in audio:
-        lines.append(f"## голос {run.persona.key}: ждали {run.persona.expected}, получили {run.outcome} "
+        lines.append(f"## голос{' ' + run.preset if run.preset else ''} {run.persona.key}: ждали {run.persona.expected}, получили {run.outcome} "
                      f"[{'OK' if run.ok else 'НЕ ТО'}]")
         lines.append(f"Реакция, мс: {run.reactions}")
         if run.problems:
@@ -341,6 +344,8 @@ async def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--operator", default="kitchen")
     parser.add_argument("--out", help="отчёт markdown в файл")
     parser.add_argument("--sheet", action="store_true", help="строки на лист «Робот · Автотест»")
+    parser.add_argument("--presets", default="", help="сравнить наборы робота: ключи из voice/presets.py через запятую "
+                                                      "(голосовые персонажи прогоняются для каждого набора по очереди)")
     args = parser.parse_args(argv)
 
     # по умолчанию робот говорит голосом из анкеты (Яндекс), чтобы не тратить символы ElevenLabs
@@ -351,12 +356,20 @@ async def main(argv: list[str] | None = None) -> int:
     client_model = simulate.SIM_MODEL or os.getenv("VOICE_AUTOTEST_CLIENT_MODEL") or None
     sha = commit()
     spreadsheet = (os.getenv("VOICE_AUTOTEST_SHEET_ID") or os.getenv("GOOGLE_SHEET_ID") or "").strip() if args.sheet else ""
+    compare = [k for k in args.presets.split(",") if k in presets.PRESETS]
     try:
-        robot = make_backend()
+        robot = make_backend(model=presets.llm_model())
         client = make_backend(model=client_model)
         audio_runs, text_runs = await asyncio.gather(
-            asyncio.gather(*(VirtualClient(p, robot, client).talk() for p in audio_personas)),
+            asyncio.gather(*(VirtualClient(p, robot, client).talk() for p in ([] if compare else audio_personas))),
             asyncio.gather(*(simulate.run_one(robot, client, p, args.operator) for p in text_personas)))
+        audio_runs = list(audio_runs)
+        for key in compare:  # по очереди: у Яндекса без подписки всего две одновременные генерации
+            runs = await asyncio.gather(*(VirtualClient(p, make_backend("yandex", presets.PRESETS[key]["llm"]), client).talk()
+                                          for p in audio_personas))
+            for run in runs:
+                run.preset = key
+            audio_runs += runs
     except Exception as e:  # сам автотест упал: пишем ошибку в таблицу, иначе её никто не увидит
         log.exception("автотест упал")
         if spreadsheet:
