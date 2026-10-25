@@ -32,6 +32,7 @@ VIEWS.auto = async view => {
       ${auCat().email_ready ? '' : '<p class="hint">Почта CRM ещё не настроена: сценарии с письмами можно собрать, но письма не уйдут.</p>'}</section></div>`;
   bindAuto(view);
   if (!ro) auAgent($('[data-agent]', view));
+  AU.studioRefresh?.();
 };
 
 // ---------- помощник: «Что вы хотите сделать?» ----------
@@ -203,126 +204,263 @@ function auBlank(type) {
     || (type === 'email.send' ? {type, to: [], subject: '', text: ''} : {type, url: ''});
 }
 
+// ---------- визуальный редактор ----------
+// Сценарий схемой: событие → условия (все должны выполниться) → действия по порядку. Слева схема, справа
+// настройки выбранного блока. Схема рисуется HTML-блоками и линиями SVG; стиль только через классы и el.style
+// (политика безопасности не пускает атрибут style).
+const AU_NODE = {w: 280, h: 74, gap: 58};
+const AU_ICON = {
+  trigger: '<path d="M13 3 5 14h6l-1 7 8-11h-6z"/>', cond: '<path d="M12 3 21 12 12 21 3 12z"/>',
+  'telegram.send': '<path d="m21 4-18 7 6 2 2 6 3-4 5 4z"/><path d="m9 13 8-6"/>', 'email.send': '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
+  'sheets.append': '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M4 9h16M4 15h16M10 3v18"/>', 'webhook.send': '<circle cx="6" cy="17" r="2.5"/><circle cx="18" cy="17" r="2.5"/><circle cx="12" cy="6" r="2.5"/><path d="M8.5 17h7M10.8 8.2 7 14.8M13.2 8.2l3.8 6.6"/>',
+};
+const auSvg = k => `<svg class="au-ic" viewBox="0 0 24 24" aria-hidden="true">${AU_ICON[k] || AU_ICON.cond}</svg>`;
+
 function auEditor(draft) {
   const cat = auCat();
-  const body = openDrawer({title: draft.id ? 'Сценарий' : 'Новый сценарий', wide: true, html: '<div data-ed></div>'});
-  const box = $('[data-ed]', body);
-  let lastTpl = null;
+  let sel = 'trigger', lastTpl = null, dirty = false, saved = null;
   const fieldsOf = () => cat.triggers[draft.spec.trigger.type].fields;
   const groups = [...new Set(Object.values(cat.triggers).map(t => t.group))];
+  const acc = id => AU.d.accounts.find(x => x.id === id);
+  const opText = c => {
+    const v = cat.choices[c.field]?.[String(c.value)] ?? c.value;
+    return `${auLabel(c.field)} ${cat.op_labels[c.op] || c.op}${['empty', 'not_empty'].includes(c.op) ? '' : ` «${v ?? ''}»`}`;
+  };
+  const actSummary = a => {
+    if (a.type === 'telegram.send') return [acc(a.account)?.title.replace(/^Telegram: /, '') || 'чат не выбран', (a.text || '').split('\n')[0]];
+    if (a.type === 'sheets.append') return [acc(a.account)?.title || 'таблица не выбрана', `${(a.row || []).length} ${plural((a.row || []).length, 'столбец', 'столбца', 'столбцов')}`];
+    if (a.type === 'email.send') return [(a.to || []).join(', ') || 'адрес не указан', a.subject || ''];
+    return [a.url || 'адрес не указан', 'POST JSON'];
+  };
+  const actBad = a => (cat.actions[a.type].account && !acc(a.account)) || (a.type === 'webhook.send' && !a.url)
+    || (a.type === 'email.send' && !(a.to || []).length) || (['telegram.send', 'email.send'].includes(a.type) && !(a.text || '').trim());
+  // Узлы схемы по порядку: id выбирается и подсвечивается, kind решает, что показывать справа.
+  const nodes = () => {
+    const t = draft.spec.trigger;
+    return [{id: 'trigger', kind: 'trigger', icon: 'trigger', cap: 'Когда', title: cat.triggers[t.type].title + (t.time ? ' в ' + t.time : ''), sub: cat.triggers[t.type].group},
+      ...draft.spec.if.map((c, i) => ({id: 'c' + i, kind: 'cond', i, icon: 'cond', cap: 'Если', title: opText(c), bad: !['empty', 'not_empty'].includes(c.op) && String(c.value ?? '').trim() === ''})),
+      ...draft.spec.actions.map((a, i) => { const [t1, t2] = actSummary(a); return {id: 'a' + i, kind: 'act', i, icon: a.type, cap: `${i + 1}. ${cat.actions[a.type].title}`, title: t1, sub: t2, bad: actBad(a)}; })];
+  };
+
+  const root = document.createElement('div');
+  root.className = 'au-studio'; root.setAttribute('role', 'dialog'); root.setAttribute('aria-modal', 'true'); root.setAttribute('aria-label', 'Редактор сценария');
+  root.innerHTML = `<header class="au-bar"><input class="inp au-name" data-name maxlength="120" placeholder="Название сценария" aria-label="Название">
+      <span class="sp"></span><span class="au-acts" data-acts></span>
+      <button class="btn primary" type="button" data-save>Сохранить</button><button class="x" type="button" data-shut aria-label="Закрыть">${svg('x', '')}</button></header>
+    <div class="au-split"><div class="au-canvas" data-canvas><div class="au-board" data-board></div></div>
+      <aside class="au-insp" data-insp></aside></div>`;
+  document.body.appendChild(root);
+  document.documentElement.classList.add('au-lock');
+  $('[data-name]', root).value = draft.name || '';
+  const board = $('[data-board]', root), insp = $('[data-insp]', root);
+
+  // ---------- схема ----------
+  const drawBoard = () => {
+    const list = nodes(), {w, h, gap} = AU_NODE;
+    const width = Math.max(w + 80, board.parentElement.clientWidth - 2);
+    const x = (width - w) / 2;
+    const ys = list.map((_, i) => 24 + i * (h + gap));
+    const height = ys[ys.length - 1] + h + gap + 40;
+    board.style.width = width + 'px'; board.style.height = height + 'px';
+    const firstAct = 1 + draft.spec.if.length;
+    // «+» на каждой связи: до первого действия можно вставить условие, с первого действия — только действия.
+    const plus = (k, y) => `<button class="au-plus" type="button" data-plus="${k}" aria-label="Добавить шаг" data-css="left:${width / 2 - 13}px;top:${y - 13}px">+</button>`;
+    const lines = list.map((n, k) => k ? `<path d="M${width / 2} ${ys[k - 1] + h} V${ys[k] - 4}"/><path class="au-arr" d="M${width / 2 - 5} ${ys[k] - 10} l5 6 5-6"/>` : '').join('')
+      + `<path class="au-tail" d="M${width / 2} ${ys[ys.length - 1] + h} V${ys[ys.length - 1] + h + gap - 14}"/>`;
+    board.innerHTML = `<svg class="au-lines" width="${width}" height="${height}" aria-hidden="true">${lines}</svg>`
+      + list.map((n, k) => `<button type="button" class="au-node ${n.kind}${n.id === sel ? ' on' : ''}${n.bad ? ' bad' : ''}" data-node="${n.id}"${n.kind === 'act' ? ` data-drag="${n.i}"` : ''}
+          data-css="left:${x}px;top:${ys[k]}px;width:${w}px;height:${h}px">${auSvg(n.icon)}<span class="au-nt"><small>${esc(n.cap)}</small><b>${esc(n.title)}</b>${n.sub ? `<span>${esc(n.sub)}</span>` : ''}</span>${n.bad ? '<i class="au-warn" title="Нужно дописать">!</i>' : ''}</button>`).join('')
+      + list.slice(1).map((_, k) => plus(k + 1 <= firstAct ? 'mid' + (k + 1) : 'act' + (k + 1 - firstAct), ys[k] + h + gap / 2)).join('')
+      + plus('end', ys[ys.length - 1] + h + gap - 2);
+  };
+
+  // ---------- настройки выбранного блока ----------
   const accSelect = (a, kind) => {
     const list = AU.d.accounts.filter(x => x.kind === kind && x.status === 'ready');
-    return list.length ? `<label class="field">${kind === 'telegram' ? 'Чат' : 'Таблица'}<select data-k="account">${list.map(x =>
-      `<option value="${x.id}"${x.id === a.account ? ' selected' : ''}>${esc(x.title)}</option>`).join('')}</select></label>`
+    return list.length ? `<label class="field">${kind === 'telegram' ? 'Чат' : 'Таблица'}<select data-k="account">${a.account == null ? '<option value="">выберите</option>' : ''}${list.map(x =>
+      `<option value="${x.id}"${x.id === a.account ? ' selected' : ''}>${esc(x.title)}</option>`).join('')}</select></label>
+      <button class="linkish" type="button" data-connect="${kind}">${kind === 'telegram' ? 'Подключить ещё чат' : 'Подключить ещё таблицу'}</button>`
       : `<p class="hint bad-text">${kind === 'telegram' ? 'Нет подключённого чата.' : 'Нет подключённой таблицы.'} <button class="linkish" type="button" data-connect="${kind}">Подключить</button></p>`;
-  };
-  const actionHtml = (a, i) => {
-    const meta = cat.actions[a.type];
-    let inner = '';
-    if (a.type === 'telegram.send') inner = accSelect(a, 'telegram') + `<label class="field">Текст сообщения<textarea data-k="text" data-tpl rows="5">${esc(a.text)}</textarea></label>`;
-    else if (a.type === 'email.send') inner = `${cat.email_ready ? '' : '<p class="hint bad-text">Почта CRM не настроена: письмо не уйдёт.</p>'}
-      <label class="field">Кому (через запятую)<input data-k="to" value="${esc((a.to || []).join(', '))}" placeholder="boss@company.ru"></label>
-      <label class="field">Тема<input data-k="subject" data-tpl value="${esc(a.subject)}"></label>
-      <label class="field">Текст письма<textarea data-k="text" data-tpl rows="5">${esc(a.text)}</textarea></label>`;
-    else if (a.type === 'sheets.append') inner = accSelect(a, 'sheets') + `<label class="field">Столбцы строки, по одному на строку<textarea data-k="row" data-tpl rows="5">${esc((a.row || []).join('\n'))}</textarea></label>`;
-    else inner = `<label class="field">Адрес (https)<input data-k="url" value="${esc(a.url)}" placeholder="https://example.ru/hook"></label>
-      <p class="hint">Уйдёт POST с JSON: {"event": "...", "data": {все поля события}}.</p>`;
-    return `<div class="au-act" data-i="${i}"><div class="au-top"><b>${i + 1}. ${esc(meta.title)}</b><span class="sp"></span>
-      <button class="x" type="button" data-rm-act="${i}" aria-label="Убрать действие" data-css="width:28px;height:28px">${svg('x', '')}</button></div>${inner}</div>`;
   };
   const valueInput = c => {
     const hide = ['empty', 'not_empty'].includes(c.op) ? ' hidden' : '', opts = cat.choices[c.field];
-    return opts ? `<select class="inp" data-ck="value"${hide}>${Object.entries(opts).map(([v, l]) => `<option value="${esc(v)}"${String(c.value) === v ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>`
-      : `<input class="inp" data-ck="value" value="${esc(c.value ?? '')}"${hide}>`;
+    return opts ? `<label class="field"${hide}>Значение<select data-ck="value">${Object.entries(opts).map(([v, l]) => `<option value="${esc(v)}"${String(c.value) === v ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label>`
+      : `<label class="field"${hide}>Значение<input data-ck="value" value="${esc(c.value ?? '')}"></label>`;
   };
-  const condHtml = (c, i) => `<div class="au-cond" data-c="${i}">
-    <select class="inp" data-ck="field">${fieldsOf().map(f => `<option value="${esc(f)}"${f === c.field ? ' selected' : ''}>${esc(auLabel(f))}</option>`).join('')}</select>
-    <select class="inp" data-ck="op">${cat.ops.map(o => `<option value="${esc(o)}"${o === c.op ? ' selected' : ''}>${esc(cat.op_labels[o] || o)}</option>`).join('')}</select>
-    ${valueInput(c)}
-    <button class="x" type="button" data-rm-cond="${i}" aria-label="Убрать условие" data-css="width:28px;height:28px">${svg('x', '')}</button></div>`;
-  const draw = () => {
-    const t = draft.spec.trigger;
-    box.innerHTML = `<label class="field">Название<input data-name value="${esc(draft.name)}" maxlength="120"></label>
-      <h3 class="au-h">Когда</h3>
-      <div class="row"><select class="inp" data-trigger>${groups.map(g => `<optgroup label="${esc(g)}">${Object.entries(cat.triggers).filter(([, v]) => v.group === g).map(([k, v]) =>
-        `<option value="${esc(k)}"${k === t.type ? ' selected' : ''}>${esc(v.title)}</option>`).join('')}</optgroup>`).join('')}</select>
-        ${t.type === 'schedule.daily' ? `<input class="inp" type="time" data-time value="${esc(t.time || '19:00')}">` : ''}</div>
-      ${t.type === 'webhook.in' ? `<p class="hint">${draft.hook ? 'Адрес для вызова показан в карточке сценария.' : 'Адрес для вызова появится после сохранения.'}</p>` : ''}
-      <h3 class="au-h">Если <span class="hint">необязательно</span></h3>
-      ${draft.spec.if.map(condHtml).join('')}<button class="btn small ghost" type="button" data-add-cond>+ условие</button>
-      <h3 class="au-h">Сделать</h3>
-      ${draft.spec.actions.map(actionHtml).join('')}
-      <div class="row"><select class="inp" data-new-act>${Object.entries(cat.actions).map(([k, v]) => `<option value="${esc(k)}">${esc(v.title)}</option>`).join('')}</select>
-        <button class="btn small" type="button" data-add-act>+ действие</button></div>
-      <h3 class="au-h">Поля события <span class="hint">нажмите, чтобы вставить в текст</span></h3>
-      <div class="chips">${fieldsOf().map(f => `<button class="chip au-field" type="button" data-field="${esc(f)}">${esc(auLabel(f))}</button>`).join('')}</div>
-      <div class="row au-save"><button class="btn primary" type="button" data-save>Сохранить</button><span class="hint" data-msg>${draft.id ? 'Сохранение выключит сценарий до новой пробы.' : ''}</span></div>`;
-  };
-  // Поля формы в draft: перерисовываем только при смене состава (событие, добавить, убрать).
-  const read = () => {
-    draft.name = $('[data-name]', box).value;
-    const time = $('[data-time]', box); if (time) draft.spec.trigger.time = time.value;
-    $$('[data-c]', box).forEach(el => {
-      const c = draft.spec.if[+el.dataset.c];
-      c.field = $('[data-ck="field"]', el).value; c.op = $('[data-ck="op"]', el).value;
-      if (['empty', 'not_empty'].includes(c.op)) delete c.value; else c.value = $('[data-ck="value"]', el).value;
-    });
-    $$('[data-i]', box).forEach(el => {
-      const a = draft.spec.actions[+el.dataset.i];
-      $$('[data-k]', el).forEach(inp => {
-        const k = inp.dataset.k, v = inp.value;
-        a[k] = k === 'account' ? +v : k === 'to' ? v.split(/[,;\s]+/).filter(Boolean) : k === 'row' ? v.split('\n').map(x => x.trim()).filter(Boolean) : v;
-      });
-    });
-  };
-  draw();
-  box.addEventListener('focusin', e => { if (e.target.matches('[data-tpl]')) lastTpl = e.target; });
-  box.addEventListener('change', e => {
-    if (e.target.matches('[data-trigger]')) {
-      read();
-      draft.spec.trigger = {type: e.target.value, ...(e.target.value === 'schedule.daily' ? {time: '19:00'} : {})};
-      draft.spec.if = draft.spec.if.filter(c => fieldsOf().includes(c.field));
-      draw();
-    } else if (e.target.matches('[data-ck="field"]')) {
-      read();
-      const c = draft.spec.if[+e.target.closest('[data-c]').dataset.c];
-      const opts = cat.choices[c.field]; c.value = opts ? Object.keys(opts)[0] : '';
-      draw();
-    } else if (e.target.matches('[data-ck="op"]')) {
-      $('[data-ck="value"]', e.target.closest('[data-c]')).hidden = ['empty', 'not_empty'].includes(e.target.value);
+  const chips = () => `<h3 class="au-h">Поля события <span class="hint">нажмите, чтобы вставить в текст</span></h3>
+    <div class="chips">${fieldsOf().map(f => `<button class="chip au-field" type="button" data-field="${esc(f)}">${esc(auLabel(f))}</button>`).join('')}</div>`;
+  const drawInsp = () => {
+    const n = nodes().find(x => x.id === sel) || nodes()[0]; sel = n.id;
+    let html = '';
+    if (n.kind === 'trigger') {
+      const t = draft.spec.trigger;
+      html = `<h2>Когда запускать</h2><label class="field">Событие<select data-trigger>${groups.map(g => `<optgroup label="${esc(g)}">${Object.entries(cat.triggers).filter(([, v]) => v.group === g).map(([k, v]) =>
+        `<option value="${esc(k)}"${k === t.type ? ' selected' : ''}>${esc(v.title)}</option>`).join('')}</optgroup>`).join('')}</select></label>
+        ${t.type === 'schedule.daily' ? `<label class="field">Время<input type="time" data-time value="${esc(t.time || '19:00')}"></label>` : ''}
+        ${t.type === 'webhook.in' ? `<p class="hint">${draft.hook ? 'Адрес для вызова показан в карточке сценария.' : 'Адрес для вызова появится после сохранения.'}</p>` : ''}
+        <p class="hint">Поля этого события можно проверять в условиях и вставлять в тексты действий.</p>
+        <div class="chips">${fieldsOf().map(f => `<span class="chip">${esc(auLabel(f))}</span>`).join('')}</div>`;
+    } else if (n.kind === 'cond') {
+      const c = draft.spec.if[n.i];
+      html = `<h2>Условие</h2><p class="hint">Действия выполнятся, только если выполнены все условия.</p>
+        <label class="field">Поле<select data-ck="field">${fieldsOf().map(f => `<option value="${esc(f)}"${f === c.field ? ' selected' : ''}>${esc(auLabel(f))}</option>`).join('')}</select></label>
+        <label class="field">Проверка<select data-ck="op">${cat.ops.map(o => `<option value="${esc(o)}"${o === c.op ? ' selected' : ''}>${esc(cat.op_labels[o] || o)}</option>`).join('')}</select></label>
+        ${valueInput(c)}<div class="row au-del"><button class="btn small danger" type="button" data-rm>Убрать условие</button></div>`;
+    } else {
+      const a = draft.spec.actions[n.i];
+      let inner = '';
+      if (a.type === 'telegram.send') inner = accSelect(a, 'telegram') + `<label class="field">Текст сообщения<textarea data-k="text" data-tpl rows="6">${esc(a.text)}</textarea></label>`;
+      else if (a.type === 'email.send') inner = `${cat.email_ready ? '' : '<p class="hint bad-text">Почта CRM не настроена: письмо не уйдёт.</p>'}
+        <label class="field">Кому (через запятую)<input data-k="to" value="${esc((a.to || []).join(', '))}" placeholder="boss@company.ru"></label>
+        <label class="field">Тема<input data-k="subject" data-tpl value="${esc(a.subject)}"></label>
+        <label class="field">Текст письма<textarea data-k="text" data-tpl rows="6">${esc(a.text)}</textarea></label>`;
+      else if (a.type === 'sheets.append') inner = accSelect(a, 'sheets') + `<label class="field">Столбцы строки, по одному на строку<textarea data-k="row" data-tpl rows="6">${esc((a.row || []).join('\n'))}</textarea></label>`;
+      else inner = `<label class="field">Адрес (https)<input data-k="url" value="${esc(a.url)}" placeholder="https://example.ru/hook"></label>
+        <p class="hint">Уйдёт POST с JSON: {"event": "...", "data": {все поля события}}.</p>`;
+      html = `<h2>${esc(cat.actions[a.type].title)}</h2><p class="hint">${esc(cat.actions[a.type].about)}</p>${inner}
+        ${a.type === 'webhook.send' ? '' : chips()}
+        <div class="row au-del">${n.i > 0 ? '<button class="btn small" type="button" data-move="-1">Выше</button>' : ''}${n.i < draft.spec.actions.length - 1 ? '<button class="btn small" type="button" data-move="1">Ниже</button>' : ''}
+          ${draft.spec.actions.length > 1 ? '<button class="btn small danger" type="button" data-rm>Убрать действие</button>' : ''}</div>`;
     }
+    insp.innerHTML = html;
+  };
+  const read = () => {
+    draft.name = $('[data-name]', root).value;
+    const n = nodes().find(x => x.id === sel);
+    if (!n) return;
+    if (n.kind === 'trigger') { const time = $('[data-time]', insp); if (time) draft.spec.trigger.time = time.value; }
+    else if (n.kind === 'cond') {
+      const c = draft.spec.if[n.i];
+      c.field = $('[data-ck="field"]', insp).value; c.op = $('[data-ck="op"]', insp).value;
+      if (['empty', 'not_empty'].includes(c.op)) delete c.value; else c.value = $('[data-ck="value"]', insp).value;
+    } else {
+      const a = draft.spec.actions[n.i];
+      $$('[data-k]', insp).forEach(inp => {
+        const k = inp.dataset.k, v = inp.value;
+        a[k] = k === 'account' ? (v ? +v : null) : k === 'to' ? v.split(/[,;\s]+/).filter(Boolean) : k === 'row' ? v.split('\n').map(x => x.trim()).filter(Boolean) : v;
+      });
+    }
+  };
+  const redraw = () => { drawBoard(); drawInsp(); };
+  const select = id => { read(); sel = id; redraw(); insp.scrollTop = 0; if (matchMedia('(max-width:860px)').matches) insp.scrollIntoView({behavior: reduce ? 'auto' : 'smooth', block: 'start'}); };
+  const touch = () => {
+    dirty = true;
+    if (saved) { saved = null; $('[data-acts]', root).innerHTML = ''; $('[data-save]', root).textContent = 'Сохранить'; }
+  };
+  const close = async () => {
+    if (dirty && !await askConfirm('Закрыть без сохранения? Правки пропадут.', 'Закрыть', true)) return;
+    root.remove(); document.documentElement.classList.remove('au-lock'); document.removeEventListener('keydown', onKey, true);
+    AU.studioRefresh = null;
+    if (saved || draft.id) reload();
+  };
+  const onKey = e => { if (e.key === 'Escape' && !$('.rvm') && root.isConnected) { e.stopImmediatePropagation(); close(); } };
+  document.addEventListener('keydown', onKey, true);
+  AU.studioRefresh = () => redraw(); // подключили чат или таблицу: обновить выбор
+  redraw();
+  addEventListener('resize', () => root.isConnected && drawBoard());
+
+  // меню «+»: что можно вставить в это место
+  const plusMenu = (btn, where) => {
+    $('.au-menu', root)?.remove();
+    const canCond = where.startsWith('mid'), at = +where.replace(/\D/g, '') || 0;
+    const items = [...(canCond ? [['cond', 'Условие']] : []), ...Object.entries(cat.actions).map(([k, v]) => [k, v.title])];
+    const m = document.createElement('div'); m.className = 'au-menu'; m.setAttribute('role', 'menu');
+    m.innerHTML = items.map(([k, t]) => `<button type="button" role="menuitem" data-ins="${esc(k)}">${auSvg(k === 'cond' ? 'cond' : k)}${esc(t)}</button>`).join('');
+    board.appendChild(m);
+    m.style.left = Math.max(8, btn.offsetLeft + 34) + 'px'; m.style.top = Math.max(8, btn.offsetTop - 10) + 'px';
+    m.addEventListener('click', e => {
+      const b = e.target.closest('[data-ins]'); if (!b) return;
+      read();
+      const k = b.dataset.ins, firstAct = 1 + draft.spec.if.length;
+      if (k === 'cond') {
+        const f = fieldsOf()[0], opts = cat.choices[f];
+        const pos = Math.min(at - 1, draft.spec.if.length);
+        draft.spec.if.splice(pos, 0, {field: f, op: '=', value: opts ? Object.keys(opts)[0] : ''}); sel = 'c' + pos;
+      } else {
+        const pos = where === 'end' ? draft.spec.actions.length : where.startsWith('mid') ? Math.max(0, at - firstAct) : at;
+        draft.spec.actions.splice(pos, 0, auBlank(k)); sel = 'a' + pos;
+      }
+      m.remove(); touch(); redraw();
+    });
+  };
+
+  // перетаскивание действий: меняем порядок
+  let drag = null;
+  board.addEventListener('pointerdown', e => {
+    const n = e.target.closest('[data-drag]'); if (!n || e.button) return;
+    drag = {el: n, i: +n.dataset.drag, y0: e.clientY, top: n.offsetTop, moved: false};
   });
-  box.addEventListener('click', async e => {
-    const b = e.target.closest('button'); if (!b) return;
+  board.addEventListener('pointermove', e => {
+    if (!drag) return;
+    const dy = e.clientY - drag.y0;
+    if (!drag.moved && Math.abs(dy) < 6) return;
+    if (!drag.moved) { drag.moved = true; try { drag.el.setPointerCapture(e.pointerId); } catch (err) { /* без захвата тоже работает */ } drag.el.classList.add('dragging'); }
+    drag.el.style.top = drag.top + dy + 'px';
+  });
+  const drop = e => {
+    if (!drag) return;
+    const d = drag; drag = null;
+    if (!d.moved) return;
+    d.el.classList.remove('dragging');
+    const step = AU_NODE.h + AU_NODE.gap, to = Math.max(0, Math.min(draft.spec.actions.length - 1, d.i + Math.round((e.clientY - d.y0) / step)));
+    read();
+    const [a] = draft.spec.actions.splice(d.i, 1); draft.spec.actions.splice(to, 0, a);
+    sel = 'a' + to; d.el.dataset.skipClick = '1'; if (to !== d.i) touch(); redraw();
+  };
+  board.addEventListener('pointerup', drop);
+  board.addEventListener('pointercancel', () => { if (drag?.moved) redraw(); drag = null; }); // палец начал прокрутку: порядок не трогаем
+
+  root.addEventListener('click', async e => {
+    if (!e.target.closest('.au-menu,[data-plus]')) $('.au-menu', root)?.remove();
+    const b = e.target.closest('button'); if (!b || !root.contains(b)) return;
     const d = b.dataset;
+    if (d.node) { if (d.skipClick) { delete d.skipClick; return; } select(d.node); return; }
+    if (d.plus) { plusMenu(b, d.plus); return; }
+    if ('shut' in d) { close(); return; }
     if (d.field) {
-      const el = lastTpl && box.contains(lastTpl) ? lastTpl : $('[data-tpl]', box);
+      const el = lastTpl && insp.contains(lastTpl) ? lastTpl : $('[data-tpl]', insp);
       if (!el) return;
       const ins = `{${d.field}}`, s = el === lastTpl ? el.selectionStart : el.value.length; // ещё не ставили курсор: в конец
       el.value = el.value.slice(0, s) + ins + el.value.slice(el === lastTpl ? el.selectionEnd : s);
       el.focus(); el.selectionStart = el.selectionEnd = s + ins.length;
+      read(); touch(); drawBoard();
       return;
     }
-    if (d.connect) { closeDrawer(); d.connect === 'telegram' ? auTelegram() : auSheet(); return; }
+    if (d.connect) { read(); d.connect === 'telegram' ? auTelegram() : auSheet(); return; }
     read();
-    if ('addCond' in d) { draft.spec.if.push({field: fieldsOf()[0], op: '=', value: ''}); draw(); }
-    else if (d.rmCond) { draft.spec.if.splice(+d.rmCond, 1); draw(); }
-    else if ('addAct' in d) { draft.spec.actions.push(auBlank($('[data-new-act]', box).value)); draw(); }
-    else if (d.rmAct) { draft.spec.actions.splice(+d.rmAct, 1); draw(); }
-    else if ('save' in d) {
+    const n = nodes().find(x => x.id === sel);
+    if ('rm' in d && n) {
+      if (n.kind === 'cond') { draft.spec.if.splice(n.i, 1); sel = n.i ? 'c' + (n.i - 1) : 'trigger'; }
+      else { draft.spec.actions.splice(n.i, 1); sel = 'a' + Math.max(0, n.i - 1); }
+      touch(); redraw();
+    } else if (d.move && n) {
+      const to = n.i + +d.move, [a] = draft.spec.actions.splice(n.i, 1);
+      draft.spec.actions.splice(to, 0, a); sel = 'a' + to; touch(); redraw();
+    } else if ('save' in d) {
       busy(b, true);
       try {
-        const saved = await api('/api/automations', {method: 'POST', body: {id: draft.id, name: draft.name, spec: draft.spec}});
-        draft.id = saved.id; draft.hook = saved.hook;
+        const r = await api('/api/automations', {method: 'POST', body: {id: draft.id, name: draft.name, spec: draft.spec}});
+        draft.id = r.id; draft.hook = r.hook; saved = r; dirty = false;
         AU.d = await api('/api/automations');
-        busy(b, false);
-        const row = $('.au-save', box);
-        row.innerHTML = `<span class="chip good">сохранено</span><button class="btn primary" type="button" data-try>Пробный запуск</button>
-          <button class="btn" type="button" data-save>Сохранить снова</button><button class="btn" type="button" data-close>Готово</button>`;
-        $('[data-try]', row).onclick = ev => auTest(ev.currentTarget, saved.id, closeDrawer);
-        $('[data-close]', row).onclick = () => { closeDrawer(); reload(); };
-        $('#dr-x').onclick = () => { closeDrawer(); reload(); }; // список за панелью должен показать новый сценарий
+        busy(b, false); b.textContent = 'Сохранено';
+        $('[data-acts]', root).innerHTML = '<button class="btn" type="button" data-try>Пробный запуск</button>';
+        $('[data-try]', root).onclick = ev => auTest(ev.currentTarget, r.id, () => { root.remove(); document.documentElement.classList.remove('au-lock'); AU.studioRefresh = null; });
+        toast(draft.hook ? 'Сохранено. Адрес вебхука — в карточке сценария.' : 'Сохранено. Теперь пробный запуск.');
       } catch (err) { busy(b, false); toast(err.message, true); }
     }
   });
+  root.addEventListener('focusin', e => { if (e.target.matches('[data-tpl]')) lastTpl = e.target; });
+  root.addEventListener('input', e => { if (insp.contains(e.target) || e.target.matches('[data-name]')) { read(); touch(); drawBoard(); } });
+  root.addEventListener('change', e => {
+    if (!insp.contains(e.target)) return;
+    if (e.target.matches('[data-trigger]')) {
+      draft.spec.trigger = {type: e.target.value, ...(e.target.value === 'schedule.daily' ? {time: '19:00'} : {})};
+      draft.spec.if = draft.spec.if.filter(c => fieldsOf().includes(c.field));
+      touch(); redraw();
+    } else if (e.target.matches('[data-ck="field"]')) {
+      const c = draft.spec.if[+sel.slice(1)], opts = cat.choices[e.target.value];
+      c.field = e.target.value; c.value = opts ? Object.keys(opts)[0] : ''; touch(); redraw();
+    } else { read(); touch(); redraw(); }
+  });
+  setTimeout(() => (draft.name ? board : $('[data-name]', root)).focus?.({preventScroll: true}), 50);
 }
