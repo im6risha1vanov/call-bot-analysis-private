@@ -30,3 +30,50 @@
   .au-cond{grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto}
   .au-cond [data-ck="value"]{grid-column:1/3}
 }
+/* визуальный редактор */
+.au-lock,.au-lock body{overflow:hidden}
+.au-studio{position:fixed;inset:0;z-index:150;background:var(--bg);display:flex;flex-direction:column;animation:au-in .22s var(--ease,ease) both}
+@keyframes au-in{from{opacity:0;transform:translateY(8px)}}
+.au-bar{display:flex;align-items:center;gap:8px;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--surface)}
+.au-name{font-size:15px;font-weight:600;min-width:0;flex:1;max-width:420px}
+.au-acts{display:flex;gap:8px}
+.au-split{flex:1;display:grid;grid-template-columns:minmax(0,1fr) 380px;min-height:0}
+.au-canvas{overflow:auto;position:relative;background-color:var(--bg);background-image:radial-gradient(var(--line) 1px,transparent 1px);background-size:18px 18px}
+.au-board{position:relative;margin:0 auto}
+.au-lines{position:absolute;left:0;top:0;pointer-events:none;fill:none;stroke:var(--muted);stroke-width:1.6}
+.au-lines .au-tail{stroke-dasharray:4 4;opacity:.6}
+.au-node{position:absolute;display:flex;align-items:center;gap:12px;padding:10px 14px;text-align:left;border:1.5px solid var(--line);border-radius:14px;background:var(--surface);color:var(--fg);cursor:pointer;font:inherit;box-shadow:0 1px 2px rgba(0,0,0,.06);transition:border-color .15s, box-shadow .15s;user-select:none}
+@media (pointer:fine){.au-node.act{touch-action:none}} /* на телефоне порядок кнопками «Выше»/«Ниже», палец листает схему */
+.au-node:hover{border-color:var(--accent)}
+.au-node.on{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.au-node.bad{border-color:var(--bad)}
+.au-node.act{cursor:grab}
+.au-node.dragging{cursor:grabbing;z-index:5;box-shadow:var(--shadow-lg,0 8px 24px rgba(0,0,0,.18));transition:none}
+.au-node .au-ic{width:34px;height:34px;padding:7px;border-radius:10px;flex:none;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;background:var(--accent-soft);color:var(--accent)}
+.au-node.trigger .au-ic{background:var(--heat-soft);color:var(--heat)}
+.au-node.cond .au-ic{background:var(--surface-2);color:var(--muted)}
+.au-nt{display:flex;flex-direction:column;min-width:0;line-height:1.3}
+.au-nt small{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
+.au-nt b,.au-nt span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.au-nt b{font-size:13.5px}
+.au-nt span{font-size:12px;color:var(--muted)}
+.au-warn{position:absolute;top:-8px;right:-8px;width:20px;height:20px;border-radius:50%;background:var(--bad);color:#fff;font:700 12px/20px var(--body,inherit);text-align:center;font-style:normal}
+.au-plus{position:absolute;width:26px;height:26px;border-radius:50%;border:1.5px solid var(--line);background:var(--surface);color:var(--muted);font:600 16px/1 var(--body,inherit);cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;transition:transform .12s, border-color .15s, color .15s}
+.au-plus:hover{border-color:var(--accent);color:var(--accent);transform:scale(1.12)}
+.au-menu{position:absolute;z-index:6;min-width:220px;background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow-lg,0 8px 24px rgba(0,0,0,.18));padding:6px;display:flex;flex-direction:column}
+.au-menu button{display:flex;align-items:center;gap:10px;padding:8px 10px;border:0;border-radius:8px;background:none;color:var(--fg);font:inherit;text-align:left;cursor:pointer}
+.au-menu button:hover{background:var(--surface-2)}
+.au-menu .au-ic{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round;color:var(--accent)}
+.au-insp{border-left:1px solid var(--line);background:var(--surface);overflow:auto;padding:18px 18px 28px;display:flex;flex-direction:column;gap:12px}
+.au-insp h2{font-size:16px;margin:0}
+.au-insp .hint{margin:0}
+.au-insp .linkish{align-self:flex-start;font-size:12.5px}
+.au-del{margin-top:6px}
+@media (max-width:860px){
+  .au-split{display:block;overflow:auto}
+  .au-canvas{height:52vh;border-bottom:1px solid var(--line)}
+  .au-insp{border-left:0;overflow:visible}
+  .au-bar{flex-wrap:wrap;padding:8px 12px}
+  .au-name{flex-basis:100%;max-width:none;order:-1}
+}
+@media (prefers-reduced-motion:reduce){.au-studio{animation:none}}
