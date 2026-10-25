@@ -289,6 +289,9 @@ async def maybe_update(pool, now: datetime | None = None, call=None, force: bool
         local = now.astimezone(ZoneInfo(client['timezone'] or 'Europe/Moscow'))
         if not force and local.hour < hour():
             continue
+        from crm.company import ai_over_limit
+        if await ai_over_limit(pool, client['id']):  # дневной лимит компании на ИИ: карточки догонят завтра
+            continue
         for m in await managers(pool, client['id']):
             try:
                 if force or await due(pool, client['id'], m['ext'], local.date()):

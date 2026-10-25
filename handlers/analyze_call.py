@@ -37,6 +37,9 @@ _bot = Bot(token=os.environ["BOT_TOKEN"])
 
 async def _over_daily_limit(pool: asyncpg.Pool, client: asyncpg.Record) -> bool:
     from automatic.jobs import installed, over_budget
+    from crm.company import ai_over_limit
+    if await ai_over_limit(pool, client["id"]):  # дневной лимит компании в ₽ (настройки компании)
+        return True
     if await installed(pool):
         return await over_budget(pool, client)
     spent = await pool.fetchval(
@@ -147,7 +150,7 @@ async def analyze_call(pool: asyncpg.Pool, task: asyncpg.Record) -> dict:
                 # Разбор по результату: один запрос вместо оценки и короткого
                 # отчёта. Балла нет; level нужен только для статистики.
                 review, cost = await review_prompts.run_common_review(
-                    pool, transcript, await _review_meta(pool, client, call), bot=_bot)
+                    pool, transcript, await _review_meta(pool, client, call), bot=_bot, company=client['id'])
                 analysis, score, level = review, None, review_engine.level(review)
                 short_report = {"result": review.get("rop_line"), "good": [], "weak": []}
             else:

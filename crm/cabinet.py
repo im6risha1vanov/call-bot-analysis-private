@@ -1,8 +1,9 @@
-"""Кабинет клиента колл-центра: его лист в таблице «Прозвон лидов».
+"""Кабинет клиента колл-центра: его лист в таблице «Прозвон лидов» или его номера в базе.
 
 Сводка таблицы даёт список клиентов и тарифы, лист клиента — номера и три
 попытки звонка по каждому. Клиент видит только свой лист: имя листа берём из
-сессии, а не из запроса.
+сессии, а не из запроса. Компания без таблицы колл-центра ведёт клиентов в базе (crm/callcenter_db.py):
+она отдаёт те же строки, что лист, и всё ниже считается одним кодом.
 """
 from __future__ import annotations
 
@@ -143,28 +144,70 @@ def parse_client(rows) -> dict:
     }
 
 
-async def summary() -> dict:
-    sheet = gsheets.leads_sheet()
+async def sheet_of(pool, client_id: int | None) -> str:
+    """Таблица колл-центра компании (у нашей — KITCHEN_SHEET_ID из .env)."""
+    from . import company
+    sheet = await company.setting(pool, client_id, 'callcenter_sheet')
     if not sheet:
         raise LookupError('Таблица колл-центра не подключена.')
-    return parse_summary(await gsheets.values(sheet, 'Сводка!A1:F80'))
+    gsheets.allow(sheet)
+    return sheet
 
 
-async def cabinet(name: str) -> dict:
-    info = await summary()
+class SheetSource:
+    """Таблица «Прозвон лидов»: лист «Сводка» и по листу на клиента."""
+    mode = 'sheet'
+
+    def __init__(self, sheet: str):
+        self.sheet = sheet
+
+    async def summary(self) -> dict:
+        return parse_summary(await gsheets.values(self.sheet, 'Сводка!A1:F80'))
+
+    async def rows(self, name: str) -> list:
+        return await gsheets.values(self.sheet, f"'{name.replace(chr(39), chr(39) * 2)}'!A1:P6000")
+
+
+async def source_of(pool, client_id: int | None):
+    """Откуда колл-центр компании: её таблица, а без таблицы — база (если модуль подключён)."""
+    from . import callcenter_db, company
+    if await company.setting(pool, client_id, 'callcenter_sheet'):
+        return SheetSource(await sheet_of(pool, client_id))
+    if await company.has_module(pool, client_id, 'callcenter'):
+        return callcenter_db.DbSource(pool, client_id)
+    raise LookupError('Колл-центр не подключён.')
+
+
+def _source(src):
+    return SheetSource(src) if isinstance(src, str) else src
+
+
+async def summary(src) -> dict:
+    return await _source(src).summary()
+
+
+async def client_names(pool, client_id: int | None) -> list[str]:
+    """Клиенты колл-центра компании; нет колл-центра — пусто."""
+    try:
+        return [c['name'] for c in (await summary(await source_of(pool, client_id)))['clients']]
+    except LookupError:
+        return []
+
+
+async def cabinet(src, name: str) -> dict:
+    src = _source(src)
+    info = await src.summary()
     row = next((c for c in info['clients'] if c['name'] == name), None)
     if row is None:
-        raise LookupError('Такого клиента нет в таблице колл-центра.')
-    rows = await gsheets.values(gsheets.leads_sheet(), f"'{name.replace(chr(39), chr(39) * 2)}'!A1:P6000")
-    return {'name': name, 'summary': row, 'tariffs': info['tariffs'], **parse_client(rows)}
+        raise LookupError('Такого клиента нет в колл-центре.')
+    return {'name': name, 'summary': row, 'tariffs': info['tariffs'], **parse_client(await src.rows(name))}
 
 
-async def callcenter() -> dict:
-    """Колл-центр целиком для директора: все клиенты из «Прозвон лидов» в одном ответе."""
-    info = await summary()
-    sheet = gsheets.leads_sheet()
-    sheets = await asyncio.gather(*(gsheets.values(sheet, f"'{c['name'].replace(chr(39), chr(39) * 2)}'!A1:P6000")
-                                    for c in info['clients']), return_exceptions=True)
+async def callcenter(src) -> dict:
+    """Колл-центр целиком для директора: все клиенты колл-центра в одном ответе."""
+    src = _source(src)
+    info = await src.summary()
+    sheets = await asyncio.gather(*(src.rows(c['name']) for c in info['clients']), return_exceptions=True)
     clients, callbacks, sources = [], [], defaultdict(lambda: defaultdict(int))
     days = defaultdict(lambda: defaultdict(int))
     bases = []
@@ -193,7 +236,7 @@ async def callcenter() -> dict:
         bases += [{**b, 'client': row['name']} for b in p['bases'] if b['date']]
     callbacks.sort(key=lambda x: x['last'], reverse=True)
     return {
-        'tariffs': info['tariffs'], 'clients': clients, 'total': dict(total),
+        'mode': getattr(src, 'mode', 'db'), 'tariffs': info['tariffs'], 'clients': clients, 'total': dict(total),
         'days': [{'day': d, **v} for d, v in sorted(days.items())][-45:],
         'callbacks': callbacks[:150],
         'sources': sorted(({'client': c, 'name': n, **v} for (c, n), v in sources.items()), key=lambda x: -x['total'])[:60],

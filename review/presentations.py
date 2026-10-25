@@ -28,6 +28,8 @@ from pathlib import Path
 
 import httpx
 
+from tools import home_client_id
+
 from . import engine
 
 log = logging.getLogger(__name__)
@@ -498,7 +500,7 @@ async def maybe_run(pool, now: datetime | None = None) -> int:
     if _last_sync and now - _last_sync < timedelta(minutes=SYNC_MINUTES):
         return 0
     _last_sync = now
-    client_id = await pool.fetchval('SELECT id FROM clients WHERE processing_enabled ORDER BY id LIMIT 1')
+    client_id = await home_client_id(pool)  # реестр презентаций из .env — наш
     if client_id is None:
         return 0
     import asyncio

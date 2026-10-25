@@ -80,10 +80,10 @@ def when(value) -> str | None:
 
 async def overview(pool, who) -> dict:
     tg = editor(who)
-    await prompts.seed(pool)
+    await prompts.seed(pool, who.actor.client_id)
     kinds = []
     for kind in prompts.KINDS:
-        _, source, version = await prompts.resolve(pool, kind, tg)
+        _, source, version = await prompts.resolve(pool, kind, tg, who.actor.client_id)
         kinds.append({'kind': kind, 'title': prompts.TITLES[kind], 'source': SOURCE[source], 'version': version})
     return {'kinds': kinds}
 
@@ -91,15 +91,15 @@ async def overview(pool, who) -> dict:
 async def state(pool, who, kind: str) -> dict:
     tg = editor(who)
     kind = kind_of(kind)
-    body, source, version = await prompts.resolve(pool, kind, tg)
-    mine = await prompts.active(pool, kind, tg)
-    common = await prompts.active(pool, kind, 0)
+    body, source, version = await prompts.resolve(pool, kind, tg, who.actor.client_id)
+    mine = await prompts.active(pool, kind, tg, who.actor.client_id)
+    common = await prompts.active(pool, kind, 0, who.actor.client_id)
     people = await names(pool, who.actor.client_id)
     versions = [{
         'id': v['id'], 'at': when(v['created_at']), 'scope': 'для всех' if v['owner_tg'] == 0 else 'личная',
         'who': people.get(v['created_by'], 'бот') if v['created_by'] else 'бот', 'note': v['note'] or '',
         'mine': bool(mine and mine['id'] == v['id']), 'common': bool(common and common['id'] == v['id']),
-    } for v in await prompts.versions(pool, kind, tg, limit=20)]
+    } for v in await prompts.versions(pool, kind, tg, limit=20, company=who.actor.client_id)]
     return {'kind': kind, 'title': prompts.TITLES[kind], 'body': body, 'source': SOURCE[source], 'version': version,
             'personal': mine is not None, 'hint': HINTS.get(kind), 'versions': versions}
 
@@ -137,7 +137,7 @@ async def tell_others(pool, who, kind: str, version: int, note: str | None) -> N
     for chat in prompts.editors():
         if chat == tg:
             continue
-        mine = await prompts.active(pool, kind, chat)
+        mine = await prompts.active(pool, kind, chat, who.actor.client_id)
         tail = ' У вас своя личная версия, она остаётся; общую можно включить в «🗂 Сохранения».' if mine else ''
         await telegram.send(chat, f'ℹ️ {name} изменил промт «{prompts.TITLES[kind]}» для всех '
                                   f'(сохранение #{version}, в CRM): {note or "без описания"}.{tail}')
@@ -151,7 +151,7 @@ async def save(pool, who, kind: str, body, note, scope: str, token) -> dict:
     if not token or not hmac.compare_digest(str(token), sign(tg, kind, body)):
         raise ValueError('Сначала посмотрите пример по этому тексту.')
     note = str(note or '').strip()[:300] or None
-    version = await prompts.save(pool, kind, body, note, tg, scope)
+    version = await prompts.save(pool, kind, body, note, tg, scope, who.actor.client_id)
     if scope == 'all':
         await tell_others(pool, who, kind, version, note)
     return {'version': version}
@@ -159,7 +159,7 @@ async def save(pool, who, kind: str, body, note, scope: str, token) -> dict:
 
 async def version_body(pool, who, version_id: int) -> dict:
     tg = editor(who)
-    row = await prompts.version(pool, version_id)
+    row = await prompts.version(pool, version_id, who.actor.client_id)
     if row is None or row['owner_tg'] not in (0, tg):
         raise ValueError('Сохранение не найдено.')
     return {'id': row['id'], 'kind': row['kind'], 'body': row['body'], 'note': row['note'] or ''}
@@ -167,14 +167,14 @@ async def version_body(pool, who, version_id: int) -> dict:
 
 async def use(pool, who, version_id: int, scope: str) -> dict:
     tg = editor(who)
-    row = await prompts.version(pool, version_id)
+    row = await prompts.version(pool, version_id, who.actor.client_id)
     if row is None:
         raise ValueError('Сохранение не найдено.')
-    await prompts.activate(pool, row['kind'], version_id, tg, scope)
+    await prompts.activate(pool, row['kind'], version_id, tg, scope, who.actor.client_id)
     if scope == 'all':
         await tell_others(pool, who, row['kind'], version_id, f'возврат к сохранению #{version_id}')
     return {'kind': row['kind']}
 
 
 async def drop_personal(pool, who, kind: str) -> None:
-    await prompts.drop_personal(pool, kind_of(kind), editor(who))
+    await prompts.drop_personal(pool, kind_of(kind), editor(who), who.actor.client_id)

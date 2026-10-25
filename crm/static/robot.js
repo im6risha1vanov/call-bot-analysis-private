@@ -32,7 +32,7 @@ VIEWS.robot = async (view, arg) => {
       <p class="hint">Робот сам обзванивает ваши номера по расписанию, выясняет интерес и записывает итог каждого звонка. Вы видите звонки, записи разговоров и аналитику здесь.</p></section></div>`;
     return;
   }
-  const tabs = RB_TABS.filter(t => !t[2] || t[2] === RB.st.role);
+  const tabs = RB_TABS.filter(t => !t[2] || (t[2] === RB.st.role && RB.st.home !== false)); // голос и настройки — нашего робота
   if (!tabs.some(t => t[0] === RB.tab)) RB.tab = 'campaigns';
   const owners = RB.st.owners.length > 1 && RB.tab !== 'voice' && RB.tab !== 'settings'
     ? `<select class="inp" id="rb-owner" aria-label="Чей кабинет">${RB.st.owners.map(o => `<option value="${esc(o.id)}"${o.id === RB.st.owner ? ' selected' : ''}>${esc(o.name)}</option>`).join('')}</select>` : '';
@@ -67,12 +67,12 @@ async function operatorForm(id, copyFrom) {
     name: '', gender: 'female', company: '', lead_source: '', goal: '', greeting: 'Здравствуйте, ', farewell: 'Спасибо, хорошего дня.', example: '',
     transfer_to: '', plan: [''], rules: [], facts: [], fields: [], max_items: 10};
   const builtin = id && src.builtin;
-  const ro = RB.st.readonly ? ' disabled' : '';
+  const ro = RB.st.readonly || (builtin && RB.st.home === false) ? ' disabled' : ''; // встроенный общий: другая компания правит копию
   const list = (key, title, hint) => `<section class="op-list" data-list="${key}"><h3>${title} <span class="muted">до ${src.max_items || 10}</span></h3>
     <p class="muted">${hint}</p><div class="op-items">${(src[key].length ? src[key] : (key === 'plan' ? [''] : [])).map(v => opItem(v, ro)).join('')}</div>
     ${ro ? '' : '<button class="btn small" data-add>+ Добавить</button>'}</section>`;
   const box = modal(`<header class="rvm-head"><div><h2>${id ? (builtin ? 'Встроенный оператор' : 'Оператор') : copyFrom ? 'Копия оператора' : 'Новый оператор'}</h2>
-      <div class="rvm-mut">${builtin ? (src.edited ? 'Изменён в CRM. «Вернуть исходный» отменит правки.' : 'Правки сразу идут во все его кампании.') : 'Робот говорит только то, что здесь написано.'}</div></div>
+      <div class="rvm-mut">${builtin ? (RB.st.home === false ? 'Образец: чтобы поменять, сделайте копию.' : src.edited ? 'Изменён в CRM. «Вернуть исходный» отменит правки.' : 'Правки сразу идут во все его кампании.') : 'Робот говорит только то, что здесь написано.'}</div></div>
       <button class="rvm-x" aria-label="Закрыть">×</button></header>
     <div class="rvm-body op-form">
       ${OP_GUIDE}

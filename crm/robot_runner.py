@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
-from . import robot, robot_store
+from . import company, robot, robot_store
 
 log = logging.getLogger('crm.robot')
 TICK_S = 15
@@ -124,6 +124,10 @@ async def tick(pool, now: datetime | None = None) -> dict | None:
     if not running:
         return None
     clients = set(await robot_store.enabled_clients(pool))
+    for c in running:  # кабинет другой компании звонит, пока у неё включён модуль «Робот»
+        cid = robot_store.company_of_owner(c['owner'])
+        if cid is not None and await company.has_module(pool, cid, 'robot'):
+            clients.add(c['owner'])
     live = [c['id'] for c in running if (not c['owner'] or c['owner'] in clients) and robot_store.in_window(c, now)]
     if not live:
         return None

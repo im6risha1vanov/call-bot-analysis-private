@@ -21,6 +21,8 @@ import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from tools import home_client_id
+
 from .presentations import match_employee
 
 log = logging.getLogger(__name__)
@@ -179,7 +181,7 @@ async def maybe_run(pool, now: datetime | None = None) -> dict | None:
     if _last_sync and now - _last_sync < timedelta(minutes=SYNC_MINUTES):
         return None
     _last_sync = now
-    client_id = await pool.fetchval('SELECT id FROM clients WHERE processing_enabled ORDER BY id LIMIT 1')
+    client_id = await home_client_id(pool)  # рабочий Telegram из .env — наш
     if client_id is None:
         return None
     client = make_client()
