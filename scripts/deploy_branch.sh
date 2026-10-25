@@ -3,7 +3,8 @@
 #   cd /opt/callbot-astra && git -c safe.directory=/opt/callbot-astra fetch private-backup && \
 #   git -c safe.directory=/opt/callbot-astra show private-backup/<ветка>:scripts/deploy_branch.sh | bash -s <ветка>
 # Останавливается, если на сервере есть незакоммиченные правки. Конфликт только в метках ?v= файла
-# crm/static/index.html решает в пользу ветки (у неё те же строки и новые метки), любой другой — отменяет merge.
+# crm/static/index.html решает в пользу ветки (новые метки), сохраняя файлы, которые подключили другие ветки;
+# любой другой конфликт — отменяет merge.
 # Первая строка вывода — версия для отката: git reset --hard <она> && bash scripts/crm_setup.sh update
 set -euo pipefail
 BRANCH=${1:?укажите ветку}
@@ -16,7 +17,18 @@ fi
 if ! g merge --no-edit "private-backup/$BRANCH"; then
   conflicts=$(g diff --name-only --diff-filter=U)
   if [ "$conflicts" = crm/static/index.html ]; then
+    # берём файл ветки, но строки подключения файлов, которых в ней нет (их добавили другие ветки), возвращаем
+    g show :2:crm/static/index.html > /tmp/index.ours.html
     g checkout --theirs crm/static/index.html
+    stamp=$(grep -o 'v=[0-9a-z]*' crm/static/index.html | head -1)
+    while IFS= read -r line; do
+      file=$(printf '%s' "$line" | grep -o '/static/[^?]*')
+      if [ -n "$file" ] && ! grep -qF "$file?" crm/static/index.html; then
+        printf '%s\n' "$line" | sed "s/v=[0-9a-z]*/$stamp/" > /tmp/index.line
+        sed -i '/<\/head>/e cat /tmp/index.line' crm/static/index.html
+        echo "index.html: вернул строку $file"
+      fi
+    done < <(grep -E '<(script|link) ' /tmp/index.ours.html)
     g add crm/static/index.html
     g commit --no-edit -q
     echo 'index.html: взяты метки ветки'
