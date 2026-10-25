@@ -19,6 +19,7 @@
 #   bash scripts/crm_setup.sh prices           — пересчитать себестоимость звонка робота сейчас и показать, откуда взялись цены
 #   bash scripts/crm_setup.sh gpt-check [dreamn] — AveronGPT: типовые вопросы директора, менеджера и клиента, ответы на экран (ничего не меняет)
 #   bash scripts/crm_setup.sh auto-agent-check [dreamn] — помощник «Автоматизаций»: типовые просьбы, ответы и черновики на экран (ничего не сохраняет)
+#   bash scripts/crm_setup.sh auto-status      — автоматизации: подключения, сценарии, запуски и ошибки за сутки, очередь событий (ничего не меняет)
 #   bash scripts/crm_setup.sh yandex-key       — подключить yandex-sa-key.json (ключ сервисного аккаунта Яндекса для цены YandexGPT)
 #   bash scripts/crm_setup.sh rollback         — выключить сайт и убрать CRM_URL (таблицы CRM остаются, они ничему не мешают)
 set -euo pipefail
@@ -214,6 +215,21 @@ demo-off)
 gpt-check)
   # AveronGPT: типовые вопросы от директора, менеджера и клиента; ничего не пишет и не меняет на сайте.
   DATABASE_URL="$DATABASE_URL" .venv/bin/python scripts/gpt_check.py "${2:-yandex}"
+  ;;
+auto-status)
+  # Пилот автоматизаций: что подключено и включено, как прошли запуски. Тексты сообщений и данные событий не печатаем.
+  q() { echo; echo "== $1"; psql "$DATABASE_URL" -P pager=off -c "$2"; }
+  q 'подключения' "SELECT id, kind, title, status, coalesce(error,'') AS error, created_at::timestamp(0) FROM automation_accounts ORDER BY id"
+  q 'сценарии' "SELECT id, name, enabled, spec->'trigger'->>'type' AS event, coalesce(paused_reason,'') AS paused, updated_at::timestamp(0) FROM automations ORDER BY id"
+  q 'запуски за сутки' "SELECT a.name, r.test, r.status, count(*) FROM automation_runs r JOIN automations a ON a.id=r.automation_id
+     WHERE r.created_at > now() - interval '24 hours' GROUP BY 1,2,3 ORDER BY 1,2,3"
+  q 'последние ошибки' "SELECT r.created_at::timestamp(0) AS at, a.name, r.status, r.attempts, s->>'type' AS action, s->>'error' AS error
+     FROM automation_runs r JOIN automations a ON a.id=r.automation_id, jsonb_array_elements(r.steps) s
+     WHERE r.status IN ('failed','retry','limit') AND s->>'error' IS NOT NULL ORDER BY r.id DESC LIMIT 10"
+  q 'очередь событий' "SELECT kind, count(*) FILTER (WHERE processed_at IS NULL) AS waiting, count(*) AS last_24h,
+     max(created_at)::timestamp(0) AS last FROM automation_events WHERE created_at > now() - interval '24 hours' GROUP BY 1 ORDER BY 1"
+  q 'расход за месяц' "SELECT month, runs FROM automation_usage ORDER BY month DESC LIMIT 2"
+  journalctl -u callbot-crm --since '24 hours ago' --no-pager 2>/dev/null | grep -i 'автоматизац' | tail -5 || true
   ;;
 auto-agent-check)
   # Помощник «Автоматизаций»: собирает черновики на типовые просьбы, ничего не сохраняет и не включает.
