@@ -748,6 +748,28 @@ async def api_presentation_link(request):
                                                            await author_name(pool, who)))
 
 
+def peer_id(request) -> int:
+    try:
+        return int(request.match_info['peer'])
+    except ValueError:
+        raise web.HTTPNotFound()
+
+
+async def api_tgchat(request):
+    """Переписка рабочего Telegram с клиентом: для карточки сделки."""
+    who = await actor(request)
+    return web.json_response(await deals.chat_messages(request.app[POOL], who, peer_id(request)))
+
+
+async def api_tgchat_link(request):
+    """«Привязать к клиенту» для переписки Telegram: номер клиента."""
+    who = await actor(request, write=True)
+    pool = request.app[POOL]
+    data = await body(request)
+    return web.json_response(await deals.link_chat(pool, who, peer_id(request), str(data.get('phone') or ''),
+                                                   await author_name(pool, who)))
+
+
 # Генератор договоров (static/contracts/): пути — те, что ждёт страница генератора.
 async def api_contracts_config(request):
     who = await actor(request)
@@ -1127,6 +1149,8 @@ def build(pool) -> web.Application:
     app.router.add_get('/api/deals', api_deals)
     app.router.add_get('/api/deals/{phone}', api_deal)
     app.router.add_post('/api/deals/{phone}/event', api_deal_event)
+    app.router.add_get('/api/tgchats/{peer}', api_tgchat)
+    app.router.add_post('/api/tgchats/{peer}/link', api_tgchat_link)
     app.router.add_get('/api/sources/selections', api_sources)
     app.router.add_post('/api/sources/selections', api_source_save)
     app.router.add_get('/api/sources/selections/{id}', api_source)

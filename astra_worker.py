@@ -35,6 +35,7 @@ from reports import esc, send_long
 from tools import owner_chat_ids, report_chat_ids
 from crm import journal as crm_journal
 from review import callbacks as review_callbacks, engine as review_engine, kitchen as review_kitchen, memory as review_memory, presentations as review_presentations, render as review_render, tgchats as review_tgchats, sheets as review_sheets, store as review_store
+from review import tgreview as review_tgreview
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("callbot-astra-worker")
@@ -58,6 +59,16 @@ async def _run_tgchats(pool) -> None:
         await review_tgchats.maybe_run(pool)
     except Exception:
         log.exception("не удалось прочитать рабочий Telegram")
+
+
+_tg_review_task = None
+
+
+async def _run_tgreview(pool) -> None:
+    try:
+        await review_tgreview.maybe_run(pool)
+    except Exception:
+        log.exception("не удалось разобрать переписку Telegram")
 
 bot = Bot(token=os.environ["BOT_TOKEN"])
 
@@ -652,6 +663,10 @@ async def main() -> None:
                     global _tg_task
                     if review_tgchats.enabled() and (_tg_task is None or _tg_task.done()):
                         _tg_task = asyncio.create_task(_run_tgchats(pool))
+                    # Переписка в сделках: чей клиент и где остыл (TG_REVIEW, включено по умолчанию).
+                    global _tg_review_task
+                    if review_tgreview.enabled() and (_tg_review_task is None or _tg_review_task.done()):
+                        _tg_review_task = asyncio.create_task(_run_tgreview(pool))
                 await maybe_enqueue_rop_digests(pool)
                 await maybe_enqueue_oversight_report(pool)
                 last_sweep = now

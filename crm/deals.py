@@ -5,13 +5,14 @@
 1. База номеров — номер загружен в CRM (crm_leads); считается только в воронке;
 2. Холодный звонок — разобранный разговор; результат — встреча, перезвон на дату, КП, ЛПР;
 3. Презентация — разобранная запись из реестра (review/presentations.py) или отметка;
-4. Telegram или почта — отметка «отправил материалы» (этап можно пропустить);
+4. Telegram или почта — переписка рабочего Telegram, привязанная к клиенту (review/tgreview.py),
+   или отметка «отправил материалы» (этап можно пропустить);
 5. Договор — отправлен, правки, подписан;
 6. Оплата — отмечает только директор.
 
 Где сделка встала, CRM понимает сама: последний разговор без результата — отказ на
 холодном звонке с причиной из разбора; клиент, остывший до отказа на презентации, —
-отказ на презентации. Люди отмечают поздние этапы и отказ с причиной из списка.
+отказ на презентации (или в переписке). Люди отмечают поздние этапы и отказ с причиной из списка.
 Ничего не считается моделью заново: всё из сохранённых разборов и событий.
 """
 from __future__ import annotations
@@ -39,6 +40,9 @@ PRESENTATION_LOSS = {
     'price_no_value': 'цена без расчёта пользы', 'objection_unhandled': 'не снято возражение',
     'no_trust': 'не дали доказательств', 'no_dmp': 'не вышли на ЛПР', 'no_next_step': 'нет шага с днём',
     'pushy': 'давили на клиента', 'unanswered_question': 'вопрос без ответа', 'other': 'другое'}
+# Где клиент остыл в переписке: те же причины, что на презентации, и свои для мессенджера.
+CHAT_LOSS = {**PRESENTATION_LOSS, 'slow_reply': 'долго не отвечали клиенту', 'no_followup': 'клиент пропал, не напомнили о себе',
+             'materials_no_talk': 'материалы без договорённости обсудить'}
 EVENT_LABELS = {
     'presentation': 'Презентация проведена', 'materials': 'Отправлены материалы', 'contract_sent': 'Договор отправлен',
     'contract_edits': 'Клиент прислал правки', 'contract_signed': 'Договор подписан', 'paid': 'Оплата получена',
@@ -107,10 +111,23 @@ async def load(pool, client_id: int, ext: str | None = None) -> dict:
         if await has_table(pool, 'crm_docs') and client_id == await home_client_id(pool) else []
     base = await pool.fetch('SELECT number, extension, created_at FROM crm_leads WHERE client_id=$1', client_id) \
         if await has_table(pool, 'crm_leads') else []
+    # Переписка рабочего Telegram, где известен номер клиента. «Не клиент» по разбору не берём,
+    # если только человек сам не привязал чат.
+    chats = await pool.fetch(
+        """SELECT c.peer_id, c.title, c.username, c.phone, c.extension, c.analysis, c.last_message_at,
+                  s.messages, s.first_at, s.last_in, s.last_out
+           FROM tg_chats c
+           JOIN LATERAL (SELECT count(*) AS messages, min(m.sent_at) AS first_at,
+                                max(m.sent_at) FILTER (WHERE NOT m.outgoing) AS last_in,
+                                max(m.sent_at) FILTER (WHERE m.outgoing) AS last_out
+                         FROM tg_messages m WHERE m.client_id=c.client_id AND m.peer_id=c.peer_id) s ON true
+           WHERE c.client_id=$1 AND c.phone IS NOT NULL AND s.messages > 0
+             AND (c.analysis->>'kind' IS DISTINCT FROM 'not_client' OR c.analysis->'link'->>'by' = 'manual')
+           ORDER BY c.last_message_at""", client_id) if await has_table(pool, 'tg_chats') else []
     names = {r['extension']: r['full_name'] for r in await pool.fetch(
         "SELECT extension, full_name FROM employees WHERE client_id=$1 AND role='manager'", client_id)}
     return {'calls': calls, 'shows': shows, 'events': events, 'tasks': tasks, 'outcomes': outcomes,
-            'legacy': legacy, 'base': base, 'names': names}
+            'legacy': legacy, 'base': base, 'names': names, 'chats': chats}
 
 
 def legacy_events(rows) -> list[dict]:
@@ -130,7 +147,7 @@ def legacy_events(rows) -> list[dict]:
 
 def build(raw: dict, tz, now: datetime) -> list[dict]:
     """Сделки из звонков, презентаций и событий. Порядок: свежие сверху."""
-    by = collections.defaultdict(lambda: {'calls': [], 'shows': [], 'events': [], 'outcomes': []})
+    by = collections.defaultdict(lambda: {'calls': [], 'shows': [], 'events': [], 'outcomes': [], 'chats': []})
     for r in raw['calls']:
         if review_kitchen.handles(r['extension']):
             continue
@@ -141,6 +158,10 @@ def build(raw: dict, tz, now: datetime) -> list[dict]:
         k = key(r['client_number'])
         if k:
             by[k]['shows'].append(r)
+    for r in raw.get('chats', []):
+        k = key(r['phone'])
+        if k:
+            by[k]['chats'].append(r)
     for e in [*map(dict, raw['events']), *legacy_events(raw['legacy'])]:
         if e['phone'] in by or e['kind'] != 'note':
             by[e['phone']]['events'].append(e)
@@ -161,9 +182,9 @@ def build(raw: dict, tz, now: datetime) -> list[dict]:
 
 
 def deal(k: str, src: dict, task, in_base: bool, names: dict, tz, now: datetime) -> dict | None:
-    calls, shows = src['calls'], src['shows']
+    calls, shows, chats = src['calls'], src['shows'], src.get('chats', [])
     events = sorted(src['events'], key=lambda e: e['created_at'])
-    if not (calls or shows or events):
+    if not (calls or shows or events or chats):
         return None
     timeline = []
     company, number, ext = None, None, None
@@ -182,14 +203,13 @@ def deal(k: str, src: dict, task, in_base: bool, names: dict, tz, now: datetime)
                          'say': moment.get('say_instead')})
     for r in src['outcomes']:
         cold_ok = cold_ok or r['outcome'] in ('meeting', 'proposal', 'callback', 'interested')
-    last_show = None
+    reviews = []  # (когда, что, разбор) презентаций и переписок: по самому свежему — совет и температура
     for r in shows:
         data = loads(r['data'])
         contract = data.get('contract') or {}
         company = contract.get('company') or company
         number, ext = r['client_number'], r['extension'] or ext
         reached = 'presentation'
-        last_show = data
         moment = data.get('key_moment') or {}
         # Звонок Mango — сама презентация; иначе (по смыслу, по телефону) время берём из реестра.
         at = (show_time(r['day'], r['time_text'], tz) if r['day'] and (r['match_by'] in ('context', 'manual', 'registry')
@@ -199,6 +219,30 @@ def deal(k: str, src: dict, task, in_base: bool, names: dict, tz, now: datetime)
                          'title': 'Презентация', 'text': data.get('rop_line'), 'temperature': data.get('temperature'),
                          'lost': PRESENTATION_LOSS.get(moment.get('category')) if moment else None,
                          'say': moment.get('say_instead'), 'file_id': r['file_id']})
+        reviews.append((at, 'presentation', data))
+    waiting = None  # клиент написал в Telegram последним: когда
+    for r in chats:
+        data = loads(r['analysis'])
+        reviewed = bool(data.get('reviewed'))
+        moment = (data.get('key_moment') or {}) if reviewed else {}
+        company = company or ((data.get('contract') or {}).get('company') if reviewed else None)
+        number, ext = number or r['phone'], ext or r['extension']
+        if STAGE_INDEX[reached] < STAGE_INDEX['messenger']:
+            reached = 'messenger'
+        at = iso(r['last_message_at'], tz)
+        if r['last_in'] and (not r['last_out'] or r['last_in'] > r['last_out']):
+            waiting = max(waiting or '', iso(r['last_in'], tz))
+        timeline.append({'at': at, 'type': 'chat', 'id': r['peer_id'],
+                         'title': 'Переписка в Telegram', 'messages': r['messages'],
+                         'since': iso(r['first_at'], tz), 'chat': r['title'] or (f"@{r['username']}" if r['username'] else None),
+                         'text': data.get('rop_line') if reviewed else None,
+                         'temperature': data.get('temperature') if reviewed else None,
+                         'lost': CHAT_LOSS.get(moment.get('category')) if moment else None, 'say': moment.get('say_instead'),
+                         'linked': (data.get('link') or {}).get('by')})
+        if reviewed:
+            reviews.append((at, 'chat', data))
+    latest = max(reviews, key=lambda x: x[0] or '') if reviews else None
+    last_review = latest[2] if latest else None
     status, lost = 'active', None
     manual_stage = None
     amount = None
@@ -249,11 +293,12 @@ def deal(k: str, src: dict, task, in_base: bool, names: dict, tz, now: datetime)
                         'note': None, 'auto': True,
                         'at': iso(last_call['call_started_at'], tz),
                         'chance': last_call['chance']}
-        elif reached == 'presentation' and last_show and last_show.get('temperature') == 'lost':
-            moment = last_show.get('key_moment') or {}
+        elif reached in ('presentation', 'messenger') and last_review and last_review.get('temperature') == 'lost':
+            moment = last_review.get('key_moment') or {}
             status = 'lost'
-            lost = {'reason': PRESENTATION_LOSS.get(moment.get('category'), 'отказ на презентации'), 'note': moment.get('what_happened'),
-                    'auto': True, 'at': last_at}
+            lost = {'reason': CHAT_LOSS.get(moment.get('category')) or
+                    ('отказ в переписке' if latest[1] == 'chat' else 'отказ на презентации'),
+                    'note': moment.get('what_happened'), 'auto': True, 'at': last_at}
 
     # Следующий шаг и совет.
     advice, due = None, None
@@ -262,9 +307,9 @@ def deal(k: str, src: dict, task, in_base: bool, names: dict, tz, now: datetime)
         advice = f"{'Встреча' if task['kind'] == 'meeting' else 'Перезвон'} {task['due_date']:%d.%m}" + \
                  (f" в {task['due_time']:%H:%M}" if task['due_time'] else '') + (f": {task['raw']}" if task['raw'] else '')
     missing = []
-    if last_show:
-        missing = [CONTRACT_FIELDS[f] for f in (last_show.get('contract') or {}).get('missing') or [] if f in CONTRACT_FIELDS]
-        advice = last_show.get('next_step_advice') or advice
+    if last_review:
+        missing = [CONTRACT_FIELDS[f] for f in (last_review.get('contract') or {}).get('missing') or [] if f in CONTRACT_FIELDS]
+        advice = last_review.get('next_step_advice') or advice
     if status == 'active' and not advice:
         if reached == 'contract':
             advice = 'Узнать, когда клиент подпишет договор, и что мешает.'
@@ -287,7 +332,8 @@ def deal(k: str, src: dict, task, in_base: bool, names: dict, tz, now: datetime)
         'in_base': in_base, 'cold_ok': cold_ok, 'status': status, 'lost': lost, 'amount': amount,
         'first_at': timeline[0]['at'] if timeline else None, 'last_at': last_at, 'due': due,
         'advice': advice if status == 'active' else None, 'missing': missing, 'stalled_days': stalled_days,
-        'temperature': (last_show or {}).get('temperature'), 'timeline': timeline,
+        'temperature': (last_review or {}).get('temperature'), 'timeline': timeline,
+        'waiting': waiting if status == 'active' and waiting and waiting >= (last_at or '') else None,
     }
 
 
@@ -332,7 +378,7 @@ async def listing(pool, actor, ext: str | None = None, days: int | None = None, 
                 and (not days or r['created_at'] >= now - timedelta(days=days))} - {None})
     managers = sorted({(d['ext'], d['manager']) for d in build(raw, tz, now) if d['ext']}, key=lambda x: x[1])
     return {'deals': [{**d, 'timeline': None} for d in deals], 'funnel': funnel(deals, base),
-            'unlinked': await unlinked(pool, actor, ext),
+            'unlinked': await unlinked(pool, actor, ext), 'unlinked_chats': await unlinked_chats(pool, actor, ext),
             'stages': [{'key': k, 'name': n} for k, n in STAGES], 'reasons': LOST_REASONS,
             'managers': [{'ext': e, 'name': n} for e, n in managers],
             'can_pay': can_pay(actor), 'today': now.astimezone(tz).date().isoformat()}
@@ -396,6 +442,85 @@ async def link_presentation(pool, actor, presentation_id: int, phone: str, name:
         """UPDATE presentations SET phone=$2, call_id=$3, linked_by=$4, linked_at=now(), updated_at=now(),
              match=coalesce(match, '{}'::jsonb) || jsonb_build_object('by', 'manual', 'phone', $2::text)
            WHERE id=$1""", presentation_id, digits, call_id, name or 'CRM')
+    return {'phone': key(digits), 'call_found': call_id is not None}
+
+
+async def unlinked_chats(pool, actor, ext: str | None = None) -> list[dict]:
+    """Переписки Telegram без номера клиента. Чаты через Telegram Business ничьи (общий рабочий аккаунт),
+    поэтому их видят директор и руководитель; менеджер — только чаты из своей папки (Telethon)."""
+    if not await has_table(pool, 'tg_chats'):
+        return []
+    if not is_privileged(actor):
+        ext = actor.extension
+    tz = await store.zone(pool, actor.client_id)
+    rows = await pool.fetch(
+        """SELECT c.peer_id, c.title, c.username, c.extension, c.analysis, c.last_message_at, s.messages, s.texts
+           FROM tg_chats c
+           JOIN LATERAL (SELECT count(*) AS messages,
+                                array_agg(m.text ORDER BY m.sent_at) FILTER (WHERE NOT m.outgoing AND m.text IS NOT NULL) AS texts
+                         FROM tg_messages m WHERE m.client_id=c.client_id AND m.peer_id=c.peer_id) s ON true
+           WHERE c.client_id=$1 AND c.phone IS NULL AND c.kind='user' AND s.messages > 0
+             AND c.analysis->>'kind' IS DISTINCT FROM 'not_client'
+             AND ($2::text IS NULL OR c.extension=$2 OR c.extension IS NULL AND $3)
+           ORDER BY c.last_message_at DESC NULLS LAST LIMIT 200""", actor.client_id, ext, is_privileged(actor))
+    from review.tgreview import phones_in
+    out = []
+    for r in rows:
+        data = loads(r['analysis'])
+        texts = r['texts'] or []
+        out.append({'peer_id': r['peer_id'], 'title': r['title'] or (f"@{r['username']}" if r['username'] else 'Без имени'),
+                    'username': r['username'], 'at': iso(r['last_message_at'], tz), 'messages': r['messages'],
+                    'company': (data.get('contract') or {}).get('company'), 'summary': data.get('rop_line'),
+                    'last': (texts[-1][:200] if texts else None), 'phones': phones_in(texts)[:3]})
+    return out
+
+
+async def chat_access(pool, actor, peer_id: int):
+    row = await pool.fetchrow('SELECT * FROM tg_chats WHERE client_id=$1 AND peer_id=$2', actor.client_id, peer_id) \
+        if await has_table(pool, 'tg_chats') else None
+    if not row:
+        raise ValueError('Такой переписки нет.')
+    if not is_privileged(actor):
+        if row['phone']:
+            await one(pool, actor, row['phone'])  # сделка своя, иначе Forbidden
+        elif row['extension'] != actor.extension:
+            raise Forbidden('Это переписка другого менеджера.')
+    return row
+
+
+async def chat_messages(pool, actor, peer_id: int, limit: int = 300) -> dict:
+    """Переписка для карточки сделки: последние сообщения, старые сверху."""
+    row = await chat_access(pool, actor, peer_id)
+    tz = await store.zone(pool, actor.client_id)
+    rows = await pool.fetch(
+        """SELECT sent_at, outgoing, text, media FROM tg_messages WHERE client_id=$1 AND peer_id=$2
+           ORDER BY sent_at DESC, message_id DESC LIMIT $3""", actor.client_id, peer_id, limit)
+    data = loads(row['analysis'])
+    return {'peer_id': peer_id, 'title': row['title'] or (f"@{row['username']}" if row['username'] else 'Без имени'),
+            'username': row['username'], 'phone': key(row['phone']), 'linked': (data.get('link') or {}).get('by'),
+            'details': data.get('details') if data.get('reviewed') else None,
+            'messages': [{'at': iso(m['sent_at'], tz), 'out': m['outgoing'], 'text': m['text'], 'media': m['media']}
+                         for m in reversed(rows)]}
+
+
+async def link_chat(pool, actor, peer_id: int, phone: str, name: str | None) -> dict:
+    """«Привязать к клиенту» для переписки: номер клиента, чат попадает в его сделку. Можно перепривязать."""
+    from review.presentations import call_by_phone, phone_digits
+    digits = phone_digits(phone)
+    if not digits:
+        raise ValueError('Введите номер клиента, например +7 999 123-45-67.')
+    await chat_access(pool, actor, peer_id)
+    tz = await store.zone(pool, actor.client_id)
+    call_id = await call_by_phone(pool, actor.client_id, digits, None, tz)
+    if call_id and not is_privileged(actor):
+        owner = await pool.fetchval('SELECT extension FROM calls WHERE id=$1', call_id)
+        if owner and owner != actor.extension:
+            raise Forbidden('Это клиент другого менеджера.')
+    await pool.execute(
+        """UPDATE tg_chats SET phone=$3, call_id=$4, updated_at=now(),
+             analysis=coalesce(analysis, '{}'::jsonb) || jsonb_build_object('link',
+               jsonb_build_object('by', 'manual', 'name', $5::text, 'at', now()))
+           WHERE client_id=$1 AND peer_id=$2""", actor.client_id, peer_id, digits, call_id, name or 'CRM')
     return {'phone': key(digits), 'call_found': call_id is not None}
 
 
