@@ -23,7 +23,7 @@ from aiohttp import web  # noqa: E402
 
 import mango_client  # noqa: E402
 from tools import Forbidden, home_client_id, is_privileged  # noqa: E402
-from . import accounts, ask as asking, auth, automations, cabinet, callcenter_db, company, contracts, deals, gpt, journal, overview, people, platform, recording, reviews, sources, staff, store, training  # noqa: E402
+from . import accounts, ask as asking, auth, automation_agent, automations, cabinet, callcenter_db, company, contracts, deals, gpt, journal, overview, people, platform, recording, reviews, sources, staff, store, training  # noqa: E402
 from . import prompts as prompt_mode, robot, robot_api, robot_prices, robot_runner, robot_store  # noqa: E402
 from review import store as review_store  # noqa: E402
 from .dial import dial  # noqa: E402
@@ -677,6 +677,14 @@ async def api_automation_save(request):
                                                     data.get('spec'), await author_name(pool, who)))
 
 
+async def api_automation_agent(request):
+    """«Что вы хотите сделать?»: черновик сценария от помощника, ничего не сохраняет."""
+    who = await automation_admin(request, write=True)
+    data = await body(request)
+    history = data.get('history') if isinstance(data.get('history'), list) else []
+    return web.json_response(await automation_agent.ask(request.app[POOL], who.client_id, str(data.get('text') or ''), history))
+
+
 async def api_automation_test(request):
     who = await automation_admin(request, write=True)
     return web.json_response(await automations.test_run(request.app[POOL], who.client_id, path_id(request)))
@@ -1126,6 +1134,7 @@ def build(pool) -> web.Application:
     app.router.add_post('/api/presentations/{id}/link', api_presentation_link)
     app.router.add_get('/api/automations', api_automations)
     app.router.add_post('/api/automations', api_automation_save)
+    app.router.add_post('/api/automations/agent', api_automation_agent)
     app.router.add_post(r'/api/automations/{id:\d+}/test', api_automation_test)
     app.router.add_post(r'/api/automations/{id:\d+}/enable', api_automation_enable)
     app.router.add_post(r'/api/automations/{id:\d+}/delete', api_automation_delete)

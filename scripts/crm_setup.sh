@@ -18,6 +18,7 @@
 #   bash scripts/crm_setup.sh dadata-key       — ключ DaData для поиска реквизитов по ИНН в «Договорах» (спросит ключ, на экран не выводит)
 #   bash scripts/crm_setup.sh prices           — пересчитать себестоимость звонка робота сейчас и показать, откуда взялись цены
 #   bash scripts/crm_setup.sh gpt-check [dreamn] — AveronGPT: типовые вопросы директора, менеджера и клиента, ответы на экран (ничего не меняет)
+#   bash scripts/crm_setup.sh auto-agent-check [dreamn] — помощник «Автоматизаций»: типовые просьбы, ответы и черновики на экран (ничего не сохраняет)
 #   bash scripts/crm_setup.sh yandex-key       — подключить yandex-sa-key.json (ключ сервисного аккаунта Яндекса для цены YandexGPT)
 #   bash scripts/crm_setup.sh rollback         — выключить сайт и убрать CRM_URL (таблицы CRM остаются, они ничему не мешают)
 set -euo pipefail
@@ -239,6 +240,10 @@ async def main():
 
 asyncio.run(main())
 PY
+  ;;
+auto-agent-check)
+  # Помощник «Автоматизаций»: собирает черновики на типовые просьбы, ничего не сохраняет и не включает.
+  DATABASE_URL="$DATABASE_URL" .venv/bin/python scripts/automation_agent_check.py "${2:-yandex}"
   ;;
 accounts)
   # Пароли видно только здесь и в «Доступах» у директора; в базе — хэш и зашифрованная копия.

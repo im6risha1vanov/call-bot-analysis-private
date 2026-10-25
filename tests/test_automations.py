@@ -262,3 +262,52 @@ class EngineTests(DBCase):
             self.assertEqual(r.status, 401)
         await automations.tick(self.pool)
         self.assertEqual(self.fake.sent, [(-100500, 'из другой системы')])
+
+
+class AgentTests(unittest.TestCase):
+    def test_check_fills_accounts_and_marks_missing(self):
+        from crm import automation_agent as agent
+        spec = {'trigger': {'type': 'deal.paid'}, 'if': [{'field': 'deal.amount', 'op': '>', 'value': 100000}],
+                'actions': [{'type': 'telegram.send', 'account': 99, 'text': 'Оплата {deal.amount}'},
+                            {'type': 'sheets.append', 'row': ['{deal.client}']}, {'type': 'webhook.send'}]}
+        draft, missing = agent.check({'name': 'Крупные оплаты', 'spec': spec}, TG)
+        self.assertEqual(draft['spec']['actions'][0]['account'], 1)  # чужой id заменён своим чатом
+        self.assertIsNone(draft['spec']['actions'][1]['account'])  # таблицы нет: пусто, человек подключит
+        self.assertEqual(draft['spec']['actions'][2]['url'], '')
+        self.assertEqual(missing, ['sheets'])
+        with self.assertRaises(ValueError):
+            agent.check({'name': 'x', 'spec': {'trigger': {'type': 'shell'}, 'actions': []}}, TG)
+
+    def test_parse_json_or_text(self):
+        from crm import automation_agent as agent
+        self.assertEqual(agent.parse('```json\n{"reply": "ок", "scenario": null}\n```'), {'reply': 'ок', 'scenario': None})
+        self.assertEqual(agent.parse('Какой чат?'), {'reply': 'Какой чат?', 'scenario': None})
+
+
+@unittest.skipUnless(DSN, 'METHODOLOGY_TEST_DATABASE_URL не задан')
+class AgentDBTests(DBCase):
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        root = Path(__file__).resolve().parents[1]
+        await self.pool.execute((root / 'migrations/029_averongpt.sql').read_text())
+        await self.pool.execute((root / 'migrations/030_automations.sql').read_text())
+        await self.pool.execute('TRUNCATE automations, automation_accounts CASCADE')
+        await self.pool.execute("INSERT INTO automation_accounts(client_id, kind, title, data_enc, status) "
+                                "VALUES(1,'telegram','Telegram: Продажи',$1,'ready')", encrypt(json.dumps({'chat_id': -1})))
+
+    async def test_bad_answer_retried_with_error_then_draft(self):
+        from crm import automation_agent as agent, gpt
+        bad = json.dumps({'reply': 'x', 'scenario': {'name': 'n', 'spec': {'trigger': {'type': 'deal.paid'},
+                          'actions': [{'type': 'telegram.send', 'text': ''}]}}})
+        good = json.dumps({'reply': 'Собрал: оплаты в чат.', 'scenario': {'name': 'Оплаты', 'spec': {
+            'trigger': {'type': 'deal.paid'}, 'if': [], 'actions': [{'type': 'telegram.send', 'text': 'Оплата {deal.amount} ₽'}]}}})
+        think = AsyncMock(side_effect=[(bad, 'yandex:m', 0.1), (good, 'yandex:m', 0.1)])
+        with patch.object(gpt, 'think', think):
+            r = await agent.ask(self.pool, 1, 'Каждую оплату в телеграм')
+        self.assertEqual(r['draft']['name'], 'Оплаты')
+        self.assertEqual(r['missing'], [])
+        self.assertIn('пустой текст', think.call_args_list[1].args[3][-1]['text'])  # модель увидела ошибку
+        self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM automations'), 0)  # ничего не сохранено
+        system = think.call_args_list[0].args[2]
+        self.assertIn('Telegram: Продажи', system)
+        self.assertIn('deal.amount (Сумма)', system)
