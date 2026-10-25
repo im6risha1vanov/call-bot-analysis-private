@@ -216,6 +216,10 @@ gpt-check)
   # AveronGPT: типовые вопросы от директора, менеджера и клиента; ничего не пишет и не меняет на сайте.
   DATABASE_URL="$DATABASE_URL" .venv/bin/python scripts/gpt_check.py "${2:-yandex}"
   ;;
+auto-agent-check)
+  # Помощник «Автоматизаций»: собирает черновики на типовые просьбы, ничего не сохраняет и не включает.
+  DATABASE_URL="$DATABASE_URL" .venv/bin/python scripts/automation_agent_check.py "${2:-yandex}"
+  ;;
 auto-status)
   # Пилот автоматизаций: что подключено и включено, как прошли запуски. Тексты сообщений и данные событий не печатаем.
   q() { echo; echo "== $1"; psql "$DATABASE_URL" -P pager=off -c "$2"; }
@@ -230,10 +234,6 @@ auto-status)
      max(created_at)::timestamp(0) AS last FROM automation_events WHERE created_at > now() - interval '24 hours' GROUP BY 1 ORDER BY 1"
   q 'расход за месяц' "SELECT month, runs FROM automation_usage ORDER BY month DESC LIMIT 2"
   journalctl -u callbot-crm --since '24 hours ago' --no-pager 2>/dev/null | grep -i 'автоматизац' | tail -5 || true
-  ;;
-auto-agent-check)
-  # Помощник «Автоматизаций»: собирает черновики на типовые просьбы, ничего не сохраняет и не включает.
-  DATABASE_URL="$DATABASE_URL" .venv/bin/python scripts/automation_agent_check.py "${2:-yandex}"
   ;;
 accounts)
   # Пароли видно только здесь и в «Доступах» у директора; в базе — хэш и зашифрованная копия.
