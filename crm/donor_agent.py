@@ -24,6 +24,7 @@ import logging
 import os
 import re
 import time
+from collections import Counter
 from datetime import date, datetime, timezone
 
 import httpx
@@ -238,6 +239,19 @@ def site_key(site: str) -> str:
 
 def cand_key(c: dict) -> str:
     return site_key(c.get('site') or '') or re.sub(r'[^a-zа-я0-9]', '', str(c.get('name') or '').lower())
+
+
+# Сайты-определители «Кто звонил с номера…»: это не другая компания с тем же номером, а отзывы людей,
+# которым с номера звонили. Повтором их не считаем.
+WHO_CALLED = re.compile(r'кто (мне )?звонил|кто звонит|чей (это )?номер|чей телефон|информация (по|о) номер|отзыв\w* о номер|'
+                        r'звонили с номера|звонок с номера|(номер|телефон) \+?[78][\d\s()-]{9,}:? \d+ отзыв|спам|мошенник|'
+                        r'определитель номер|проверить номер', re.I)
+WHO_CALLED_HOST = re.compile(r'(^|\.)(zvonili|ktozvonil|kto-zvonil|ktozvonit|kto-zvonit|neberitrubku|chej-nomer|cheinomer|'
+                             r'nomer-org|telefon-info|callfilter|zvonki|spravochnik-nomerov|phonenumbers|ktotam|getcontact|numbuster)', re.I)
+
+
+def norm_name(name: str) -> str:
+    return re.sub(r'[^0-9a-zа-я]+', '', str(name or '').lower().replace('ё', 'е'))
 
 
 def name_words(name: str) -> list[str]:
@@ -468,7 +482,7 @@ class Run:
         """Пачка запросов без спешки: отложенным поиском (в 16 раз дешевле), что не пришло — обычным.
         Модель в разговоре ищет обычным поиском: ей ответ нужен сразу."""
         out: dict[str, list[dict] | None] = {}
-        if queries and os.getenv('DONOR_DEFERRED', 'on') != 'off':
+        if queries and os.getenv('DONOR_DEFERRED', 'on') != 'off' and not self.state.get('deferred_off'):
             await self.budget()
             self.say(f'🔍 Яндекс, отложенный поиск: {len(queries)} запросов ({what}), ответ приходит за несколько минут')
             await self.spend(DEFERRED_RUB * len(queries), search=len(queries))
@@ -477,12 +491,19 @@ class Run:
             async def waiting(ready, total):
                 self.stage = f'{base}: готово {ready} из {total}'
                 await self.save()
+            errors: dict[str, str] = {}
             out = await webx.search_deferred(self.http, queries, webx.region_of(self.brief['city']),
-                                             wait=env_float('DONOR_DEFERRED_WAIT_MIN', 30) * 60, on_wait=waiting)
+                                             wait=env_float('DONOR_DEFERRED_WAIT_MIN', 30) * 60, on_wait=waiting, errors=errors)
             self.stage = base
             late = [q for q, r in out.items() if r is None]
             if late:
-                self.say(f'Отложенный поиск не успел по {len(late)} запросам, ищу их обычным.')
+                why = Counter(errors.get(q) or 'без причины' for q in late).most_common(3)
+                self.say(f'Отложенный поиск не дал ответа по {len(late)} из {len(queries)} запросам, ищу их обычным. '
+                         'Причины: ' + '; '.join(f'{w} ({k})' for w, k in why))
+                if len(late) == len(queries) or len(late) > 0.8 * len(queries):
+                    # Если пачка почти целиком не пришла, в этом прогоне больше не ждём: платим дважды и теряем время.
+                    self.state['deferred_off'] = True
+                    self.say('Дальше в этом прогоне ищу только обычным поиском.')
         for q in queries:
             if out.get(q) is None:
                 try:
@@ -839,18 +860,21 @@ class Run:
             if res is None:
                 self.state['dup'][r['n']] = {'others': [], 'err': 'поиск не ответил'}
                 continue
-            others = []
+            others, called = [], False
             for it in res:
                 h = it['host']
                 t = (it['title'] + ' ' + it['snippet']).lower().replace('ё', 'е')
                 if h and any(h == d or h.endswith('.' + d) for d in own):
+                    continue
+                if WHO_CALLED.search(t) or (h and WHO_CALLED_HOST.search(h)):
+                    called = called or any(n == r['n'] for n, _ in ph.find(it['title'] + ' ' + it['snippet'] + ' ' + it['url']))
                     continue
                 if any(w in t for w in names):
                     continue
                 if not any(n == r['n'] for n, _ in ph.find(it['title'] + ' ' + it['snippet'])):
                     continue
                 others.append(it['title'][:70])
-            self.state['dup'][r['n']] = {'others': others[:5]}
+            self.state['dup'][r['n']] = {'others': others[:5], 'called': called}
         await self.save()
 
     # --- вердикт по номеру (как judge в v2)
@@ -871,6 +895,8 @@ class Run:
             out.append(f'найден в {len(hosts)} местах')
         if d and not d.get('err') and not d.get('others'):
             out.append('у других не встречается')
+        if d and d.get('called'):
+            out.append('с номера звонят сами (есть на сайтах «Кто звонил»)')
         return out
 
     def judge(self, r: dict) -> dict:
@@ -900,17 +926,26 @@ class Run:
         person = any(re.match(r'^(мобильный|конкретный человек|есть WhatsApp)', t) for t in pr)
         sales = bool(re.search(r'отдел продаж|офис продаж|частный специалист|менеджер', r['type'])) or (
             r['stage'] == 'выбирает услугу' and bool(re.search(r'основной|8-800', r['type'])))
-        if r['n'].startswith(('7800', '7804')) and r['stage'] != 'выбирает услугу':
-            v = 'test'
-            why.append('8-800 (в Big Data вводится как +7800…): неясно, продажи это или поддержка')
         cw = city_words(self.brief['city'])
-        if not self.brief['remote'] and cw and r['city'] and not ALL_RUSSIA.match(self.brief['city'].strip()) and not any(w in r['city'].lower().replace('ё', 'е') for w in cw):
+        local = not self.brief['remote'] and bool(cw) and not ALL_RUSSIA.match(self.brief['city'].strip())
+        mobile = bool(o and o['type'] == 'mobile')
+        if local and r['city'] and not any(w in r['city'].lower().replace('ё', 'е') for w in cw):
+            if not mobile and not r['n'].startswith(('7800', '7804')):
+                # Городской номер офиса в другом городе: туда звонят жители того города, не нашего.
+                return out('no', [f'городской номер офиса в городе «{r["city"]}», вне заданной географии'])
             v = 'test'
             why.append(f'этот офис в городе «{r["city"]}», вне заданной географии')
+        if r['n'].startswith(('7800', '7804')):
+            if local:
+                v = 'test'
+                why.append('8-800 — федеральная линия: звонят со всей страны, спрос именно в заданном городе не виден')
+            elif r['stage'] != 'выбирает услугу':
+                v = 'test'
+                why.append('8-800 (в Big Data вводится как +7800…): неясно, продажи это или поддержка')
         if o and o['virtual'] and not r['n'].startswith(('7800', '7804')):
             v = 'test'
             why.append(f'виртуальный номер ({o["op"]}): ВАТС или колл-трекинг, постоянство покажет тест')
-        if len(r['co']) > 1:
+        if len(r['real']) > 1:
             v = 'test'
             why.append('номер указан у нескольких компаний: ' + ', '.join(r['co']))
         d = self.state['dup'].get(r['n'])
@@ -941,16 +976,25 @@ class Run:
                 if not ph.valid(n):
                     continue
                 r = by.get(n)
+                real = d.get('kind') != 'не донор'
                 if r:
-                    if d.get('name') not in r['co']:
+                    if norm_name(d.get('name')) not in {norm_name(c) for c in r['co']}:
                         r['co'].append(d.get('name'))
                         r['sites'].append(site_key(d.get('site')))
+                    if real:
+                        # Каталоги и справочники (не донор) не считаем отдельной компанией с тем же номером.
+                        r['real'].add(norm_name(d.get('name')))
+                        if not r['real_first']:
+                            r['real_first'] = True
+                            r.update({'cverdict': d.get('verdict'), 'cwhy': d.get('why') or '', 'scale': d.get('scale') or '',
+                                      'rel': (d.get('relevance') or 0) + (d.get('flow') or 0)})
                     continue
                 r = by[n] = {'n': n, 'type': p.get('type') or 'другое', 'who': p.get('who') or '', 'person': bool(p.get('person')),
                              'caller': p.get('caller') or '', 'stage': p.get('stage') or '', 'city': p.get('office_city') or '',
                              'co': [d.get('name') or ''], 'sites': [site_key(d.get('site'))], 'cverdict': d.get('verdict'), 'cwhy': d.get('why') or '',
                              'scale': d.get('scale') or '', 'src': p.get('source') or '', 'rel': (d.get('relevance') or 0) + (d.get('flow') or 0),
-                             'op': ph.operator(n), 'series': sum(1 for m in nums if m[:9] == n[:9])}
+                             'op': ph.operator(n), 'series': sum(1 for m in nums if m[:9] == n[:9]),
+                             'real': {norm_name(d.get('name'))} if real else set(), 'real_first': real}
                 rows.append(r)
         for r in rows:
             r['j'] = self.judge(r)
