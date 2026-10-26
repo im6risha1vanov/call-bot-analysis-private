@@ -101,13 +101,14 @@ function unlinkedList(items, dir, onChange) {
     b.remove();
     $('.move input', row).focus();
     $('[data-pgo]', row).addEventListener('click', async ev => {
-      busy(ev.currentTarget, true);
+      const btn = ev.currentTarget; // после await e.currentTarget уже null
+      busy(btn, true);
       try {
         const r = await api(`/api/presentations/${row.dataset.u}/link`, {method: 'POST', body: {phone: $('.move input', row).value}});
-        doneBtn(ev.currentTarget, r.call_found ? 'Привязано к сделке' : 'Привязано, сделка создана');
+        doneBtn(btn, r.call_found ? 'Привязано к сделке' : 'Привязано, сделка создана');
         row.style.opacity = .55;
         onChange && onChange();
-      } catch (err) { busy(ev.currentTarget, false); toast(err.message, true); }
+      } catch (err) { busy(btn, false); toast(err.message, true); }
     });
   });
 }
@@ -173,15 +174,16 @@ function dealForm(box, d, kind, onChange) {
     <div class="row wide"><button class="btn primary" type="button" data-save>Сохранить</button></div></div>`;
   $('[data-v="note"]', form).focus();
   $('[data-save]', form).addEventListener('click', async e => {
+    const btn = e.currentTarget; // после await e.currentTarget уже null
     const v = k => $(`[data-v="${k}"]`, form)?.value;
-    busy(e.currentTarget, true);
+    busy(btn, true);
     try {
       await api(`/api/deals/${encodeURIComponent(d.phone)}/event`, {method: 'POST', body: {kind, note: v('note'), reason: v('reason'), amount: v('amount')}});
       toast('Сохранено');
       box.close();
       onChange && onChange();
       dealCard(d.phone, onChange);
-    } catch (err) { busy(e.currentTarget, false); toast(err.message, true); }
+    } catch (err) { busy(btn, false); toast(err.message, true); }
   });
 }
 

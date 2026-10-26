@@ -358,7 +358,8 @@ async def import_contacts(pool, owner: str, contacts: list[dict], source: str) -
                    ON CONFLICT (owner,phone) DO UPDATE SET name=CASE WHEN EXCLUDED.name<>'' THEN EXCLUDED.name ELSE robot_contacts.name END,
                      note=CASE WHEN EXCLUDED.note<>'' THEN EXCLUDED.note ELSE robot_contacts.note END""",
                 owner, c['phone'], c.get('name') or '', c.get('note') or '', source[:100])
-    return {'added': len(contacts), 'total': await pool.fetchval('SELECT count(*) FROM robot_contacts WHERE owner=$1', owner)}
+    total = await pool.fetchval('SELECT count(*) FROM robot_contacts WHERE owner=$1', owner)
+    return {'added': total - have, 'total': total}  # только новые: повторы обновляют имя и заметку, но не считаются
 
 
 async def upload_contacts(pool, owner: str, data: dict) -> dict:
@@ -433,7 +434,7 @@ async def contacts(pool, owner: str, q: str = '', limit: int = 500) -> dict:
 
 
 async def delete_contacts(pool, owner: str, ids) -> int:
-    ids = [int(i) for i in (ids or []) if str(i).isdigit()]
+    ids = [int(i) for i in (ids or []) if str(i).isdigit() and len(str(i)) <= 18]
     status = await pool.execute('DELETE FROM robot_contacts WHERE owner=$1 AND id=ANY($2)', owner, ids)
     return int(status.split()[-1])
 
@@ -553,7 +554,7 @@ async def save_campaign(pool, owner: str, data: dict, campaign_id: int | None = 
                 c['attempts'], c['retry_minutes'])
         pick = data.get('contacts')
         if pick == 'all' or isinstance(pick, list):
-            ids = None if pick == 'all' else [int(i) for i in pick if str(i).isdigit()]
+            ids = None if pick == 'all' else [int(i) for i in pick if str(i).isdigit() and len(str(i)) <= 18]
             await con.execute(
                 """INSERT INTO robot_targets(campaign_id,phone,name)
                    SELECT $1, c.phone, c.name FROM robot_contacts c WHERE c.owner=$2 AND ($3::bigint[] IS NULL OR c.id=ANY($3))
@@ -586,10 +587,15 @@ async def campaign_action(pool, owner: str, campaign_id: int, action: str) -> di
 
 async def targets(pool, owner: str, campaign_id: int) -> list[dict]:
     await _campaign(pool, owner, campaign_id)
-    rows = await pool.fetch('SELECT * FROM robot_targets WHERE campaign_id=$1 ORDER BY id LIMIT 2000', campaign_id)
-    return [{'phone': r['phone'], 'name': r['name'], 'attempts': r['attempts'], 'done': r['done'],
-             'outcome': {**OUTCOMES, 'stop': 'В стоп-листе', 'error': 'Робот не смог позвонить'}.get(r['outcome'] or '', r['outcome'] or ''),
-             'next_at': r['next_at'].isoformat(timespec='minutes') if r['next_at'] and not r['done'] else None} for r in rows]
+    rows = await pool.fetch(
+        """SELECT t.*, s.phone IS NOT NULL AS stopped FROM robot_targets t
+           LEFT JOIN robot_stoplist s ON s.owner=$2 AND s.phone=t.phone WHERE t.campaign_id=$1 ORDER BY t.id LIMIT 2000""",
+        campaign_id, owner)
+    # номер внесли в стоп-лист после запуска: робот его пропустит на следующем шаге, показываем это сразу
+    return [{'phone': r['phone'], 'name': r['name'], 'attempts': r['attempts'], 'done': r['done'] or r['stopped'],
+             'outcome': {**OUTCOMES, 'stop': 'В стоп-листе', 'error': 'Робот не смог позвонить'}.get(
+                 r['outcome'] or ('stop' if r['stopped'] and not r['done'] else ''), r['outcome'] or ''),
+             'next_at': r['next_at'].isoformat(timespec='minutes') if r['next_at'] and not (r['done'] or r['stopped']) else None} for r in rows]
 
 
 def in_window(c, now: datetime) -> bool:
@@ -685,7 +691,7 @@ async def analytics(pool, who, owner: str, f: dict) -> dict:
         d['reached'] += r['outcome'] != 'ndz'
         d['leads'] += r['outcome'] == 'interested'
     ends = {key: sum(r['outcome'] == key for r in rows) for key in OUTCOMES}
-    priced = cost is not None and (who.role == 'client' or any(p[key] for key in COST_KEYS))
+    priced = cost is not None and (who.role == 'client' or cost > 0 or any(p[key] for key in COST_KEYS))
     out = {'total': total, 'reached': reached, 'leads': leads,
            'dial_rate': round(reached / total * 100, 1) if total else 0, 'conversion': round(leads / total * 100, 1) if total else 0,
            'minutes': round(sum(r['duration_s'] for r in rows) / 60, 1), 'priced': priced,

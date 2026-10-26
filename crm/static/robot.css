@@ -32,3 +32,4 @@
 #ct-file{max-width:100%}
 @media (max-width:640px){.rb-owner{min-width:0;width:100%}}
 a.btn{color:inherit;text-decoration:none;display:inline-flex;align-items:center}
+@media (max-width:640px){.rvm.rvm-wide{width:100%}}/* на телефоне окна правки во всю ширину, как остальные */

@@ -49,9 +49,10 @@ async function leadsView(box) {
     if (tr) workDrawer(byId[tr.dataset.id], {ext, onDone: () => leadsView(box)});
   });
   $('[data-add]', box)?.addEventListener('click', async e => {
+    const btn = e.currentTarget; // после await e.currentTarget уже null
     const text = $('[data-l="text"]', box).value;
     if (!text.trim()) { toast('Вставьте номера', true); return; }
-    busy(e.currentTarget, true);
+    busy(btn, true);
     try {
       const r = await api('/api/leads', {method: 'POST', body: {text, source: $('[data-l="src"]', box).value, ext: ext || undefined}});
       const parts = [`Добавлено: ${r.added}`];
@@ -62,7 +63,7 @@ async function leadsView(box) {
       await leadsView(box);
       if (r.invalid) $('[data-res]', box).textContent = 'Не распознаны: ' + r.invalid_samples.join(' | ');
       refreshCounts();
-    } catch (err) { busy(e.currentTarget, false); toast(err.message, true); }
+    } catch (err) { busy(btn, false); toast(err.message, true); }
   });
 }
 
@@ -148,7 +149,8 @@ function accountBox(out, login, password) {
   out.innerHTML = `<div class="acc-done"><div>Логин <code>${esc(login)}</code></div><div>Пароль <code>${esc(password)}</code></div>
     <button class="btn small" type="button">Скопировать для отправки</button></div>`;
   $('button', out).addEventListener('click', async e => {
-    try { await navigator.clipboard.writeText(text); doneBtn(e.currentTarget, 'Скопировано'); } catch (err) { toast(text); }
+    const btn = e.currentTarget; // после await e.currentTarget уже null
+    try { await navigator.clipboard.writeText(text); doneBtn(btn, 'Скопировано'); } catch (err) { toast(text); }
   });
 }
 
@@ -162,24 +164,25 @@ function newAccount(d, onDone) {
       <label class="field" data-for="name" hidden>Имя<input data-v="name" maxlength="80" placeholder="Например, Евгений"></label>
       <label class="field">Логин<input data-v="login" maxlength="40" autocapitalize="none" spellcheck="false" placeholder="придумаем из имени"></label>
       <label class="field">Пароль<input data-v="password" maxlength="64" autocapitalize="none" spellcheck="false" placeholder="придумаем сами"></label>
-      <div class="row wide"><button class="btn primary" type="button" data-go>Создать</button></div></div><div data-out></div></div>`);
+      <div class="row wide"><button class="btn primary" type="button" data-ok>Создать</button></div></div><div data-out></div></div>`);
   const v = k => $(`[data-v="${k}"]`, box);
   const sync = () => {
     const r = v('role').value;
     $$('[data-for]', box).forEach(f => { f.hidden = f.dataset.for === 'name' ? r !== 'director' || v('tg').value !== '' : f.dataset.for !== r; });
   };
   v('role').addEventListener('change', sync); v('tg').addEventListener('change', sync); sync();
-  $('[data-go]', box).addEventListener('click', async e => {
-    busy(e.currentTarget, true);
+  $('[data-ok]', box).addEventListener('click', async e => {
+    const btn = e.currentTarget; // после await e.currentTarget уже null
+    busy(btn, true);
     try {
       const before = new Set(d.invites.map(i => i.id));
       const r = await api('/api/access', {method: 'POST', body: {role: v('role').value, person_ext: v('ext').value, client: v('client').value,
         name: v('tg').value ? '' : v('name').value, tg: v('tg').value, login: v('login').value, password: v('password').value}});
       const made = r.invites.find(i => !before.has(i.id));
       if (made) accountBox($('[data-out]', box), made.login, made.password);
-      doneBtn(e.currentTarget, 'Создано');
+      doneBtn(btn, 'Создано');
       onDone && onDone();
-    } catch (err) { busy(e.currentTarget, false); toast(err.message, true); }
+    } catch (err) { busy(btn, false); toast(err.message, true); }
   });
 }
 
@@ -188,7 +191,7 @@ function editAccount(acc, onDone) {
     <div class="rvm-body"><div class="outform">
       <label class="field">Логин<input data-v="login" maxlength="40" autocapitalize="none" spellcheck="false" value="${esc(acc.login)}"></label>
       <label class="field">Новый пароль<input data-v="password" maxlength="64" autocapitalize="none" spellcheck="false" placeholder="оставьте пустым, чтобы не менять"></label>
-      <div class="row wide"><button class="btn primary" type="button" data-go>Сохранить</button><button class="btn" type="button" data-gen>Придумать новый пароль</button></div>
+      <div class="row wide"><button class="btn primary" type="button" data-ok>Сохранить</button><button class="btn" type="button" data-gen>Придумать новый пароль</button></div>
       <p class="hint">После смены пароля человеку нужно войти заново.</p></div><div data-out></div></div>`);
   const v = k => $(`[data-v="${k}"]`, box);
   const send = async (btn, extra) => {
@@ -200,7 +203,7 @@ function editAccount(acc, onDone) {
       onDone && onDone();
     } catch (err) { busy(btn, false); toast(err.message, true); }
   };
-  $('[data-go]', box).addEventListener('click', e => send(e.currentTarget, {password: v('password').value}));
+  $('[data-ok]', box).addEventListener('click', e => send(e.currentTarget, {password: v('password').value}));
   $('[data-gen]', box).addEventListener('click', e => send(e.currentTarget, {new: true}));
 }
 

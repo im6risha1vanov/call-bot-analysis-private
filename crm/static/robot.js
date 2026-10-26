@@ -194,7 +194,7 @@ function opSortable(list) {
 const CAMPAIGN_GUIDE = `<details class="rb-more op-guide"><summary>Как запустить кампанию</summary><div class="op-guide-body">
   <ol>
     <li><b>Номера.</b> Сначала загрузите их во вкладке «Номера»: файлом CSV или Excel либо из листов «Прозвон лидов». Звоните только тем, кто согласился на звонок.</li>
-    <li><b>Оператор.</b> Выберите анкету, по которой робот будет говорить, и перед запуском позвоните себе на вкладке «Голос», чтобы послушать.</li>
+    <li><b>Оператор.</b> Выберите анкету, по которой робот будет говорить. Своего оператора можно завести на вкладке «Операторы». Перед запуском послушайте его: тестовый звонок делается на вкладке «Голос», а если её у вас нет, попросите менеджера Averon.</li>
     <li><b>Дни и часы.</b> Робот звонит только в эти часы по выбранному часовому поясу. Ставьте пояс клиентов, а не свой.</li>
     <li><b>Попытки и повтор.</b> Если не дозвонился или ответил автоответчик, робот перезвонит через указанное число минут, пока не кончатся попытки. Обычно хватает 2–3 попыток с перерывом в 2 часа.</li>
     <li><b>Запуск.</b> Сохраните, затем нажмите «Запустить» в списке кампаний. Робот звонит по одному номеру за раз, кампанию можно поставить на паузу.</li>
@@ -214,7 +214,7 @@ const OP_GUIDE = `<details class="rb-more op-guide"><summary>Как правил
     <li><b>Образец разговора.</b> 8–12 коротких реплик из хорошего живого звонка. Робот берёт из него тон и длину фраз и иногда повторяет фразы дословно, поэтому в образце не должно быть реплик, неуместных в другом звонке.</li>
     <li><b>Что записать по итогу.</b> Одна строка — одна колонка в итогах, варианты ответа в кавычках: «материал фасадов: «плёнка», «эмаль» или «не знает»».</li>
   </ol>
-  <p class="muted">После сохранения позвоните себе на вкладке «Голос» и послушайте. Ударения настраиваются там же, в «Произношении».</p>
+  <p class="muted">После сохранения позвоните себе на вкладке «Голос» и послушайте, ударения настраиваются там же, в «Произношении». Если вкладки «Голос» у вас нет, попросите менеджера Averon сделать тестовый звонок.</p>
 </div></details>`;
 
 // ---------- кампании ----------
@@ -252,7 +252,7 @@ async function campaignForm(c) {
     <div class="rvm-body op-form">
       ${c || RB.st.readonly ? '' : CAMPAIGN_GUIDE}
       <label class="field">Название<input id="cf-name" value="${esc(v.name)}"${ro}></label>
-      <label class="field">Оператор<select id="cf-op"${ro}>${RB.st.operators.map(o => `<option value="${esc(o.id)}"${o.id === v.operator ? ' selected' : ''}>${esc(o.name)} · ${esc(o.company)}</option>`).join('')}</select></label>
+      <label class="field">Оператор<select id="cf-op"${ro}>${RB.st.operators.length ? '' : '<option value="">Сначала заведите оператора на вкладке «Операторы»</option>'}${RB.st.operators.map(o => `<option value="${esc(o.id)}"${o.id === v.operator ? ' selected' : ''}>${esc(o.name)} · ${esc(o.company)}</option>`).join('')}</select></label>
       <div class="field">Дни недели<div class="filters">${RB_DAYS.map((d, i) => `<button data-day="${i + 1}" aria-pressed="${v.days.includes(i + 1)}"${ro}>${d}</button>`).join('')}</div></div>
       <div class="op-grid">
         <label class="field">Начало<input id="cf-start" type="time" value="${esc(v.start_time)}"${ro}></label>
@@ -316,7 +316,7 @@ RB_VIEW.contacts = async el => {
   $('#ct-del', el)?.addEventListener('click', async () => {
     const ids = $$('[data-ct]:checked', el).map(i => +i.dataset.ct);
     if (!ids.length) return toast('Отметьте контакты.', true);
-    if (!await askConfirm(`Удалить ${ids.length} контакт(ов)? Из уже созданных кампаний номера не пропадут.`)) return;
+    if (!await askConfirm(`Удалить ${plainItems(ids.length, 'контакт', 'контакта', 'контактов')}? Из уже созданных кампаний номера не пропадут.`)) return;
     try { await rbPost('/contacts/delete', {ids}); reload(); } catch (e) { toast(e.message, true); }
   });
   $('#ct-file', el).addEventListener('change', async e => {
@@ -522,13 +522,14 @@ RB_VIEW.settings = async el => {
   $$('[data-calc]', el).forEach(i => i.addEventListener('input', calc));
   calc();
   $('#cl-save', el)?.addEventListener('click', async e => {
-    busy(e.currentTarget, true);
+    const btn = e.currentTarget; // после await e.currentTarget уже null
+    busy(btn, true);
     const prices = {};
     $$('[data-price]', el).forEach(i => { prices[i.dataset.price] = i.value.trim(); });
     try {
       await rbPost('/options', {clients: $$('[data-cl]:checked', el).map(i => i.dataset.cl), prices: {client_min: prices}});
       toast('Сохранено'); reload();
-    } catch (err) { busy(e.currentTarget, false); toast(err.message, true); }
+    } catch (err) { busy(btn, false); toast(err.message, true); }
   });
 };
 

@@ -37,7 +37,7 @@
         ${r.details ? `<section><h3>Подробный разбор</h3><div class="rvm-pre">${tcLinks(r.details)}</div></section>` : ''}
         ${r.facts.length || r.next_step ? `<section><h3>О клиенте</h3><dl class="rvm-kv">${r.facts.map(f => `<dt>${esc(f.name)}</dt><dd>${esc(f.value)}</dd>`).join('')}
           ${r.next_step ? `<dt>Договорённость</dt><dd>${esc(r.next_step)}</dd>` : ''}</dl></section>` : ''}
-        ${r.transcript.length ? `<details class="rvm-tr"><summary>Расшифровка разговора · ${r.transcript.length} реплик</summary>
+        ${r.transcript.length ? `<details class="rvm-tr"><summary>Расшифровка разговора · ${plainItems(r.transcript.length, 'реплика', 'реплики', 'реплик')}</summary>
           ${r.transcript.map(l => `<div class="rvm-line" data-line="${l.at}">${stamp(l.at, l.timecode)}<b>${esc(l.who)}</b> ${esc(l.text)}</div>`).join('')}</details>` : ''}
       </div>`;
   }
@@ -59,9 +59,15 @@
     const veil = document.createElement('div'); veil.className = 'rvm-veil';
     const box = document.createElement('div'); box.className = 'rvm'; box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true');
     box.innerHTML = '<header class="rvm-head"><div class="rvm-mut">Загружаю разбор…</div><button class="rvm-x" aria-label="Закрыть">×</button></header>';
+    const opener = document.activeElement;
     document.body.append(veil, box);
-    const close = () => { const a = box.querySelector('audio'); if (a) a.pause(); veil.remove(); box.remove(); document.removeEventListener('keydown', onKey, true); };
-    const onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+    const close = () => {
+      const a = box.querySelector('audio'); if (a) a.pause(); veil.remove(); box.remove(); document.removeEventListener('keydown', onKey, true);
+      if (opener && document.contains(opener)) opener.focus({preventScroll: true}); // фокус туда, откуда открыли разбор
+    };
+    const onKey = e => {
+      if (e.key === 'Escape') { e.stopPropagation(); close(); } else if (typeof trapTab === 'function' && [...document.querySelectorAll('.rvm')].pop() === box) trapTab(box, e); // Tab не уходит под окно
+    };
     document.addEventListener('keydown', onKey, true);
     veil.addEventListener('click', close);
     box.addEventListener('click', e => {
@@ -100,6 +106,8 @@
         lines.forEach(l => l.classList.toggle('now', l === cur));
       });
     }
+    const title = box.querySelector('h2');
+    if (title) { title.id = 'rvm-review-t'; box.setAttribute('aria-labelledby', title.id); }
     box.querySelector('.rvm-x').focus();
   }
 

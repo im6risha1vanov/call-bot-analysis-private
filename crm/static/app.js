@@ -274,6 +274,20 @@ function drawChart(box, data, {bands, tipRows, aria}) {
 const hbars = (rows, color) => rows.length ? `<div class="hb">${rows.map(([t, v, share], k) =>
   `<span>${t}</span><em>${v}</em><span class="bar-h"><i data-css="--w:${Math.max(2, share * 100)}%;--k:${k}${color ? ';--c:' + color : ''}"></i></span>`).join('')}</div>` : '';
 
+// Tab и Shift+Tab ходят по кругу внутри окна, а не уходят на страницу под ним.
+const FOCUSABLE = 'a[href],summary,button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),audio[controls],[tabindex]:not([tabindex="-1"])';
+function trapTab(box, e) {
+  if (e.key !== 'Tab') return;
+  // checkVisibility отсекает и кнопки внутри свёрнутого <details>, у них offsetParent не пустой
+  const shown = el => (el.checkVisibility ? el.checkVisibility() : el.offsetParent !== null);
+  const items = $$(FOCUSABLE, box).filter(el => shown(el) || el === document.activeElement);
+  if (!items.length) return;
+  const first = items[0], last = items[items.length - 1];
+  if (!box.contains(document.activeElement)) { e.preventDefault(); first.focus(); }
+  else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+}
+
 // ---------- выдвижная панель ----------
 let lastFocus = null;
 function openDrawer({title = '', sub = '', avatar = '', html = '', wide = false}) {
@@ -300,9 +314,19 @@ function modal(html, wide = false) {
   const veil = document.createElement('div'); veil.className = 'rvm-veil';
   const box = document.createElement('div'); box.className = 'rvm' + (wide ? ' rvm-wide' : ''); box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true');
   box.innerHTML = html;
+  const opener = document.activeElement;
+  const title = $('h2', box);
+  if (title) { title.id = title.id || 'rvm-t' + Date.now(); box.setAttribute('aria-labelledby', title.id); }
   document.body.append(veil, box);
-  const close = () => { $$('audio', box).forEach(a => a.pause()); veil.remove(); box.remove(); document.removeEventListener('keydown', onKey, true); };
-  const onKey = e => { if (e.key === 'Escape' && $$('.rvm').pop() === box) { e.stopImmediatePropagation(); close(); } }; // закрывается только верхнее окно
+  setTimeout(() => { if (!box.contains(document.activeElement)) ($('.rvm-x', box) || $(FOCUSABLE, box))?.focus({preventScroll: true}); }, 0);
+  const close = () => {
+    $$('audio', box).forEach(a => a.pause()); veil.remove(); box.remove(); document.removeEventListener('keydown', onKey, true);
+    if (opener && document.contains(opener)) opener.focus({preventScroll: true}); // фокус туда, откуда окно открыли
+  };
+  const onKey = e => {
+    if ($$('.rvm').pop() !== box) return; // закрывается и держит фокус только верхнее окно
+    if (e.key === 'Escape') { e.stopImmediatePropagation(); close(); } else trapTab(box, e);
+  };
   document.addEventListener('keydown', onKey, true);
   veil.addEventListener('click', close);
   box.addEventListener('click', e => { if (e.target.closest('.rvm-x')) close(); });
@@ -508,7 +532,11 @@ document.addEventListener('click', e => {
   if (e.target.closest('[data-theme-btn]')) { nextTheme(); return; }
   if (e.target.closest('[data-logout]')) { api('/api/logout', {method: 'POST', body: {}}).catch(() => {}).then(() => showLogin()); }
 });
-addEventListener('keydown', e => { if (e.key === 'Escape' && drawerOpen()) closeDrawer(); });
+addEventListener('keydown', e => {
+  if (e.key === 'Escape' && $('.pop')) { $('.pop').remove(); return; }
+  if (!drawerOpen() || $('.rvm')) return;
+  if (e.key === 'Escape') closeDrawer(); else trapTab($('#drawer'), e);
+});
 
 // ---------- тема ----------
 const THEMES = [['', 'Тема: авто'], ['light', 'Тема: светлая'], ['dark', 'Тема: тёмная']];

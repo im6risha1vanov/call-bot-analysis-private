@@ -88,6 +88,8 @@ def routes(viewer, body, pool_key) -> list:
         pool, who, owner = await ctx(request, True, data)
         try:
             return web.json_response(await rs.sheet_contacts(pool, who, owner, data.get('tab')))
+        except KeyError:  # нет настройки Google на сервере: имя переменной клиенту не показываем
+            raise ValueError('Таблица «Прозвон лидов» сейчас недоступна.')
         except LookupError as exc:
             raise ValueError(str(exc))
 
@@ -165,8 +167,8 @@ def routes(viewer, body, pool_key) -> list:
         web.post(base + '/contacts/delete', contacts_delete),
         web.get(base + '/stop', stop), web.post(base + '/stop', stop_add), web.post(base + '/stop/remove', stop_remove),
         web.get(base + '/campaigns', campaigns), web.post(base + '/campaigns', campaign_save),
-        web.post(base + '/campaigns/{id:\\d+}', campaign_save), web.get(base + '/campaigns/{id:\\d+}/targets', campaign_targets),
-        web.post(base + '/campaigns/{id:\\d+}/{action}', campaign_action),
+        web.post(base + '/campaigns/{id:\\d{1,18}}', campaign_save), web.get(base + '/campaigns/{id:\\d{1,18}}/targets', campaign_targets),
+        web.post(base + '/campaigns/{id:\\d{1,18}}/{action}', campaign_action),
         web.get(base + '/calls', calls), web.get(base + '/calls.csv', calls_csv), web.get(base + '/recording/{id}', recording),
         web.get(base + '/analytics', analytics),
     ]

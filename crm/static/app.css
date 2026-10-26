@@ -216,7 +216,7 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13.5px}
 .tbl td.n,.tbl th.n{text-align:right}
 .tbl tr.click{cursor:pointer;transition:background .15s}
 .tbl tr.click:hover td,.tbl tr.click:focus-visible td{background:var(--surface-2)}
-.tbl tr.click:focus-visible{outline:none}
+.tbl tr.click:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .tbl.anim tbody tr{animation:rise .4s var(--ease) both;animation-delay:calc(120ms + var(--r,0) * 40ms)}
 .tbl .wrap{white-space:normal;min-width:200px}
 .tbl .nw{white-space:nowrap}
@@ -271,6 +271,7 @@ button.item:hover{background:var(--surface-2)}
 /* help «?» */
 .help{display:inline-grid;place-items:center;width:18px;height:18px;border-radius:50%;border:1px solid var(--line);background:var(--surface);color:var(--muted);font-size:11px;font-weight:700;padding:0;vertical-align:1px;position:relative}
 .help:hover{color:var(--accent);border-color:var(--accent)}
+.help::before{content:"";position:absolute;inset:-4px}/* попасть пальцем: зона нажатия 26 px при значке 18 px */
 .pop{position:absolute;z-index:40;max-width:300px;background:var(--surface);color:var(--fg);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow-lg);padding:10px 12px;font-size:12.5px;font-weight:400;line-height:1.45;animation:rise .2s var(--ease) both;text-transform:none;letter-spacing:0}
 
 /* details «Подробнее» */
