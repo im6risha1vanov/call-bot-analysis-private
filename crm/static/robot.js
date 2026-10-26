@@ -477,8 +477,8 @@ RB_VIEW.settings = async el => {
   const pt = econ.parts;
   const FRESH_MIN = 10;
   const minuteNote = econ.sample_minutes
-    ? `Mango ${money(pt.mango)} + распознавание ${money(pt.asr)} + синтез ${money(pt.synth)} + модель ${money(pt.llm)}. ${econ.estimate ? `Расход на минуту: ${fmt(econ.chars_min)} символов и ${fmt(econ.tokens_min)} токенов. Токены — оценка: с 22.10 простые ответы идут без модели, по автотесту это втрое меньше; точная цифра появится после ${FRESH_MIN} минут новых звонков.` : `Расход на минуту по звонкам робота с 22.10 (заготовки без модели), не старше 30 дней: ${fmt(econ.chars_min)} символов и ${fmt(econ.tokens_min)} токенов.`}`
-    : `Пока только Mango: у робота ещё нет разговоров за 30 дней, чтобы посчитать расход синтеза и модели на минуту.`;
+    ? `Распознавание ${money(pt.asr)} + синтез ${money(pt.synth)} + модель ${money(pt.llm)}, без Mango. ${econ.estimate ? `Расход на минуту: ${fmt(econ.chars_min)} символов и ${fmt(econ.tokens_min)} токенов. Токены — оценка: с 22.10 простые ответы идут без модели, по автотесту это втрое меньше; точная цифра появится после ${FRESH_MIN} минут новых звонков.` : `Расход на минуту по звонкам робота с 22.10 (заготовки без модели), не старше 30 дней: ${fmt(econ.chars_min)} символов и ${fmt(econ.tokens_min)} токенов.`}`
+    : `Пока только распознавание: у робота ещё нет разговоров за 30 дней, чтобы посчитать расход синтеза и модели на минуту. Mango не входит.`;
   const ty = econ.typical;
   const firstPrice = Object.values(p.client_min || {})[0];
   const calcField = (key, label, value, unit) => `<label class="field"><span>${label}</span><span class="rb-unit"><input class="inp" data-calc="${key}" inputmode="decimal" value="${value ?? ''}"><i>${unit}</i></span></label>`;
@@ -486,7 +486,7 @@ RB_VIEW.settings = async el => {
       <div class="list">${RB_COSTS.map(costRow).join('')}
         <div class="item rb-total"><div class="main-l"><div class="t">Минута разговора робота</div><div class="s wrap-s">${minuteNote}</div></div>
           <div class="r"><b class="num">${money(econ.cost_min)}</b><div class="s">наша себестоимость</div></div></div></div>
-      <p class="hint">Руками эти цены не меняются: Mango считается по списаниям с баланса на минуты исходящих разговоров, ElevenLabs по подписке и курсу ЦБ, YandexGPT по прайсу Яндекс Облака.</p></section>
+      <p class="hint">Минута Mango показана для справки, в себестоимость не входит. Руками эти цены не меняются: Mango считается по списаниям с баланса на минуты исходящих разговоров, ElevenLabs по подписке и курсу ЦБ, YandexGPT по прайсу Яндекс Облака.</p></section>
     <section class="card blk" data-css="--i:1"><div class="card-h"><h2>Калькулятор</h2><span class="hint">прикинуть цену для клиента</span></div>
       <div class="rb-calc">${calcField('calls', 'Звонков в месяц', ty.calls || 1000, 'шт')}${calcField('reach', 'Дозвон', ty.reach ?? 30, '%')}
         ${calcField('len', 'Средний разговор', ty.minutes_per_talk ?? 1.5, 'мин')}${calcField('price', 'Цена минуты для клиента', firstPrice ?? '', '₽')}</div>
