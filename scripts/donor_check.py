@@ -24,7 +24,7 @@ async def main() -> None:
     print('Каталог Яндекса:', webx.folder() or 'НЕТ (YANDEX_FOLDER_ID)')
     print('Ключ поиска:', 'есть' if webx.search_key() else 'НЕТ (YANDEX_SEARCH_API_KEY)')
     print('Модели:', ', '.join(f"{p['name']} {p['model']}" for p in agent.providers()) or 'НЕТ ключей')
-    print('Лимит: в день $%g, на прогон $%g' % (agent.daily_limit(), agent.run_limit()))
+    print('Лимит: в день %g ₽, на прогон %g ₽' % (agent.daily_limit(), agent.run_limit()))
     async with httpx.AsyncClient() as http:
         if webx.search_ready():
             try:

@@ -22,6 +22,8 @@ import httpx
 from . import donor_phone as ph
 
 SEARCH_URL = 'https://searchapi.api.cloud.yandex.net/v2/web/search'
+ASYNC_URL = 'https://searchapi.api.cloud.yandex.net/v2/web/searchAsync'
+OPERATION_URL = 'https://operation.api.cloud.yandex.net/operations/'
 SEARCH_RESULTS = 20  # одна платная выдача отдаёт до 100 результатов; 20 — как две страницы обычной
 PAGE_LIMIT = 1_500_000
 PAGE_TIMEOUT = 20
@@ -127,15 +129,19 @@ def parse_xml(raw: bytes) -> list[dict]:
     return out
 
 
-async def search(client: httpx.AsyncClient, query: str, region: int = 225, results: int = SEARCH_RESULTS) -> list[dict]:
-    if not search_ready():
-        raise SearchUnavailable('поиск Яндекса не подключён: нет YANDEX_SEARCH_API_KEY или каталога в .env')
-    body = {'query': {'searchType': 'SEARCH_TYPE_RU', 'queryText': query[:400], 'familyMode': 'FAMILY_MODE_MODERATE', 'page': '0'},
+def search_body(query: str, region: int, results: int) -> dict:
+    return {'query': {'searchType': 'SEARCH_TYPE_RU', 'queryText': query[:400], 'familyMode': 'FAMILY_MODE_MODERATE', 'page': '0'},
             'groupSpec': {'groupMode': 'GROUP_MODE_DEEP', 'groupsOnPage': str(results), 'docsInGroup': '1'},
             'region': str(region), 'l10N': 'LOCALIZATION_RU', 'folderId': folder(), 'responseFormat': 'FORMAT_XML'}
+
+
+async def call(client: httpx.AsyncClient, method: str, url: str, body: dict | None = None) -> dict:
+    """Запрос к API Яндекса с повтором на 429 и 5xx."""
+    if not search_ready():
+        raise SearchUnavailable('поиск Яндекса не подключён: нет YANDEX_SEARCH_API_KEY или каталога в .env')
     for attempt in range(3):
         try:
-            r = await client.post(SEARCH_URL, json=body, headers={'Authorization': 'Api-Key ' + search_key()}, timeout=40)
+            r = await client.request(method, url, json=body, headers={'Authorization': 'Api-Key ' + search_key()}, timeout=40)
         except httpx.HTTPError as e:
             if attempt == 2:
                 raise SearchUnavailable(f'Яндекс не ответил ({type(e).__name__})') from None
@@ -146,9 +152,56 @@ async def search(client: httpx.AsyncClient, query: str, region: int = 225, resul
             continue
         if r.status_code >= 300:
             raise SearchUnavailable(f'Яндекс {r.status_code}: {r.text[:200]}')
-        raw = r.json().get('rawData') or ''
-        return parse_xml(base64.b64decode(raw)) if raw else []
+        return r.json()
     raise SearchUnavailable('Яндекс отвечает «слишком много запросов»')
+
+
+def decode(raw: str) -> list[dict]:
+    return parse_xml(base64.b64decode(raw)) if raw else []
+
+
+async def search(client: httpx.AsyncClient, query: str, region: int = 225, results: int = SEARCH_RESULTS) -> list[dict]:
+    """Обычный (синхронный) поиск: ответ сразу, 488 ₽ за 1000 запросов днём."""
+    data = await call(client, 'POST', SEARCH_URL, search_body(query, region, results))
+    return decode(data.get('rawData') or '')
+
+
+async def search_deferred(client: httpx.AsyncClient, queries: list[str], region: int = 225, results: int = SEARCH_RESULTS,
+                          wait: float = 1800, poll: float = 20, on_wait=None) -> dict[str, list[dict] | None]:
+    """Отложенный поиск: 30,5 ₽ за 1000 запросов, ответ от нескольких минут до часов.
+
+    Отправляем все запросы сразу и ждём до wait секунд. Что не пришло или упало — None
+    (такие запросы вызывающий может повторить обычным поиском). on_wait(готово, всего) — для хода работы.
+    """
+    ops: dict[str, str] = {}
+    out: dict[str, list[dict] | None] = {q: None for q in queries}
+    for q in queries:
+        try:
+            op = await call(client, 'POST', ASYNC_URL, search_body(q, region, results))
+            if op.get('id'):
+                ops[q] = op['id']
+        except SearchUnavailable as e:
+            if 'не подключён' in str(e) or ' 401' in str(e) or ' 403' in str(e):
+                raise
+    deadline = asyncio.get_running_loop().time() + wait
+    while ops and asyncio.get_running_loop().time() < deadline:
+        await asyncio.sleep(poll)
+        for q, oid in list(ops.items()):
+            try:
+                op = await call(client, 'GET', OPERATION_URL + oid)
+            except SearchUnavailable:
+                continue
+            if not op.get('done'):
+                continue
+            del ops[q]
+            if op.get('response'):
+                try:
+                    out[q] = decode(op['response'].get('rawData') or '')
+                except SearchUnavailable:
+                    out[q] = None
+        if on_wait:
+            await on_wait(len(queries) - len(ops), len(queries))
+    return out
 
 
 # ------------------------------------------------------------------ чтение сайта
