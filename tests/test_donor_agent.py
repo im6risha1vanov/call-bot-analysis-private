@@ -1,9 +1,12 @@
 """Агент доноров: номера и реестр, разбор страниц и выдачи, защита от внутренних адресов, полный прогон на макетах."""
 import asyncio
+import base64
 import os
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
+
+import httpx
 
 from crm import donor_agent as agent, donor_phone as ph, donor_web as webx
 from tests.test_crm import DSN, HEAD, MANAGER, OTHER, DBCase
@@ -60,6 +63,24 @@ class PageTests(unittest.TestCase):
         nothing = '<yandexsearch><response><error code="15">Искомая комбинация слов нигде не встречается</error></response></yandexsearch>'.encode()
         self.assertEqual(webx.parse_xml(nothing), [])
 
+    def test_deferred_search_polls_operation(self):
+        raw = base64.b64encode('<yandexsearch><response><results><grouping><group><doc><url>https://kuhni-a.ru/</url><title>Альфа</title></doc></group></grouping></results></response></yandexsearch>'.encode()).decode()
+        polls = []
+
+        def handler(request):
+            if request.url.path.endswith('/searchAsync'):
+                return httpx.Response(200, json={'id': 'op1', 'done': False})
+            polls.append(1)
+            return httpx.Response(200, json={'id': 'op1', 'done': len(polls) > 1, 'response': {'rawData': raw}} if len(polls) > 1 else {'id': 'op1', 'done': False})
+
+        async def go():
+            with patch.dict(os.environ, {'YANDEX_SEARCH_API_KEY': 'k', 'YANDEX_FOLDER_ID': 'f'}):
+                async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
+                    return await webx.search_deferred(c, ['кухни'], wait=5, poll=0)
+        got = asyncio.run(go())
+        self.assertEqual([r['host'] for r in got['кухни']], ['kuhni-a.ru'])
+        self.assertEqual(len(polls), 2)
+
     def test_internal_addresses_blocked(self):
         async def check(url):
             with self.assertRaises(webx.Blocked):
@@ -103,7 +124,7 @@ class FakeAI:
             for block in user.split('### ')[1:]:
                 host = block.split('\n')[0].strip()
                 phones = [{'number': m, 'type': 'служебный' if 'кадр' in line else 'менеджер (мобильный)',
-                           'who': 'Иван, менеджер' if '345' in m else '', 'person': '345' in m, 'caller': 'покупатели', 'stage': 'выбирает услугу',
+                           'who': 'Иван, менеджер' if '345' in m else 'Пётр Сидоров' if '22-44' in m else '', 'person': '345' in m or '22-44' in m, 'caller': 'покупатели', 'stage': 'выбирает услугу',
                            'office_city': 'Краснодар', 'source': 'https://' + host + '/'}
                           for line in block.split('\n') if line.startswith('- ') for m in [line[2:].split(' [')[0]]]
                 sites.append({'domain': host, 'name': host, 'kind': 'прямой конкурент', 'relevance': 8, 'flow': 7, 'verdict': 'берём', 'why': 'кухни',
@@ -125,6 +146,20 @@ async def fake_search(client, query, region=225, results=20):
             {'title': 'Кухни Бета', 'url': 'https://kuhni-b.ru/', 'host': 'kuhni-b.ru', 'snippet': ''}]
 
 
+SYNC_CALLS = []
+
+
+async def fake_deferred(client, queries, region=225, results=20, wait=0, poll=0, on_wait=None):
+    if on_wait:
+        await on_wait(len(queries) - 1, len(queries))
+    return {q: None if q == 'кухни краснодар' else await fake_search(client, q) for q in queries}  # один запрос не успел
+
+
+async def counted_search(client, query, region=225, results=20):
+    SYNC_CALLS.append(query)
+    return await fake_search(client, query)
+
+
 async def fake_fetch(client, url):
     if url not in SITES:
         raise webx.Blocked('нет страницы')
@@ -137,8 +172,9 @@ class RunTests(DBCase):
         fake = FakeAI()
         env = {'ANTHROPIC_API_KEY': 'k', 'YANDEX_SEARCH_API_KEY': 'k', 'YANDEX_FOLDER_ID': 'f', 'DONOR_DAILY_RUB': '1500'}
         with patch.dict(os.environ, env), patch.object(agent, 'ai_client', lambda p: SimpleNamespace(messages=fake)), \
-                patch.object(webx, 'search', fake_search), patch.object(webx, 'fetch', fake_fetch), \
-                patch.object(agent.Run, 'usd_rub', lambda self: asyncio.sleep(0, 100.0)):
+                patch.object(webx, 'search', counted_search), patch.object(webx, 'fetch', fake_fetch), \
+                patch.object(webx, 'search_deferred', fake_deferred), patch.object(agent.Run, 'usd_rub', lambda self: asyncio.sleep(0, 100.0)):
+            SYNC_CALLS.clear()
             started = await agent.start(self.pool, MANAGER, {'niche': 'Кухни на заказ', 'city': 'Краснодар', 'target': 10})
             row = await agent.take(self.pool)
             self.assertEqual(row['id'], started['id'])
@@ -148,12 +184,15 @@ class RunTests(DBCase):
         phones = {p['n']: p for p in run['result']['phones']}
         self.assertEqual(phones['79123456789']['verdict'], 'go')  # мобильный менеджера с именем
         self.assertTrue(phones['79123456789']['live'])
+        self.assertFalse(any('Пётр' in w for w in phones['79181112244']['why']))  # имя выдумано: рядом с номером его нет
+        self.assertTrue(phones['79181112244']['live'])  # но WhatsApp — признак живого человека
         self.assertEqual(phones['79185550011']['verdict'], 'no')  # отдел кадров
         self.assertEqual(phones['74951234567']['verdict'], 'test')  # встречается у другой компании
         self.assertTrue(any('у других' in w for w in phones['74951234567']['why']))
         self.assertEqual(phones['79990000001']['verdict'], 'no')  # только в коде страницы, на сайте колл-трекинг
         self.assertIn('колл-трекинг', phones['79990000001']['why'][0])
         self.assertFalse(any(s['site'] == 'avito.ru' for s in run['result']['sites']))
+        self.assertEqual(SYNC_CALLS, ['кухни краснодар'])  # обычным поиском только то, что отложенный не успел
         self.assertGreater(run['rub'], 0)
         self.assertEqual(set(run['cost']), {'план', 'разбор сайтов', 'проверка повторов', 'досье', 'поиск кандидатов', 'обход выдачи'})
         self.assertAlmostEqual(sum(run['cost'].values()), run['rub'], delta=0.1)

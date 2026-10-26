@@ -39,6 +39,7 @@ MAX_QUEUED = 3  # прогонов в очереди на компанию
 LOG_LIMIT = 400
 TARGETS = (10, 20, 30, 50)
 SEARCH_RUB = 0.488  # Yandex Search API, синхронный запрос днём, ₽ за запрос (прайс 488 ₽ за 1000)
+DEFERRED_RUB = 0.0305  # отложенный запрос (30,5 ₽ за 1000): ответ через минуты, для пачек запросов
 USD_RUB_FALLBACK = 95.0
 
 
@@ -248,6 +249,15 @@ def city_words(city: str) -> list[str]:
     return [w[:max(5, len(w) - 2)] for w in words if len(w) > 4 and not re.search(r'област|республ|город|округ|автоном|край', w)]
 
 
+def near_number(who: str, seen: dict) -> bool:
+    """Подпись модели («Иван, менеджер») стоит рядом с номером на странице. Модель может приписать номеру
+    чужое или выдуманное имя: тогда подпись не считается признаком живого человека."""
+    text = (str(seen.get('ctx') or '') + ' ' + str(seen.get('pre') or '')).lower().replace('ё', 'е')
+    names = [w for w in re.findall(r'[А-ЯЁ][а-яё]{2,}', who or '') if not NOT_NAME.search(w)]
+    words = names or [w for w in re.findall(r'[а-яё]{5,}', (who or '').lower()) if not NOT_NAME.search(w)]
+    return any(w.lower().replace('ё', 'е')[:4] in text for w in words)
+
+
 # ------------------------------------------------------------------ прогон
 
 
@@ -389,8 +399,8 @@ class Run:
             x['s'][src] = 1
         if ct:
             x['ct'] = 1
-        if ctx and not x['ctx']:
-            x['ctx'] = ctx[:140]
+        if ctx and ctx[:140] not in x['ctx']:
+            x['ctx'] = (x['ctx'] + ' | ' + ctx[:140] if x['ctx'] else ctx[:140])[:600]  # текст рядом с номером на разных страницах
 
     async def search(self, query: str) -> list[dict]:
         await self.budget()
@@ -399,10 +409,45 @@ class Run:
             res = await webx.search(self.http, query, webx.region_of(self.brief['city']))
         finally:
             await self.spend(SEARCH_RUB, search=1)
+        self.found(res)
+        return res
+
+    def found(self, res: list[dict]) -> None:
         for r in res:
             for n, _ in ph.find(r['title'] + ' ' + r['snippet']):
                 self.remember(n, 'yandex.ru/search', 'поиск')
-        return res
+
+    async def batch_search(self, queries: list[str], what: str) -> dict[str, list[dict] | None]:
+        """Пачка запросов без спешки: отложенным поиском (в 16 раз дешевле), что не пришло — обычным.
+        Модель в разговоре ищет обычным поиском: ей ответ нужен сразу."""
+        out: dict[str, list[dict] | None] = {}
+        if queries and os.getenv('DONOR_DEFERRED', 'on') != 'off':
+            await self.budget()
+            self.say(f'🔍 Яндекс, отложенный поиск: {len(queries)} запросов ({what}), ответ приходит за несколько минут')
+            await self.spend(DEFERRED_RUB * len(queries), search=len(queries))
+            base = self.stage
+
+            async def waiting(ready, total):
+                self.stage = f'{base}: готово {ready} из {total}'
+                await self.save()
+            out = await webx.search_deferred(self.http, queries, webx.region_of(self.brief['city']),
+                                             wait=env_float('DONOR_DEFERRED_WAIT_MIN', 30) * 60, on_wait=waiting)
+            self.stage = base
+            late = [q for q, r in out.items() if r is None]
+            if late:
+                self.say(f'Отложенный поиск не успел по {len(late)} запросам, ищу их обычным.')
+        for q in queries:
+            if out.get(q) is None:
+                try:
+                    out[q] = await self.search(q)
+                except webx.SearchUnavailable as e:
+                    self.say(f'⚠️ поиск «{q}»: {e}')
+                    if 'не подключён' in str(e) or '401' in str(e) or '403' in str(e):
+                        raise
+                    out[q] = None
+            else:
+                self.found(out[q])
+        return out
 
     async def t_search(self, inp: dict):
         q = str(inp.get('query') or '').strip()
@@ -586,13 +631,10 @@ class Run:
         self.part = 'обход выдачи'
         await self.set_stage(f'Шаг 2. Обход выдачи Яндекса: {len(qs)} запросов')
         sites = self.state['crawl']['sites']
+        got = await self.batch_search([x['q'] for x in qs], 'обход выдачи')
         for item in qs:
-            try:
-                res = await self.search(item['q'])
-            except webx.SearchUnavailable as e:
-                self.say(f'⚠️ поиск «{item["q"]}»: {e}')
-                if 'не подключён' in str(e) or '401' in str(e) or '403' in str(e):
-                    raise
+            res = got.get(item['q'])
+            if res is None:
                 continue
             rows = []
             for pos, r in enumerate(res, 1):
@@ -734,31 +776,32 @@ class Run:
             nd['phones'] = (nd.get('phones') or []) + [p for p in od.get('phones') or [] if ph.norm(p.get('number')) not in have]
 
     async def check_dups(self) -> None:
-        rows = [r for r in self.phone_rows() if r['j']['v'] != 'no' and r['n'] not in self.state['dup']][:int(env_float('DONOR_DUP_CHECKS', 25))]
+        rows = [r for r in self.phone_rows() if r['j']['v'] != 'no' and r['n'] not in self.state['dup']][:int(env_float('DONOR_DUP_CHECKS', 40))]
         if not rows:
             return
         self.part = 'проверка повторов'
         await self.set_stage(f'Проверка номеров в интернете: не указаны ли они у других ({len(rows)})')
+        got = await self.batch_search([f'"{ph.fmt(r["n"])}"' for r in rows], 'проверка повторов')
         for r in rows:
             own = [s for s in r['sites'] if s]
             names = [w for c in r['co'] for w in name_words(c)]
-            try:
-                res = await self.search(f'"{ph.fmt(r["n"])}"')
-                others = []
-                for it in res:
-                    h = it['host']
-                    t = (it['title'] + ' ' + it['snippet']).lower().replace('ё', 'е')
-                    if h and any(h == d or h.endswith('.' + d) for d in own):
-                        continue
-                    if any(w in t for w in names):
-                        continue
-                    if not any(n == r['n'] for n, _ in ph.find(it['title'] + ' ' + it['snippet'])):
-                        continue
-                    others.append(it['title'][:70])
-                self.state['dup'][r['n']] = {'others': others[:5]}
-            except webx.SearchUnavailable as e:
-                self.state['dup'][r['n']] = {'others': [], 'err': str(e)[:100]}
-            await self.save()
+            res = got.get(f'"{ph.fmt(r["n"])}"')
+            if res is None:
+                self.state['dup'][r['n']] = {'others': [], 'err': 'поиск не ответил'}
+                continue
+            others = []
+            for it in res:
+                h = it['host']
+                t = (it['title'] + ' ' + it['snippet']).lower().replace('ё', 'е')
+                if h and any(h == d or h.endswith('.' + d) for d in own):
+                    continue
+                if any(w in t for w in names):
+                    continue
+                if not any(n == r['n'] for n, _ in ph.find(it['title'] + ' ' + it['snippet'])):
+                    continue
+                others.append(it['title'][:70])
+            self.state['dup'][r['n']] = {'others': others[:5]}
+        await self.save()
 
     # --- вердикт по номеру (как judge в v2)
 
@@ -769,7 +812,8 @@ class Run:
         hosts = {webx.host_of(u if u.startswith('http') else 'https://' + u) for u in x['u']} - {''}
         if o and o['type'] == 'mobile' and not o['virtual']:
             out.append('мобильный ' + o['op'])
-        if (r['person'] and not NOT_NAME.search(r['who'] or '')) or (r['who'] and re.search(r'[А-ЯЁ][а-яё]{2,}', r['who']) and not NOT_NAME.search(r['who'])):
+        claimed = (r['person'] and not NOT_NAME.search(r['who'] or '')) or (r['who'] and re.search(r'[А-ЯЁ][а-яё]{2,}', r['who']) and not NOT_NAME.search(r['who']))
+        if claimed and near_number(r['who'], x):
             out.append('конкретный человек' + (': ' + r['who'] if r['who'] else ''))
         if x['s'].get('wa') or r['type'] == 'WhatsApp/Telegram':
             out.append('есть WhatsApp')
@@ -887,8 +931,8 @@ class Run:
     async def execute(self) -> None:
         await self.build_plan()
         await self.crawl_stage()
-        await self.check_dups()
         await self.deep_dive(min(10, max(4, round(self.target / 3))))
+        # Повторы проверяем пачками отложенного поиска: после обхода и в конце, а не после каждого раунда.
         await self.check_dups()
         self.say(f'📊 после обхода выдачи проверенных номеров: {self.good()} из нужных {self.target}')
         max_d = min(60, self.target * 2 + 10)
@@ -912,8 +956,8 @@ class Run:
                     break
             await self.set_stage(f'Досье: раунд {rnd + 1}')
             await self.dossiers(left[:min(8, max_d - done)])
-            await self.check_dups()
             self.say(f'📊 проверенных номеров: {self.good()} из нужных {self.target}')
+        await self.check_dups()
 
 
 # ------------------------------------------------------------------ фон
