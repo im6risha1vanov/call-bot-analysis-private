@@ -225,6 +225,29 @@ class RunTests(DBCase):
         await agent.settings(self.pool, HEAD, {'avito_text': 'Здравствуйте! Удобно обсудить в Телеграм @AveronCompany'})
         self.assertIn('@AveronCompany', (await agent.overview(self.pool, MANAGER))['avito_text'])
 
+    async def test_cheap_yandex_model_for_sites(self):
+        import json as _json
+        answers = [httpx.Response(200, json={'usage': {'prompt_tokens': 10000, 'completion_tokens': 1000}, 'choices': [{'message': {'tool_calls': [
+            {'id': 'c1', 'type': 'function', 'function': {'name': 'save_sites', 'arguments': _json.dumps({'sites': [{'domain': 'kuhni-a.ru'}]})}}]}}]}),
+            httpx.Response(500, text='упало')]
+        sent = []
+
+        def handler(request):
+            sent.append(_json.loads(request.content))
+            return answers.pop(0)
+        with patch.dict(os.environ, {'YANDEX_GPT_API_KEY': 'k', 'YANDEX_FOLDER_ID': 'fold', 'ANTHROPIC_API_KEY': 'k', 'YANDEX_SEARCH_API_KEY': 'k'}):
+            started = await agent.start(self.pool, MANAGER, {'niche': 'Кухни', 'target': 10, 'sites_model': 'aliceai-llm-flash'})
+            row = await self.pool.fetchrow('SELECT * FROM donor_runs WHERE id=$1', started['id'])
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+                run = agent.Run(self.pool, row, http)
+                self.assertEqual(await run.yandex_sites('сайты'), [{'domain': 'kuhni-a.ru'}])
+                self.assertIsNone(await run.yandex_sites('сайты'))  # ошибка: разберёт основная модель
+            with self.assertRaises(ValueError):
+                await agent.start(self.pool, MANAGER, {'niche': 'Кухни', 'target': 10, 'sites_model': 'gpt-что-угодно'})
+        self.assertEqual(sent[0]['model'], 'gpt://fold/aliceai-llm-flash')
+        self.assertAlmostEqual(run.rub, 1.2)  # 10k входа по 0,1 ₽ и 1k выхода по 0,2 ₽
+        self.assertIn('Alice', (await agent.one(self.pool, MANAGER, started['id']))['sites_model'])
+
     async def test_reserve_model_takes_over(self):
         class NoKey(Exception):
             status_code = 401

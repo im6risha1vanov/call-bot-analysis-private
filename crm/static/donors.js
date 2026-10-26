@@ -25,6 +25,7 @@
         <label class="field" data-css="margin-top:10px">Что продаёт клиент (необязательно)<input data-d="offer" maxlength="500"></label>
         <label class="field" data-css="margin-top:10px">Сам клиент, чтобы не взять его донором (необязательно)<input data-d="client" maxlength="200" placeholder="сайт или название"></label>
         <label class="field" data-css="margin-top:10px">Сколько проверенных номеров нужно<select data-d="target">${d.targets.map(t => `<option${t === 20 ? ' selected' : ''}>${t}</option>`).join('')}</select></label>
+        <label class="field" data-css="margin-top:10px">Модель для разбора сайтов<select data-d="model">${d.sites_models.map(m => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join('')}</select></label>
         <div class="row" data-css="margin-top:12px"><button class="btn primary" type="button" data-start${ro ? ' disabled' : ''}>Найти номера</button></div>
         <p class="hint">Один прогон стоит не больше ${rub(d.limit.run_rub)}. Общий лимит на день ${rub(d.limit.day_rub)}.</p></section>
       <section class="card blk" data-css="--i:1"><div class="card-h"><h2>Прогоны</h2><span class="hint">${d.runs.length || ''}</span></div>
@@ -43,7 +44,7 @@
       if (val('niche').length < 3) { toast('Напишите нишу клиента', true); return; }
       busy(e.currentTarget, true);
       try {
-        const r = await api('/api/donors', {method: 'POST', body: {niche: val('niche'), city: val('city'), offer: val('offer'), client: val('client'), target: +val('target')}});
+        const r = await api('/api/donors', {method: 'POST', body: {niche: val('niche'), city: val('city'), offer: val('offer'), client: val('client'), target: +val('target'), sites_model: val('model')}});
         toast('Агент начал поиск');
         go('sources', 'run-' + r.id);
       } catch (err) { busy(e.currentTarget, false); toast(err.message, true); }
@@ -86,7 +87,7 @@
         ${going && manage ? '<button class="btn small" type="button" data-stop>Остановить</button>' : ''}
         ${!going && manage ? '<button class="btn small" type="button" data-del>Удалить</button>' : ''}
         <button class="btn small" type="button" data-back>Все прогоны</button></div>
-      <p class="hint" data-css="margin:0">${esc(run.city || 'Вся Россия')}${run.offer ? ' · ' + esc(run.offer) : ''} · запустил ${esc(run.author || '—')} ${fmtWhen(run.created_at)}</p>
+      <p class="hint" data-css="margin:0">${esc(run.city || 'Вся Россия')}${run.offer ? ' · ' + esc(run.offer) : ''} · разбор сайтов: ${esc(run.sites_model)} · запустил ${esc(run.author || '—')} ${fmtWhen(run.created_at)}</p>
       <p data-css="margin:10px 0 0"><b>${esc(run.stage || '')}</b></p>
       <div class="kpis" data-css="margin-top:12px"><div class="kpi"><span class="lab">В парсинг</span><span class="val">${counts.go}</span><span class="foot">нужно ${run.target}</span></div>
         <div class="kpi"><span class="lab">Живые люди</span><span class="val">${res.live}</span><span class="foot">мобильный, имя или WhatsApp</span></div>

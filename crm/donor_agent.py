@@ -38,6 +38,7 @@ POLL_SEC = 5
 MAX_QUEUED = 3  # прогонов в очереди на компанию
 LOG_LIMIT = 400
 TARGETS = (10, 20, 30, 50)
+SITES_MODELS = {'': 'dreamn (основная)', 'aliceai-llm-flash': 'Alice Flash (дешевле, тест)'}
 SEARCH_RUB = 0.488  # Yandex Search API, синхронный запрос днём, ₽ за запрос (прайс 488 ₽ за 1000)
 DEFERRED_RUB = 0.0305  # отложенный запрос (30,5 ₽ за 1000): ответ через минуты, для пачек запросов
 USD_RUB_FALLBACK = 95.0
@@ -267,6 +268,7 @@ class Run:
         self.client_id = row['client_id']
         self.brief = {'niche': row['niche'], 'city': row['city'], 'offer': row['offer'], 'client': row['project_client'], 'remote': False}
         self.target = row['target']
+        self.sites_model = (row['sites_model'] if 'sites_model' in row.keys() else '') or ''  # дешёвая модель Яндекса на разборе сайтов
         self.state = {'cands': [], 'dossiers': {}, 'seen': {}, 'dup': {}, 'crawl': {'queries': [], 'sites': {}}, 'raw': {}, 'summary': ''}
         self.plan = None
         self.log_items: list[dict] = []
@@ -356,6 +358,51 @@ class Run:
                 return [block_dict(b) for b in resp.content]
             log.warning('агент доноров: %s не ответил: %r', p['name'], last)
         raise AIUnavailable(f'ИИ не ответил: {type(last).__name__}: {str(last)[:200]}')
+
+    async def yandex_sites(self, user: str) -> list | None:
+        """Разбор сайтов дешёвой моделью Яндекса (для сравнения с основной). None — не вышло, разберёт основная.
+        Выдуманные номера и имена отсекает код (judge, near_number), поэтому ошибки модели в парсинг не попадут."""
+        folder = webx.folder()
+        key = (os.getenv('YANDEX_GPT_API_KEY') or os.getenv('YANDEX_TTS_API_KEY') or '').strip()
+        if not folder or not key:
+            self.say('Модель Яндекса не подключена, разбираю основной.')
+            self.sites_model = ''
+            return None
+        await self.budget()
+        tool = {'type': 'function', 'function': {'name': T_SITES['name'], 'description': T_SITES['description'], 'parameters': T_SITES['input_schema']}}
+        payload = {'model': f'gpt://{folder}/{self.sites_model}', 'max_tokens': 6000, 'temperature': 0.1, 'tools': [tool], 'tool_choice': 'auto',
+                   'messages': [{'role': 'system', 'content': SYS_SITES}, {'role': 'user', 'content': user}]}
+        try:
+            r = await self.http.post('https://llm.api.cloud.yandex.net/v1/chat/completions', json=payload, timeout=120,
+                                     headers={'Authorization': 'Bearer ' + key, 'OpenAI-Project': folder})
+            data = r.json() if r.status_code < 300 else None
+        except (httpx.HTTPError, ValueError) as e:
+            self.say(f'⚠️ модель Яндекса не ответила ({type(e).__name__}), разбираю основной.')
+            return None
+        if data is None:
+            self.say(f'⚠️ модель Яндекса: {r.status_code} {r.text[:150]}, разбираю основной.')
+            return None
+        u = data.get('usage') or {}
+        await self.spend((u.get('prompt_tokens') or 0) / 1000 * env_float('DONOR_ALICE_IN_RUB_1K', 0.1)
+                         + (u.get('completion_tokens') or 0) / 1000 * env_float('DONOR_ALICE_OUT_RUB_1K', 0.2), call=1)
+        msg = ((data.get('choices') or [{}])[0]).get('message') or {}
+        for c in msg.get('tool_calls') or []:
+            try:
+                args = json.loads((c.get('function') or {}).get('arguments') or '{}')
+            except json.JSONDecodeError:
+                continue
+            if isinstance(args, dict) and isinstance(args.get('sites'), list):
+                return args['sites']
+        m = re.search(r'\{.*\}', msg.get('content') or '', re.S)  # иногда модель пишет JSON текстом
+        if m:
+            try:
+                args = json.loads(m.group(0))
+                if isinstance(args.get('sites'), list):
+                    return args['sites']
+            except (json.JSONDecodeError, AttributeError):
+                pass
+        self.say('⚠️ модель Яндекса не вернула разбор, разбираю основной.')
+        return None
 
     async def agent(self, system: str, user: str, tools: list[dict], handlers: dict, max_turns: int, done=lambda: False) -> str:
         """Цикл инструментов. dreamn ставит stop_reason=end_turn и при вызове инструмента, поэтому смотрим на сами блоки."""
@@ -597,9 +644,12 @@ class Run:
             async def save_sites(x):
                 got['sites'] = x.get('sites') or []
                 return 'Сохранено.'
+            user = self.brief_text() + '\n\nСайты:\n\n' + '\n\n'.join(self.site_brief(s) for s in part)
             try:
-                await self.agent(SYS_SITES, self.brief_text() + '\n\nСайты:\n\n' + '\n\n'.join(self.site_brief(s) for s in part),
-                                 [T_SITES], {'save_sites': save_sites}, 2, lambda: 'sites' in got)
+                if self.sites_model:
+                    got['sites'] = await self.yandex_sites(user)
+                if got.get('sites') is None:
+                    await self.agent(SYS_SITES, user, [T_SITES], {'save_sites': save_sites}, 2, lambda: 'sites' in got)
             except AIUnavailable as e:
                 self.say(f'⚠️ разбор: {e}')
                 continue
@@ -1050,7 +1100,8 @@ async def overview(pool, who) -> dict:
             'ready': {'search': webx.search_ready(), 'ai': bool(providers())},
             'limit': {'day_rub': daily_limit(), 'run_rub': run_limit(), 'spent_rub': round(spent)},
             'avito_text': await robot_store.get_option(pool, avito_key(who.client_id), AVITO_DEFAULT),
-            'can_settings': is_privileged(who), 'targets': list(TARGETS)}
+            'can_settings': is_privileged(who), 'targets': list(TARGETS),
+            'sites_models': [{'id': k, 'name': v} for k, v in SITES_MODELS.items()]}
 
 
 async def start(pool, who, data: dict) -> dict:
@@ -1072,11 +1123,14 @@ async def start(pool, who, data: dict) -> dict:
         raise ValueError(f'Уже идут или ждут {waiting} прогона. Дождитесь, пока закончится хотя бы один.')
     if await spent_today(pool) >= daily_limit():
         raise ValueError(f'Дневной лимит агента {daily_limit():g} ₽ исчерпан, продолжим завтра.')
+    sites_model = str(data.get('sites_model') or '')
+    if sites_model not in SITES_MODELS:
+        raise ValueError('Неверная модель.')
     rid = await pool.fetchval(
-        """INSERT INTO donor_runs(client_id, niche, city, offer, project_client, target, author_tg, author_ext, author_name)
-           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id""", who.client_id, niche, text(data.get('city'), 200), text(data.get('offer'), 500),
+        """INSERT INTO donor_runs(client_id, niche, city, offer, project_client, target, author_tg, author_ext, author_name, sites_model)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id""", who.client_id, niche, text(data.get('city'), 200), text(data.get('offer'), 500),
         text(data.get('client'), 200), target, who.telegram_user_id or None, who.extension if str(who.extension or '').isdigit() else None,
-        await author_name(pool, who))
+        await author_name(pool, who), sites_model)
     return {'id': rid}
 
 
@@ -1094,7 +1148,7 @@ async def one(pool, who, rid: int) -> dict:
         tmp.brief['remote'] = bool(plan and plan.get('remote'))
         result = tmp.result()
     return {'id': r['id'], 'niche': r['niche'], 'city': r['city'], 'offer': r['offer'], 'client': r['project_client'], 'target': r['target'],
-            'status': r['status'], 'stage': r['stage'], 'error': r['error'], 'rub': float(r['rub']), 'searches': r['searches'], 'cost': state.get('cost') or {},
+            'status': r['status'], 'stage': r['stage'], 'error': r['error'], 'sites_model': SITES_MODELS.get(r['sites_model'] or '', r['sites_model']), 'rub': float(r['rub']), 'searches': r['searches'], 'cost': state.get('cost') or {},
             'author': r['author_name'], 'created_at': r['created_at'].isoformat(),
             'plan': plan, 'log': json.loads(r['log']) if r['log'] else [],
             'queries': [{'q': q['q'], 'seg': q['seg'], 'results': len(q.get('results') or []),
