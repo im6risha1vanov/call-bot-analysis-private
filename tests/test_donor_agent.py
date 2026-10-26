@@ -81,6 +81,22 @@ class PageTests(unittest.TestCase):
         self.assertEqual([r['host'] for r in got['кухни']], ['kuhni-a.ru'])
         self.assertEqual(len(polls), 2)
 
+    def test_deferred_search_reports_errors(self):
+        def handler(request):
+            if request.url.path.endswith('/searchAsync'):
+                return httpx.Response(200, json={'id': 'op1', 'done': False})
+            return httpx.Response(200, json={'id': 'op1', 'done': True, 'error': {'code': 7, 'message': 'Permission denied'}})
+
+        async def go():
+            with patch.dict(os.environ, {'YANDEX_SEARCH_API_KEY': 'k', 'YANDEX_FOLDER_ID': 'f'}):
+                async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
+                    errors = {}
+                    got = await webx.search_deferred(c, ['кухни'], wait=5, poll=0, errors=errors)
+                    return got, errors
+        got, errors = asyncio.run(go())
+        self.assertIsNone(got['кухни'])
+        self.assertEqual(errors['кухни'], '7 Permission denied')
+
     def test_internal_addresses_blocked(self):
         async def check(url):
             with self.assertRaises(webx.Blocked):
@@ -89,6 +105,71 @@ class PageTests(unittest.TestCase):
                     'https://example.ru:8080/', 'http://[::1]/', 'https://user:pw@example.ru/', 'https://localhost/',
                     'https://online.sberbank.ru/'):
             asyncio.run(check(url))
+
+
+class JudgeTests(unittest.TestCase):
+    """Вердикт по номеру: 8-800 и чужие города при заданном городе, сайты «Кто звонил», каталоги."""
+
+    def run_for(self, city='Сыктывкар'):
+        r = agent.Run.__new__(agent.Run)
+        r.brief = {'city': city, 'remote': False}
+        r.state = {'seen': {}, 'dup': {}, 'dossiers': {}}
+        return r
+
+    def row(self, run, n, **kw):
+        run.state['seen'][n] = {'u': ['https://a.ru/', 'https://b.ru/'], 's': {'текст': 1}, 'ctx': '', 'pre': ''}
+        base = {'n': n, 'type': 'отдел продаж', 'who': '', 'person': False, 'stage': 'выбирает услугу', 'city': 'Сыктывкар',
+                'co': ['Альфа'], 'real': {'альфа'}, 'sites': ['a.ru'], 'cverdict': 'берём', 'cwhy': '', 'scale': 'одна точка',
+                'op': ph.operator(n), 'series': 1}
+        base.update(kw)
+        return base
+
+    def test_800_is_test_when_city_set(self):
+        run = self.run_for()
+        j = run.judge(self.row(run, '78001234567', type='8-800'))
+        self.assertEqual(j['v'], 'test')
+        self.assertTrue(any('федеральная линия' in w for w in j['why']))
+        run = self.run_for('вся Россия')
+        self.assertEqual(run.judge(self.row(run, '78001234567', type='8-800'))['v'], 'go')
+
+    def test_landline_in_other_city_is_no(self):
+        run = self.run_for()
+        self.assertEqual(run.judge(self.row(run, '74951234567', city='Москва'))['v'], 'no')
+        self.assertEqual(run.judge(self.row(run, '79123456789', city='Москва'))['v'], 'test')  # мобильный может работать и тут
+
+    def test_catalog_and_case_do_not_make_duplicates(self):
+        run = self.run_for()
+        n = '79123456789'
+        run.state['seen'][n] = {'u': ['https://a.ru/'], 's': {'текст': 1}, 'ctx': '', 'pre': ''}
+        run.state['dossiers'] = {
+            'cat': {'status': 'done', 'name': 'Каталог Spravker', 'site': 'spravker.ru', 'kind': 'не донор', 'verdict': 'не брать',
+                    'phones': [{'number': n, 'type': 'менеджер (мобильный)', 'stage': 'выбирает услугу', 'office_city': 'Сыктывкар'}]},
+            'a': {'status': 'done', 'name': 'Полезный Юрист', 'site': 'a.ru', 'kind': 'прямой конкурент', 'verdict': 'берём',
+                  'phones': [{'number': n, 'type': 'менеджер (мобильный)', 'stage': 'выбирает услугу', 'office_city': 'Сыктывкар'}]},
+            'b': {'status': 'done', 'name': 'Полезный юрист', 'site': 'a.ru', 'kind': 'прямой конкурент', 'verdict': 'берём',
+                  'phones': [{'number': n, 'type': 'менеджер (мобильный)', 'stage': 'выбирает услугу', 'office_city': 'Сыктывкар'}]}}
+        row = run.phone_rows()[0]
+        self.assertEqual(row['real'], {'полезныйюрист'})
+        self.assertEqual(row['cverdict'], 'берём')  # вердикт настоящей компании, не каталога
+        self.assertEqual(row['j']['v'], 'go')
+
+    def test_who_called_sites_are_not_other_companies(self):
+        run = self.run_for()
+        n = '79123456789'
+        row = self.row(run, n)
+        run.phone_rows = lambda: [dict(row, j={'v': 'go'})]
+        run.save = lambda: asyncio.sleep(0)
+        run.set_stage = lambda text: asyncio.sleep(0)
+
+        async def batch(queries, what):
+            return {queries[0]: [{'title': 'Кто звонил с +79123456789: 6 отзывов', 'url': 'https://zvonili.com/x', 'host': 'zvonili.com', 'snippet': ''},
+                                 {'title': 'Чужая фирма +7 912 345-67-89', 'url': 'https://zzz.ru/', 'host': 'zzz.ru', 'snippet': ''}]}
+        run.batch_search = batch
+        asyncio.run(run.check_dups())
+        d = run.state['dup'][n]
+        self.assertEqual(d['others'], ['Чужая фирма +7 912 345-67-89'])
+        self.assertTrue(d['called'])
+        self.assertIn('с номера звонят сами (есть на сайтах «Кто звонил»)', run.proofs(row))
 
 
 # ------------------------------------------------------------------ полный прогон на макетах
@@ -149,9 +230,11 @@ async def fake_search(client, query, region=225, results=20):
 SYNC_CALLS = []
 
 
-async def fake_deferred(client, queries, region=225, results=20, wait=0, poll=0, on_wait=None):
+async def fake_deferred(client, queries, region=225, results=20, wait=0, poll=0, on_wait=None, errors=None):
     if on_wait:
         await on_wait(len(queries) - 1, len(queries))
+    if errors is not None and 'кухни краснодар' in queries:
+        errors['кухни краснодар'] = 'не дождались'
     return {q: None if q == 'кухни краснодар' else await fake_search(client, q) for q in queries}  # один запрос не успел
 
 

@@ -167,12 +167,15 @@ async def search(client: httpx.AsyncClient, query: str, region: int = 225, resul
 
 
 async def search_deferred(client: httpx.AsyncClient, queries: list[str], region: int = 225, results: int = SEARCH_RESULTS,
-                          wait: float = 1800, poll: float = 20, on_wait=None) -> dict[str, list[dict] | None]:
+                          wait: float = 1800, poll: float = 20, on_wait=None,
+                          errors: dict[str, str] | None = None) -> dict[str, list[dict] | None]:
     """Отложенный поиск: 30,5 ₽ за 1000 запросов, ответ от нескольких минут до часов.
 
     Отправляем все запросы сразу и ждём до wait секунд. Что не пришло или упало — None
     (такие запросы вызывающий может повторить обычным поиском). on_wait(готово, всего) — для хода работы.
+    В errors (если передан) пишем, почему запрос не дал ответа: текст ошибки Яндекса или «не дождались».
     """
+    errors = {} if errors is None else errors
     ops: dict[str, str] = {}
     out: dict[str, list[dict] | None] = {q: None for q in queries}
     for q in queries:
@@ -180,9 +183,12 @@ async def search_deferred(client: httpx.AsyncClient, queries: list[str], region:
             op = await call(client, 'POST', ASYNC_URL, search_body(q, region, results))
             if op.get('id'):
                 ops[q] = op['id']
+            else:
+                errors[q] = 'нет id операции: ' + str(op)[:200]
         except SearchUnavailable as e:
             if 'не подключён' in str(e) or ' 401' in str(e) or ' 403' in str(e):
                 raise
+            errors[q] = str(e)[:200]
     deadline = asyncio.get_running_loop().time() + wait
     while ops and asyncio.get_running_loop().time() < deadline:
         await asyncio.sleep(poll)
@@ -197,10 +203,15 @@ async def search_deferred(client: httpx.AsyncClient, queries: list[str], region:
             if op.get('response'):
                 try:
                     out[q] = decode(op['response'].get('rawData') or '')
-                except SearchUnavailable:
-                    out[q] = None
+                except Exception as e:  # битый base64 или XML: такой запрос повторим обычным поиском
+                    errors[q] = 'ответ не разобран: ' + str(e)[:200]
+            else:
+                err = op.get('error') or {}
+                errors[q] = (f"{err.get('code', '')} {err.get('message', '')}".strip() if isinstance(err, dict) else str(err)) or 'готово без ответа'
         if on_wait:
             await on_wait(len(queries) - len(ops), len(queries))
+    for q in ops:
+        errors[q] = 'не дождались'
     return out
 
 

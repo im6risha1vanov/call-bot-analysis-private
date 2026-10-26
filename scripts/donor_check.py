@@ -2,6 +2,8 @@
 
 Ничего не пишет в базу. Поиск стоит около 0,5 ₽, вопросы моделям — доли цента. Запуск:
   bash scripts/crm_setup.sh donor-check
+С аргументом deferred проверяет только отложенный поиск: один запрос, ждёт до 15 минут и печатает,
+что ответил Яндекс (около 0,03 ₽).
 """
 from __future__ import annotations
 
@@ -18,6 +20,27 @@ load_dotenv(ROOT / '.env')
 import httpx  # noqa: E402
 
 from crm import donor_agent as agent, donor_web as webx  # noqa: E402
+
+
+async def deferred() -> None:
+    async with httpx.AsyncClient() as http:
+        op = await webx.call(http, 'POST', webx.ASYNC_URL, webx.search_body('кухни на заказ краснодар', webx.region_of('Краснодар'), 10))
+        print('Отправлено:', {k: v for k, v in op.items() if k != 'response'})
+        if not op.get('id'):
+            return
+        for i in range(45):
+            await asyncio.sleep(20)
+            op = await webx.call(http, 'GET', webx.OPERATION_URL + op['id'])
+            if op.get('done'):
+                raw = (op.get('response') or {}).get('rawData') or ''
+                print(f'Готово через {(i + 1) * 20} с:', {k: v for k, v in op.items() if k != 'response'},
+                      'ключи ответа:', list((op.get('response') or {}).keys()), 'длина rawData:', len(raw))
+                if raw:
+                    res = webx.decode(raw)
+                    print(f'Результатов: {len(res)}:', ', '.join(r['host'] for r in res[:8]))
+                return
+            print(f'{(i + 1) * 20} с: ещё не готово')
+        print('За 15 минут ответа нет.')
 
 
 async def main() -> None:
@@ -45,4 +68,4 @@ async def main() -> None:
                 print(f'{p["name"]} НЕ отвечает: {type(e).__name__}: {str(e)[:150]}')
 
 
-asyncio.run(main())
+asyncio.run(deferred() if sys.argv[1:] == ['deferred'] else main())
