@@ -4,14 +4,15 @@
 
 // ---------- источники ----------
 VIEWS.sources = async (view, arg) => {
-  const tab = arg === 'base' ? 'base' : 'donors';
+  // Агент доноров (donors.js) — первая вкладка; ручной подбор и закладка «Собрать номера» — «Ручной подбор».
+  const tab = arg === 'base' ? 'base' : arg === 'manual' || /^import:/.test(arg || '') ? 'donors' : 'agent';
   const head = tab === 'base' && S.me.role === 'director' ? managerSelect(S.f.ext || S.me.team[0]?.ext, '') : '';
   setHead({filters: head.replace('<option value=""></option>', '')});
   bindManager($('#top'), () => reload());
-  view.innerHTML = `<div class="page">${tabsHtml([['donors', 'Подбор доноров'], ['base', 'Номера в очереди']], tab)}<div data-body></div></div>`;
-  $$('[data-tab]', view).forEach(b => b.addEventListener('click', () => go('sources', b.dataset.tab === 'base' ? 'base' : null)));
+  view.innerHTML = `<div class="page">${tabsHtml([['agent', 'Агент доноров'], ['donors', 'Ручной подбор'], ['base', 'Номера в очереди']], tab)}<div data-body></div></div>`;
+  $$('[data-tab]', view).forEach(b => b.addEventListener('click', () => go('sources', {base: 'base', donors: 'manual'}[b.dataset.tab] || null)));
   const body = $('[data-body]', view);
-  try { await (tab === 'donors' ? window.SourcesPicker(body, arg) : leadsView(body)); }
+  try { await (tab === 'agent' ? window.DonorAgent(body, arg) : tab === 'donors' ? window.SourcesPicker(body, arg) : leadsView(body)); }
   catch (e) { body.innerHTML = emptyCard(esc(e.message)); } // вкладки остаются, можно перейти на соседнюю
 };
 

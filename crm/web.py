@@ -23,7 +23,7 @@ from aiohttp import web  # noqa: E402
 
 import mango_client  # noqa: E402
 from tools import Forbidden, home_client_id, is_privileged  # noqa: E402
-from . import accounts, ask as asking, auth, automation_agent, automations, cabinet, callcenter_db, company, contracts, deals, gpt, journal, overview, people, platform, recording, reviews, sources, staff, store, training  # noqa: E402
+from . import accounts, ask as asking, auth, automation_agent, automations, cabinet, callcenter_db, company, contracts, deals, donor_agent, gpt, journal, overview, people, platform, recording, reviews, sources, staff, store, training  # noqa: E402
 from . import prompts as prompt_mode, robot, robot_api, robot_prices, robot_runner, robot_store  # noqa: E402
 from review import store as review_store  # noqa: E402
 from .dial import dial  # noqa: E402
@@ -820,6 +820,35 @@ async def api_source_delete(request):
     return web.json_response({'ok': True})
 
 
+async def api_donors(request):
+    """Агент доноров: прогоны компании, готовность ключей, лимит дня."""
+    return web.json_response(await donor_agent.overview(request.app[POOL], await actor(request)))
+
+
+async def api_donor_start(request):
+    who = await actor(request, write=True)
+    return web.json_response(await donor_agent.start(request.app[POOL], who, await body(request)))
+
+
+async def api_donor(request):
+    return web.json_response(await donor_agent.one(request.app[POOL], await actor(request), int_id(request.match_info['id'])))
+
+
+async def api_donor_stop(request):
+    await donor_agent.stop(request.app[POOL], await actor(request, write=True), int_id(request.match_info['id']))
+    return web.json_response({'ok': True})
+
+
+async def api_donor_delete(request):
+    await donor_agent.delete(request.app[POOL], await actor(request, write=True), int_id(request.match_info['id']))
+    return web.json_response({'ok': True})
+
+
+async def api_donor_settings(request):
+    who = await actor(request, write=True)
+    return web.json_response(await donor_agent.settings(request.app[POOL], who, await body(request)))
+
+
 async def api_staff_add(request):
     who = await director(request)
     data = await body(request)
@@ -1152,6 +1181,12 @@ def build(pool) -> web.Application:
     app.router.add_get('/api/tgchats/{peer}', api_tgchat)
     app.router.add_post('/api/tgchats/{peer}/link', api_tgchat_link)
     app.router.add_get('/api/sources/selections', api_sources)
+    app.router.add_get('/api/donors', api_donors)
+    app.router.add_post('/api/donors', api_donor_start)
+    app.router.add_post('/api/donors/settings', api_donor_settings)
+    app.router.add_get('/api/donors/{id}', api_donor)
+    app.router.add_post('/api/donors/{id}/stop', api_donor_stop)
+    app.router.add_post('/api/donors/{id}/delete', api_donor_delete)
     app.router.add_post('/api/sources/selections', api_source_save)
     app.router.add_get('/api/sources/selections/{id}', api_source)
     app.router.add_post('/api/sources/selections/{id}/delete', api_source_delete)
@@ -1220,6 +1255,8 @@ async def make_app() -> web.Application:
         tasks.append(asyncio.create_task(robot_prices.loop(pool)))
         if os.getenv('AUTOMATIONS', 'on') != 'off':  # сценарии конструктора автоматизаций
             tasks.append(asyncio.create_task(automations.loop(pool)))
+        if os.getenv('DONOR_AGENT', 'on') != 'off':  # агент доноров: прогоны поиска по очереди
+            tasks.append(asyncio.create_task(donor_agent.loop(pool)))
         yield
         for task in tasks:
             task.cancel()
