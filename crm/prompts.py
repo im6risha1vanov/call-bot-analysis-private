@@ -7,7 +7,9 @@ PROMPT_EDITORS. Черновик живёт на странице, а не в pr
 принимал бы обычные сообщения этого человека за правки промта.
 
 Сохранить можно только текст, по которому уже собран пример: сервер выдаёт к
-примеру подпись этого текста и проверяет её при сохранении.
+примеру подпись этого текста и проверяет её при сохранении. Разбор звонка для всех,
+кроме того, сохраняется только после проверки на звонках (review/prompt_check.py),
+у неё своя подпись.
 """
 from __future__ import annotations
 
@@ -17,7 +19,7 @@ import hmac
 import secrets
 
 from tools import Forbidden
-from review import prompts
+from review import prompt_check, prompts
 from . import journal, telegram
 
 _KEY = secrets.token_bytes(32)  # подпись примера; после перезапуска пример просто собирают заново
@@ -101,7 +103,8 @@ async def state(pool, who, kind: str) -> dict:
         'mine': bool(mine and mine['id'] == v['id']), 'common': bool(common and common['id'] == v['id']),
     } for v in await prompts.versions(pool, kind, tg, limit=20, company=who.actor.client_id)]
     return {'kind': kind, 'title': prompts.TITLES[kind], 'body': body, 'source': SOURCE[source], 'version': version,
-            'personal': mine is not None, 'hint': HINTS.get(kind), 'versions': versions}
+            'personal': mine is not None, 'hint': HINTS.get(kind), 'versions': versions,
+            'check_calls': prompt_check.CALLS if kind == 'review' else None}
 
 
 async def edit(pool, who, kind: str, body, history, ask) -> dict:
@@ -130,6 +133,18 @@ async def preview(pool, who, kind: str, body) -> dict:
             'token': sign(tg, kind, body)}
 
 
+async def check(pool, who, kind: str, body) -> dict:
+    """Проверка разбора на последних звонках: старый общий текст против нового. 2–4 минуты."""
+    tg = editor(who)
+    kind, body = kind_of(kind), clean_body(body)
+    if kind != 'review':
+        raise ValueError('Проверка на звонках есть только у разбора звонка.')
+    report = await prompt_check.check(pool, who.actor.client_id, body)
+    report['verdict'] = prompt_check.verdict(report)
+    report['token'] = None if report['broken'] else sign(tg, 'check:' + kind, body)
+    return report
+
+
 async def tell_others(pool, who, kind: str, version: int, note: str | None) -> None:
     """Как в боте: остальным редакторам — что общий промт поменялся."""
     tg = who.actor.telegram_user_id
@@ -143,13 +158,16 @@ async def tell_others(pool, who, kind: str, version: int, note: str | None) -> N
                                   f'(сохранение #{version}, в CRM): {note or "без описания"}.{tail}')
 
 
-async def save(pool, who, kind: str, body, note, scope: str, token) -> dict:
+async def save(pool, who, kind: str, body, note, scope: str, token, check_token=None) -> dict:
     tg = editor(who)
     kind, body = kind_of(kind), clean_body(body)
     if scope not in ('me', 'all'):
         raise ValueError('Неизвестно, для кого сохранить.')
     if not token or not hmac.compare_digest(str(token), sign(tg, kind, body)):
         raise ValueError('Сначала посмотрите пример по этому тексту.')
+    if kind == 'review' and scope == 'all' and not (
+            check_token and hmac.compare_digest(str(check_token), sign(tg, 'check:' + kind, body))):
+        raise ValueError(f'Разбор для всех сохраняется после проверки на {prompt_check.CALLS} звонках.')
     note = str(note or '').strip()[:300] or None
     version = await prompts.save(pool, kind, body, note, tg, scope, who.actor.client_id)
     if scope == 'all':

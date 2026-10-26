@@ -2,12 +2,15 @@
 
 Выбрал, что править → пишешь обычным текстом, что поменять → модель правит текст,
 бот показывает, какие строки изменились → «Пример» прогоняет черновик на последнем
-звонке (или собирает отчёт) → «Сохранить для себя» или «для всех». «Сохранения» —
+звонке (или собирает отчёт) → «Сохранить для себя» или «для всех». Разбор звонка для всех
+сохраняется только после «🧪 Проверки на звонках» (review/prompt_check.py): тот же
+текст на 20 последних звонках против действующего, где поменялся итог. «Сохранения» —
 список, к любому можно вернуться, как к сохранению в игре; исходный текст в нём
 всегда есть. Хранение и применение — review/prompts.py.
 """
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 import logging
@@ -20,7 +23,7 @@ from aiogram.types import BufferedInputFile, InlineKeyboardButton as Button, Inl
 from reports import send_long
 from tools import Forbidden, resolve_actor
 from unified.ui import private_action
-from . import prompts
+from . import prompt_check, prompts
 
 log = logging.getLogger(__name__)
 
@@ -43,9 +46,23 @@ def session_keyboard(changed: bool) -> Keyboard:
               [('🗂 Сохранения', 'pm:ver'), ('📋 Другой промт', 'pm:menu'), ('🚪 Выйти', 'pm:exit')])
 
 
-def save_keyboard() -> Keyboard:
-    return kb([('💾 Сохранить для себя', 'pm:save:me')], [('💾 Сохранить для всех', 'pm:save:all')],
+def save_keyboard(kind: str = '') -> Keyboard:
+    check = [(f'🧪 Проверить на {prompt_check.CALLS} звонках', 'pm:check')] if kind == 'review' else None
+    return kb([('💾 Сохранить для себя', 'pm:save:me')], check, [('💾 Сохранить для всех', 'pm:save:all')],
               [('✏️ Править дальше', 'pm:more'), ('🚪 Выйти', 'pm:exit')])
+
+
+# Какой текст разбора человек проверил на звонках: tg -> подпись текста. После перезапуска
+# бота проверку просто прогоняют ещё раз.
+_checked: dict[int, str] = {}
+
+
+def body_sign(body: str) -> str:
+    return hashlib.sha256(body.encode()).hexdigest()
+
+
+def checked(tg: int, body: str) -> bool:
+    return _checked.get(tg) == body_sign(body)
 
 
 async def names(pool, client_id: int) -> dict[int, str]:
@@ -227,10 +244,17 @@ def install(router, pool_getter):
                                        reply_markup=session_keyboard(draft['body'] != draft['start_body']))
             elif action == 'prev':
                 await show_preview(pool, bot, actor, draft)
+            elif action == 'check' and kind == 'review':
+                await show_check(pool, bot, actor, draft)
             elif action == 'save' and len(bits) == 3 and bits[2] in {'me', 'all'}:
                 if draft['previewed_body'] != draft['body']:
                     await bot.send_message(tg, 'Сначала посмотрите пример по этому тексту.', parse_mode=None)
                     await show_preview(pool, bot, actor, draft)
+                    return
+                if kind == 'review' and bits[2] == 'all' and not checked(tg, draft['body']):
+                    await bot.send_message(tg, 'Разбор для всех сохраняется после проверки на звонках: '
+                                               'так видно, не поменялись ли итоги у остальных звонков.', parse_mode=None)
+                    await show_check(pool, bot, actor, draft)
                     return
                 version = await prompts.save(pool, kind, draft['body'], draft['note'], tg, bits[2])
                 await prompts.update_draft(pool, tg, start_body=draft['body'])
@@ -260,13 +284,23 @@ def install(router, pool_getter):
         if problem:
             await bot.send_message(
                 tg, f'⚠️ Пример не получился: {problem}.\nЕсли сохранить так, при сбое бот пришлёт причину и стандартную '
-                    'версию. Лучше поправить текст ещё раз.', parse_mode=None, reply_markup=save_keyboard())
+                    'версию. Лучше поправить текст ещё раз.', parse_mode=None, reply_markup=save_keyboard(kind))
             return
         title = 'Пример разбора последнего звонка по новому тексту' if kind == 'review' else 'Пример отчёта по новому тексту'
         await send_long(bot, tg, f'<b>👁 {title}</b>\n\n{text}')
         extra = [[Button(text='Как было (сохранённый разбор)', callback_data=f'rv:d:{call_id}')]] if call_id else []
         await bot.send_message(tg, 'Сохранить?', parse_mode=None,
-                               reply_markup=Keyboard(inline_keyboard=extra + save_keyboard().inline_keyboard))
+                               reply_markup=Keyboard(inline_keyboard=extra + save_keyboard(kind).inline_keyboard))
+
+    async def show_check(pool, bot, actor, draft):
+        tg = actor.telegram_user_id
+        await bot.send_message(tg, f'🧪 Разбираю {prompt_check.CALLS} последних звонков старым и новым текстом, '
+                                   'это займёт 2–4 минуты…', parse_mode=None)
+        report = await prompt_check.check(pool, actor.client_id, draft['body'])
+        if not report['broken']:
+            _checked[tg] = body_sign(draft['body'])
+        await send_long(bot, tg, prompt_check.message(report))
+        await bot.send_message(tg, 'Сохранить?', parse_mode=None, reply_markup=save_keyboard('review'))
 
     async def list_versions(pool, bot, actor, kind):
         tg = actor.telegram_user_id

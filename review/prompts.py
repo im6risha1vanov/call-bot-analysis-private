@@ -226,7 +226,7 @@ async def save(pool, kind: str, body: str, note: str | None, by: int, scope: str
             'INSERT INTO prompt_versions(client_id, kind, owner_tg, body, note, created_by) VALUES($1,$2,$3,$4,$5,$6) RETURNING id',
             company, kind, owner, body, (note or '')[:300] or None, by)
         await _set_active(conn, company, kind, owner, version, by)
-        if scope == 'all':
+        if scope == 'all' and by:  # by=0 — сохранение из кода или консоли, личной версии у него нет
             await conn.execute('DELETE FROM prompt_active WHERE client_id=$1 AND kind=$2 AND owner_tg=$3', company, kind, by)
     return version
 
@@ -239,7 +239,7 @@ async def activate(pool, kind: str, version_id: int, by: int, scope: str, compan
         raise ValueError('Сохранение не найдено.')
     async with pool.acquire() as conn, conn.transaction():
         await _set_active(conn, company, kind, by if scope == 'me' else 0, version_id, by)
-        if scope == 'all':
+        if scope == 'all' and by:
             await conn.execute('DELETE FROM prompt_active WHERE client_id=$1 AND kind=$2 AND owner_tg=$3', company, kind, by)
     return dict(row)
 
@@ -479,24 +479,69 @@ async def add_spend(pool, client_id: int, units: float) -> None:
         client_id, datetime.now(ZoneInfo(tz)).date(), units)
 
 
+BLOCK_MARK = '### Типовые отговорки'
+BLOCK_BEFORE = 'Дополнительно можешь указать до двух `other_misses`'
+
+
+def code_block() -> str:
+    """Блок «Типовые отговорки» из промта в коде (review/prompt.md)."""
+    head = default('review')
+    start = head.index(BLOCK_MARK)
+    end = head.index(BLOCK_BEFORE, start)
+    return head[start:end].strip()
+
+
+def with_block(body: str) -> str | None:
+    """Общий текст, сохранённый в режиме промта, плюс блок отговорок из кода. None — блок уже есть."""
+    if BLOCK_MARK in body:
+        return None
+    block = code_block()
+    if BLOCK_BEFORE in body:
+        return body.replace(BLOCK_BEFORE, block + '\n\n' + BLOCK_BEFORE, 1)
+    return body.rstrip() + '\n\n' + block
+
+
+async def sync_review_block(pool, company: int | None = None) -> str:
+    """Если для всех действует сохранённый в режиме промта разбор, правка prompt.md до звонков не дойдёт.
+    Тогда сохраняем новую общую версию: тот же текст плюс блок отговорок. Откат — use <номер>."""
+    body, version = await common(pool, 'review', company)
+    if version is None:
+        return 'Для всех действует промт из кода: блок отговорок уже в нём, ничего делать не нужно.'
+    new = with_block(body)
+    if new is None:
+        return f'В общем промте (сохранение #{version}) блок отговорок уже есть.'
+    saved = await save(pool, 'review', new, 'Блок «Типовые отговорки» (из кода, 27.10)', 0, 'all', company)
+    return (f'Общий промт был сохранением #{version}; сохранено #{saved} с блоком отговорок.\n'
+            f'откат промта: python -m review.prompts use {version}')
+
+
 if __name__ == '__main__':
     # python -m review.prompts seed — сохранить исходные тексты (точка отката «как было»).
+    # python -m review.prompts sync-review — добавить блок отговорок в общий промт, если он сохранён в режиме промта.
+    # python -m review.prompts use N — сделать сохранение N общим для разбора (откат).
     import asyncio
     import sys
 
-    async def _main():
+    async def _main(args):
         import asyncpg
         from scripts.kitchen_backfill import load_env
         from pathlib import Path
         load_env(Path(__file__).resolve().parents[1] / '.env')
         pool = await asyncpg.create_pool(os.environ['DATABASE_URL'], min_size=1, max_size=2)
         try:
-            print('исходных версий сохранено:', await seed(pool))
-            for kind in KINDS:
-                body, how, vid = await resolve(pool, kind, 0)
-                print(kind, how, vid, len(body))
+            if args == ['seed']:
+                print('исходных версий сохранено:', await seed(pool))
+                for kind in KINDS:
+                    body, how, vid = await resolve(pool, kind, 0)
+                    print(kind, how, vid, len(body))
+            elif args == ['sync-review']:
+                print(await sync_review_block(pool))
+            elif len(args) == 2 and args[0] == 'use' and args[1].isdigit():
+                row = await activate(pool, 'review', int(args[1]), 0, 'all')
+                print(f"для всех действует сохранение #{row['id']}")
+            else:
+                print('команды: seed | sync-review | use N')
         finally:
             await pool.close()
 
-    if sys.argv[1:] == ['seed']:
-        asyncio.run(_main())
+    asyncio.run(_main(sys.argv[1:]))

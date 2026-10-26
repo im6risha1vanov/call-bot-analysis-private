@@ -456,6 +456,12 @@ audio.rec{display:block;width:100%;max-width:420px;height:36px;margin-top:6px}
 .pm-text{margin:12px 0}
 .pm-text summary{cursor:pointer;font-weight:600}
 .pm-vers{display:flex;flex-direction:column;gap:10px;margin-top:10px}
+.pm-check{margin-top:12px}
+.pm-check-sum{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin:4px 0 10px}
+.pm-check-sum div{display:flex;flex-direction:column;gap:2px;background:var(--surface-2);border-radius:8px;padding:8px 10px}
+.pm-check-sum b{font-size:18px}
+.pm-check .was{color:var(--muted)}
+.pm-check .now{font-weight:600}
 .pm-ver{border-top:1px solid var(--line);padding-top:8px;display:flex;flex-direction:column;gap:4px}
 .pm-qa{border-left:3px solid var(--accent-soft);padding:2px 0 2px 10px;margin-top:10px}
 .pm-qa .q{font-weight:600}
