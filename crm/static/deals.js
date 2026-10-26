@@ -6,6 +6,9 @@ const DEAL_SHOW = [['active', 'В работе'], ['stalled', 'Зависшие'
 const DEAL_PERIODS = [['30', '30 дней'], ['90', '90 дней'], ['', 'Всё время']];
 const TEMP = {hot: ['горячий', 'good'], warm: ['тёплый', 'warn'], cold: ['холодный', ''], lost: ['отказ', 'bad']};
 const dealName = d => d.company || phone(d.number);
+const CHAT_LINKED = {contact: 'номер из контакта клиента', text: 'номер из сообщения клиента', manual: 'привязали вручную'};
+const CHAT_MEDIA = {voice: 'голосовое', video_note: 'видеокружок', audio: 'аудио', video: 'видео', animation: 'гифка', photo: 'фото',
+  sticker: 'стикер', document: 'файл', contact: 'контакт', location: 'геопозиция'};
 S.deal = {show: 'active', days: '90', stage: 0};
 
 function dealStatus(d) {
@@ -21,13 +24,13 @@ function dealSteps(d) {
     return `<span class="${cls}">${esc(st.name)}</span>`;
   }).join('')}</div>`;
 }
-const dealTabs = cur => tabsHtml([['', 'Сделки'], ['contracts', 'Договоры']], cur);
+const dealTabs = cur => tabsHtml([['', 'Сделки'], ...(hasModule('contracts') ? [['contracts', 'Договоры']] : [])], cur);
 function bindDealTabs(view) {
   $$('[data-tab]', view).forEach(b => b.addEventListener('click', () => go('deals', b.dataset.tab || null)));
 }
 
 VIEWS.deals = async (view, arg) => {
-  if (arg === 'contracts') return contractsView(view);
+  if (arg === 'contracts' && hasModule('contracts')) return contractsView(view);
   const f = S.deal;
   const dir = S.me.role === 'director';
   const head = managers => setHead({filters: seg('show', DEAL_SHOW, f.show, 'Какие сделки') + seg('days', DEAL_PERIODS, f.days, 'Период') +
@@ -68,17 +71,20 @@ VIEWS.deals = async (view, arg) => {
       ${picked && picked.lost ? `<p class="hint blk" data-css="--i:${i++};margin:-6px 0 0">Почему отказываются на этапе «${esc(picked.name)}»: ${picked.reasons.map(([r, n]) => `${esc(r)} · ${n}`).join('; ')}</p>` : ''}
       ${d.unlinked?.length ? `<div class="alert acc blk" data-css="--i:${i++}"><span class="pdot"></span><p><b>${plainItems(d.unlinked.length, 'презентация', 'презентации', 'презентаций')} без клиента</b>: шли не через Mango, бот не знает номер.</p>
         <button class="btn small" type="button" data-unlinked>Привязать</button></div>` : ''}
+      ${d.unlinked_chats?.length ? `<div class="alert acc blk" data-css="--i:${i++}"><span class="pdot"></span><p><b>${plainItems(d.unlinked_chats.length, 'переписка', 'переписки', 'переписок')} в Telegram без клиента</b>: бот не нашёл в них номер клиента.</p>
+        <button class="btn small" type="button" data-unlinked-chats>Привязать</button></div>` : ''}
       <section class="card blk" data-css="--i:${i++}"><div class="card-h"><h2>${esc(DEAL_SHOW.find(x => x[0] === f.show)[1])}${picked ? ` · этап «${esc(picked.name)}»` : ''}</h2><span class="hint">${fmt(list.length)}</span>
         ${fn.paid ? `<span class="sp"></span><span class="hint">оплачено ${fmt(fn.paid)}${fn.paid_sum ? ' на ' + rub(fn.paid_sum) : ''}</span>` : ''}</div>
       ${list.length ? `<div class="tbl-wrap"><table class="tbl anim"><thead><tr><th>Клиент</th>${dir ? '<th class="hide-m">Менеджер</th>' : ''}<th>Этап</th><th class="hide-m">Последнее</th><th class="hide-m">Что дальше</th></tr></thead><tbody>
         ${list.slice(0, 300).map((x, r) => `<tr class="click" tabindex="0" data-deal="${esc(x.phone)}" data-css="--r:${Math.min(r, 30)}"><td><div class="t">${esc(dealName(x))}</div>${x.company ? `<div class="s num">${esc(phone(x.number))}</div>` : ''}</td>
           ${dir ? `<td class="hide-m nw">${esc(x.manager)}</td>` : ''}<td>${esc(x.stage_name)}<div data-css="margin-top:3px">${dealStatus(x)}</div></td><td class="hide-m nw">${esc(when(x.last_at))}</td>
-          <td class="hide-m wrap">${x.status === 'lost' ? `<span class="s">${esc(x.lost.reason)}</span>` : esc(x.advice || '')}</td></tr>`).join('')}</tbody></table></div>`
+          <td class="hide-m wrap">${x.waiting ? '<span class="chip late">ждёт ответа в Telegram</span> ' : ''}${x.status === 'lost' ? `<span class="s">${esc(x.lost.reason)}</span>` : esc(x.advice || '')}</td></tr>`).join('')}</tbody></table></div>`
         : '<div class="empty">Таких сделок нет.</div>'}</section>
-      ${moreBlock('Как считаются сделки', '', `<p class="lead">Клиент — это номер телефона. Звонки и презентации CRM разбирает сама; Telegram или почту, договор и отказ отмечает менеджер в карточке сделки, оплату — директор. Отказ на холодном звонке CRM ставит сама, если последний разговор без результата и перезвона нет; причина берётся из разбора.</p>`, i++)}</div>`;
+      ${moreBlock('Как считаются сделки', '', `<p class="lead">Клиент — это номер телефона. Звонки, презентации и переписку в рабочем Telegram CRM разбирает сама; переписка попадает в сделку по номеру клиента (из его контакта или сообщения) или кнопкой «Привязать». Почту, договор и отказ отмечает менеджер в карточке сделки, оплату — директор. Отказ на холодном звонке CRM ставит сама, если последний разговор без результата и перезвона нет; причина берётся из разбора.</p>`, i++)}</div>`;
     bindDealTabs(view);
     $$('[data-stage]', view).forEach(b => b.addEventListener('click', () => { f.stage = f.stage === +b.dataset.stage ? 0 : +b.dataset.stage; render(); }));
     $('[data-unlinked]', view)?.addEventListener('click', () => unlinkedList(d.unlinked, dir, load));
+    $('[data-unlinked-chats]', view)?.addEventListener('click', () => unlinkedChats(d.unlinked_chats, load));
     const tbody = $('tbody', view);
     tbody?.addEventListener('click', e => { const tr = e.target.closest('[data-deal]'); if (tr) dealCard(tr.dataset.deal, load); });
     tbody?.addEventListener('keydown', e => { const tr = e.target.closest('[data-deal]'); if (tr && e.key === 'Enter') dealCard(tr.dataset.deal, load); });
@@ -113,18 +119,75 @@ function unlinkedList(items, dir, onChange) {
   });
 }
 
+function unlinkedChats(items, onChange) {
+  const box = modal(`${modalHead('Переписки без клиента', 'Бот не нашёл в переписке номер клиента, который уже есть в звонках или базе. Укажите номер, и переписка попадёт в его сделку.')}
+    <div class="rvm-body"><div class="list">${items.map(u => `<div class="item" data-u="${u.peer_id}"><div class="main-l">
+      <div class="t" data-css="white-space:normal">${esc(u.title)}${u.company ? ' · ' + esc(u.company) : ''} <span class="hint">${esc(when(u.at))} · ${plainItems(u.messages, 'сообщение', 'сообщения', 'сообщений')}</span></div>
+      <div class="s" data-css="white-space:normal">${esc(u.summary || u.last || '')}${u.phones.length ? ` · номера в сообщениях: ${u.phones.map(p => esc(phone(p))).join(', ')}` : ''}</div>
+      <div class="row" data-css="margin-top:6px"><button class="btn small" type="button" data-chat="${u.peer_id}">Переписка</button>
+        ${S.me.readonly ? '' : '<button class="btn small primary" type="button" data-clink>Привязать к клиенту</button>'}</div></div></div>`).join('')}</div></div>`, true);
+  box.addEventListener('click', e => {
+    const open = e.target.closest('[data-chat]');
+    if (open) return chatView(open.dataset.chat, () => { box.close(); onChange && onChange(); });
+    const b = e.target.closest('[data-clink]'); if (!b) return;
+    const row = b.closest('[data-u]');
+    if ($('.move', row)) return;
+    const u = items.find(x => String(x.peer_id) === row.dataset.u);
+    b.insertAdjacentHTML('afterend', `<span class="move row"><input class="inp" inputmode="tel" placeholder="+7 999 123-45-67" aria-label="Номер клиента" value="${esc(u?.phones[0] ? phone(u.phones[0]) : '')}"><button class="btn small primary" type="button" data-cgo>Сохранить</button></span>`);
+    b.remove();
+    $('.move input', row).focus();
+    $('[data-cgo]', row).addEventListener('click', async ev => {
+      busy(ev.currentTarget, true);
+      try {
+        const r = await api(`/api/tgchats/${encodeURIComponent(row.dataset.u)}/link`, {method: 'POST', body: {phone: $('.move input', row).value}});
+        doneBtn(ev.currentTarget, r.call_found ? 'Привязано к сделке' : 'Привязано, сделка создана');
+        row.style.opacity = .55;
+        onChange && onChange();
+      } catch (err) { busy(ev.currentTarget, false); toast(err.message, true); }
+    });
+  });
+}
+
+// Переписка рабочего Telegram: сообщения пузырями, разбор и привязка к другому номеру.
+async function chatView(peer, onLinked) {
+  const box = modal(`${modalHead('Загружаю…')}<div class="rvm-body"><div class="sk line"></div><div class="sk line" data-css="width:60%"></div></div>`, true);
+  let c;
+  try { c = await api('/api/tgchats/' + encodeURIComponent(peer)); } catch (e) { $('h2', box).textContent = e.message; $('.rvm-body', box).remove(); return; }
+  if (!box.isConnected) return;
+  const bubble = m => `<div data-msg data-css="align-self:${m.out ? 'flex-end' : 'flex-start'};background:var(${m.out ? '--accent-soft' : '--surface-2'});max-width:85%;border-radius:12px;padding:6px 10px;white-space:pre-wrap;overflow-wrap:anywhere">${m.media ? `<span class="rvm-mut">[${esc(CHAT_MEDIA[m.media] || m.media)}]</span> ` : ''}${esc(m.text || '')}<div class="rvm-mut" data-css="font-size:11.5px;text-align:right;white-space:normal">${m.out ? 'менеджер' : 'клиент'} · ${esc(when(m.at))}</div></div>`;
+  box.innerHTML = `${modalHead(c.title, `${c.username ? '@' + esc(c.username) + ' · ' : ''}${c.phone ? `<span class="num">${esc(phone('7' + c.phone))}</span>` : 'номер клиента не известен'}${c.linked ? ' · ' + esc(CHAT_LINKED[c.linked] || '') : ''}`)}
+    <div class="rvm-body">
+      ${c.details ? `<section><h3>Разбор</h3><div data-css="white-space:pre-line">${esc(c.details)}</div></section>` : ''}
+      <section><h3>Сообщения</h3><div data-css="display:flex;flex-direction:column;gap:6px">${c.messages.map(bubble).join('') || '<div class="rvm-mut">Пусто.</div>'}</div>
+        <p class="hint">Бот только читает рабочий Telegram: ничего не отправляет и не отмечает прочитанным.</p></section>
+      ${S.me.readonly ? '' : `<section><h3>${c.phone ? 'Это другой клиент?' : 'Привязать к клиенту'}</h3><div class="row"><input class="inp" inputmode="tel" placeholder="+7 999 123-45-67" aria-label="Номер клиента" data-lphone>
+        <button class="btn small primary" type="button" data-lgo>${c.phone ? 'Перенести к этому номеру' : 'Привязать'}</button></div></section>`}
+    </div>`;
+  $('[data-lgo]', box)?.addEventListener('click', async e => {
+    busy(e.currentTarget, true);
+    try {
+      const r = await api(`/api/tgchats/${encodeURIComponent(peer)}/link`, {method: 'POST', body: {phone: $('[data-lphone]', box).value}});
+      toast(r.call_found ? 'Переписка в сделке клиента' : 'Переписка привязана, сделка создана');
+      box.close();
+      onLinked && onLinked(r.phone);
+    } catch (err) { busy(e.currentTarget, false); toast(err.message, true); }
+  });
+}
+
 function dealTimeline(items) {
   return items.map(t => {
     const head = `<div class="rvm-ih"><b>${esc(t.title)}</b><span class="rvm-mut">${esc(when(t.at))}${t.by ? ' · ' + esc(t.by) : ''}</span>
-      ${t.type === 'presentation' && TEMP[t.temperature] ? `<span class="rvm-chip ${TEMP[t.temperature][1]}">клиент ${TEMP[t.temperature][0]}</span>` : ''}
+      ${(t.type === 'presentation' || t.type === 'chat') && TEMP[t.temperature] ? `<span class="rvm-chip ${TEMP[t.temperature][1]}">клиент ${TEMP[t.temperature][0]}</span>` : ''}
       ${t.amount ? `<span class="rvm-chip good">${rub(t.amount)}</span>` : ''}</div>`;
-    const cls = t.type === 'event' ? '' : t.ok || (t.type === 'presentation' && !t.lost) ? 'good' : t.lost ? 'miss' : '';
+    const cls = t.type === 'event' ? '' : t.ok || (t.type === 'presentation' && !t.lost) || (t.type === 'chat' && t.temperature && !t.lost) ? 'good' : t.lost ? 'miss' : '';
     return `<div class="rvm-item ${cls}">${head}
       ${t.text ? `<div>${esc(t.text)}</div>` : ''}
       ${t.lost ? `<div class="rvm-q">Где остыл: ${esc(t.lost)}</div>` : ''}
       ${t.say ? `<div class="rvm-say">Как можно было: ${esc(t.say)}</div>` : ''}
       ${t.type === 'call' ? `<div><button class="btn small" type="button" data-review="${t.id}">Разбор и запись</button></div>` : ''}
-      ${t.file_id ? `<div><a class="btn small" href="https://drive.google.com/file/d/${encodeURIComponent(t.file_id)}/view" target="_blank" rel="noopener">Запись презентации</a></div>` : ''}</div>`;
+      ${t.file_id ? `<div><a class="btn small" href="https://drive.google.com/file/d/${encodeURIComponent(t.file_id)}/view" target="_blank" rel="noopener">Запись презентации</a></div>` : ''}
+      ${t.type === 'chat' ? `<div class="rvm-q">${t.chat ? esc(t.chat) + ' · ' : ''}${plainItems(t.messages, 'сообщение', 'сообщения', 'сообщений')} с ${esc(when(t.since))}${CHAT_LINKED[t.linked] ? ' · ' + esc(CHAT_LINKED[t.linked]) : ''}</div>
+        <div><button class="btn small" type="button" data-chat="${t.id}">Переписка</button></div>` : ''}</div>`;
   }).join('');
 }
 
@@ -142,9 +205,10 @@ async function dealCard(ph, onChange) {
     <div class="rvm-body">
       ${dealSteps(d)}
       <div class="row">${S.me.role !== 'client' ? `<button class="btn small primary" type="button" data-dcall>${svg('phone', '')}${S.me.can_dial ? 'Позвонить' : 'Карточка клиента'}</button>` : ''}
-        ${ro ? '' : '<button class="btn small" type="button" data-contract>Составить договор</button>'}</div>
+        ${ro || !hasModule('contracts') ? '' : '<button class="btn small" type="button" data-contract>Составить договор</button>'}</div>
       ${d.status === 'lost' ? `<div class="rvm-item miss"><b>Отказ: ${esc(d.lost.reason)}</b>${d.lost.note ? `<div>${esc(d.lost.note)}</div>` : ''}
         <div class="rvm-q">${d.lost.auto ? 'CRM поставила сама по последнему разговору. Если это не так, нажмите «Снова в работе».' : 'Отмечено ' + esc(when(d.lost.at))}</div></div>` : ''}
+      ${d.waiting ? `<div class="rvm-item miss"><b>Клиент ждёт ответа в Telegram</b><div class="rvm-q">Написал ${esc(when(d.waiting))}, ответа пока нет.</div></div>` : ''}
       ${d.advice ? `<section><h3>Что дальше</h3><div class="rvm-say">${esc(d.advice)}</div></section>` : ''}
       ${d.missing.length && d.status === 'active' ? `<section><h3>Для договора не хватает</h3><div class="chips">${d.missing.map(m => `<span class="chip warn">${esc(m)}</span>`).join('')}</div></section>` : ''}
       ${d.contracts.length ? `<section><h3>Договоры</h3>${d.contracts.map(c => `<div>${esc(contractTitle(c))}${c.by ? ` <span class="rvm-mut">· ${esc(c.by)}</span>` : ''}</div>`).join('')}</section>` : ''}
@@ -156,6 +220,9 @@ async function dealCard(ph, onChange) {
     $$('[data-ev]', box).forEach(x => x.setAttribute('aria-pressed', String(x === b)));
     dealForm(box, d, b.dataset.ev, onChange);
   }));
+  $$('[data-chat]', box).forEach(b => b.addEventListener('click', () => chatView(b.dataset.chat, moved => {
+    box.close(); onChange && onChange(); dealCard(moved, onChange);  // переписку перенесли к другому номеру: его сделка
+  })));
   $('[data-dcall]', box)?.addEventListener('click', () => { box.close(); workDrawer({kind: 'call', number: d.number, title: d.company || ''}, {ext: d.ext}); });
   $('[data-contract]', box)?.addEventListener('click', () => {
     S.contractDeal = {phone: d.phone, number: d.number, title: dealName(d) + (d.company ? ' · ' + phone(d.number) : ''), missing: d.missing};

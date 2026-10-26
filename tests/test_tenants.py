@@ -1,0 +1,527 @@
+"""Компании не видят друг друга: обход всех адресов CRM от лица второй компании.
+
+В первой компании лежат данные с меткой СЕКРЕТ и номером 79115550001 во всех таблицах. Директор и менеджер
+второй компании проходят все адреса API (подставляя номера записей первой компании), и ни один ответ не должен
+содержать метку. Запросы на запись с чужими номерами записей не должны менять ни одной строки первой компании.
+Новый адрес в web.py попадает в обход сам.
+"""
+import json
+import os
+import re
+import unittest
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
+
+from crm import auth, company
+from tests.test_crm import DSN, TEST_KEY, DBCase
+
+SECRET, PHONE = 'СЕКРЕТ', '79115550001'
+ROOT = Path(__file__).resolve().parents[1]
+
+# Общего между компаниями не осталось: робот у каждой компании свой (кабинет '#N').
+SHARED_YET = ()
+
+# Не обходим: вход и выход, внешние сервисы (LLM, ElevenLabs, DaData, Манго-звонок), страницы не API.
+SKIP = {'/api/login', '/api/logout', '/api/test/login', '/api/ask', '/api/gpt', '/api/robot/preview', '/api/robot/call',
+        '/api/robot/voices/clone', '/api/robot/voices/add', '/api/robot/voices', '/api/robot/voices/sample',
+        '/api/contracts/lookup/{kind}/{value}'}
+
+# Таблицы с данными компании: снимок строк первой компании до и после чужих запросов на запись.
+TABLES = ('prompt_versions', 'prompt_active', 'calls', 'call_reviews', 'callback_tasks', 'crm_leads', 'crm_outcomes', 'crm_reports', 'crm_questions',
+          'crm_invites', 'employees', 'manager_memory', 'presentations', 'deal_events', 'contracts',
+          'source_selections', 'training_sessions', 'review_copy_lists', 'cc_clients', 'cc_leads', 'automations', 'automation_accounts')
+
+
+@unittest.skipUnless(DSN, 'METHODOLOGY_TEST_DATABASE_URL не задан')
+class TenantIsolationTests(DBCase):
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        for name in ('020_robot.sql', '029_averongpt.sql', '030_automations.sql', '030_company_settings.sql', '031_company_prompts.sql'):
+            await self.pool.execute((ROOT / 'migrations' / name).read_text())
+        await self.pool.execute('TRUNCATE robot_contacts, robot_stoplist, robot_campaigns, robot_targets, robot_calls CASCADE')
+        from aiohttp.test_utils import TestClient, TestServer
+        from crm import web
+        web.SECURE_COOKIE = False
+        self.http = TestClient(TestServer(web.build(self.pool)))
+        await self.http.start_server()
+        self.addAsyncCleanup(self.http.close)
+        await self.seed_secret()
+        # Вторая компания: тот же добавочный 101, чтобы поймать выборки по добавочному без компании.
+        await self.pool.execute("INSERT INTO clients(id,timezone,processing_enabled) VALUES(2,'Europe/Moscow',true)")
+        # Все модули включены: закрытый модуль не должен прятать утечку от обхода.
+        await self.pool.execute("INSERT INTO company_settings(client_id,name,modules) VALUES(2,'Вторая',$1)", list(company.MODULES))
+        await self.pool.execute("INSERT INTO employees VALUES(2,'101',223,'manager','Свой менеджер'),"
+                                "(2,'head',902,'head','Свой РОП')")
+        await self.pool.execute("INSERT INTO calls(client_id,extension,call_started_at,client_number,duration_seconds) "
+                                "VALUES(2,'101',now()-'1 hour'::interval,'79990002222',60),"
+                                "(2,'101',now()-'2 hours'::interval,$1,60)", PHONE)  # тот же клиент звонил и им
+
+    async def seed_secret(self):
+        p = self.pool
+        self.ids = {}
+        call = await p.fetchval(
+            "INSERT INTO calls(client_id,extension,transcript,call_started_at,client_number,duration_seconds,recording_id) "
+            "VALUES(1,'101',$1,now()-'1 hour'::interval,$2,95,'rec1') RETURNING id", SECRET + ' разговор', PHONE)
+        self.ids['call'] = call
+        data = {'kind': 'cold_first', 'success': False, 'chance': 'hot', 'client': {'company': SECRET + ' Ромашка'},
+                'rop_line': SECRET, 'key_moment': {'category': 'no_close', 'what_happened': SECRET}}
+        await p.execute("INSERT INTO call_reviews(call_id,client_id,extension,prompt_version,kind,success,chance,category,data) "
+                        "VALUES($1,1,'101','v',$2,false,'hot','no_close',$3::jsonb)", call, data['kind'], json.dumps(data))
+        await p.execute("UPDATE employees SET full_name=$1 || ' ' || full_name WHERE client_id=1", SECRET)
+        self.ids['task'] = await p.fetchval(
+            "INSERT INTO callback_tasks(client_id,extension,call_id,client_number,company,kind,due_date,raw) "
+            "VALUES(1,'101',$1,$2,$3,'callback',current_date,$3) RETURNING id", call, PHONE, SECRET)
+        self.ids['lead'] = await p.fetchval(
+            "INSERT INTO crm_leads(client_id,extension,number,name,company) VALUES(1,'101',$1,$2,$2) RETURNING id", PHONE, SECRET)
+        await p.execute("INSERT INTO crm_outcomes(client_id,extension,number,outcome,comment) VALUES(1,'101',$1,'callback',$2)",
+                        PHONE, SECRET)
+        self.ids['report'] = await p.fetchval(
+            "INSERT INTO crm_reports(client_id,kind,title,extension,body) VALUES(1,'daily',$1,'101',$1) RETURNING id", SECRET)
+        await p.execute("INSERT INTO crm_questions(client_id,role,extension,question,answer) VALUES(1,'director',NULL,$1,$1),"
+                        "(1,'manager','101',$1,$1)", SECRET)
+        self.ids['invite'] = await p.fetchval(
+            "INSERT INTO crm_invites(token_hash,role,client_id,extension,name,login) VALUES('h-secret','manager',1,'101',$1,'secretlogin') "
+            "RETURNING id", SECRET)
+        card = {'weak': [{'title': SECRET}], 'focus': SECRET}
+        await p.execute("INSERT INTO manager_memory(client_id,extension,day,card,stats,prompt_version) "
+                        "VALUES(1,'101',current_date,$1::jsonb,'{}'::jsonb,'v')", json.dumps(card))
+        self.ids['presentation'] = await p.fetchval(
+            "INSERT INTO presentations(client_id,file_id,day,extension,status,call_id,data,comment) "
+            "VALUES(1,'f-secret',current_date,'101','reviewed',$1,$2::jsonb,$3) RETURNING id",
+            call, json.dumps({'kind': 'presentation', 'rop_line': SECRET, 'contract': {'company': SECRET}}), SECRET)
+        await p.execute("INSERT INTO deal_events(client_id,phone,kind,note,extension) VALUES(1,$1,'note',$2,'101')",
+                        PHONE[-10:], SECRET)
+        self.ids['contract'] = await p.fetchval(
+            "INSERT INTO contracts(client_id,num,type,contract_date,company,inn,amount,phone,extension) "
+            "VALUES(1,77,'ops',current_date,$1,'7700000000',1000,$2,'101') RETURNING id", SECRET, PHONE[-10:])
+        self.ids['selection'] = await p.fetchval(
+            "INSERT INTO source_selections(client_id,niche,niche_name,city,donors,author_ext,author_name) "
+            "VALUES(1,'kitchen',$1,$1,$2::jsonb,'101',$1) RETURNING id",
+            SECRET, json.dumps([{'name': SECRET, 'phone': PHONE}]))
+        self.ids['training'] = await p.fetchval(
+            "INSERT INTO training_sessions(client_id,extension,topic,status,transcript) "
+            "VALUES(1,'101',$1,'completed',$2::jsonb) RETURNING id", SECRET, json.dumps([{'role': 'user', 'text': SECRET}]))
+        await p.execute("INSERT INTO review_copy_lists(client_id,tokens) VALUES(1,ARRAY[$1])", SECRET)
+        await p.execute("INSERT INTO crm_docs(path,data) VALUES('pipe/' || $1, $2::jsonb)", PHONE[-10:],
+                        json.dumps({'stage': 'contract', 'note': SECRET}))
+        from review import prompts
+        self.ids['prompt'] = await prompts.save(p, 'review', SECRET + ' промт', SECRET, 0, 'all', company=1)
+        cc = await p.fetchval("INSERT INTO cc_clients(client_id,name) VALUES(1,$1) RETURNING id", SECRET)
+        await p.execute("INSERT INTO cc_leads(client_id,cc_client_id,phone,note) VALUES(1,$1,$2,$3)", cc, PHONE, SECRET)
+        auto = await p.fetchval("INSERT INTO automations(client_id,name,spec,hook_token) VALUES(1,$1,'{}'::jsonb,'tok-secret') RETURNING id", SECRET)
+        self.ids['automation'] = auto
+        await p.execute("INSERT INTO automation_accounts(client_id,kind,title) VALUES(1,'telegram',$1)", SECRET)
+        # робот нашей компании: кабинет '' (наш) и кабинет клиента с меткой в имени
+        await p.execute("INSERT INTO robot_options(key,value) VALUES('clients',$1::jsonb) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value",
+                        json.dumps([SECRET]))
+        for owner in ('', SECRET):
+            await p.execute("INSERT INTO robot_contacts(owner,phone,name) VALUES($1,$2,$3)", owner, PHONE, SECRET)
+            await p.execute("INSERT INTO robot_stoplist(owner,phone,reason) VALUES($1,$2,$3)", owner, '79115550009', SECRET)
+            camp = await p.fetchval("INSERT INTO robot_campaigns(owner,name,operator) VALUES($1,$2,'olga') RETURNING id", owner, SECRET)
+            self.ids.setdefault('campaign', camp)
+            self.ids.setdefault('robot_call', 'call-' + owner)
+            await p.execute("INSERT INTO robot_targets(campaign_id,phone,name) VALUES($1,$2,$3)", camp, PHONE, SECRET)
+            await p.execute("INSERT INTO robot_calls(call_id,owner,campaign_id,phone,at,outcome,comment,recording) "
+                            "VALUES($1,$2,$3,$4,now(),'interested',$5,'x.wav')", 'call-' + owner, owner, camp, PHONE, SECRET)
+
+    async def enter(self, who):
+        """Сессия второй компании: директор и клиент по учётке, менеджер по Telegram."""
+        token = 'tenant2-' + who
+        if who in ('director', 'client'):
+            # Директор привязан к своему РОПу (tg 902): так ему открыты и промты.
+            await self.pool.execute("INSERT INTO crm_sessions(token_hash,telegram_user_id,expires_at,role,client_id,client_key,is_test) "
+                                    "VALUES($1,$2,now()+'1 day',$3,2,$4,false) ON CONFLICT DO NOTHING", auth.digest(token),
+                                    902 if who == 'director' else None, who, 'Свой клиент' if who == 'client' else None)
+        else:
+            await self.pool.execute("INSERT INTO crm_sessions(token_hash,telegram_user_id,expires_at) VALUES($1,223,now()+'1 day') ON CONFLICT DO NOTHING",
+                                    auth.digest(token))
+        self.http.session.cookie_jar.clear()
+        self.http.session.cookie_jar.update_cookies({'crm_session': token})
+
+    def routes(self, method):
+        out = []
+        for route in self.http.server.app.router.routes():
+            info = route.resource.get_info() if route.resource else {}
+            path = info.get('path') or info.get('formatter') or ''
+            if route.method == method and path.startswith('/api/') and path not in SKIP:
+                out.append(path)
+        return sorted(set(out))
+
+    def fill(self, path):
+        """Подставляет в адрес номера записей первой компании."""
+        any_id = {'/api/prompts/version/': 'prompt', '/api/recording/': 'call', '/api/review/': 'call', '/api/trainings/': 'training',
+                  '/api/sources/': 'selection', '/api/presentations/': 'presentation', '/api/access/': 'invite',
+                  '/api/tasks/': 'task', '/api/leads/': 'lead', '/api/robot/cab/campaigns/': 'campaign',
+                  '/api/robot/cab/recording/': 'robot_call', '/api/automations/': 'automation'}
+        rid = next((self.ids[v] for k, v in any_id.items() if path.startswith(k)), self.ids['call'])
+        path = re.sub(r'\{id(:[^}]*)?\}', str(rid), path)
+        return (path.replace('{phone}', PHONE[-10:]).replace('{kind}', 'review').replace('{action}', 'delete'))
+
+    QUERY = {'ext': '101', 'number': PHONE, 'phone': PHONE, 'id': '1', 'call': '1', 'client': SECRET, 'person': '101',
+             'days': '30', 'period': '30', 'q': '', 'owner': SECRET, 'path': 'pipe/'}
+
+    async def crawl_reads(self, who):
+        leaks = []
+        for path in self.routes('GET'):
+            url = self.fill(path)
+            # робот: и чужой кабинет клиента (owner=метка), и наш кабинет (owner пустой)
+            for query in ([self.QUERY, {**self.QUERY, 'owner': ''}] if path.startswith('/api/robot') else [self.QUERY]):
+                r = await self.http.get(url, params=query)
+                text = (await r.read()).decode('utf-8', 'replace')
+                try:  # JSON отдаётся с \uXXXX: метку ищем в раскодированном тексте
+                    text = json.dumps(json.loads(text), ensure_ascii=False)
+                except ValueError:
+                    pass
+                self.statuses.append((who, 'GET', url, r.status, text[:90]))
+                if (SECRET in text or 'x.wav' in text) and not (SHARED_YET and path.startswith(SHARED_YET)):
+                    leaks.append(f'{who} GET {url} → {r.status}: {text[:160]}')
+        return leaks
+
+    async def snapshot(self):
+        out = {}
+        for table in ('robot_contacts', 'robot_stoplist', 'robot_campaigns', 'robot_calls'):
+            rows = await self.pool.fetch(f"SELECT to_jsonb(t) AS j FROM {table} t WHERE owner NOT LIKE '#%'")
+            out[table] = sorted(r['j'] for r in rows)
+        out['robot_targets'] = sorted(str(dict(r)) for r in await self.pool.fetch('SELECT * FROM robot_targets ORDER BY id'))
+        for table in TABLES:
+            rows = await self.pool.fetch(f'SELECT to_jsonb(t) AS j FROM {table} t WHERE client_id=1')
+            out[table] = sorted(json.dumps(dict(json.loads(r['j'])), sort_keys=True, default=str) for r in rows)
+        return out
+
+    async def crawl_writes(self, who):
+        before = await self.snapshot()
+        h = {'X-CRM': '1'}
+        payload = {'id': self.ids['call'], 'phone': PHONE, 'number': PHONE, 'ext': '101', 'extension': '101',
+                   'kind': 'note', 'note': 'чужой', 'status': 'done', 'outcome': 'not_interested', 'call_id': self.ids['call'],
+                   'phone_client': PHONE, 'reason': 'price', 'client': SECRET, 'tg': '123', 'role': 'manager'}
+        for method in ('POST', 'DELETE'):
+            for path in self.routes(method):
+                if SHARED_YET and path.startswith(SHARED_YET):
+                    continue
+                url = self.fill(path)
+                r = await self.http.request(method, url, json=payload, headers=h)
+                self.statuses.append((who, method, url, r.status, (await r.text())[:90]))
+        after = await self.snapshot()
+        return [f'{who}: изменилась таблица {t} первой компании' for t in before if before[t] != after[t]]
+
+    async def test_second_company_sees_nothing_of_the_first(self):
+        mango = patch('mango_client.fetch_recording', AsyncMock(return_value=(SECRET.encode(), 'audio/mpeg')))
+        callback = patch('mango_client.callback', AsyncMock(return_value={'result': 1000}))
+        with mango, callback, patch.dict(os.environ, {'CRM_TEST_KEY': TEST_KEY, 'PROMPT_EDITORS': '902'}):
+            leaks, self.statuses = [], []
+            for who in ('director', 'manager', 'client'):
+                await self.enter(who)
+                leaks += await self.crawl_reads(who)
+            for who in ('director', 'manager', 'client'):
+                await self.enter(who)
+                leaks += await self.crawl_writes(who)
+        if os.getenv('TENANT_DEBUG'):
+            print('\n'.join(' '.join(map(str, x)) for x in self.statuses))
+        self.assertEqual(leaks, [], '\n'.join(leaks))
+
+    async def test_crawl_reaches_the_api(self):
+        """Обход не пустой и видит свои данные: без этого тест выше ничего бы не проверял."""
+        self.assertGreater(len(self.routes('GET')), 30)
+        self.assertGreater(len(self.routes('POST')), 30)
+        await self.enter('director')
+        r = await self.http.get('/api/me')
+        self.assertEqual(r.status, 200, await r.text())
+        r = await self.http.get('/api/journal', params={'period': '7'})
+        self.assertIn('9990002222', await r.text())
+
+    async def test_viewer_knows_its_company(self):
+        """У клиента компании нет actor: компания берётся из сессии, а не «первая в базе»."""
+        from crm import gpt
+        await self.enter('client')
+        who = await auth.viewer_for(self.pool, 'tenant2-client')
+        self.assertEqual((who.role, who.company), ('client', 2))
+        self.assertEqual(await gpt.client_id_of(self.pool, who), 2)
+        await self.enter('manager')
+        self.assertEqual((await auth.viewer_for(self.pool, 'tenant2-manager')).company, 2)
+
+    async def test_bot_sheet_takes_only_our_company(self):
+        """Таблица бота (GOOGLE_SHEET_ID) наша: звонки других компаний в неё не попадают."""
+        from review import sheets
+        with patch.dict(os.environ, {'CRM_HOME_COMPANY': '2'}):
+            tables = await sheets.collect(self.pool)
+        text = json.dumps([t.rows for t in tables], ensure_ascii=False, default=str)
+        self.assertNotIn(SECRET, text)
+        with patch.dict(os.environ, {'CRM_HOME_COMPANY': '1'}):
+            tables = await sheets.collect(self.pool)
+        self.assertIn(SECRET, json.dumps([t.rows for t in tables], ensure_ascii=False, default=str))
+
+
+@unittest.skipUnless(DSN, 'METHODOLOGY_TEST_DATABASE_URL не задан')
+class CompanySettingsTests(DBCase):
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        await self.pool.execute((ROOT / 'migrations' / '030_company_settings.sql').read_text())
+        await self.pool.execute('TRUNCATE company_settings')
+        await self.pool.execute("INSERT INTO clients(id,timezone,processing_enabled) VALUES(3,'Europe/Moscow',true)")
+        from aiohttp.test_utils import TestClient, TestServer
+        from crm import web
+        web.SECURE_COOKIE = False
+        self.http = TestClient(TestServer(web.build(self.pool)))
+        await self.http.start_server()
+        self.addAsyncCleanup(self.http.close)
+
+    async def enter(self, client_id):
+        token = f'company-{client_id}'
+        await self.pool.execute("INSERT INTO crm_sessions(token_hash,expires_at,role,client_id,is_test) "
+                                "VALUES($1,now()+'1 day','director',$2,false) ON CONFLICT DO NOTHING", auth.digest(token), client_id)
+        self.http.session.cookie_jar.update_cookies({'crm_session': token})
+
+    async def test_home_company_keeps_env_settings(self):
+        """Наша компания без строки настроек работает как раньше: все модули, таблица из .env."""
+        with patch.dict(os.environ, {'KITCHEN_SHEET_ID': 'leads-sheet', 'CONTRACT_OUR_EMAIL': 'we@example.ru'}):
+            info = await company.info(self.pool, 1)
+            self.assertEqual((info['home'], info['modules']), (True, list(company.MODULES)))
+            self.assertEqual(info['settings'], {'callcenter_sheet': 'leads-sheet', 'contract_email': 'we@example.ru'})
+            # другой компании .env не достаётся
+            other = await company.info(self.pool, 3)
+            self.assertEqual((other['home'], other['modules'], other['settings']), (False, list(company.DEFAULT_MODULES), {}))
+
+    async def test_modules_close_pages_and_api(self):
+        await self.enter(3)
+        me = await (await self.http.get('/api/me')).json()
+        self.assertEqual((me['company'], me['modules']), ('Компания 3', list(company.DEFAULT_MODULES)))
+        for path in ('/api/callcenter', '/api/robot', '/api/robot/cab/campaigns', '/api/contracts', '/api/contracts/config'):
+            r = await self.http.get(path)
+            self.assertEqual(r.status, 403, path)
+            self.assertIn('не подключён', (await r.json())['error'])
+        self.assertEqual((await self.http.get('/api/sources/selections')).status, 200)
+        await self.pool.execute("INSERT INTO company_settings(client_id,name,modules,settings) VALUES(3,'Окна Юг',$1,$2::jsonb)",
+                                ['contracts'], json.dumps({'contract_email': 'okna@example.ru'}))
+        me = await (await self.http.get('/api/me')).json()
+        self.assertEqual((me['company'], me['modules']), ('Окна Юг', ['contracts']))
+        cfg = await (await self.http.get('/api/contracts/config')).json()
+        self.assertEqual(cfg['ourEmail'], 'okna@example.ru')
+        self.assertEqual((await self.http.get('/api/sources/selections')).status, 403)
+
+    async def test_callcenter_sheet_per_company(self):
+        """Колл-центр читает таблицу своей компании; без таблицы — понятная ошибка, а не наша таблица."""
+        from crm import cabinet
+        await self.pool.execute("INSERT INTO company_settings(client_id,modules,settings) VALUES(3,$1,$2::jsonb)",
+                                ['callcenter'], json.dumps({'callcenter_sheet': 'their-sheet'}))
+        with patch.dict(os.environ, {'KITCHEN_SHEET_ID': 'our-sheet'}):
+            self.assertEqual(await cabinet.sheet_of(self.pool, 3), 'their-sheet')
+            self.assertEqual(await cabinet.sheet_of(self.pool, 1), 'our-sheet')
+            await self.pool.execute("UPDATE company_settings SET settings='{}' WHERE client_id=3")
+            with self.assertRaisesRegex(LookupError, 'не подключена'):
+                await cabinet.sheet_of(self.pool, 3)
+
+
+@unittest.skipUnless(DSN, 'METHODOLOGY_TEST_DATABASE_URL не задан')
+class AiLimitTests(DBCase):
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        for name in ('029_averongpt.sql', '030_company_settings.sql'):
+            await self.pool.execute((ROOT / 'migrations' / name).read_text())
+        await self.pool.execute('TRUNCATE company_settings')
+        await self.pool.execute("INSERT INTO clients(id,timezone,processing_enabled) VALUES(3,'Europe/Moscow',true)")
+
+    async def test_day_limit_counts_units_and_gpt(self):
+        """300 ₽ в день: разборы (единицы провайдера) и AveronGPT складываются; у нашей компании лимита нет."""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        day = datetime.now(ZoneInfo('Europe/Moscow')).date()
+        await self.pool.execute("INSERT INTO astra_daily_spend(client_id,day,spent_units) VALUES(3,$1,4000000),(1,$1,9e9)", day)
+        await self.pool.execute("INSERT INTO crm_questions(client_id,role,question,answer,cost_rub) VALUES(3,'director','q','a',50)")
+        with patch.dict(os.environ, {'AI_RUB_PER_MILLION_UNITS': '50'}):
+            self.assertAlmostEqual(await company.spent_today_rub(self.pool, 3), 250.0)
+            self.assertFalse(await company.ai_over_limit(self.pool, 3))  # лимит не задан
+            await self.pool.execute("INSERT INTO company_settings(client_id,settings) VALUES(3,'{\"ai_day_limit_rub\": 300}')")
+            self.assertFalse(await company.ai_over_limit(self.pool, 3))
+            await self.pool.execute("UPDATE crm_questions SET cost_rub=150")
+            self.assertTrue(await company.ai_over_limit(self.pool, 3))
+            self.assertFalse(await company.ai_over_limit(self.pool, 1))
+            # AveronGPT отвечает без модели, что на сегодня всё
+            from crm import gpt
+            who = auth.Viewer('director', None, client_id=3)
+            self.assertTrue(await gpt.over_limit(self.pool, who))
+
+
+@unittest.skipUnless(DSN, 'METHODOLOGY_TEST_DATABASE_URL не задан')
+class PlatformTests(DBCase):
+    """Вкладка «Компании»: только наши учётки с отметкой platform; вход в компанию — только просмотр."""
+    H = {'X-CRM': '1'}
+
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        for name in ('029_averongpt.sql', '030_company_settings.sql'):
+            await self.pool.execute((ROOT / 'migrations' / name).read_text())
+        await self.pool.execute('TRUNCATE company_settings')
+        from aiohttp.test_utils import TestClient, TestServer
+        from crm import web
+        web.SECURE_COOKIE = False
+        self.http = TestClient(TestServer(web.build(self.pool)))
+        await self.http.start_server()
+        self.addAsyncCleanup(self.http.close)
+        await auth.account_create(self.pool, 1, 'director', 'grisha', name='Григорий', password='grisha-pass-1')
+        await auth.account_create(self.pool, 1, 'director', 'boss', name='Директор', password='boss-pass-12')
+        await self.pool.execute("UPDATE crm_invites SET platform=true WHERE login='grisha'")
+
+    async def login(self, login, password):
+        self.http.session.cookie_jar.clear()
+        r = await self.http.post('/api/login', json={'login': login, 'password': password}, headers=self.H)
+        self.assertEqual(r.status, 200, await r.text())
+
+    async def test_only_platform_accounts_see_companies(self):
+        await self.login('boss', 'boss-pass-12')
+        self.assertFalse((await (await self.http.get('/api/me')).json())['platform'])
+        self.assertEqual((await self.http.get('/api/platform/companies')).status, 403)
+        r = await self.http.post('/api/platform/companies', json={'name': 'Окна Юг'}, headers=self.H)
+        self.assertEqual(r.status, 403)
+        await self.login('grisha', 'grisha-pass-1')
+        self.assertTrue((await (await self.http.get('/api/me')).json())['platform'])
+        d = await (await self.http.get('/api/platform/companies')).json()
+        self.assertEqual([(c['id'], c['home']) for c in d['companies']], [(1, True)])
+
+    async def test_create_configure_connect_and_look(self):
+        await self.login('grisha', 'grisha-pass-1')
+        r = await self.http.post('/api/platform/companies', headers=self.H, json={
+            'name': ' Окна  Юг ', 'director': 'Пётр', 'login': 'okna', 'modules': ['robot', 'gpt', 'nonsense'],
+            'settings': {'ai_day_limit_rub': '300', 'callcenter_sheet': 'https://docs.google.com/spreadsheets/d/abc_DEF-1/edit'}})
+        self.assertEqual(r.status, 200, await r.text())
+        made = await r.json()
+        cid = made['id']
+        self.assertEqual(made['login'], 'okna')
+        info = await company.info(self.pool, cid)
+        self.assertEqual((info['name'], sorted(info['modules'])), ('Окна Юг', ['gpt', 'robot']))
+        self.assertEqual(info['settings'], {'ai_day_limit_rub': 300.0, 'callcenter_sheet': 'abc_DEF-1'})
+        self.assertFalse(await self.pool.fetchval('SELECT processing_enabled FROM clients WHERE id=$1', cid))
+
+        r = await self.http.post(f'/api/platform/companies/{cid}', headers=self.H,
+                                 json={'name': 'Окна Юг', 'modules': ['contracts'], 'settings': {'contract_email': 'okna@example.ru'}})
+        self.assertEqual(r.status, 200, await r.text())
+        self.assertEqual((await r.json())['modules'], ['contracts'])
+
+        # Манго: неверные ключи не сохраняются, верные включают компанию
+        bad = patch('mango_client.call', AsyncMock(side_effect=RuntimeError('401 Service disabled')))
+        with bad:
+            r = await self.http.post(f'/api/platform/companies/{cid}/mango', json={'key': 'k', 'salt': 's'}, headers=self.H)
+        self.assertEqual(r.status, 400)
+        self.assertIsNone(await self.pool.fetchval('SELECT vpbx_api_key_enc FROM clients WHERE id=$1', cid))
+        with patch('mango_client.call', AsyncMock(return_value={'balance': 1500})):
+            r = await self.http.post(f'/api/platform/companies/{cid}/mango', json={'key': 'k', 'salt': 's'}, headers=self.H)
+        self.assertEqual((r.status, (await r.json())['balance']), (200, 1500))
+        row = await self.pool.fetchrow('SELECT processing_enabled, vpbx_api_key_enc FROM clients WHERE id=$1', cid)
+        self.assertTrue(row['processing_enabled'])
+        from crypto_util import decrypt
+        self.assertEqual(decrypt(row['vpbx_api_key_enc']), 'k')
+        r = await self.http.post('/api/platform/companies/1/mango', json={'key': 'k', 'salt': 's'}, headers=self.H)
+        self.assertEqual(r.status, 400)  # нашу Манго отсюда не трогаем
+
+        # директор новой компании входит своим логином и видит свою компанию, без «Компаний»
+        own = self.http.session.cookie_jar.filter_cookies(self.http.make_url('/'))['crm_session'].value
+        await self.login('okna', made['password'])
+        me = await (await self.http.get('/api/me')).json()
+        self.assertEqual((me['company'], me['platform']), ('Окна Юг', False))
+        self.assertEqual((await self.http.get('/api/platform/companies')).status, 403)
+
+        # «Посмотреть»: сессия директора компании только для просмотра, обратно — в свою
+        self.http.session.cookie_jar.clear()
+        self.http.session.cookie_jar.update_cookies({'crm_session': own})
+        r = await self.http.post(f'/api/platform/companies/{cid}/enter', json={}, headers=self.H)
+        self.assertEqual(r.status, 200, await r.text())
+        me = await (await self.http.get('/api/me')).json()
+        self.assertEqual((me['company'], me['support'], me['platform'], me['readonly']), ('Окна Юг', True, False, True))
+        self.assertEqual((await self.http.get('/api/platform/companies')).status, 403)
+        r = await self.http.post('/api/access', json={'role': 'director', 'name': 'x'}, headers=self.H)
+        self.assertEqual(r.status, 403)
+        r = await self.http.get('/support-exit', allow_redirects=False)
+        self.assertEqual(r.status, 302)
+        me = await (await self.http.get('/api/me')).json()
+        self.assertEqual((me['company'], me['platform'], me['support']), ('Averon', True, False))
+        actions = [a for (a,) in await self.pool.fetch('SELECT action FROM platform_log ORDER BY id')]
+        self.assertEqual(actions, ['create', 'update', 'mango', 'support'])
+        r = await self.http.post('/api/platform/companies/1/enter', json={}, headers=self.H)
+        self.assertEqual(r.status, 400)
+
+
+@unittest.skipUnless(DSN, 'METHODOLOGY_TEST_DATABASE_URL не задан')
+class CallcenterDbTests(DBCase):
+    """Колл-центр без Google Таблицы: клиенты и номера в базе, кабинет и сводка как по таблице."""
+    H = {'X-CRM': '1'}
+
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        await self.pool.execute((ROOT / 'migrations' / '030_company_settings.sql').read_text())
+        await self.pool.execute('TRUNCATE company_settings')
+        await self.pool.execute("INSERT INTO clients(id,timezone,processing_enabled) VALUES(3,'Europe/Moscow',true)")
+        await self.pool.execute("INSERT INTO company_settings(client_id,name,modules) VALUES(3,'Окна Юг',$1)", ['callcenter'])
+        await self.pool.execute("INSERT INTO employees VALUES(3,'201',323,'manager','Оператор')")
+        from aiohttp.test_utils import TestClient, TestServer
+        from crm import web
+        web.SECURE_COOKIE = False
+        self.http = TestClient(TestServer(web.build(self.pool)))
+        await self.http.start_server()
+        self.addAsyncCleanup(self.http.close)
+
+    async def enter(self, who):
+        token = 'cc-' + who
+        if who == 'director':
+            await self.pool.execute("INSERT INTO crm_sessions(token_hash,expires_at,role,client_id,is_test) "
+                                    "VALUES($1,now()+'1 day','director',3,false) ON CONFLICT DO NOTHING", auth.digest(token))
+        elif who == 'client':
+            await self.pool.execute("INSERT INTO crm_sessions(token_hash,expires_at,role,client_id,client_key,is_test) "
+                                    "VALUES($1,now()+'1 day','client',3,'Кухни',false) ON CONFLICT DO NOTHING", auth.digest(token))
+        else:
+            await self.pool.execute("INSERT INTO crm_sessions(token_hash,telegram_user_id,expires_at) VALUES($1,323,now()+'1 day') "
+                                    "ON CONFLICT DO NOTHING", auth.digest(token))
+        self.http.session.cookie_jar.clear()
+        self.http.session.cookie_jar.update_cookies({'crm_session': token})
+
+    async def post(self, path, data):
+        r = await self.http.post(path, json=data, headers=self.H)
+        return r.status, await r.json()
+
+    async def test_clients_numbers_calls_and_cabinet(self):
+        await self.enter('director')
+        me = await (await self.http.get('/api/me')).json()
+        self.assertEqual(me['callcenter_mode'], 'db')
+        self.assertEqual((await self.post('/api/callcenter/clients', {'name': 'Кухни'}))[0], 200)
+        self.assertEqual((await self.post('/api/callcenter/clients', {'name': 'Кухни'}))[0], 400)
+        st, r = await self.post('/api/callcenter/leads', {'client': 'Кухни', 'tag': 'МПП',
+                                                          'text': '89991112233; Иван\n+7 999 111-22-33\n89994445566\nмусор'})
+        self.assertEqual((st, r['added'], r['duplicates'], r['invalid']), (200, 2, 1, 1))
+        await self.post('/api/callcenter/prices', {'first': 10, 'repeat': 5, 'interested': 150})
+
+        await self.enter('manager')  # оператор — менеджер компании
+        w = await (await self.http.get('/api/callcenter/work')).json()
+        self.assertEqual([x['phone'] for x in w['items']], ['79991112233', '79994445566'])
+        a, b = w['items'][0]['id'], w['items'][1]['id']
+        st, r = await self.post(f'/api/callcenter/leads/{a}/attempt', {'result': 'no_answer', 'comment': 'не берёт'})
+        self.assertEqual((st, r['attempts']), (200, ['НДЗ']))
+        await self.post(f'/api/callcenter/leads/{b}/attempt', {'result': 'interested', 'comment': 'ждёт замер'})
+        st, r = await self.post(f'/api/callcenter/leads/{b}/attempt', {'result': 'no_answer'})
+        self.assertEqual(st, 400)  # номер закрыт
+        w = await (await self.http.get('/api/callcenter/work')).json()
+        self.assertEqual(w['items'], [])  # недозвон вернётся завтра
+        self.assertEqual((await self.post('/api/callcenter/clients', {'name': 'Окна'}))[0], 403)  # клиентов заводит директор
+        await self.pool.execute("UPDATE cc_leads SET attempts=jsonb_set(attempts,'{0,d}','\"2020-01-01\"') WHERE id=$1", a)
+        w = await (await self.http.get('/api/callcenter/work')).json()
+        self.assertEqual([x['id'] for x in w['items']], [a])
+        st, r = await self.post(f'/api/callcenter/leads/{a}/attempt', {'result': 'no_answer'})
+        self.assertEqual(r['attempts'], ['НДЗ', 'НДЗ 2'])
+        st, r = await self.post(f'/api/callcenter/leads/{a}/attempt', {'result': 'callback', 'remind': 'завтра'})
+        self.assertEqual((st, r['attempts'], r['open']), (200, ['НДЗ', 'НДЗ 2', 'Перезвон'], False))
+
+        await self.enter('client')
+        c = await (await self.http.get('/api/cabinet')).json()
+        self.assertEqual((c['counts']['total'], c['counts']['interested'], c['counts']['callback']), (2, 1, 1))
+        self.assertEqual((c['summary']['first'], c['summary']['repeat'], c['summary']['sum']), (2, 2, 170.0))
+        self.assertEqual(c['interested'][0]['comment'], 'ждёт замер')
+
+        await self.enter('director')
+        d = await (await self.http.get('/api/callcenter')).json()
+        self.assertEqual((d['mode'], d['clients'][0]['name'], d['total']['sum']), ('db', 'Кухни', 170.0))
+        r = await self.http.get('/api/callcenter/export', params={'client': 'Кухни'})
+        text = await r.text()
+        self.assertEqual(r.status, 200)
+        self.assertIn('Звонок 1 (первичный)', text)
+        self.assertIn('79991112233', text)
+
+        # компания со своей таблицей меняет номера в таблице, а не здесь
+        await self.pool.execute("""UPDATE company_settings SET settings='{"callcenter_sheet": "their-sheet"}' WHERE client_id=3""")
+        self.assertEqual((await self.post('/api/callcenter/clients', {'name': 'Ещё'}))[0], 400)

@@ -21,12 +21,16 @@ _token: tuple[float, str] | None = None
 _lock = asyncio.Lock()
 
 
+_company_sheets: set[str] = set()  # таблицы колл-центра из настроек компаний (crm/company.py)
+
+
 def allowed() -> set[str]:
-    return {v for v in (os.getenv('GOOGLE_SHEET_ID'), os.getenv('KITCHEN_SHEET_ID')) if v}
+    return {v for v in (os.getenv('GOOGLE_SHEET_ID'), os.getenv('KITCHEN_SHEET_ID')) if v} | _company_sheets
 
 
-def leads_sheet() -> str | None:
-    return os.getenv('KITCHEN_SHEET_ID') or None
+def allow(spreadsheet_id: str) -> None:
+    """Таблица из настроек компании: адрес задаёт сервер, а не запрос, поэтому её можно читать."""
+    _company_sheets.add(spreadsheet_id)
 
 
 async def _bearer() -> str:

@@ -102,7 +102,7 @@ class PureTests(unittest.TestCase):
 class CallcenterTests(unittest.IsolatedAsyncioTestCase):
     async def test_all_clients_in_one_answer(self):
         with patch.dict(os.environ, {'KITCHEN_SHEET_ID': 'leads'}), patch.object(gsheets, 'values', fake_values):
-            cc = await cabinet.callcenter()
+            cc = await cabinet.callcenter('leads')
         self.assertEqual([c['name'] for c in cc['clients']], ['Кухни', 'Окна'])
         self.assertEqual({k: cc['clients'][0][k] for k in ('leads', 'called', 'reached', 'interested', 'callback', 'waiting', 'sum')},
                          {'leads': 4, 'called': 3, 'reached': 2, 'interested': 1, 'callback': 1, 'waiting': 1, 'sum': 190})
@@ -131,9 +131,9 @@ class DBCase(unittest.IsolatedAsyncioTestCase):
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS topic TEXT;
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS mode TEXT;
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS assigned_by_telegram_user_id BIGINT;""")
-        for name in ('008_call_reviews.sql', '009_callback_tasks.sql', '012_prompt_versions.sql', '013_employee_invites.sql',
+        for name in ('008_call_reviews.sql', '009_callback_tasks.sql', '012_prompt_versions.sql', '031_company_prompts.sql', '013_employee_invites.sql',
                      '014_crm.sql', '015_crm_roles.sql', '016_crm_access.sql', '017_crm_reports.sql', '018_crm_questions.sql',
-                     '019_crm_staff.sql', '020_robot.sql', '021_manager_memory.sql', '022_presentations.sql', '024_deals.sql', '025_contracts.sql', '026_presentation_client.sql', '027_sources.sql', '028_crm_logins.sql'):
+                     '019_crm_staff.sql', '020_robot.sql', '021_manager_memory.sql', '022_presentations.sql', '024_deals.sql', '025_contracts.sql', '026_presentation_client.sql', '027_sources.sql', '028_crm_logins.sql', '032_platform.sql', '033_callcenter.sql'):
             await self.pool.execute((root / 'migrations' / name).read_text())
         await self.pool.execute('TRUNCATE clients, crm_login_tokens, crm_sessions, crm_docs, crm_invites, crm_reports, crm_questions, '
                                 'employee_invites, manager_memory, deal_events, contracts, source_selections, prompt_active, prompt_versions, prompt_drafts, astra_daily_spend, robot_options CASCADE')
@@ -936,6 +936,80 @@ class WebTests(DBCase):
         self.assertEqual((await post('79990000002', kind='materials', note='КП в Telegram')).status, 200)
         self.assertEqual([u['file_id'] for u in mine['unlinked']], [])  # m3 — презентация другого менеджера
         self.assertEqual((await link(ids['m3'], '+7 999 111-22-33')).status, 403)
+
+    async def test_deals_telegram(self):
+        """Переписка рабочего Telegram в сделке: этап, «ждёт ответа», отказ по разбору, привязка вручную."""
+        await self.pool.execute((Path(__file__).resolve().parents[1] / 'migrations/023_tg_chats.sql').read_text())
+        await self.add_review('101', WON, '6 days', number='79990000003')
+        await self.add_review('102', LOST, '6 days', number='79990000004')
+        warm = {'kind': 'client', 'reviewed': True, 'temperature': 'warm', 'contract': {'company': 'ООО Чат', 'missing': ['inn']},
+                'key_moment': {'category': 'materials_no_talk', 'say_instead': 'Когда удобно созвониться по КП?'},
+                'next_step_advice': 'Ответить про цену и назначить созвон.', 'rop_line': 'Переписка. КП отправлено, созвона нет.',
+                'link': {'by': 'text'}}
+        lost = {'kind': 'client', 'reviewed': True, 'temperature': 'lost', 'key_moment': {'category': 'price_no_value',
+                'what_happened': 'Клиент написал, что дорого.'}, 'rop_line': 'Отказ: дорого.'}
+        chats = [(555, 'Анна', '79990000003', None, warm), (556, 'Борис', '79990000004', None, lost),
+                 (557, 'Мама', '79990000005', None, {'kind': 'not_client'}), (558, 'Новый', None, None, None),
+                 (559, 'Спам', None, None, {'kind': 'not_client'}), (560, 'Из папки', None, '101', None)]
+        for peer, title, number, ext, data in chats:
+            await self.pool.execute(
+                """INSERT INTO tg_chats(client_id,peer_id,kind,title,phone,extension,analysis,last_message_at)
+                   VALUES(1,$1,'user',$2,$3,$4,$5::jsonb,now()-'1 hour'::interval)""",
+                peer, title, number, ext, json.dumps(data) if data else None)
+        msgs = [(555, 1, '2 days', False, 'Пришлите КП'), (555, 2, '2 days', True, 'Отправил КП'),
+                (555, 3, '1 hour', False, 'А сколько стоит пакет на 1000?'), (556, 1, '3 hours', False, 'Дорого'),
+                (556, 2, '1 hour', True, 'Понял, спасибо'), (557, 1, '1 hour', False, 'Купи хлеба'),
+                (558, 1, '1 hour', False, 'Мой номер 8 (912) 345-67-89, ИНН 7707083893'), (559, 1, '1 hour', False, 'Скидки'),
+                (560, 1, '1 hour', False, 'Здравствуйте')]
+        for peer, mid, ago, out, text in msgs:
+            await self.pool.execute(
+                """INSERT INTO tg_messages(client_id,peer_id,message_id,sent_at,outgoing,text)
+                   VALUES(1,$1,$2,now()-$3::text::interval,$4,$5)""", peer, mid, ago, out, text)
+
+        await self.director()
+        d = await (await self.http.get('/api/deals')).json()
+        by = {x['phone']: x for x in d['deals']}
+        self.assertNotIn('9990000005', by)  # разбор сказал «не клиент»
+        a = by['9990000003']
+        self.assertEqual((a['stage'], a['status'], a['temperature'], a['missing']), ('messenger', 'active', 'warm', ['ИНН']))
+        self.assertEqual((a['company'], a['advice']), ('ООО Чат', 'Ответить про цену и назначить созвон.'))
+        self.assertTrue(a['waiting'])  # последним написал клиент
+        b = by['9990000004']
+        self.assertEqual((b['stage'], b['status'], b['lost']['reason'], b['lost']['auto'], b['waiting']),
+                         ('messenger', 'lost', 'цена без расчёта пользы', True, None))
+        self.assertEqual(sorted((u['peer_id'], u['phones']) for u in d['unlinked_chats']), [(558, ['79123456789']), (560, [])])
+        one = await (await self.http.get('/api/deals/79990000003')).json()
+        chat = one['timeline'][-1]
+        self.assertEqual((chat['type'], chat['id'], chat['messages'], chat['linked'], chat['lost']),
+                         ('chat', 555, 3, 'text', 'материалы без договорённости обсудить'))
+
+        c = await (await self.http.get('/api/tgchats/555')).json()
+        self.assertEqual([(m['out'], m['text']) for m in c['messages']][:2], [(False, 'Пришлите КП'), (True, 'Отправил КП')])
+        self.assertEqual((c['phone'], c['linked']), ('9990000003', 'text'))
+        self.assertEqual((await self.http.get('/api/tgchats/abc')).status, 404)
+        self.assertEqual((await self.http.get('/api/tgchats/777')).status, 400)
+        link = lambda peer, number: self.http.post(f'/api/tgchats/{peer}/link', json={'phone': number}, headers={'X-CRM': '1'})
+        self.assertEqual((await link(558, 'ИНН')).status, 400)
+        r = await link(558, '+7 912 345-67-89')
+        self.assertEqual(await r.json(), {'phone': '9123456789', 'call_found': False})
+        d = await (await self.http.get('/api/deals')).json()
+        new = next(x for x in d['deals'] if x['phone'] == '9123456789')
+        self.assertEqual((new['stage'], new['ext']), ('messenger', None))
+        self.assertEqual([u['peer_id'] for u in d['unlinked_chats']], [560])
+        link_by = await self.pool.fetchval("SELECT analysis->'link'->>'name' FROM tg_chats WHERE peer_id=558")
+        self.assertEqual(link_by, 'Директор')
+
+        # менеджер: свои сделки и чаты из своей папки; чаты Telegram Business без номера не видит
+        self.http.session.cookie_jar.clear()
+        await self.login(123)
+        mine = await (await self.http.get('/api/deals')).json()
+        self.assertEqual([u['peer_id'] for u in mine['unlinked_chats']], [560])
+        self.assertEqual((await self.http.get('/api/tgchats/555')).status, 200)
+        self.assertEqual((await self.http.get('/api/tgchats/556')).status, 403)  # сделка другого менеджера
+        self.assertEqual((await link(560, '79990000004')).status, 403)  # клиент другого менеджера
+        self.assertEqual((await link(560, '79990000003')).status, 200)
+        timeline = (await (await self.http.get('/api/deals/79990000003')).json())['timeline']
+        self.assertEqual([t['id'] for t in timeline if t['type'] == 'chat'], [555, 560])
 
     async def test_contracts(self):
         import asyncio

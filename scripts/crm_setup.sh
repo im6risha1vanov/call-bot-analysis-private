@@ -46,7 +46,7 @@ test_link() {
 }
 
 # Все миграции CRM; каждая только добавляет и повторный запуск ничего не ломает.
-migrate() { for f in migrations/014_crm.sql migrations/015_crm_roles.sql migrations/016_crm_access.sql migrations/017_crm_reports.sql migrations/018_crm_questions.sql migrations/019_crm_staff.sql migrations/020_robot.sql migrations/021_manager_memory.sql migrations/022_presentations.sql migrations/023_tg_chats.sql migrations/024_deals.sql migrations/025_contracts.sql migrations/026_presentation_client.sql migrations/027_sources.sql migrations/028_crm_logins.sql migrations/029_averongpt.sql migrations/030_automations.sql; do
+migrate() { for f in migrations/014_crm.sql migrations/015_crm_roles.sql migrations/016_crm_access.sql migrations/017_crm_reports.sql migrations/018_crm_questions.sql migrations/019_crm_staff.sql migrations/020_robot.sql migrations/021_manager_memory.sql migrations/022_presentations.sql migrations/023_tg_chats.sql migrations/024_deals.sql migrations/025_contracts.sql migrations/026_presentation_client.sql migrations/027_sources.sql migrations/028_crm_logins.sql migrations/029_averongpt.sql migrations/030_automations.sql migrations/030_company_settings.sql migrations/031_company_prompts.sql migrations/032_platform.sql migrations/033_callcenter.sql; do
   psql "$DATABASE_URL" -q -v ON_ERROR_STOP=1 -f "$f"; done; }
 
 listeners() { ss -ltnpH "( sport = :80 or sport = :443 )" || true; }
@@ -215,6 +215,32 @@ demo-off)
 gpt-check)
   # AveronGPT: типовые вопросы от директора, менеджера и клиента; ничего не пишет и не меняет на сайте.
   DATABASE_URL="$DATABASE_URL" .venv/bin/python scripts/gpt_check.py "${2:-yandex}"
+  ;;
+platform)
+  # Вкладка «Компании»: bash scripts/crm_setup.sh platform <логин> [off]. Без логина — список наших руководителей.
+  migrate
+  LOGIN="${2:-}" MODE="${3:-on}" DATABASE_URL="$DATABASE_URL" .venv/bin/python - <<'PY'
+import asyncio, os
+import asyncpg
+from dotenv import load_dotenv
+load_dotenv('.env')
+from tools import home_client_id
+
+async def main():
+    pool = await asyncpg.create_pool(os.environ['DATABASE_URL'], min_size=1, max_size=2)
+    home, login = await home_client_id(pool), os.environ['LOGIN'].strip().lower()
+    if login:
+        done = await pool.fetchval(
+            "UPDATE crm_invites SET platform=$3 WHERE client_id=$1 AND lower(login)=$2 AND role='director' AND revoked_at IS NULL "
+            "RETURNING login", home, login, os.environ['MODE'] != 'off')
+        print(f'{done}: platform {os.environ["MODE"]}' if done else 'no such director login in our company')
+    for r in await pool.fetch("SELECT login, name, platform FROM crm_invites WHERE client_id=$1 AND role='director' "
+                              "AND login IS NOT NULL AND revoked_at IS NULL ORDER BY login", home):
+        print(f"{r['login']:24} {(r['name'] or '')[:30]:30} {'platform' if r['platform'] else ''}")
+    await pool.close()
+
+asyncio.run(main())
+PY
   ;;
 auto-agent-check)
   # Помощник «Автоматизаций»: собирает черновики на типовые просьбы, ничего не сохраняет и не включает.

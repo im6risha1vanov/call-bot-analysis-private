@@ -21,6 +21,8 @@ import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from tools import home_client_id
+
 from .presentations import match_employee
 
 log = logging.getLogger(__name__)
@@ -179,7 +181,7 @@ async def maybe_run(pool, now: datetime | None = None) -> dict | None:
     if _last_sync and now - _last_sync < timedelta(minutes=SYNC_MINUTES):
         return None
     _last_sync = now
-    client_id = await pool.fetchval('SELECT id FROM clients WHERE processing_enabled ORDER BY id LIMIT 1')
+    client_id = await home_client_id(pool)  # рабочий Telegram из .env — наш
     if client_id is None:
         return None
     client = make_client()
@@ -198,7 +200,8 @@ async def maybe_run(pool, now: datetime | None = None) -> dict | None:
 if __name__ == '__main__':
     # python -m review.tgchats login — один раз: вход в рабочий аккаунт (номер, код из Telegram, пароль).
     # python -m review.tgchats folders — только чтение: какие папки видит бот и сколько в них чатов.
-    # python -m review.tgchats setup — спросить api_id и api_hash, записать их в .env и сразу войти (login).
+    # python -m review.tgchats setup — спросить api_id и api_hash (или получить их с my.telegram.org, review/tgapp.py),
+    # записать в .env и сразу войти (login).
     import asyncio
     import sys
 
@@ -210,9 +213,22 @@ if __name__ == '__main__':
             if os.getenv('TG_API_ID') and os.getenv('TG_API_HASH'):
                 print('Ключи уже есть в .env, сразу вход.')
             else:
-                import getpass
-                save_keys(env, input('api_id: ').strip(), getpass.getpass('api_hash (при вводе не видно): ').strip())
-                print('Ключи записаны в .env.')
+                api_id = input('api_id (пусто: получить ключи на my.telegram.org прямо с сервера): ').strip()
+                if api_id:
+                    import getpass
+                    api_hash = getpass.getpass('api_hash (при вводе не видно): ').strip()
+                else:
+                    from .tgapp import TgAppError, fetch_keys, site_phone
+                    try:
+                        phone = site_phone(input('Номер для my.telegram.org, любой твой, например личный: '))
+                        api_id, api_hash = fetch_keys(
+                            phone, lambda: input('Код из Telegram (чат «Telegram» на этом номере): ').strip())
+                    except TgAppError as exc:
+                        print('Не вышло:', exc)
+                        return
+                    print('Ключи получены, api_id', api_id)
+                save_keys(env, api_id, api_hash)
+                print('Ключи записаны в .env. Теперь вход в рабочий аккаунт: номер рабочего телефона и код.')
             command = 'login'
         client = make_client()
         if command == 'login':
