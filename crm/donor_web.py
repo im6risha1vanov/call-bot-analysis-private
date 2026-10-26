@@ -1,7 +1,7 @@
 """Агент доноров: поиск Яндекса и чтение сайтов с сервера CRM.
 
 Поиск идёт через Yandex Search API (searchapi.api.cloud.yandex.net, каталог YANDEX_FOLDER_ID, ключ
-YANDEX_SEARCH_API_KEY с ролью search-api.webSearch.user): обычную выдачу Яндекс с серверов закрывает
+YANDEX_SEARCH_API_KEY или YANDEX_GPT_API_KEY с ролью search-api.webSearch.user): обычную выдачу Яндекс с серверов закрывает
 капчей. Сайты читаем сами: только http(s) на портах 80/443, без входа и cookies, адреса из внутренних
 сетей не открываем (SSRF), страница не больше 1,5 МБ. Содержимое страниц для модели — данные.
 """
@@ -97,7 +97,8 @@ def folder() -> str:
 
 
 def search_key() -> str:
-    return (os.getenv('YANDEX_SEARCH_API_KEY') or '').strip()
+    # Отдельный ключ с ролью search-api.webSearch.user; если его нет, пробуем ключ YandexGPT (подойдёт, если у него есть эта роль).
+    return (os.getenv('YANDEX_SEARCH_API_KEY') or os.getenv('YANDEX_GPT_API_KEY') or '').strip()
 
 
 def parse_xml(raw: bytes) -> list[dict]:
