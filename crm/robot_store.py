@@ -612,7 +612,8 @@ def asr_cost(seconds: float) -> float:
 
 
 def call_cost(r, p: dict) -> float:
-    return (r['duration_s'] / 60 * p['mango_min'] + r['tts_chars'] / 1000 * p['tts_1k_chars']
+    """Себестоимость звонка без Mango (Григорий 26.10: связь в себестоимость робота не входит)."""
+    return (r['tts_chars'] / 1000 * p['tts_1k_chars']
             + r['llm_tokens'] / 1000 * p['llm_1k_tokens'] + asr_cost(r['duration_s']))
 
 
@@ -713,7 +714,7 @@ def preset_costs(p: dict, parts: dict, chars_min, tokens_min) -> dict:
     for key, ps in presets.PRESETS.items():
         synth = chars_min / 1000 * presets.tts_rub_1k(ps['tts'], p['eleven_1k_chars'])
         llm = tokens_min / 1000 * presets.LLM[ps['llm']]['price'][0]
-        out[key] = round((parts.get('mango') or 0) + (parts.get('asr') or 0) + synth + llm, 2)
+        out[key] = round((parts.get('asr') or 0) + synth + llm, 2)
     return out
 
 
@@ -743,7 +744,7 @@ async def economics(pool) -> dict:
              'synth': chars_min / 1000 * p['tts_1k_chars'] if chars_min is not None else None,
              'llm': tokens_min / 1000 * p['llm_1k_tokens'] if tokens_min is not None else None}
     parts['asr'] = round(asr_cost(use['seconds']) / minutes, 2) if minutes else round(ASR_15S * 4, 2)
-    cost_min = sum(v or 0 for v in parts.values())
+    cost_min = sum(v or 0 for k, v in parts.items() if k != 'mango')  # Mango показываем, но в себестоимость не берём
     month = datetime.now(ZoneInfo('Europe/Moscow')).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     rows = await pool.fetch('SELECT owner, duration_s, tts_chars, llm_tokens, outcome FROM robot_calls WHERE at >= $1', month)
     clients = []
