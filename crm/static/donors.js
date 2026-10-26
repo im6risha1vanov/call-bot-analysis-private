@@ -64,12 +64,19 @@
   function csv(run) {
     const head = ['Номер', 'Вердикт', 'Почему', 'Тип', 'Чей', 'Компания', 'Сайт', 'Город', 'Оператор', 'Источник'];
     const rows = run.result.phones.map(p => ['+' + p.n, VERDICT[p.verdict][0], p.why.join('; '), p.type, p.who, p.company, p.site, p.city, p.operator, p.src]);
-    const blob = new Blob(['﻿' + [head, ...rows].map(r => r.map(csvCell).join(';')).join('\n')], {type: 'text/csv;charset=utf-8'});
+    save(new Blob(['﻿' + [head, ...rows].map(r => r.map(csvCell).join(';')).join('\n')], {type: 'text/csv;charset=utf-8'}), `доноры-${run.niche.slice(0, 40)}.csv`);
+  }
+  function save(blob, name) {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `доноры-${run.niche.slice(0, 40)}.csv`;
+    a.download = name;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  }
+  // Весь прогон одним файлом: номера, компании, план, запросы, расход по шагам и ход работы — для разбора.
+  function exportRun(run) {
+    const {can_manage, ...data} = run;
+    save(new Blob([JSON.stringify(data, null, 1)], {type: 'application/json'}), `прогон-${run.id}-${run.niche.slice(0, 40)}.json`);
   }
 
   let filter = 'go';
@@ -86,6 +93,7 @@
     box.innerHTML = `<div data-css="display:grid;gap:16px"><section class="card blk"><div class="card-h"><h2>${esc(run.niche)}</h2>${chip(STATUS[run.status] || [run.status, ''])}<span class="sp"></span>
         ${going && manage ? '<button class="btn small" type="button" data-stop>Остановить</button>' : ''}
         ${!going && manage ? '<button class="btn small" type="button" data-del>Удалить</button>' : ''}
+        <button class="btn small" type="button" data-export title="Номера, компании, план, расход и ход работы одним файлом">Скачать прогон</button>
         <button class="btn small" type="button" data-back>Все прогоны</button></div>
       <p class="hint" data-css="margin:0">${esc(run.city || 'Вся Россия')}${run.offer ? ' · ' + esc(run.offer) : ''} · разбор сайтов: ${esc(run.sites_model)} · запустил ${esc(run.author || '—')} ${fmtWhen(run.created_at)}</p>
       <p data-css="margin:10px 0 0"><b>${esc(run.stage || '')}</b></p>
@@ -127,6 +135,7 @@
       if (k === 'sites') copy(res.sites.filter(s => s.verdict === 'берём' && s.site).map(s => s.site).join('\n'), 'сайты');
     }));
     $('[data-csv]', box)?.addEventListener('click', () => csv(run));
+    $('[data-export]', box).addEventListener('click', () => exportRun(run));
     if (going) poll(box, () => detail(box, id));
   }
 
