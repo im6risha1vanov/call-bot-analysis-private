@@ -135,7 +135,7 @@ async def fake_fetch(client, url):
 class RunTests(DBCase):
     async def test_full_run_on_mocks(self):
         fake = FakeAI()
-        env = {'ANTHROPIC_API_KEY': 'k', 'YANDEX_SEARCH_API_KEY': 'k', 'YANDEX_FOLDER_ID': 'f', 'DONOR_DAILY_USD': '15'}
+        env = {'ANTHROPIC_API_KEY': 'k', 'YANDEX_SEARCH_API_KEY': 'k', 'YANDEX_FOLDER_ID': 'f', 'DONOR_DAILY_RUB': '1500'}
         with patch.dict(os.environ, env), patch.object(agent, 'ai_client', lambda p: SimpleNamespace(messages=fake)), \
                 patch.object(webx, 'search', fake_search), patch.object(webx, 'fetch', fake_fetch), \
                 patch.object(agent.Run, 'usd_rub', lambda self: asyncio.sleep(0, 100.0)):
@@ -154,7 +154,9 @@ class RunTests(DBCase):
         self.assertEqual(phones['79990000001']['verdict'], 'no')  # только в коде страницы, на сайте колл-трекинг
         self.assertIn('колл-трекинг', phones['79990000001']['why'][0])
         self.assertFalse(any(s['site'] == 'avito.ru' for s in run['result']['sites']))
-        self.assertGreater(run['usd'], 0)
+        self.assertGreater(run['rub'], 0)
+        self.assertEqual(set(run['cost']), {'план', 'разбор сайтов', 'проверка повторов', 'досье', 'поиск кандидатов', 'обход выдачи'})
+        self.assertAlmostEqual(sum(run['cost'].values()), run['rub'], delta=0.1)
         self.assertEqual(await self.pool.fetchval('SELECT calls FROM donor_spend'), len(fake.calls))
         listing = await agent.overview(self.pool, OTHER)  # прогоны видят все в отделе
         self.assertEqual(listing['runs'][0]['good'], run['result']['good'])
@@ -172,7 +174,7 @@ class RunTests(DBCase):
             first = await agent.start(self.pool, MANAGER, {'niche': 'Кухни', 'target': 20})
             await agent.stop(self.pool, MANAGER, first['id'])
             self.assertEqual((await agent.one(self.pool, MANAGER, first['id']))['status'], 'stopped')
-            await self.pool.execute("INSERT INTO donor_spend(day, usd) VALUES(current_date, 15)")
+            await self.pool.execute("INSERT INTO donor_spend(day, rub) VALUES(current_date, 1500)")
             with self.assertRaises(ValueError) as e:
                 await agent.start(self.pool, MANAGER, {'niche': 'Кухни', 'target': 20})
             self.assertIn('лимит', str(e.exception))

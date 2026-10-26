@@ -7,7 +7,7 @@
   const VERDICT = {go: ['В парсинг', 'good'], test: ['Проверить тестом', 'warn'], no: ['Не брать', 'bad']};
   const STATUS = {queued: ['В очереди', 'acc'], running: ['Идёт', 'acc'], done: ['Готово', 'good'], failed: ['Ошибка', 'bad'], stopped: ['Остановлен', 'warn']};
   const chip = ([t, c]) => `<span class="chip ${c}">${esc(t)}</span>`;
-  const usd = v => '$' + (Math.round((v || 0) * 100) / 100).toFixed(2);
+  const rub = v => fmt(v) + ' ₽';
   let timer = null;
   const live = box => box.isConnected;
   const poll = (box, fn) => { clearTimeout(timer); timer = setTimeout(() => { if (live(box)) fn(); }, 4000); };
@@ -17,7 +17,7 @@
     const ro = S.me.readonly;
     const notReady = [!d.ready.ai && 'ИИ', !d.ready.search && 'поиск Яндекса'].filter(Boolean);
     box.innerHTML = `<div class="grid2">
-      <section class="card blk"><div class="card-h"><h2>Новый поиск</h2><span class="hint">сегодня ${usd(d.limit.spent_usd)} из ${usd(d.limit.day_usd)}</span></div>
+      <section class="card blk"><div class="card-h"><h2>Новый поиск</h2><span class="hint">сегодня ${rub(d.limit.spent_rub)} из ${rub(d.limit.day_rub)}</span></div>
         <p class="hint" data-css="margin:0 0 10px">Агент сам составит план, пройдёт по выдаче Яндекса и сайтам конкурентов, найдёт номера людей и проверит их. Прогон идёт на сервере 20–60 минут, страницу можно закрыть.</p>
         ${notReady.length ? `<p class="bad-text">Не подключено: ${esc(notReady.join(' и '))}. Ключи ставит администратор в .env сервера.</p>` : ''}
         <label class="field" data-css="margin-top:10px">Ниша клиента<input data-d="niche" maxlength="200" placeholder="например: кухни на заказ, банкротство физлиц"></label>
@@ -26,7 +26,7 @@
         <label class="field" data-css="margin-top:10px">Сам клиент, чтобы не взять его донором (необязательно)<input data-d="client" maxlength="200" placeholder="сайт или название"></label>
         <label class="field" data-css="margin-top:10px">Сколько проверенных номеров нужно<select data-d="target">${d.targets.map(t => `<option${t === 20 ? ' selected' : ''}>${t}</option>`).join('')}</select></label>
         <div class="row" data-css="margin-top:12px"><button class="btn primary" type="button" data-start${ro ? ' disabled' : ''}>Найти номера</button></div>
-        <p class="hint">Один прогон стоит до ${usd(d.limit.run_usd)}. Общий лимит на день ${usd(d.limit.day_usd)}.</p></section>
+        <p class="hint">Один прогон стоит не больше ${rub(d.limit.run_rub)}. Общий лимит на день ${rub(d.limit.day_rub)}.</p></section>
       <section class="card blk" data-css="--i:1"><div class="card-h"><h2>Прогоны</h2><span class="hint">${d.runs.length || ''}</span></div>
         ${d.runs.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Ниша</th><th>Статус</th><th>Номера</th><th class="hide-m">Кто</th></tr></thead><tbody>
         ${d.runs.map(r => `<tr class="click" data-run="${r.id}"><td>${esc(r.niche)}<div class="s">${esc(r.city || 'вся Россия')} · ${fmtWhen(r.created_at)}</div></td>
@@ -91,7 +91,7 @@
       <div class="kpis" data-css="margin-top:12px"><div class="kpi"><span class="lab">В парсинг</span><span class="val">${counts.go}</span><span class="foot">нужно ${run.target}</span></div>
         <div class="kpi"><span class="lab">Живые люди</span><span class="val">${res.live}</span><span class="foot">мобильный, имя или WhatsApp</span></div>
         <div class="kpi"><span class="lab">Компаний разобрано</span><span class="val">${res.sites.length}</span><span class="foot">запросов ${run.queries.length}</span></div>
-        <div class="kpi"><span class="lab">Расход</span><span class="val">${usd(run.usd)}</span><span class="foot">поисков ${run.searches}</span></div></div></section>
+        <div class="kpi"><span class="lab">Расход</span><span class="val">${fmt(run.rub)}<small> ₽</small></span><span class="foot">поисков ${run.searches}</span></div></div></section>
       ${res.phones.length ? `<section class="card blk" data-css="--i:1"><div class="card-h"><h2>Номера</h2><span class="sp"></span>
           <button class="btn small" type="button" data-copy="calls">Номера для звонков</button><button class="btn small" type="button" data-copy="sms">Для SMS</button>
           <button class="btn small" type="button" data-copy="sites">Сайты</button><button class="btn small" type="button" data-csv>CSV</button></div>
@@ -106,7 +106,9 @@
         ${(plan.avoid || []).length ? `<p><b>Чего избегаем:</b> ${esc(plan.avoid.join('; '))}</p>` : ''}${plan.note ? `<p class="hint">${esc(plan.note)}</p>` : ''}`, 2) : ''}
       ${res.sites.length ? moreBlock('Компании', `${res.sites.length}`, `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Компания</th><th>Вердикт</th><th>Почему</th></tr></thead><tbody>
         ${res.sites.map(s => `<tr><td>${esc(s.name || s.site)}<div class="s">${esc(s.site)} · ${esc(s.kind || '')}</div></td><td>${esc(s.verdict || '')}</td><td class="s">${esc(s.why)}</td></tr>`).join('')}</tbody></table></div>`, 3) : ''}
-      ${moreBlock('Ход работы', `${run.log.length}`, `<div class="s">${run.log.slice().reverse().map(l => `<div>${esc(l.t)} ${esc(l.text)}</div>`).join('')}</div>`, 4, going)}</div>`;
+      ${Object.keys(run.cost || {}).length ? moreBlock('Расход по шагам', rub(run.rub), `<div class="tbl-wrap"><table class="tbl"><tbody>${Object.entries(run.cost).sort((a, b) => b[1] - a[1]).map(([k, v]) =>
+        `<tr><td>${esc(k)}</td><td class="num">${rub(v)}</td></tr>`).join('')}</tbody></table></div>`, 4) : ''}
+      ${moreBlock('Ход работы', `${run.log.length}`, `<div class="s">${run.log.slice().reverse().map(l => `<div>${esc(l.t)} ${esc(l.text)}</div>`).join('')}</div>`, 5, going)}</div>`;
     $('[data-back]', box).addEventListener('click', () => go('sources', null));
     $$('[data-f]', box).forEach(b => b.addEventListener('click', () => { filter = b.dataset.f; detail(box, id); }));
     $('[data-stop]', box)?.addEventListener('click', async e => {

@@ -12,7 +12,8 @@
 Прогоны идут в фоне (loop), по одному. Состояние лежит в donor_runs, страница опрашивает его.
 ИИ: основная модель через dreamn (ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL, DONOR_MODEL), запасная через
 OctavApi (OCTAV_API_KEY, OCTAV_BASE_URL, DONOR_RESERVE_MODEL); обе в формате Anthropic Messages.
-Общий дневной лимит расхода на ИИ и поиск — DONOR_DAILY_USD (по умолчанию $15), на прогон — DONOR_RUN_USD.
+Расход считаем в рублях: ИИ по курсу ЦБ, поиск по прайсу Яндекса. Общий дневной лимит на ИИ и поиск — DONOR_DAILY_RUB
+(по умолчанию 1500 ₽), на прогон — DONOR_RUN_RUB (600 ₽). По шагам расход лежит в state['cost'].
 Проверки «подмены при заходе с рекламы» из v2 здесь нет: на сервере нет браузера.
 """
 from __future__ import annotations
@@ -49,11 +50,15 @@ def env_float(name: str, default: float) -> float:
 
 
 def daily_limit() -> float:
-    return env_float('DONOR_DAILY_USD', 15)
+    return env_float('DONOR_DAILY_RUB', 1500)
 
 
 def run_limit() -> float:
-    return env_float('DONOR_RUN_USD', 6)
+    return env_float('DONOR_RUN_RUB', 600)
+
+
+async def spent_today(pool) -> float:
+    return float(await pool.fetchval('SELECT rub FROM donor_spend WHERE day=$1', date.today()) or 0)
 
 
 class Stopped(Exception):
@@ -255,7 +260,8 @@ class Run:
         self.state = {'cands': [], 'dossiers': {}, 'seen': {}, 'dup': {}, 'crawl': {'queries': [], 'sites': {}}, 'raw': {}, 'summary': ''}
         self.plan = None
         self.log_items: list[dict] = []
-        self.usd = 0.0
+        self.rub = 0.0
+        self.part = 'план'  # шаг, на который пишем расход
         self.searches = 0
         self.stage = ''
         self.provider = 0  # индекс в providers(): после отказа основной идём на запасную до конца прогона
@@ -273,9 +279,9 @@ class Run:
             return
         self._saved = time.monotonic()
         stop = await self.pool.fetchval(
-            """UPDATE donor_runs SET stage=$2, plan=$3::jsonb, state=$4::jsonb, log=$5::jsonb, usd=$6, searches=$7
+            """UPDATE donor_runs SET stage=$2, plan=$3::jsonb, state=$4::jsonb, log=$5::jsonb, rub=$6, searches=$7
                WHERE id=$1 RETURNING stop_requested""", self.id, self.stage, json.dumps(self.plan, ensure_ascii=False),
-            json.dumps(self.state, ensure_ascii=False), json.dumps(self.log_items, ensure_ascii=False), round(self.usd, 4), self.searches)
+            json.dumps(self.state, ensure_ascii=False), json.dumps(self.log_items, ensure_ascii=False), round(self.rub, 2), self.searches)
         if stop:
             raise Stopped('остановлено')
 
@@ -296,18 +302,19 @@ class Run:
         return self._usd_rub
 
     async def budget(self) -> None:
-        spent = float(await self.pool.fetchval('SELECT usd FROM donor_spend WHERE day=$1', date.today()) or 0)
-        if spent >= daily_limit():
-            raise Stopped(f'дневной лимит агента ${daily_limit():g} исчерпан, продолжим завтра')
-        if self.usd >= run_limit():
-            raise Stopped(f'лимит на один прогон ${run_limit():g} исчерпан')
+        if await spent_today(self.pool) >= daily_limit():
+            raise Stopped(f'дневной лимит агента {daily_limit():g} ₽ исчерпан, продолжим завтра')
+        if self.rub >= run_limit():
+            raise Stopped(f'лимит на один прогон {run_limit():g} ₽ исчерпан')
 
-    async def spend(self, usd: float, call: int = 0, search: int = 0) -> None:
-        self.usd += usd
+    async def spend(self, rub: float, call: int = 0, search: int = 0) -> None:
+        self.rub += rub
         self.searches += search
-        await self.pool.execute("""INSERT INTO donor_spend(day, usd, calls, searches) VALUES($1,$2,$3,$4)
-                                   ON CONFLICT(day) DO UPDATE SET usd=donor_spend.usd+EXCLUDED.usd, calls=donor_spend.calls+EXCLUDED.calls,
-                                   searches=donor_spend.searches+EXCLUDED.searches""", date.today(), usd, call, search)
+        cost = self.state.setdefault('cost', {})
+        cost[self.part] = round(cost.get(self.part, 0) + rub, 2)
+        await self.pool.execute("""INSERT INTO donor_spend(day, rub, calls, searches) VALUES($1,$2,$3,$4)
+                                   ON CONFLICT(day) DO UPDATE SET rub=donor_spend.rub+EXCLUDED.rub, calls=donor_spend.calls+EXCLUDED.calls,
+                                   searches=donor_spend.searches+EXCLUDED.searches""", date.today(), rub, call, search)
 
     # --- ИИ
 
@@ -329,7 +336,8 @@ class Run:
                         continue
                     break
                 u = resp.usage
-                await self.spend(((u.input_tokens or 0) * p['price'][0] + (u.output_tokens or 0) * p['price'][1]) / 1e6, call=1)
+                usd = ((u.input_tokens or 0) * p['price'][0] + (u.output_tokens or 0) * p['price'][1]) / 1e6
+                await self.spend(usd * await self.usd_rub(), call=1)
                 if i != self.provider:
                     self.provider = i
                     self.say(f'Основная модель не отвечает, дальше работает запасная ({p["name"]}).')
@@ -390,7 +398,7 @@ class Run:
         try:
             res = await webx.search(self.http, query, webx.region_of(self.brief['city']))
         finally:
-            await self.spend(SEARCH_RUB / await self.usd_rub(), search=1)
+            await self.spend(SEARCH_RUB, search=1)
         for r in res:
             for n, _ in ph.find(r['title'] + ' ' + r['snippet']):
                 self.remember(n, 'yandex.ru/search', 'поиск')
@@ -452,6 +460,7 @@ class Run:
     # --- шаги
 
     async def build_plan(self) -> None:
+        self.part = 'план'
         await self.set_stage('Шаг 1. План поиска: куда звонит покупатель клиента')
         got = {}
 
@@ -534,6 +543,7 @@ class Run:
                 f'Текст главной (начало): {str(s.get("text") or "").replace(chr(10), " ")[:1500]}')
 
     async def analyze_sites(self, sites: list[dict]) -> None:
+        self.part = 'разбор сайтов'
         for i in range(0, len(sites), 5):
             part = sites[i:i + 5]
             self.say('🧠 разбираю сайты: ' + ', '.join(s['host'] for s in part))
@@ -573,6 +583,7 @@ class Run:
 
     async def crawl_stage(self) -> None:
         qs = self.crawl_queries()
+        self.part = 'обход выдачи'
         await self.set_stage(f'Шаг 2. Обход выдачи Яндекса: {len(qs)} запросов')
         sites = self.state['crawl']['sites']
         for item in qs:
@@ -636,6 +647,7 @@ class Run:
         return True
 
     async def find_cands(self, need: int) -> None:
+        self.part = 'поиск кандидатов'
         self.state['find_n'] = self.state.get('find_n', 0) + 1
         await self.set_stage('Шаг 6. Номеров мало: ищу кандидатов вне выдачи (каталоги, 2ГИС, ВК)' if self.state['find_n'] == 1
                              else f'Ещё кандидаты (поиск {self.state["find_n"]})')
@@ -657,6 +669,7 @@ class Run:
                          int(env_float('DONOR_FIND_TURNS', 12)), lambda: bool(fin))
 
     async def dossiers(self, cands: list[dict]) -> None:
+        self.part = 'досье'
         self.say(f'Досье по {len(cands)} кандидатам (по два одновременно)')
         queue = list(cands)
 
@@ -724,6 +737,7 @@ class Run:
         rows = [r for r in self.phone_rows() if r['j']['v'] != 'no' and r['n'] not in self.state['dup']][:int(env_float('DONOR_DUP_CHECKS', 25))]
         if not rows:
             return
+        self.part = 'проверка повторов'
         await self.set_stage(f'Проверка номеров в интернете: не указаны ли они у других ({len(rows)})')
         for r in rows:
             own = [s for s in r['sites'] if s]
@@ -914,9 +928,9 @@ async def finish(pool, run: Run, status: str, error: str | None = None) -> None:
         run.stage = {'stopped': 'Остановлено', 'failed': 'Ошибка'}[status] + (f': {error}' if error else '')
     run.say(run.stage)
     await pool.execute(
-        """UPDATE donor_runs SET status=$2, stage=$3, error=$4, plan=$5::jsonb, state=$6::jsonb, log=$7::jsonb, usd=$8, searches=$9,
+        """UPDATE donor_runs SET status=$2, stage=$3, error=$4, plan=$5::jsonb, state=$6::jsonb, log=$7::jsonb, rub=$8, searches=$9,
            result=$10::jsonb, finished_at=now() WHERE id=$1""", run.id, status, run.stage, error, json.dumps(run.plan, ensure_ascii=False),
-        json.dumps(run.state, ensure_ascii=False), json.dumps(run.log_items, ensure_ascii=False), round(run.usd, 4), run.searches,
+        json.dumps(run.state, ensure_ascii=False), json.dumps(run.log_items, ensure_ascii=False), round(run.rub, 2), run.searches,
         json.dumps(result, ensure_ascii=False))
 
 
@@ -981,16 +995,16 @@ AVITO_DEFAULT = 'Здравствуйте! Удобно обсудить в Те
 async def overview(pool, who) -> dict:
     from . import robot_store
     rows = await pool.fetch(
-        """SELECT id, niche, city, target, status, stage, usd, author_name, author_ext, created_at, finished_at,
+        """SELECT id, niche, city, target, status, stage, rub, author_name, author_ext, created_at, finished_at,
                   (result->>'good')::int AS good, (result->>'live')::int AS live
            FROM donor_runs WHERE client_id=$1 AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 50""", who.client_id)
-    spent = float(await pool.fetchval('SELECT usd FROM donor_spend WHERE day=$1', date.today()) or 0)
+    spent = await spent_today(pool)
     return {'runs': [{'id': r['id'], 'niche': r['niche'], 'city': r['city'], 'target': r['target'], 'status': r['status'], 'stage': r['stage'],
-                      'usd': float(r['usd']), 'author': r['author_name'], 'created_at': r['created_at'].isoformat(),
+                      'rub': float(r['rub']), 'author': r['author_name'], 'created_at': r['created_at'].isoformat(),
                       'finished_at': r['finished_at'].isoformat() if r['finished_at'] else None, 'good': r['good'], 'live': r['live'],
                       'can_manage': mine(r, who)} for r in rows],
             'ready': {'search': webx.search_ready(), 'ai': bool(providers())},
-            'limit': {'day_usd': daily_limit(), 'run_usd': run_limit(), 'spent_usd': round(spent, 2)},
+            'limit': {'day_rub': daily_limit(), 'run_rub': run_limit(), 'spent_rub': round(spent)},
             'avito_text': await robot_store.get_option(pool, avito_key(who.client_id), AVITO_DEFAULT),
             'can_settings': is_privileged(who), 'targets': list(TARGETS)}
 
@@ -1012,9 +1026,8 @@ async def start(pool, who, data: dict) -> dict:
     waiting = await pool.fetchval("SELECT count(*) FROM donor_runs WHERE client_id=$1 AND status IN ('queued','running') AND deleted_at IS NULL", who.client_id)
     if waiting >= MAX_QUEUED:
         raise ValueError(f'Уже идут или ждут {waiting} прогона. Дождитесь, пока закончится хотя бы один.')
-    spent = float(await pool.fetchval('SELECT usd FROM donor_spend WHERE day=$1', date.today()) or 0)
-    if spent >= daily_limit():
-        raise ValueError(f'Дневной лимит агента ${daily_limit():g} исчерпан, продолжим завтра.')
+    if await spent_today(pool) >= daily_limit():
+        raise ValueError(f'Дневной лимит агента {daily_limit():g} ₽ исчерпан, продолжим завтра.')
     rid = await pool.fetchval(
         """INSERT INTO donor_runs(client_id, niche, city, offer, project_client, target, author_tg, author_ext, author_name)
            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id""", who.client_id, niche, text(data.get('city'), 200), text(data.get('offer'), 500),
@@ -1037,7 +1050,7 @@ async def one(pool, who, rid: int) -> dict:
         tmp.brief['remote'] = bool(plan and plan.get('remote'))
         result = tmp.result()
     return {'id': r['id'], 'niche': r['niche'], 'city': r['city'], 'offer': r['offer'], 'client': r['project_client'], 'target': r['target'],
-            'status': r['status'], 'stage': r['stage'], 'error': r['error'], 'usd': float(r['usd']), 'searches': r['searches'],
+            'status': r['status'], 'stage': r['stage'], 'error': r['error'], 'rub': float(r['rub']), 'searches': r['searches'], 'cost': state.get('cost') or {},
             'author': r['author_name'], 'created_at': r['created_at'].isoformat(),
             'plan': plan, 'log': json.loads(r['log']) if r['log'] else [],
             'queries': [{'q': q['q'], 'seg': q['seg'], 'results': len(q.get('results') or []),
