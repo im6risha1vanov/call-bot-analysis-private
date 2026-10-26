@@ -42,8 +42,8 @@ def templates() -> dict[str, str]:
     return _templates
 
 
-def config() -> dict:
-    return {'ourEmail': os.getenv('CONTRACT_OUR_EMAIL', OUR_EMAIL), 'innLookup': bool(dadata_key()),
+def config(our_email: str | None = None) -> dict:
+    return {'ourEmail': our_email or OUR_EMAIL, 'innLookup': bool(dadata_key()),
             'dsTariffs': DS_TARIFFS, 'templates': templates()}
 
 

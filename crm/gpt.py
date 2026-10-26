@@ -70,14 +70,14 @@ def owner_of(who) -> tuple[str, str | None, str | None]:
 
 
 async def client_id_of(pool, who) -> int:
-    if who.actor is not None:
-        return who.actor.client_id
-    return await pool.fetchval('SELECT id FROM clients WHERE processing_enabled ORDER BY id LIMIT 1')
+    if who.company is None:
+        raise Forbidden('Войдите в CRM заново.')
+    return who.company
 
 
 def spend_scope(who) -> str | None:
-    """Лимит расходов только у клиентов, по их листу."""
-    return f'client:{who.client_key}' if who.role == 'client' else None
+    """Свой лимит у клиентов компании, по их листу; общий лимит компании считает crm/company.py."""
+    return f'client:{who.company}:{who.client_key}' if who.role == 'client' else None
 
 
 async def robot_on(pool, who) -> bool:
@@ -235,11 +235,11 @@ async def run_tool(pool, who, name: str, args: dict) -> str:
     from . import ask, cabinet, deals, overview, people, robot_store
     args = args if isinstance(args, dict) else {}
     if name == 'my_cabinet' and who.role == 'client':
-        return trim(cabinet_view(await cabinet.cabinet(who.client_key)))
+        return trim(cabinet_view(await cabinet.cabinet(await cabinet.source_of(pool, who.company), who.client_key)))
     if name == 'client_cabinet' and who.role == 'director':
-        return trim(cabinet_view(await cabinet.cabinet(str(args.get('client') or ''))))
+        return trim(cabinet_view(await cabinet.cabinet(await cabinet.source_of(pool, who.company), str(args.get('client') or ''))))
     if name == 'callcenter' and who.role == 'director':
-        d = await cabinet.callcenter()
+        d = await cabinet.callcenter(await cabinet.source_of(pool, who.company))
         clients = sorted(({**x, 'дозвон, %': pct(x['reached'], x['called'])} for x in d['clients']),
                          key=lambda x: -(x['дозвон, %'] or 0))
         return trim({'итого': {**d['total'], 'дозвон, %': pct(d['total'].get('reached', 0), d['total'].get('called', 0))},
@@ -471,6 +471,9 @@ async def add_spend(pool, scope: str, rub: float) -> None:
 
 
 async def over_limit(pool, who) -> bool:
+    from . import company
+    if await company.ai_over_limit(pool, who.company):
+        return True
     scope = spend_scope(who)
     if scope is None:
         return False

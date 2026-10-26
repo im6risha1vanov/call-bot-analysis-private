@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import os
+import urllib.parse
 from datetime import date, time
 from pathlib import Path
 
@@ -21,8 +22,8 @@ import asyncpg  # noqa: E402
 from aiohttp import web  # noqa: E402
 
 import mango_client  # noqa: E402
-from tools import Forbidden, is_privileged  # noqa: E402
-from . import accounts, ask as asking, auth, automation_agent, automations, cabinet, contracts, deals, gpt, journal, overview, people, recording, reviews, sources, staff, store, training  # noqa: E402
+from tools import Forbidden, home_client_id, is_privileged  # noqa: E402
+from . import accounts, ask as asking, auth, automation_agent, automations, cabinet, callcenter_db, company, contracts, deals, gpt, journal, overview, people, platform, recording, reviews, sources, staff, store, training  # noqa: E402
 from . import prompts as prompt_mode, robot, robot_api, robot_prices, robot_runner, robot_store  # noqa: E402
 from review import store as review_store  # noqa: E402
 from .dial import dial  # noqa: E402
@@ -31,6 +32,7 @@ log = logging.getLogger('crm')
 STATIC = Path(__file__).resolve().parent / 'static'
 COOKIE = 'crm_session'
 TEST_COOKIE = 'crm_test'
+BACK_COOKIE = 'crm_back'  # своя сессия, пока смотрим чужую компанию (вкладка «Компании»)
 POOL = web.AppKey('pool', asyncpg.Pool)
 SECURE_COOKIE = os.getenv('CRM_COOKIE_SECURE', '1') != '0'
 HEADERS = {
@@ -62,6 +64,14 @@ async def guard(request: web.Request, handler):
         who = await auth.viewer_for(request.app[POOL], request.cookies.get(COOKIE))
         if who is not None and who.test:
             response = fail(403, VIEW_ONLY)
+            response.headers.update(HEADERS)
+            return response
+    module = company.module_of(request.path)
+    if module:
+        # Модуль не подключён компании: его адреса закрыты для всех её входов.
+        who = await auth.viewer_for(request.app[POOL], request.cookies.get(COOKIE))
+        if who is not None and not await company.has_module(request.app[POOL], who.company, module):
+            response = fail(403, f'Модуль «{company.MODULES[module]}» не подключён.')
             response.headers.update(HEADERS)
             return response
     try:
@@ -198,6 +208,22 @@ async def test_exit(request):
     raise response
 
 
+async def support_exit(request):
+    """Из чужой компании обратно в свою сессию."""
+    who = await auth.viewer_for(request.app[POOL], request.cookies.get(COOKIE))
+    back = request.cookies.get(BACK_COOKIE)
+    if who is not None and who.support:
+        await auth.logout(request.app[POOL], request.cookies.get(COOKIE))
+    response = web.HTTPFound('/#companies')
+    if back and await auth.viewer_for(request.app[POOL], back) is not None:
+        response.set_cookie(COOKIE, back, max_age=int(auth.PERSONAL_TTL.total_seconds()), httponly=True,
+                            secure=SECURE_COOKIE, samesite='Lax', path='/')
+    else:
+        response.del_cookie(COOKIE, path='/')
+    response.del_cookie(BACK_COOKIE, path='/')
+    raise response
+
+
 async def logout_page(request):
     await auth.logout(request.app[POOL], request.cookies.get(COOKIE))
     response = web.HTTPFound('/')
@@ -223,10 +249,14 @@ async def api_logout(request):
 async def api_me(request):
     who = await viewer(request)
     pool = request.app[POOL]
+    firm = await company.info(pool, who.company)
+    cc_mode = ('sheet' if firm['settings'].get('callcenter_sheet') else 'db') if 'callcenter' in firm['modules'] else None
+    firm = {'company': firm['name'], 'modules': firm['modules'], 'support': who.support, 'callcenter_mode': cc_mode,
+            'platform': who.platform and not who.support and firm['home']}
     if who.role == 'client':
         return web.json_response({'name': who.client_key, 'role': 'client', 'test': who.test, 'client': who.client_key,
-                                  'privileged': False, 'can_dial': False, 'team': [],
-                                  'robot': who.client_key in await robot_store.enabled_clients(pool)})
+                                  'privileged': False, 'can_dial': False, 'team': [], **firm,
+                                  'robot': 'robot' in firm['modules'] and await robot_store.company_owner(pool, who) == '' and who.client_key in await robot_store.enabled_clients(pool)})
     a = who.actor
     name = await pool.fetchval('SELECT full_name FROM employees WHERE client_id=$1 AND telegram_user_id=$2 LIMIT 1',
                                a.client_id, a.telegram_user_id) if a.telegram_user_id else None
@@ -240,7 +270,7 @@ async def api_me(request):
         'ext': a.extension if str(a.extension or '').isdigit() else None,
         'can_dial': can_dial, 'privileged': privileged, 'readonly': who.test,
         'team': await store.team(pool, a.client_id) if privileged else [],
-        'outcomes': store.OUTCOMES, 'needs_date': sorted(store.NEEDS_DATE), 'lead_status': store.LEAD_STATUS,
+        'outcomes': store.OUTCOMES, 'needs_date': sorted(store.NEEDS_DATE), 'lead_status': store.LEAD_STATUS, **firm,
     })
 
 
@@ -248,9 +278,9 @@ async def api_test_options(request):
     if not auth.test_key_ok(request.query.get('key')):
         raise web.HTTPNotFound()
     pool = request.app[POOL]
-    client_id = await pool.fetchval('SELECT id FROM clients WHERE processing_enabled ORDER BY id LIMIT 1')
+    client_id = await home_client_id(pool)
     try:
-        clients = [c['name'] for c in (await cabinet.summary())['clients']]
+        clients = await cabinet.client_names(pool, client_id)
     except Exception:
         log.exception('список клиентов колл-центра не загрузился')
         clients = []
@@ -264,7 +294,7 @@ async def api_test_login(request):
     role = str(data.get('role') or '')
     client_key = None
     if role == 'client':
-        names = [c['name'] for c in (await cabinet.summary())['clients']]
+        names = await cabinet.client_names(request.app[POOL], await home_client_id(request.app[POOL]))
         client_key = str(data.get('client') or '')
         if client_key not in names:
             raise ValueError('Такого клиента нет.')
@@ -284,8 +314,16 @@ def doc_path(value) -> str:
     return path
 
 
+async def home_director(request) -> auth.Viewer:
+    """Документы старой страницы директора (crm_docs) — только нашей компании."""
+    who = await director(request)
+    if who.company != await home_client_id(request.app[POOL]):
+        raise Forbidden('Раздел недоступен.')
+    return who
+
+
 async def api_docs(request):
-    await director(request)
+    await home_director(request)
     pool = request.app[POOL]
     if 'path' in request.query:
         row = await pool.fetchval('SELECT data FROM crm_docs WHERE path=$1', doc_path(request.query['path']))
@@ -304,7 +342,7 @@ def merge(old: dict, new: dict) -> dict:
 
 
 async def api_docs_write(request):
-    await director(request)
+    await home_director(request)
     data = await body(request)
     path, op, value = doc_path(data.get('path')), data.get('op'), data.get('data')
     pool = request.app[POOL]
@@ -325,26 +363,81 @@ async def api_docs_write(request):
 
 async def api_cabinet(request):
     who = await viewer(request)
-    if who.role == 'client':
-        name = who.client_key
-    elif who.role == 'director':
-        name = request.query.get('client')
-        if not name:
-            return web.json_response({'clients': (await cabinet.summary())['clients']})
-    else:
+    if who.role not in ('client', 'director'):
         raise Forbidden('Кабинет клиента недоступен.')
     try:
-        return web.json_response(await cabinet.cabinet(name))
+        sheet = await cabinet.source_of(request.app[POOL], who.company)
+        if who.role == 'client':
+            name = who.client_key
+        else:
+            name = request.query.get('client')
+            if not name:
+                return web.json_response({'clients': (await cabinet.summary(sheet))['clients']})
+        return web.json_response(await cabinet.cabinet(sheet, name))
     except LookupError as exc:
         raise ValueError(str(exc))
 
 
 async def api_callcenter(request):
-    await director(request)
+    who = await director(request)
     try:
-        return web.json_response(await cabinet.callcenter())
+        return web.json_response(await cabinet.callcenter(await cabinet.source_of(request.app[POOL], who.company)))
     except LookupError as exc:
         raise ValueError(str(exc))
+
+
+async def cc_db(request, roles=('director',)):
+    """Колл-центр в базе (без Google Таблицы): кто пишет и его компания."""
+    who = await viewer(request)
+    if who.role not in roles or who.actor is None:
+        raise Forbidden('Раздел недоступен.')
+    try:
+        src = await cabinet.source_of(request.app[POOL], who.company)
+    except LookupError as exc:
+        raise ValueError(str(exc))
+    if src.mode != 'db':
+        raise ValueError('Колл-центр компании ведётся в Google Таблице: номера и звонки меняются там.')
+    return who
+
+
+async def api_cc_work(request):
+    who = await cc_db(request, ('director', 'manager'))
+    pool = request.app[POOL]
+    return web.json_response({**await callcenter_db.work(pool, who.company, request.query.get('client') or None),
+                              'prices': await callcenter_db.prices(pool, who.company)})
+
+
+async def api_cc_client_add(request):
+    who = await cc_db(request)
+    return web.json_response(await callcenter_db.add_client(request.app[POOL], who.company, (await body(request)).get('name')))
+
+
+async def api_cc_leads_add(request):
+    who = await cc_db(request)
+    data = await body(request)
+    return web.json_response(await callcenter_db.add_leads(request.app[POOL], who.company, str(data.get('client') or ''),
+                                                           str(data.get('text') or ''), data.get('tag')))
+
+
+async def api_cc_attempt(request):
+    who = await cc_db(request, ('director', 'manager'))
+    data = await body(request)
+    return web.json_response(await callcenter_db.attempt(
+        request.app[POOL], who.company, int_id(request.match_info['id']), str(data.get('result') or ''),
+        data.get('comment'), data.get('remind'), who.actor.extension))
+
+
+async def api_cc_prices(request):
+    who = await cc_db(request)
+    return web.json_response(await callcenter_db.save_prices(request.app[POOL], who.company, await body(request)))
+
+
+async def api_cc_export(request):
+    who = await cc_db(request)
+    name = str(request.query.get('client') or '')
+    text = await callcenter_db.export_csv(request.app[POOL], who.company, name)
+    return web.Response(body=text.encode('utf-8'), content_type='text/csv', charset='utf-8', headers={
+        'Content-Disposition': "attachment; filename*=UTF-8''" + urllib.parse.quote(name + '.csv')})
 
 
 async def api_recording(request):
@@ -402,7 +495,7 @@ async def api_access(request):
     who = await director(request)
     pool = request.app[POOL]
     try:
-        clients = [c['name'] for c in (await cabinet.summary())['clients']]
+        clients = await cabinet.client_names(pool, who.company)
     except Exception:
         log.exception('список клиентов колл-центра не загрузился')
         clients = []
@@ -417,7 +510,7 @@ async def api_access_create(request):
     pool = request.app[POOL]
     data = await body(request)
     role = str(data.get('role') or '')
-    if role == 'client' and str(data.get('client') or '') not in [c['name'] for c in (await cabinet.summary())['clients']]:
+    if role == 'client' and str(data.get('client') or '') not in await cabinet.client_names(pool, who.company):
         raise ValueError('Такого клиента нет.')
     login = str(data.get('login') or '').strip()
     if not login:
@@ -447,6 +540,51 @@ async def api_login(request):
     response = web.json_response({'ok': True, 'role': role})
     response.set_cookie(COOKIE, session, max_age=int(auth.PERSONAL_TTL.total_seconds()), httponly=True,
                         secure=SECURE_COOKIE, samesite='Lax', path='/')
+    return response
+
+
+async def platform_viewer(request) -> auth.Viewer:
+    who = await viewer(request)
+    await platform.require(request.app[POOL], who)
+    return who
+
+
+async def api_companies(request):
+    await platform_viewer(request)
+    return web.json_response({'companies': await platform.companies(request.app[POOL]),
+                              'modules': company.MODULES, 'default_modules': company.DEFAULT_MODULES})
+
+
+async def api_company_create(request):
+    who = await platform_viewer(request)
+    return web.json_response(await platform.create(request.app[POOL], who, await body(request)))
+
+
+def company_id(request) -> int:
+    try:
+        return int(request.match_info['id'])
+    except ValueError:
+        raise ValueError('Такой компании нет.')
+
+
+async def api_company_update(request):
+    who = await platform_viewer(request)
+    return web.json_response(await platform.update(request.app[POOL], who, company_id(request), await body(request)))
+
+
+async def api_company_mango(request):
+    who = await platform_viewer(request)
+    return web.json_response(await platform.connect_mango(request.app[POOL], who, company_id(request), await body(request)))
+
+
+async def api_company_enter(request):
+    """Посмотреть компанию её глазами (только просмотр); своя сессия ждёт в BACK_COOKIE."""
+    who = await platform_viewer(request)
+    session = await platform.support_session(request.app[POOL], who, company_id(request))
+    response = web.json_response({'go': '/'})
+    response.set_cookie(BACK_COOKIE, request.cookies.get(COOKIE), max_age=4 * 3600, httponly=True,
+                        secure=SECURE_COOKIE, samesite='Lax', path='/')
+    response.set_cookie(COOKIE, session, max_age=4 * 3600, httponly=True, secure=SECURE_COOKIE, samesite='Lax', path='/')
     return response
 
 
@@ -610,10 +748,32 @@ async def api_presentation_link(request):
                                                            await author_name(pool, who)))
 
 
+def peer_id(request) -> int:
+    try:
+        return int(request.match_info['peer'])
+    except ValueError:
+        raise web.HTTPNotFound()
+
+
+async def api_tgchat(request):
+    """Переписка рабочего Telegram с клиентом: для карточки сделки."""
+    who = await actor(request)
+    return web.json_response(await deals.chat_messages(request.app[POOL], who, peer_id(request)))
+
+
+async def api_tgchat_link(request):
+    """«Привязать к клиенту» для переписки Telegram: номер клиента."""
+    who = await actor(request, write=True)
+    pool = request.app[POOL]
+    data = await body(request)
+    return web.json_response(await deals.link_chat(pool, who, peer_id(request), str(data.get('phone') or ''),
+                                                   await author_name(pool, who)))
+
+
 # Генератор договоров (static/contracts/): пути — те, что ждёт страница генератора.
 async def api_contracts_config(request):
-    await actor(request)
-    return web.json_response(contracts.config())
+    who = await actor(request)
+    return web.json_response(contracts.config(await company.setting(request.app[POOL], who.client_id, 'contract_email')))
 
 
 async def api_contracts_next(request):
@@ -722,46 +882,53 @@ async def api_prompt_use(request):
                                                    str(data.get('scope') or '')))
 
 
+async def robot_director(request) -> auth.Viewer:
+    """Голос и настройки нашего робота: только директор нашей компании."""
+    who = await director(request)
+    await robot_store.require_home(request.app[POOL], who)
+    return who
+
+
 async def api_robot(request):
-    return web.json_response(await robot.overview(await director(request), request.app[POOL]))
+    return web.json_response(await robot.overview(await robot_director(request), request.app[POOL]))
 
 
 async def api_robot_calls(request):
-    return web.json_response({'items': await robot.calls(await director(request))})
+    return web.json_response({'items': await robot.calls(await robot_director(request))})
 
 
 async def api_robot_settings(request):
-    who = await director(request)
+    who = await robot_director(request)
     return web.json_response(await robot.save_settings(who, await body(request), request.app[POOL]))
 
 
 async def api_robot_preview(request):
-    who = await director(request)
+    who = await robot_director(request)
     pcm, rate = await robot.preview(who, await body(request))
     return web.Response(body=pcm, content_type='application/octet-stream', headers={'X-Rate': str(rate)})
 
 
 async def api_robot_voices(request):
-    who = await director(request)
+    who = await robot_director(request)
     q = request.query
     return web.json_response(await robot.voices_search(who, q.get('q', ''), q.get('gender', ''), q.get('use', ''),
                                                        q.get('page', '0')))
 
 
 async def api_robot_voice_add(request):
-    who = await director(request)
+    who = await robot_director(request)
     return web.json_response(await robot.voices_add(who, await body(request)))
 
 
 async def api_robot_voice_sample(request):
-    who = await director(request)
+    who = await robot_director(request)
     audio, kind = await robot.voices_preview(who, request.query.get('url', ''))
     return web.Response(body=audio, content_type=kind.split(';')[0] if kind.startswith('audio/') else 'audio/mpeg')
 
 
 async def api_robot_voice_clone(request):
     """Записи для клона приходят формой multipart; читаем сами, общий предел запроса (512 КБ) для них мал."""
-    who = await director(request)
+    who = await robot_director(request)
     if not request.content_type.startswith('multipart/'):
         raise ValueError('Неверный запрос.')
     if request.content_length and request.content_length > robot.CLONE_MAX_BYTES:
@@ -783,7 +950,7 @@ async def api_robot_voice_clone(request):
 
 
 async def api_robot_call(request):
-    who = await director(request)
+    who = await robot_director(request)
     data = await body(request)
     return web.json_response(await robot.call(who, data.get('phone'), data.get('operator')))
 
@@ -937,6 +1104,7 @@ def build(pool) -> web.Application:
     app.router.add_get('/p/{token}', personal_page)
     app.router.add_get('/test-exit', test_exit)
     app.router.add_get('/logout', logout_page)
+    app.router.add_get('/support-exit', support_exit)
     app.router.add_get('/director', old_director)
     app.router.add_get('/director/{name}', old_director)
     app.router.add_static('/static/', STATIC, show_index=False)
@@ -948,6 +1116,12 @@ def build(pool) -> web.Application:
     app.router.add_post('/api/docs', api_docs_write)
     app.router.add_get('/api/cabinet', api_cabinet)
     app.router.add_get('/api/callcenter', api_callcenter)
+    app.router.add_get('/api/callcenter/work', api_cc_work)
+    app.router.add_get('/api/callcenter/export', api_cc_export)
+    app.router.add_post('/api/callcenter/clients', api_cc_client_add)
+    app.router.add_post('/api/callcenter/leads', api_cc_leads_add)
+    app.router.add_post('/api/callcenter/leads/{id}/attempt', api_cc_attempt)
+    app.router.add_post('/api/callcenter/prices', api_cc_prices)
     app.router.add_get('/api/recording/{id}', api_recording)
     app.router.add_get('/api/review/{id}', api_review)
     app.router.add_get('/api/reports', api_reports)
@@ -966,10 +1140,17 @@ def build(pool) -> web.Application:
     app.router.add_post('/api/access/{id}/account', api_access_account)
     app.router.add_post('/api/login', api_login)
     app.router.add_get('/api/staff', api_staff)
+    app.router.add_get('/api/platform/companies', api_companies)
+    app.router.add_post('/api/platform/companies', api_company_create)
+    app.router.add_post('/api/platform/companies/{id}', api_company_update)
+    app.router.add_post('/api/platform/companies/{id}/mango', api_company_mango)
+    app.router.add_post('/api/platform/companies/{id}/enter', api_company_enter)
     app.router.add_get('/api/person', api_person)
     app.router.add_get('/api/deals', api_deals)
     app.router.add_get('/api/deals/{phone}', api_deal)
     app.router.add_post('/api/deals/{phone}/event', api_deal_event)
+    app.router.add_get('/api/tgchats/{peer}', api_tgchat)
+    app.router.add_post('/api/tgchats/{peer}/link', api_tgchat_link)
     app.router.add_get('/api/sources/selections', api_sources)
     app.router.add_post('/api/sources/selections', api_source_save)
     app.router.add_get('/api/sources/selections/{id}', api_source)

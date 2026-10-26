@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass
 from datetime import date, datetime
 from datetime import time as dtime
@@ -57,6 +58,16 @@ async def resolve_actor(pool: asyncpg.Pool, telegram_user_id: int) -> Actor | No
         return None
     return Actor(telegram_user_id=telegram_user_id, client_id=row["client_id"],
                  role=row["role"], extension=row["extension"])
+
+
+async def home_client_id(pool: asyncpg.Pool) -> int | None:
+    """Наша компания (Averon). К ней относится всё, что пока настраивается одним на сервер в .env:
+    таблица колл-центра, презентации, рабочий Telegram, тестовая ссылка CRM. Номер можно задать
+    CRM_HOME_COMPANY, иначе берём первую рабочую компанию. Данные других компаний сюда не попадают."""
+    configured = os.getenv("CRM_HOME_COMPANY")
+    if configured:
+        return int(configured)
+    return await pool.fetchval("SELECT id FROM clients WHERE processing_enabled ORDER BY id LIMIT 1")
 
 
 def is_privileged(actor: Actor) -> bool:

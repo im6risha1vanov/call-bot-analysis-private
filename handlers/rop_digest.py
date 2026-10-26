@@ -73,7 +73,7 @@ async def _digest(pool: asyncpg.Pool, client_id: int, kind: str, header: str, ac
     standard = prompts.default(kind)
     groups: dict[str, list[tuple[Actor, str, int | None]]] = {}
     for actor in actors:
-        body, source, version = await prompts.resolve(pool, kind, actor.telegram_user_id)
+        body, source, version = await prompts.resolve(pool, kind, actor.telegram_user_id, actor.client_id)
         groups.setdefault(body, []).append((actor, source, version))
     texts: dict[str, str] = {}
     failed: dict[str, str] = {}

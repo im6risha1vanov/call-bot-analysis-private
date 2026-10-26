@@ -1,7 +1,8 @@
 """Кабинет голосового робота: операторы, контакты, стоп-лист, кампании, звонки, аналитика.
 
 Как у Соловья, но на нашем роботе. Кабинеты разделены по owner: '' — наш
-(директор), иначе лист клиента в «Прозвон лидов». Клиенту кабинет открывается
+(директор), иначе лист клиента в «Прозвон лидов». У другой компании CRM свой кабинет
+'#<номер компании>' (crm/company.py, модуль «Робот»): как у клиента, без нашей себестоимости. Клиенту кабинет открывается
 платной опцией: директор включает его в «Настройках» и задаёт цену минуты,
 клиент видит стоимость своих разговоров по этой цене (посекундно).
 
@@ -87,10 +88,34 @@ async def enabled_clients(pool) -> list[str]:
     return list(await get_option(pool, 'clients', []))
 
 
+async def company_owner(pool, who) -> str:
+    """'' — наша компания (её кабинеты по листам клиентов), иначе '#N' — единственный кабинет компании N."""
+    from tools import home_client_id
+    return '' if who.company == await home_client_id(pool) else f'#{who.company}'
+
+
+def company_of_owner(owner: str) -> int | None:
+    return int(owner[1:]) if re.fullmatch(r'#\d+', owner or '') else None
+
+
+async def require_home(pool, who) -> None:
+    """Голос, себестоимость и клиенты с роботом — настройки нашего робота, у других компаний их нет."""
+    if await company_owner(pool, who):
+        raise Forbidden('Раздел недоступен.')
+
+
 async def owner_for(pool, who, requested=None, write: bool = False) -> str:
-    """Чей кабинет открыт. Клиенту — только свой и только если опция включена; директору — любой."""
+    """Чей кабинет открыт. Клиенту — только свой и только если опция включена; директору — любой.
+    Другая компания: у директора её кабинет, у её клиентов робота пока нет."""
     if write and who.test:
         raise Forbidden(READONLY)
+    own = await company_owner(pool, who)
+    if own:
+        if who.role != 'director':
+            raise Forbidden(PAID_OPTION if who.role == 'client' else 'Раздел директора.')
+        if str(requested or '').strip():
+            raise Forbidden('Кабинет робота этому клиенту не включён.')
+        return own
     if who.role == 'client':
         if not who.client_key or who.client_key not in await enabled_clients(pool):
             raise Forbidden(PAID_OPTION)
@@ -106,10 +131,11 @@ async def owner_for(pool, who, requested=None, write: bool = False) -> str:
 async def state(pool, who) -> dict:
     """С чего начинается страница: чей кабинет, что можно, справочники."""
     director = who.role == 'director'
-    clients = await enabled_clients(pool)
+    home = not await company_owner(pool, who)
+    clients = await enabled_clients(pool) if home else []
     enabled = director or (who.client_key in clients)
-    return {'role': who.role, 'enabled': enabled, 'paid_note': None if enabled else PAID_OPTION,
-            'owners': ([{'id': '', 'name': 'Averon (наш)'}] + [{'id': c, 'name': c} for c in clients]) if director else [],
+    return {'role': who.role, 'enabled': enabled, 'paid_note': None if enabled else PAID_OPTION, 'home': home,
+            'owners': ([{'id': '', 'name': 'Averon (наш)'}] + [{'id': c, 'name': c} for c in clients]) if director and home else [],
             'readonly': who.test, 'outcomes': OUTCOMES, 'statuses': STATUSES, 'timezones': TIMEZONES,
             'recording_days': RECORDING_DAYS}
 
@@ -119,6 +145,7 @@ async def save_options(pool, who, data: dict) -> dict:
         raise Forbidden('Раздел директора.')
     if who.test:
         raise Forbidden(READONLY)
+    await require_home(pool, who)
     if 'prices' in data:  # руками задаётся только цена минуты для клиентов, себестоимость считается сама
         got = data['prices'] if isinstance(data['prices'], dict) else {}
         clean = {}
@@ -140,6 +167,11 @@ async def save_options(pool, who, data: dict) -> dict:
 # ------------------------------------------------------------------ операторы
 
 
+def is_root(owner: str) -> bool:
+    """Кабинет директора компании (не клиента): ему видны встроенные операторы как образцы для копии."""
+    return owner == '' or company_of_owner(owner) is not None
+
+
 def _read(path) -> dict:
     return tomllib.loads(path.read_text(encoding='utf-8'))
 
@@ -152,9 +184,10 @@ def operators(owner: str) -> list[dict]:
             op = vop.load(op_id)
         except vop.OperatorError:
             continue
-        if op.owner != owner and not (owner == '' and vop.builtin(op_id)):
+        if op.owner != owner and not (is_root(owner) and vop.shipped(op_id)):
             continue
-        out.append({'id': op.id, 'name': op.name, 'company': op.company, 'goal': op.goal, 'builtin': vop.builtin(op_id),
+        out.append({'id': op.id, 'name': op.name, 'company': op.company, 'goal': op.goal, 'builtin': vop.shipped(op_id),
+                    'edited': vop.shipped(op_id) and not vop.builtin(op_id),
                     'plan': len(op.plan), 'rules': len(op.rules), 'facts': len(op.facts)})
     return out
 
@@ -165,18 +198,22 @@ def _owned(op_id: str, owner: str, write: bool = False):
     if path is None:
         raise ValueError('Нет такого оператора.')
     data = _read(path)
-    builtin = vop.builtin(op_id)
-    if (data.get('owner') or '') != owner and not (owner == '' and builtin):
+    builtin = vop.shipped(op_id)
+    if (data.get('owner') or '') != owner and not (is_root(owner) and builtin):
         raise Forbidden('Это оператор другого кабинета.')
+    if write and builtin and owner:
+        raise ValueError('Встроенный оператор общий для всех компаний: сделайте копию и правьте её.')
     if write and builtin:
-        raise ValueError('Встроенный оператор не правится. Сделайте копию и правьте её.')
+        # встроенного правит только директор (кабинеты клиентов их не видят): правка ложится рядом под тем же id
+        path = vop.EXTRA_DIR / f'{op_id}.toml'
     return path, data, builtin
 
 
 def operator(owner: str, op_id: str) -> dict:
+    from voice import operator as vop
     _, data, builtin = _owned(op_id, owner)
     fields = data.get('fields') or {}
-    return {'id': op_id, 'builtin': builtin, **{k: data.get(k, '') for k in TEXT_FIELDS},
+    return {'id': op_id, 'builtin': builtin, 'edited': builtin and not vop.builtin(op_id), **{k: data.get(k, '') for k in TEXT_FIELDS},
             **{k: list(data.get(k) or []) for k in LIST_FIELDS},
             'fields': [{'key': k, 'text': v} for k, v in fields.items()], 'max_items': 10}
 
@@ -211,8 +248,13 @@ def save_operator(owner: str, data: dict, op_id: str | None = None, copy_from: s
         if not key.isidentifier() or key in fields:
             key = f'f{i + 1}'
         fields[key] = text
-    # быстрые ответы привязаны к фразам оператора: если приветствие или план поменялись, они уже не к месту
-    if base.get('quick') and (new.get('greeting') != base.get('greeting') or new.get('plan') != base.get('plan')):
+    # быстрые ответы копия встроенного оператора берёт у него при каждом звонке (voice.operator._builtin_quick),
+    # своих не храним: так до неё доходят новые заготовки
+    if copy_from and vop.shipped(copy_from):
+        new['copy_of'] = copy_from
+    if new.get('copy_of') or vop.shipped(op_id):
+        new.pop('quick', None)
+    elif base.get('quick') and (new.get('greeting') != base.get('greeting') or new.get('plan') != base.get('plan')):
         new.pop('quick', None)
     if owner:
         new['owner'] = owner
@@ -242,7 +284,14 @@ def _human_error(text: str) -> str:
 
 
 async def delete_operator(pool, owner: str, op_id: str) -> None:
-    path, _, _ = _owned(op_id, owner, write=True)
+    """Свой оператор удаляем, у встроенного удаляем правку из CRM: он снова как в репозитории."""
+    from voice import operator as vop
+    path, _, builtin = _owned(op_id, owner, write=True)
+    if builtin:
+        if not path.is_file():
+            raise ValueError('Встроенный оператор не правили: возвращать нечего.')
+        path.unlink()
+        return
     if await pool.fetchval("SELECT 1 FROM robot_campaigns WHERE operator=$1 AND status IN ('running','paused')", op_id):
         raise ValueError('Оператор работает в кампании. Сначала завершите её.')
     path.unlink()
@@ -374,11 +423,12 @@ async def upload_contacts(pool, owner: str, data: dict) -> dict:
     return {**result, 'skipped': bad}
 
 
-async def sheet_tabs(who) -> list[str]:
-    """Листы «Прозвон лидов», откуда можно взять номера. Клиенту только его лист."""
-    from . import gsheets
-    sheet = gsheets.leads_sheet()
-    if not sheet:
+async def sheet_tabs(pool, who) -> list[str]:
+    """Листы таблицы колл-центра компании, откуда можно взять номера. Клиенту только его лист."""
+    from . import cabinet, gsheets
+    try:
+        sheet = await cabinet.sheet_of(pool, who.company)
+    except LookupError:
         return []
     if who.role == 'client':
         return [who.client_key]
@@ -390,12 +440,13 @@ async def sheet_tabs(who) -> list[str]:
 
 
 async def sheet_contacts(pool, who, owner: str, tab: str) -> dict:
-    from . import gsheets
-    sheet = gsheets.leads_sheet()
-    if not sheet:
-        raise ValueError('Таблица «Прозвон лидов» не подключена.')
+    from . import cabinet, gsheets
+    try:
+        sheet = await cabinet.sheet_of(pool, who.company)
+    except LookupError:
+        raise ValueError('Таблица колл-центра не подключена.')
     tab = str(tab or '').strip()
-    if tab not in await sheet_tabs(who):
+    if tab not in await sheet_tabs(pool, who):
         raise ValueError('Такого листа нет.')
     rows = await gsheets.values(sheet, "'" + tab.replace("'", "''") + "'!A1:Z20000")
     contacts, bad = contacts_from_rows(rows)
@@ -618,7 +669,7 @@ async def calls(pool, who, owner: str, f: dict, limit: int = 500) -> dict:
     where, args = _filters(owner, f)
     rows = await pool.fetch(f'SELECT * FROM robot_calls WHERE {where} ORDER BY at DESC LIMIT {int(limit)}', *args)
     p = await prices(pool)
-    client = who.role == 'client'
+    client = who.role == 'client' or company_of_owner(owner) is not None  # платит по цене минуты, нашу себестоимость не видит
     names = {r['id']: r['name'] for r in await pool.fetch('SELECT id, name FROM robot_campaigns WHERE owner=$1', owner)}
     cutoff = datetime.now(timezone.utc) - timedelta(days=RECORDING_DAYS)
     data = {r['call_id']: json.loads(r['data'] or '{}') for r in rows}
@@ -660,7 +711,8 @@ async def analytics(pool, who, owner: str, f: dict) -> dict:
     leads = sum(r['outcome'] == 'interested' for r in rows)
     cost = sum(call_cost(r, p) for r in rows)
     charge = client_charge(sum(r['duration_s'] for r in rows), p, owner)
-    if who.role == 'client':
+    payer = who.role == 'client' or company_of_owner(owner) is not None
+    if payer:
         cost = charge
     days: dict[str, dict] = {}
     for r in rows:
@@ -670,14 +722,14 @@ async def analytics(pool, who, owner: str, f: dict) -> dict:
         d['reached'] += r['outcome'] != 'ndz'
         d['leads'] += r['outcome'] == 'interested'
     ends = {key: sum(r['outcome'] == key for r in rows) for key in OUTCOMES}
-    priced = cost is not None and (who.role == 'client' or any(p[key] for key in COST_KEYS))
+    priced = cost is not None and (payer or any(p[key] for key in COST_KEYS))
     out = {'total': total, 'reached': reached, 'leads': leads,
            'dial_rate': round(reached / total * 100, 1) if total else 0, 'conversion': round(leads / total * 100, 1) if total else 0,
            'minutes': round(sum(r['duration_s'] for r in rows) / 60, 1), 'priced': priced,
            'cost': round(cost or 0, 2), 'lead_cost': round(cost / leads, 2) if leads and cost is not None else None,
            'days': sorted(days.values(), key=lambda d: d['day']),
            'ends': [{'key': key, 'name': OUTCOMES[key], 'count': n} for key, n in ends.items()]}
-    if who.role == 'director' and owner:
+    if who.role == 'director' and owner and not payer:
         out['client_cost'] = charge
     return out
 
