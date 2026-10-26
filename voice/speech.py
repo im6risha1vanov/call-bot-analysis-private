@@ -34,7 +34,7 @@ _SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
 _LONG = 140
 
 
-_FILLER_WORDS = {"Так…", "Угу…", "Ага…", "Так-так…"}
+_FILLER_WORDS = {"Так…", "Угу…", "Ага…", "Так-так…", "Записываю…", "Секундочку…"}
 
 
 class PhraseSplitter:
@@ -570,7 +570,7 @@ _REDUCTIONS = [
     (r"\b([Нн])ичего страшного\b", r"\1ичё страшного"),
     (r"\bсейчас\b", "щас"),
 ]
-_HESITATIONS = ["Ну, ", "Так, "]  # «Ну вот, скажите…» после «Так, так…» звучало заученно
+_HESITATIONS = ["Ну, "]  # 23.10: «Так, …» в начале фраз (и даже «Так, алло…») Григорий назвал сырым
 
 
 def casual_text(text: str) -> str:
@@ -584,7 +584,8 @@ def casual_text(text: str) -> str:
         if rng.random() < level:
             text = re.sub(pattern, repl, text, count=1)
     words = text.split()
-    if len(words) < 6 or "голосовой помощник" in text or rng.random() > level * 0.5:  # запинка не в каждой фразе и не в коротких
+    if len(words) < 6 or "голосовой помощник" in text or re.match(r"(Алло|Здравствуйте|Добрый)", text) \
+            or rng.random() > level * 0.5:  # запинка не в каждой фразе, не в коротких и не в приветствии
         return text
     # повтор слова («поняла… поняла, специалист…») на звонке звучал как заикание: только «ну», «так» и «э-э»
     kind = rng.choice(["prefix", "prefix", "uh"])

@@ -27,12 +27,15 @@ HELLO_WORDS = {"алло", "ало", "алё", "але", "да", "слушаю",
 # Исключения: слова, которыми клиент правда просит замолчать.
 STOP_WORDS = {"стоп", "нет", "подождите", "погодите", "стойте", "извините", "простите", "минуту", "секунду"}
 # «эффект думания»: если модель не начала отвечать за FILLER_AFTER_S, робот говорит «так…», «угу…»
-FILLERS = [w.strip() for w in os.getenv("VOICE_FILLERS", "Так…|Угу…|Ага…|Так-так…").split("|") if w.strip()]
-FILLER_AFTER_S = int(os.getenv("VOICE_FILLER_AFTER_MS", "400")) / 1000
+# 23.10 Григорий: «так» перед каждой репликой звучит сыро. Без «так»; заполнитель только если модель правда
+# задумалась (около секунды), а не на каждой реплике.
+FILLERS = [w.strip() for w in os.getenv("VOICE_FILLERS", "Угу…|Ага…").split("|") if w.strip()]
+FILLER_AFTER_S = int(os.getenv("VOICE_FILLER_AFTER_MS", "900")) / 1000
+MIN_FILLER_AFTER_S = 0.9
 FILLER_COOLDOWN_S = 12.0  # на звонке 21.10 «так…» звучало на каждой реплике: заученный шаблон
 # Ольга, когда клиент называет данные (город, сумму, имя), говорит «так, записываю…» и пишет: пауза
 # на раздумье звучит как работа, а не как зависание. Ответ «да»/«нет» записывать нечего: обычное «угу…».
-NOTE_FILLERS = [w.strip() for w in os.getenv("VOICE_NOTE_FILLERS", "Так, записываю…|Секундочку…|Так, сейчас…").split("|")
+NOTE_FILLERS = [w.strip() for w in os.getenv("VOICE_NOTE_FILLERS", "Записываю…|Секундочку…").split("|")
                 if w.strip()]
 SHORT_ANSWERS = {"да", "нет", "ага", "угу", "конечно", "не", "неа", "ну", "давайте", "хорошо", "ладно", "можно",
                  "алло", "слушаю", "да-да", "так", "актуален", "актуально", "актуальна", "планирую", "планируем",
@@ -308,7 +311,8 @@ class CallSession:
             self._arm_silence()
 
     async def _filler(self, generation: int, started: asyncio.Event) -> None:
-        after = speech.setting("filler_after_ms", FILLER_AFTER_S * 1000) / 1000
+        # не раньше 0,9 с, даже если в сохранённых настройках осталось старое 0,4 с: иначе заполнитель на каждой реплике
+        after = max(speech.setting("filler_after_ms", FILLER_AFTER_S * 1000) / 1000, MIN_FILLER_AFTER_S)
         try:
             await asyncio.wait_for(started.wait(), after)
             return
