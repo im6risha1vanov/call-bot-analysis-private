@@ -258,6 +258,18 @@ class CabinetTests(DBCase):
         self.assertEqual([tuple(r) for r in await targets()][1], ('79990000022', True, 'error', 1))
         self.assertEqual(await self.pool.fetchval('SELECT status FROM robot_campaigns WHERE id=$1', camp['id']), 'done')
 
+    async def test_huge_ids_and_repeat_upload(self):
+        """Номер больше int64 — 404/400, а не 500; повторная загрузка тех же номеров не считается добавлением."""
+        await self.as_director()
+        big = '9' * 26
+        self.assertEqual((await self.http.get(f'/api/robot/cab/campaigns/{big}/targets')).status, 404)
+        self.assertEqual((await self.http.post(f'/api/robot/cab/campaigns/{big}/pause', json={}, headers=H)).status, 404)
+        r = await self.http.post('/api/robot/cab/contacts/delete', json={'ids': [int(big)]}, headers=H)
+        self.assertEqual((r.status, (await r.json())['deleted']), (200, 0))
+        for added in (2, 0):
+            r = await self.http.post('/api/robot/cab/contacts/upload', json={'name': 'c.csv', 'text': '89990000031\n89990000032\n'}, headers=H)
+            self.assertEqual(((await r.json())['added'], (await r.json())['total']), (added, 2))
+
     async def test_minute_cost_after_quick_replies(self):
         await robot_store.set_option(self.pool, 'prices_auto', {'mango_min': {'value': 1.5}, 'eleven_1k_chars': {'value': 10},
                                                                 'llm_1k_tokens': {'value': 1}})

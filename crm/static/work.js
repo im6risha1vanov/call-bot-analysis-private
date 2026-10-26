@@ -58,7 +58,8 @@ function workCard(el, item, onDone, opts = {}) {
   const form = $('.outform', el), ring = $('[data-ring]', el);
   const field = k => $(`[data-f="${k}"]`, el);
   $('[data-act="copy"]', el).addEventListener('click', async e => {
-    try { await navigator.clipboard.writeText('+' + item.number); doneBtn(e.currentTarget, 'Скопировано'); } catch (err) { toast(phone(item.number)); }
+    const btn = e.currentTarget; // после await e.currentTarget уже null
+    try { await navigator.clipboard.writeText('+' + item.number); doneBtn(btn, 'Скопировано'); } catch (err) { toast(phone(item.number)); }
   });
   $('[data-act="dial"]', el).addEventListener('click', async ev => {
     const b = ev.currentTarget;
@@ -92,6 +93,7 @@ function workCard(el, item, onDone, opts = {}) {
   $('[data-act="cancel"]', el).addEventListener('click', () => {
     chosen = null; form.classList.add('hidden');
     $$('[data-out]', el).forEach(x => x.setAttribute('aria-pressed', 'false'));
+    $('[data-out]', el)?.focus(); // кнопка «Отмена» спряталась вместе с формой: фокус не теряем
   });
   $('[data-act="save"]', el).addEventListener('click', saveOutcome);
 
@@ -190,7 +192,7 @@ VIEWS.queue = async (view, arg) => {
   S.today = q.today || S.today;
   if (!director) setCount('queue', q.items.length);
   if (!q.items.length) {
-    view.innerHTML = `<div class="page"><div class="card empty blk"><p><b>Очередь пуста.</b></p><p>${q.later ? `Ещё ${plainItems(q.later, 'номер', 'номера', 'номеров')} вернутся позже: перезвоны на другие дни и недозвоны через 2 часа.` : 'Добавьте номера в разделе «Источники», и они появятся здесь.'}</p>
+    view.innerHTML = `<div class="page"><div class="card empty blk"><p><b>Очередь пуста.</b></p><p>${q.later ? `Ещё ${plainItems(q.later, 'номер', 'номера', 'номеров')} ${q.later % 10 === 1 && q.later % 100 !== 11 ? 'вернётся' : 'вернутся'} позже: перезвоны на другие дни и недозвоны через 2 часа.` : 'Добавьте номера в разделе «Источники», и они появятся здесь.'}</p>
       ${director ? '' : '<button class="btn primary" type="button" data-go="sources" data-arg="base">Добавить номера</button>'}</div></div>`;
     return;
   }
@@ -198,7 +200,7 @@ VIEWS.queue = async (view, arg) => {
   const tasksN = q.items.filter(i => i.kind === 'task').length;
   view.innerHTML = `<div class="page">
     <div class="qline blk"><span>В очереди <b>${fmt(q.items.length)}</b>${tasksN ? `, из них <b>${fmt(tasksN)}</b> ${plural(tasksN, 'перезвон', 'перезвона', 'перезвонов')}` : ''}</span>
-      ${q.later ? `<span class="hint">ещё ${fmt(q.later)} вернутся позже ${help('Перезвоны на другие дни и номера, которые не взяли трубку: они возвращаются через 2 часа, до 3 попыток.')}</span>` : ''}</div>
+      ${q.later ? `<span class="hint">ещё ${fmt(q.later)} ${q.later % 10 === 1 && q.later % 100 !== 11 ? 'вернётся' : 'вернутся'} позже ${help('Перезвоны на другие дни и номера, которые не взяли трубку: они возвращаются через 2 часа, до 3 попыток.')}</span>` : ''}</div>
     <div class="grid2"><div class="stack" data-work></div>
       <div class="card blk" data-css="--i:3"><div class="card-h"><h2>Дальше по очереди</h2><span class="hint">${fmt(q.items.length)}</span></div><div class="list" data-next></div></div></div></div>`;
   const show = () => {

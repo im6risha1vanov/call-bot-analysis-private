@@ -32,19 +32,20 @@ function addPerson() {
       <label class="field" data-extf>Добавочный в Mango<input data-v="ext" inputmode="numeric" maxlength="6" placeholder="15"></label>
       <label class="field">Имя<input data-v="name" maxlength="80" placeholder="Например, Пётр Иванов"></label>
       <label class="field">Ник в Telegram, если знаете<input data-v="user" maxlength="33" placeholder="@nick"></label>
-      <div class="row wide"><button class="btn primary" type="button" data-go>Добавить и дать ссылку</button></div></div>
+      <div class="row wide"><button class="btn primary" type="button" data-ok>Добавить и дать ссылку</button></div></div>
       <div data-out></div>
       <p class="hint">Ссылка одноразовая и действует 7 дней. Руководитель получает отчёты по отделу и горячие потери.</p></div>`);
   const v = k => $(`[data-v="${k}"]`, box);
   v('role').addEventListener('change', () => { $('[data-extf]', box).hidden = v('role').value !== 'manager'; });
-  $('[data-go]', box).addEventListener('click', async e => {
-    busy(e.currentTarget, true);
+  $('[data-ok]', box).addEventListener('click', async e => {
+    const btn = e.currentTarget; // после await e.currentTarget уже null
+    busy(btn, true);
     try {
       const r = await api('/api/staff', {method: 'POST', body: {role: v('role').value, person_ext: v('ext').value, name: v('name').value, username: v('user').value}});
       linkBox($('[data-out]', box), r.link, 'Отправьте ссылку человеку лично. Он появится в списке после обновления страницы.');
-      doneBtn(e.currentTarget, 'Добавлен');
+      doneBtn(btn, 'Добавлен');
       if (S.page === 'staff' && !S.arg) reload();
-    } catch (err) { busy(e.currentTarget, false); toast(err.message, true); }
+    } catch (err) { busy(btn, false); toast(err.message, true); }
   });
 }
 
@@ -186,16 +187,18 @@ const PERSON_TAB = {
         <div class="row" data-css="margin-top:12px">${p.manager && !S.me.readonly ? '<button class="btn" type="button" data-crm>Выдать ссылку в CRM</button>' : ''}
           <button class="btn ghost" type="button" data-go="settings" data-arg="access">Все ссылки →</button></div><div data-crm-out></div></section>`;
     $('[data-inv]', el)?.addEventListener('click', async e => {
-      busy(e.currentTarget, true);
+      const btn = e.currentTarget; // после await e.currentTarget уже null
+      busy(btn, true);
       try { const r = await api('/api/staff/invite', {method: 'POST', body: {person_ext: p.ext}}); linkBox($('[data-inv-out]', el), r.link, 'Ссылка одноразовая, действует 7 дней.'); }
       catch (err) { toast(err.message, true); }
-      busy(e.currentTarget, false);
+      busy(btn, false);
     });
     $('[data-crm]', el)?.addEventListener('click', async e => {
-      busy(e.currentTarget, true);
+      const btn = e.currentTarget; // после await e.currentTarget уже null
+      busy(btn, true);
       try { const r = await api('/api/access', {method: 'POST', body: {role: 'manager', person_ext: p.ext}}); linkBox($('[data-crm-out]', el), r.link, 'Ссылку видно только сейчас: скопируйте и отправьте лично.'); }
       catch (err) { toast(err.message, true); }
-      busy(e.currentTarget, false);
+      busy(btn, false);
     });
     $('[data-unlink]', el)?.addEventListener('click', async () => {
       if (!await askConfirm(`Отключить ${p.name} от бота?`, 'Отключить', true)) return;
