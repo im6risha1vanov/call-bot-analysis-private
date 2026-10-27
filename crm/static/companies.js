@@ -77,3 +77,33 @@ function companyForm(d, c, onDone) {
     } catch (err) { busy(btn, false); toast(err.message, true); }
   });
 }
+
+// «Сменить учётку»: любая учётка любой компании без пароля. Своя сессия ждёт на сервере, «Вернуться к себе» — /support-exit.
+async function switchAccount() {
+  closeDrawer();
+  const box = modal(`${modalHead('Сменить учётку', 'Вход без пароля, с полными правами этой учётки. Вернуться к себе — кнопкой в шапке.')}
+    <div class="rvm-body"><label class="field">Поиск<input data-q placeholder="имя, логин, компания" autocomplete="off"></label><div data-list><p class="hint">Загружаю…</p></div></div>`, true);
+  const ROLE = {director: 'директор', manager: 'менеджер', client: 'клиент'};
+  let d;
+  try { d = await api('/api/platform/accounts'); } catch (e) { $('[data-list]', box).innerHTML = `<p class="bad-text">${esc(e.message)}</p>`; return; }
+  const draw = () => {
+    const q = $('[data-q]', box).value.trim().toLowerCase();
+    const list = d.accounts.filter(a => !q || [a.name, a.login, a.company, a.client, a.ext].some(v => String(v || '').toLowerCase().includes(q)));
+    const groups = [...new Set(list.map(a => a.company))];
+    $('[data-list]', box).innerHTML = list.length ? groups.map(g => `<h3>${esc(g)}</h3><div class="sheet-list">${list.filter(a => a.company === g).map(a =>
+      `<button type="button" data-acc="${a.id}"${a.id === d.current ? ' aria-current="page"' : ''}><span><b>${esc(a.name)}</b> · ${esc(ROLE[a.role] || a.role)}${a.ext ? ', доб. ' + esc(a.ext) : ''}
+        <span class="hint">${a.login ? esc(a.login) : 'старая ссылка'}${a.id === d.current ? ' · сейчас' : ''}</span></span>${svg('chev')}</button>`).join('')}</div>`).join('')
+      : '<p class="hint">Никого не нашлось.</p>';
+  };
+  draw();
+  $('[data-q]', box).addEventListener('input', draw);
+  $('[data-q]', box).focus();
+  $('[data-list]', box).addEventListener('click', async e => {
+    const b = e.target.closest('[data-acc]');
+    if (!b) return;
+    busy(b, true);
+    try { const r = await api(`/api/platform/accounts/${b.dataset.acc}/switch`, {method: 'POST', body: {}}); location.href = r.go || '/'; }
+    catch (err) { busy(b, false); toast(err.message, true); }
+  });
+}
+window.switchAccount = switchAccount;

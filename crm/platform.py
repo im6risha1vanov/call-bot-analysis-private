@@ -18,6 +18,7 @@ from tools import Forbidden, home_client_id
 from . import accounts, auth, company
 
 SUPPORT_TTL = timedelta(hours=4)
+SWITCH_TTL = timedelta(hours=12)  # «Сменить учётку»: рабочий день под чужой учёткой
 SETTING_KEYS = ('callcenter_sheet', 'contract_email', 'ai_day_limit_rub')
 
 
@@ -188,4 +189,58 @@ async def support_session(pool, who, client_id: int) -> str:
         """INSERT INTO crm_sessions(token_hash,expires_at,role,client_id,is_test,support_by)
            VALUES($1,now()+$2,'director',$3,true,$4)""", auth.digest(session), SUPPORT_TTL, client_id, who.invite_id)
     await log(pool, who, client_id, 'support')
+    return session
+
+
+# ------------------------------------------------------------------ смена учётки без пароля
+
+async def switcher(pool, who) -> int:
+    """Кто переключается: наша учётка с отметкой platform, в том числе уже вошедшая под чужой учёткой."""
+    if who is None:
+        raise Forbidden('Раздел недоступен.')
+    own = who.support_by if who.support else who.invite_id
+    home = await home_client_id(pool)
+    ok = own is not None and await pool.fetchval(
+        'SELECT platform FROM crm_invites WHERE id=$1 AND client_id=$2 AND revoked_at IS NULL', own, home)
+    if not ok:
+        raise Forbidden('Раздел недоступен.')
+    return own
+
+
+async def accounts_all(pool) -> list[dict]:
+    """Все действующие учётки всех компаний: директора, менеджеры, клиенты."""
+    rows = await pool.fetch(
+        """SELECT i.id, i.client_id, i.role, i.login, i.extension, i.client_key, i.name, e.full_name, i.last_used_at
+           FROM crm_invites i
+           LEFT JOIN employees e ON e.client_id=i.client_id AND e.extension=i.extension AND e.role='manager'
+           WHERE i.revoked_at IS NULL ORDER BY i.client_id, i.role, i.id""")
+    names = {}
+    out = []
+    for r in rows:
+        if r['client_id'] not in names:
+            names[r['client_id']] = (await company.info(pool, r['client_id']))['name']
+        out.append({'id': r['id'], 'company_id': r['client_id'], 'company': names[r['client_id']], 'role': r['role'],
+                    'login': r['login'], 'ext': r['extension'], 'client': r['client_key'],
+                    'name': r['name'] or r['full_name'] or r['client_key'] or r['login'] or '',
+                    'used': r['last_used_at'].isoformat() if r['last_used_at'] else None})
+    return out
+
+
+async def switch_session(pool, by_invite: int, invite_id: int) -> str | None:
+    """Сессия выбранной учётки с полными правами, отмеченная, кто вошёл. None — это своя учётка: вернуться к себе."""
+    if invite_id == by_invite:
+        return None
+    row = await pool.fetchrow(
+        'SELECT id, role, client_id, extension, client_key, telegram_user_id FROM crm_invites WHERE id=$1 AND revoked_at IS NULL',
+        invite_id)
+    if row is None:
+        raise ValueError('Такой учётной записи нет.')
+    session = secrets.token_urlsafe(32)
+    await pool.execute(
+        """INSERT INTO crm_sessions(token_hash,telegram_user_id,expires_at,role,client_id,extension,client_key,is_test,invite_id,support_by)
+           VALUES($1,$2,now()+$3,$4,$5,$6,$7,false,$8,$9)""",
+        auth.digest(session), row['telegram_user_id'], SWITCH_TTL, row['role'], row['client_id'], row['extension'],
+        row['client_key'], row['id'], by_invite)
+    await pool.execute('INSERT INTO platform_log(invite_id,client_id,action,detail) VALUES($1,$2,$3,$4::jsonb)',
+                       by_invite, row['client_id'], 'switch', json.dumps({'to': invite_id}))
     return session
