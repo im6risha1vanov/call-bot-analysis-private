@@ -38,6 +38,7 @@ function workCard(el, item, onDone, opts = {}) {
       <button class="btn primary big" type="button" data-act="dial" ${canDial ? '' : 'disabled'}>${svg('phone', '')}Позвонить</button>
       <button class="btn" type="button" data-act="copy">Скопировать номер</button>
     </div>
+    ${canDial && !ro ? dialModeSeg() : ''}
     ${canDial ? '' : `<div class="ringing">${ro ? 'Тестовый вход: звонок и итог работают во входе самого менеджера.' : 'Звонить можно только со своего добавочного в Mango.'}</div>`}
     <div class="ringing hidden" data-ring></div>
     <div class="outs${ro ? ' hidden' : ''}">
@@ -60,14 +61,24 @@ function workCard(el, item, onDone, opts = {}) {
   $('[data-act="copy"]', el).addEventListener('click', async e => {
     try { await navigator.clipboard.writeText('+' + item.number); doneBtn(e.currentTarget, 'Скопировано'); } catch (err) { toast(phone(item.number)); }
   });
+  bindSeg(el, {dialmode: v => store.set(WP_MODE_KEY, v)});
   $('[data-act="dial"]', el).addEventListener('click', async ev => {
     const b = ev.currentTarget;
+    const browser = dialMode() === 'browser';
     busy(b, true);
-    ring.className = 'ringing'; ring.textContent = 'Отправляю команду в Mango…';
+    ring.className = 'ringing'; ring.textContent = browser ? 'Звоню из браузера…' : 'Отправляю команду в Mango…';
     try {
-      const res = await api('/api/dial', {method: 'POST', body: {number: item.number}});
+      const res = await api('/api/dial', {method: 'POST', body: {number: item.number, via: browser ? 'browser' : undefined}});
       S.dial = {id: res.dial_id, number: item.number};
-      ring.textContent = 'Сейчас зазвонит ваш софтфон Mango. Снимите трубку, и Mango наберёт клиента. После разговора отметьте итог ниже.';
+      if (browser) {
+        await wpCall(res.number, (text, kind) => {
+          if (!ring.isConnected) return;
+          ring.className = 'ringing' + (kind === 'err' ? ' err' : kind === 'talk' ? ' talk' : '');
+          ring.textContent = kind === 'end' || kind === 'err' ? `${text.replace(/\.$/, '')}. Отметьте итог ниже.` : text;
+        });
+      } else {
+        ring.textContent = 'Сейчас зазвонит ваш Talker. Снимите трубку, и Mango наберёт клиента. После разговора отметьте итог ниже.';
+      }
     } catch (e) {
       ring.className = 'ringing err'; ring.textContent = e.message;
     } finally {

@@ -1408,6 +1408,63 @@ class WebTests(DBCase):
         self.assertIn('3330', (await r.json())['error'])
         self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM crm_dials'), 2)
 
+    async def test_dial_from_browser(self):
+        import json as _json, tempfile
+        from aiohttp import web as aioweb
+        from aiohttp.test_utils import TestServer
+        from crm import webphone
+        got = []
+
+        async def asterisk(request):  # вместо Asterisk: отвечает на каждое SIP-сообщение
+            ws = aioweb.WebSocketResponse(protocols=('sip',))
+            await ws.prepare(request)
+            async for msg in ws:
+                got.append(msg.data)
+                await ws.send_str('SIP/2.0 486 Busy Here')
+            return ws
+        app = aioweb.Application()
+        app.router.add_get('/ws', asterisk)
+        fake = TestServer(app)
+        await fake.start_server()
+        self.addAsyncCleanup(fake.close)
+        with tempfile.NamedTemporaryFile('w', suffix='.json', delete=False) as f:
+            _json.dump({'101': {'user': 'wp101', 'password': 'secret'}}, f)
+        self.addCleanup(os.unlink, f.name)
+        with patch.dict(os.environ, {'WEBPHONE_FILE': f.name}), \
+                patch.object(webphone, 'UPSTREAM', f'ws://127.0.0.1:{fake.port}/ws'):
+            await self.login(124)  # доб. 102: телефона в браузере нет
+            self.assertFalse((await (await self.http.get('/api/me')).json())['webphone'])
+            self.assertEqual((await self.http.get('/api/webphone')).status, 403)
+            r = await self.http.post('/api/dial', json={'number': '89991234567', 'via': 'browser'}, headers={'X-CRM': '1'})
+            self.assertEqual(r.status, 400)
+            self.http.session.cookie_jar.clear()
+            await self.login(123)  # доб. 101
+            me = await (await self.http.get('/api/me')).json()
+            self.assertTrue(me['webphone'])
+            cfg = await (await self.http.get('/api/webphone')).json()
+            self.assertEqual((cfg['user'], cfg['password'], cfg['ws']), ('wp101', 'secret', '/webphone/ws'))
+            with patch('crm.dial.mango_client.callback', AsyncMock()) as cb:
+                r = await self.http.post('/api/dial', json={'number': '8 999 123-45-67', 'via': 'browser'}, headers={'X-CRM': '1'})
+                self.assertEqual(r.status, 200, await r.text())
+                cb.assert_not_awaited()  # звонит браузер, Mango команду не шлём
+            body = await r.json()
+            self.assertEqual(body['number'], '79991234567')
+            row = await self.pool.fetchrow('SELECT extension, result, command_id FROM crm_dials WHERE id=$1', body['dial_id'])
+            self.assertEqual((row['extension'], row['result']), ('101', 1000))
+            self.assertTrue(row['command_id'].startswith('web-101-'))
+            origin = f'http://127.0.0.1:{self.http.port}'
+            with self.assertRaises(Exception):  # чужой сайт не откроет сокет с cookie менеджера
+                await self.http.ws_connect('/webphone/ws', protocols=('sip',), headers={'Origin': 'https://evil.example'})
+            ws = await self.http.ws_connect('/webphone/ws', protocols=('sip',), headers={'Origin': origin})
+            self.assertEqual(ws.protocol, 'sip')
+            await ws.send_str('INVITE sip:79991234567@crm.invalid SIP/2.0')
+            self.assertEqual((await ws.receive(timeout=5)).data, 'SIP/2.0 486 Busy Here')
+            await ws.close()
+            self.assertEqual(got, ['INVITE sip:79991234567@crm.invalid SIP/2.0'])
+            self.http.session.cookie_jar.clear()
+            with self.assertRaises(Exception):  # без входа
+                await self.http.ws_connect('/webphone/ws', protocols=('sip',), headers={'Origin': origin})
+
     async def test_head_sees_team_but_cannot_dial(self):
         await self.login(901)
         me = await (await self.http.get('/api/me')).json()

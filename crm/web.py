@@ -24,7 +24,7 @@ from aiohttp import web  # noqa: E402
 import mango_client  # noqa: E402
 from tools import Forbidden, home_client_id, is_privileged  # noqa: E402
 from . import accounts, ask as asking, auth, automation_agent, automations, cabinet, callcenter_db, company, contracts, deals, donor_agent, gpt, journal, overview, people, platform, recording, reviews, sources, staff, store, training  # noqa: E402
-from . import prompts as prompt_mode, robot, robot_api, robot_prices, robot_runner, robot_store  # noqa: E402
+from . import prompts as prompt_mode, robot, webphone, robot_api, robot_prices, robot_runner, robot_store  # noqa: E402
 from review import store as review_store  # noqa: E402
 from .dial import dial  # noqa: E402
 
@@ -87,6 +87,8 @@ async def guard(request: web.Request, handler):
     except Exception:
         log.exception('ошибка CRM: %s %s', request.method, request.path)
         response = fail(500, 'Что-то пошло не так. Попробуйте ещё раз.')
+    if isinstance(response, web.WebSocketResponse):  # сокет телефона уже закрыт, заголовки ему не нужны
+        return response
     response.headers.update(HEADERS)
     if request.path.startswith('/api/'):
         response.headers['Cache-Control'] = 'no-store'
@@ -269,6 +271,7 @@ async def api_me(request):
         'name': name or ('Директор' if who.role == 'director' else ''), 'role': who.role, 'test': who.test,
         'ext': a.extension if str(a.extension or '').isdigit() else None,
         'can_dial': can_dial, 'privileged': privileged, 'readonly': who.test,
+        'webphone': can_dial and await webphone.account(pool, a.client_id, a.extension) is not None,
         'team': await store.team(pool, a.client_id) if privileged else [],
         'outcomes': store.OUTCOMES, 'needs_date': sorted(store.NEEDS_DATE), 'lead_status': store.LEAD_STATUS, **firm,
     })
@@ -1071,8 +1074,31 @@ async def api_dial(request):
     who = await actor(request, write=True)
     data = await body(request)
     # Только со своего добавочного: руководитель без добавочного звонить не может.
-    result = await dial(request.app[POOL], who.client_id, who.extension, data.get('number'), who.telegram_user_id)
+    browser = data.get('via') == 'browser'
+    if browser and await webphone.account(request.app[POOL], who.client_id, who.extension) is None:
+        raise ValueError('Телефон в браузере для вашего добавочного не настроен. Звоните через Talker.')
+    result = await dial(request.app[POOL], who.client_id, who.extension, data.get('number'), who.telegram_user_id,
+                        browser=browser)
     return web.json_response(result)
+
+
+async def api_webphone(request):
+    """Учётка телефона в браузере: только свой добавочный и только для своего входа."""
+    who = await actor(request, write=True)
+    acc = await webphone.account(request.app[POOL], who.client_id, who.extension)
+    if acc is None:
+        raise Forbidden('Телефон в браузере для вашего добавочного не настроен.')
+    return web.json_response({**acc, 'ws': '/webphone/ws'})
+
+
+async def webphone_ws(request):
+    if not webphone.same_origin(request):
+        raise web.HTTPForbidden()
+    who = await auth.viewer_for(request.app[POOL], request.cookies.get(COOKIE))
+    a = who.actor if who is not None and not who.test else None
+    if a is None or await webphone.account(request.app[POOL], a.client_id, a.extension) is None:
+        raise web.HTTPForbidden()
+    return await webphone.relay(request)
 
 
 async def api_outcome(request):
@@ -1235,6 +1261,8 @@ def build(pool) -> web.Application:
     app.router.add_delete('/api/leads/{id}', api_lead_delete)
     app.router.add_get('/api/card', api_card)
     app.router.add_post('/api/dial', api_dial)
+    app.router.add_get('/api/webphone', api_webphone)
+    app.router.add_get('/webphone/ws', webphone_ws)
     app.router.add_post('/api/outcome', api_outcome)
     app.router.add_get('/api/calls', api_calls)
     app.router.add_get('/api/stats', api_stats)

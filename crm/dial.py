@@ -41,7 +41,10 @@ def normalize(number) -> str | None:
     return digits
 
 
-async def dial(pool, client_id: int, extension: str | None, number, telegram_user_id: int | None = None) -> dict:
+async def dial(pool, client_id: int, extension: str | None, number, telegram_user_id: int | None = None,
+               browser: bool = False) -> dict:
+    """browser=True: звонит сам браузер (crm/webphone.py), здесь только проверяем номер и пишем попытку,
+    чтобы итог звонка и статистика наборов работали так же, как с Talker."""
     ext = str(extension or '')
     if not ext.isdigit():
         raise DialError('Звонить можно только с добавочного в Mango, а у этого входа его нет.')
@@ -53,6 +56,13 @@ async def dial(pool, client_id: int, extension: str | None, number, telegram_use
     if now - _last_dial.get(key, 0) < MIN_GAP_SEC:
         raise DialError('Звонок уже запущен. Подождите несколько секунд.')
     _last_dial[key] = now
+    if browser:
+        dial_id = await pool.fetchval(
+            """INSERT INTO crm_dials(client_id,extension,telegram_user_id,number,command_id,result)
+               VALUES($1,$2,$3,$4,$5,$6) RETURNING id""", client_id, ext, telegram_user_id, target,
+            f'web-{ext}-{int(time.time() * 1000)}', ACCEPTED)
+        log.info('звонок из браузера: доб.=%s номер=%s…', ext, target[:4])
+        return {'dial_id': dial_id, 'number': target}
     client = await pool.fetchrow('SELECT vpbx_api_key_enc, vpbx_api_salt_enc FROM clients WHERE id=$1', client_id)
     command_id = f'crm-{ext}-{int(time.time() * 1000)}'
     code = None

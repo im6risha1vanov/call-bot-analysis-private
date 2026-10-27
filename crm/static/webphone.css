@@ -1,0 +1,25 @@
+/* Телефон в браузере (webphone.js): выбор «через Talker / из браузера» и плашка звонка внизу экрана. */
+.dialmode{margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.ringing.talk{background:var(--good-soft);color:var(--good)}
+#wpbar{position:fixed;z-index:250;left:0;right:0;margin-inline:auto;bottom:calc(20px + env(safe-area-inset-bottom,0px));
+  width:min(560px,calc(100% - 32px));background:var(--surface);color:var(--fg);border:1px solid var(--line);border-left:5px solid var(--warn);
+  border-radius:14px;box-shadow:var(--shadow-lg);padding:12px 14px;display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;animation:rise .3s var(--ease) both}
+#wpbar.wp-talk{border-left-color:var(--good)}
+#wpbar.wp-err{border-left-color:var(--bad)}
+#wpbar.wp-end{border-left-color:var(--line)}
+#wpbar .wp-who{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1 1 180px}
+#wpbar .wp-num{font-variant-numeric:tabular-nums}
+#wpbar .wp-st{font-size:13px;color:var(--muted)}
+#wpbar.wp-talk .wp-st{color:var(--good)}
+#wpbar.wp-err .wp-st{color:var(--bad)}
+#wpbar .wp-acts{display:flex;gap:8px;flex-wrap:wrap}
+#wpbar .wp-hang{background:var(--bad);border-color:var(--bad);color:#fff}
+#wpbar .wp-hang svg{transform:rotate(135deg)}
+#wpbar .btn[aria-pressed="true"]{background:var(--warn-soft);border-color:var(--warn);color:var(--warn)}
+#wpbar .wp-keys{order:3;flex-basis:100%;display:grid;grid-template-columns:repeat(6,1fr);gap:6px}
+#wpbar .wp-keys button{border:1px solid var(--line);background:var(--surface-2);color:var(--fg);border-radius:9px;padding:8px 0;font-weight:600;font-size:15px}
+#wpbar .wp-keys button:active{transform:scale(.95)}
+@media (max-width:900px){
+  #wpbar{bottom:calc(72px + env(safe-area-inset-bottom,0px))}
+  #wpbar .wp-keys{grid-template-columns:repeat(4,1fr)}
+}
