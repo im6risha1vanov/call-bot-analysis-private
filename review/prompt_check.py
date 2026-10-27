@@ -68,7 +68,7 @@ def label(s: dict | None) -> str:
     if s['kind'] not in engine.REVIEWED:
         return parts[0]
     if s['success']:
-        parts.append('✅ ' + ', '.join(OUTCOME_LABELS.get(o, o) for o in s['outcome']))
+        parts.append('результат: ' + ', '.join(OUTCOME_LABELS.get(o, o) for o in s['outcome']))
     else:
         parts.append('без результата, ' + CHANCE_LABELS.get(s['chance'], 'шанс не указан'))
         if s['category']:
@@ -142,17 +142,30 @@ def totals(items: list[dict]) -> dict:
             'fields': dict(count)}
 
 
+def big_shift(report: dict) -> bool:
+    shift = report['success_after'] - report['success_before']
+    return abs(shift) >= max(2, report['total'] // 5)
+
+
+def level(report: dict) -> str:
+    """Цвет вывода в CRM: good — правка ничего не сломала, warn — посмотреть строки, bad — сбои."""
+    if report['broken']:
+        return 'bad'
+    if not report['total'] or big_shift(report) or report['diff'] > max(2, report['total'] // 10):
+        return 'warn'
+    return 'good'
+
+
 def verdict(report: dict) -> str:
     """Одна строка вывода. Пороги грубые: это подсказка, решает человек."""
     if not report['total']:
         return 'Нет разобранных звонков с расшифровкой за последние недели: проверять не на чем.'
     if report['broken']:
-        return (f"⚠️ Новый текст не сработал на {report['broken']} из {report['total']} звонков, поэтому для всех его сохранить "
+        return (f"Новый текст не сработал на {report['broken']} из {report['total']} звонков, поэтому для всех его сохранить "
                 "нельзя. Если это сбой модели, запустите проверку ещё раз; если нет, поправьте текст.")
-    shift = report['success_after'] - report['success_before']
-    if abs(shift) >= max(2, report['total'] // 5):
-        word = 'больше' if shift > 0 else 'меньше'
-        return f"⚠️ Успешных звонков стало заметно {word}: {report['success_before']} → {report['success_after']}. Проверьте, так ли задумано."
+    if big_shift(report):
+        word = 'больше' if report['success_after'] > report['success_before'] else 'меньше'
+        return f"Внимание: успешных звонков стало заметно {word}: {report['success_before']} → {report['success_after']}. Проверьте, так ли задумано."
     if report['diff'] <= max(2, report['total'] // 10):
         return 'Итоги почти не поменялись: правка ничего не сломала.'
     return f"Итог поменялся в {report['diff']} звонках из {report['total']}. Посмотрите строки ниже, так ли задумано."
@@ -160,7 +173,7 @@ def verdict(report: dict) -> str:
 
 def message(report: dict) -> str:
     """Отчёт для Telegram (HTML)."""
-    head = [f"<b>🧪 Проверка на {report['total']} звонках</b>",
+    head = [f"<b>Проверка на {report['total']} звонках</b>",
             f"Было: действующий общий промт{' (сохранение #' + str(report['old_version']) + ')' if report['old_version'] else ' (исходный)'}. "
             'Стало: новый текст. Оба прогнаны сейчас на одних и тех же звонках.', '',
             f"Без изменений: {report['same']}, изменился итог: {report['diff']}, сбоев: {report['broken']}.",

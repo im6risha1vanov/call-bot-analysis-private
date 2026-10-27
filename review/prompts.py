@@ -371,7 +371,7 @@ def diff(old: str, new: str, limit: int = 14) -> str:
     for line in difflib.unified_diff(old.splitlines(), new.splitlines(), lineterm='', n=0):
         if line.startswith(('---', '+++', '@@')) or not line[1:].strip():
             continue
-        mark = '➕' if line[0] == '+' else '➖'
+        mark = '+' if line[0] == '+' else '−'
         text = line[1:].strip()
         lines.append(f"{mark} {html.escape(text[:220] + ('…' if len(text) > 220 else ''))}")
     if len(lines) > limit:

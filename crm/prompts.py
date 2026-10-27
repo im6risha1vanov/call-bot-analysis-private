@@ -140,7 +140,7 @@ async def check(pool, who, kind: str, body) -> dict:
     if kind != 'review':
         raise ValueError('Проверка на звонках есть только у разбора звонка.')
     report = await prompt_check.check(pool, who.actor.client_id, body)
-    report['verdict'] = prompt_check.verdict(report)
+    report['verdict'], report['level'] = prompt_check.verdict(report), prompt_check.level(report)
     report['token'] = None if report['broken'] else sign(tg, 'check:' + kind, body)
     return report
 
@@ -153,8 +153,8 @@ async def tell_others(pool, who, kind: str, version: int, note: str | None) -> N
         if chat == tg:
             continue
         mine = await prompts.active(pool, kind, chat, who.actor.client_id)
-        tail = ' У вас своя личная версия, она остаётся; общую можно включить в «🗂 Сохранения».' if mine else ''
-        await telegram.send(chat, f'ℹ️ {name} изменил промт «{prompts.TITLES[kind]}» для всех '
+        tail = ' У вас своя личная версия, она остаётся; общую можно включить в «Сохранения».' if mine else ''
+        await telegram.send(chat, f'{name} изменил промт «{prompts.TITLES[kind]}» для всех '
                                   f'(сохранение #{version}, в CRM): {note or "без описания"}.{tail}')
 
 

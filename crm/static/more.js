@@ -216,17 +216,21 @@ async function promptsView(view) {
   // Разбор звонка для всех — только после проверки этого же текста на последних звонках.
   const needCheck = () => P.kind === 'review';
   const canSaveAll = () => canSave() && (!needCheck() || (P.checkToken && P.checkBody === P.body));
+  // Цвет строки: красный — результат пропал или сбой, зелёный — результат появился, жёлтый — поменялось остальное.
+  const rowTone = i => i.error || (i.before_ok && !i.after_ok) ? 'bad' : (!i.before_ok && i.after_ok ? 'good' : 'warn');
   const checkHtml = c => {
     if (!c) return '';
-    if (c.problem) return `<div class="card report open pm-check"><p><b>Проверка не получилась:</b> ${esc(c.problem)}</p></div>`;
+    if (c.problem) return `<div class="card report open pm-check"><div class="pm-verdict bad"><b>Проверка не получилась:</b> ${esc(c.problem)}</div></div>`;
     const rows = c.items.filter(i => i.changed.length);
+    const shift = c.success_after - c.success_before;
+    const tile = (tone, n, label) => `<div class="${tone}"><b>${n}</b><span>${label}</span></div>`;
     return `<div class="card report open pm-check"><div class="rep-head"><b>Проверка на ${c.total} звонках</b><span class="hint">было: ${c.old_version ? 'общий промт, сохранение #' + c.old_version : 'исходный промт'} · стало: новый текст</span></div>
-      <div class="rep-body"><div class="pm-check-sum">
-        <div><b>${c.same}</b><span class="hint">без изменений</span></div><div><b>${c.diff}</b><span class="hint">изменился итог</span></div>
-        <div><b>${c.success_before} → ${c.success_after}</b><span class="hint">звонков с результатом</span></div><div><b>${c.broken}</b><span class="hint">сбоев</span></div></div>
-      <p>${esc(c.verdict)}</p>
-      ${rows.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Звонок</th><th>Что поменялось</th><th>Было</th><th>Стало</th><th></th></tr></thead><tbody>
-        ${rows.map(i => `<tr><td class="nw"><div class="t">${esc(i.manager)}</div><div class="s">${esc(i.date)}</div></td><td>${esc(i.changed.join(', '))}</td>
+      <div class="rep-body"><div class="pm-verdict ${c.level || 'warn'}">${esc(c.verdict)}</div>
+      <div class="pm-check-sum">${tile('good', c.same, 'без изменений')}${tile(c.diff ? 'warn' : '', c.diff, 'изменился итог')}
+        ${tile(shift < 0 ? 'bad' : shift > 0 ? 'warn' : '', `${c.success_before} → ${c.success_after}`, 'звонков с результатом')}${tile(c.broken ? 'bad' : '', c.broken, 'сбоев')}</div>
+      ${rows.length ? `<div class="pm-legend"><span class="bad">результат пропал или сбой</span><span class="good">результат появился</span><span class="warn">поменялись тип, шанс или категория</span></div>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Звонок</th><th>Что поменялось</th><th>Было</th><th>Стало</th><th></th></tr></thead><tbody>
+        ${rows.map(i => `<tr class="pm-row ${rowTone(i)}"><td class="nw"><div class="t">${esc(i.manager)}</div><div class="s">${esc(i.date)}</div></td><td>${esc(i.changed.join(', '))}</td>
           <td class="wrap was">${esc(i.before)}</td><td class="wrap now">${esc(i.after)}${i.error ? `<div class="s">сбой: ${esc(i.error)}</div>` : ''}</td>
           <td><button class="btn small" type="button" data-review="${i.call_id}">Разбор</button></td></tr>`).join('')}</tbody></table></div>` : ''}
       <p class="hint">Оба текста прогнаны сейчас на одних и тех же звонках. Модель отвечает не всегда одинаково, поэтому пара изменений бывает и без правки.</p></div></div>`;
@@ -255,9 +259,9 @@ async function promptsView(view) {
         : `<div class="rep-head"><b>${P.kind === 'review' ? 'Пример разбора последнего звонка по новому тексту' : 'Пример отчёта по новому тексту'}</b>${P.preview.call_id ? `<button class="btn small" type="button" data-review="${P.preview.call_id}">Как было</button>` : ''}</div><div class="rep-body">${P.preview.html}</div>`}</div>` : ''}
       ${checkHtml(P.check)}
     </section>
-    ${moreBlock('Сохранения', `${st.versions.length}`, `<p class="hint" data-css="margin:0">✅ действует для вас, 🌐 для всех. Если 🌐 нет ни у одного, для всех действует исходная.</p>
+    ${moreBlock('Сохранения', `${st.versions.length}`, `<p class="hint" data-css="margin:0"><span class="chip acc">ваша</span> действует для вас, <span class="chip good">для всех</span> для всех. Если «для всех» нет ни у одного, для всех действует исходная.</p>
       ${st.personal ? '<div><button class="btn small" type="button" data-common>Убрать личную, получать общую</button></div>' : ''}
-      <div class="pm-vers">${st.versions.map(v => `<div class="pm-ver"><div><b>${v.mine ? '✅ ' : ''}${v.common ? '🌐 ' : ''}#${v.id}</b> · ${fmtWhen(v.at)} · ${esc(v.scope)} · ${esc(v.who)}</div>
+      <div class="pm-vers">${st.versions.map(v => `<div class="pm-ver"><div><b>#${v.id}</b>${v.mine ? ' <span class="chip acc">ваша</span>' : ''}${v.common ? ' <span class="chip good">для всех</span>' : ''} · ${fmtWhen(v.at)} · ${esc(v.scope)} · ${esc(v.who)}</div>
         ${v.note ? `<div class="hint">${esc(v.note)}</div>` : ''}
         <div class="row"><button class="btn small" type="button" data-vt="${v.id}">Текст</button><button class="btn small" type="button" data-use="${v.id}" data-scope="me">Вернуть для себя</button><button class="btn small" type="button" data-use="${v.id}" data-scope="all">Вернуть для всех</button></div></div>`).join('')}</div>`, 1)}`;
     bind();

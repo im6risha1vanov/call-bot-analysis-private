@@ -22,7 +22,7 @@ class PureTests(unittest.TestCase):
         lost = prompt_check.summary(engine.validate(copy.deepcopy(LOST), TRANSCRIPT))
         self.assertTrue(won['success'])
         self.assertEqual(lost['category'], LOST['key_moment']['category'])
-        self.assertIn('✅', prompt_check.label(won))
+        self.assertIn('результат: ', prompt_check.label(won))
         self.assertIn('без результата', prompt_check.label(lost))
         self.assertEqual(prompt_check.changed(won, won), [])
         self.assertIn('результат', prompt_check.changed(won, lost))
@@ -37,6 +37,10 @@ class PureTests(unittest.TestCase):
         self.assertIn('нельзя', prompt_check.verdict({**base, 'broken': 1}))
         self.assertIn('меньше', prompt_check.verdict({**base, 'success_after': 4, 'diff': 6}))
         self.assertIn('в 6 звонках', prompt_check.verdict({**base, 'diff': 6, 'same': 14}))
+        self.assertEqual(prompt_check.level(base), 'good')
+        self.assertEqual(prompt_check.level({**base, 'broken': 1}), 'bad')
+        self.assertEqual(prompt_check.level({**base, 'diff': 6, 'same': 14}), 'warn')
+        self.assertEqual(prompt_check.level({**base, 'success_after': 4, 'diff': 6}), 'warn')
         self.assertIn('не на чем', prompt_check.verdict({**base, 'total': 0}))
 
     def test_objection_block_is_in_code_prompt_and_can_be_added_to_saved_text(self):
@@ -89,7 +93,7 @@ class CheckTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(report['old_version'])
         self.assertIn('меньше', prompt_check.verdict(report))
         text = prompt_check.message(report)
-        self.assertIn('было: повторный · ✅', text)
+        self.assertIn('было: повторный · результат: ', text)
         self.assertIn('стало: холодный · без результата', text)
         self.assertEqual(float(await self.pool.fetchval('SELECT sum(spent_units) FROM astra_daily_spend')), 6.0)
 
@@ -157,6 +161,7 @@ class GateTests(unittest.IsolatedAsyncioTestCase):
             with patch.object(prompt_check, 'check', AsyncMock(return_value=report)):
                 checked = await crm_prompts.check(self.pool, who, 'review', 'Текст.')
             self.assertTrue(checked['token'])
+            self.assertEqual(checked['level'], 'warn')  # проверять было не на чем
             with self.assertRaisesRegex(ValueError, 'после проверки'):  # подпись от другого текста
                 await crm_prompts.save(self.pool, who, 'review', 'Текст.', None, 'all', token,
                                        crm_prompts.sign(901, 'check:review', 'Другой.'))

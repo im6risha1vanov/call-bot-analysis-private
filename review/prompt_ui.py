@@ -3,7 +3,7 @@
 Выбрал, что править → пишешь обычным текстом, что поменять → модель правит текст,
 бот показывает, какие строки изменились → «Пример» прогоняет черновик на последнем
 звонке (или собирает отчёт) → «Сохранить для себя» или «для всех». Разбор звонка для всех
-сохраняется только после «🧪 Проверки на звонках» (review/prompt_check.py): тот же
+сохраняется только после «Проверки на звонках» (review/prompt_check.py): тот же
 текст на 20 последних звонках против действующего, где поменялся итог. «Сохранения» —
 список, к любому можно вернуться, как к сохранению в игре; исходный текст в нём
 всегда есть. Хранение и применение — review/prompts.py.
@@ -37,19 +37,19 @@ def kb(*rows) -> Keyboard:
 
 
 def kinds_keyboard() -> Keyboard:
-    return kb(*[[(prompts.TITLES[k], f'pm:k:{k}')] for k in prompts.KINDS], [('🚪 Выйти', 'pm:exit')])
+    return kb(*[[(prompts.TITLES[k], f'pm:k:{k}')] for k in prompts.KINDS], [('Выйти', 'pm:exit')])
 
 
 def session_keyboard(changed: bool) -> Keyboard:
-    return kb([('👁 Пример', 'pm:prev'), ('📄 Весь текст', 'pm:cur')] if changed else [('📄 Весь текст', 'pm:cur')],
-              [('↩️ Отменить правки', 'pm:undo')] if changed else None,
-              [('🗂 Сохранения', 'pm:ver'), ('📋 Другой промт', 'pm:menu'), ('🚪 Выйти', 'pm:exit')])
+    return kb([('Пример', 'pm:prev'), ('Весь текст', 'pm:cur')] if changed else [('Весь текст', 'pm:cur')],
+              [('Отменить правки', 'pm:undo')] if changed else None,
+              [('Сохранения', 'pm:ver'), ('Другой промт', 'pm:menu'), ('Выйти', 'pm:exit')])
 
 
 def save_keyboard(kind: str = '') -> Keyboard:
-    check = [(f'🧪 Проверить на {prompt_check.CALLS} звонках', 'pm:check')] if kind == 'review' else None
-    return kb([('💾 Сохранить для себя', 'pm:save:me')], check, [('💾 Сохранить для всех', 'pm:save:all')],
-              [('✏️ Править дальше', 'pm:more'), ('🚪 Выйти', 'pm:exit')])
+    check = [(f'Проверить на {prompt_check.CALLS} звонках', 'pm:check')] if kind == 'review' else None
+    return kb([('Сохранить для себя', 'pm:save:me')], check, [('Сохранить для всех', 'pm:save:all')],
+              [('Править дальше', 'pm:more'), ('Выйти', 'pm:exit')])
 
 
 # Какой текст разбора человек проверил на звонках: tg -> подпись текста. После перезапуска
@@ -260,8 +260,8 @@ def install(router, pool_getter):
                 await prompts.update_draft(pool, tg, start_body=draft['body'])
                 where = 'для всех' if bits[2] == 'all' else 'для вас'
                 await bot.send_message(
-                    tg, f'💾 Сохранено {where}: «{prompts.TITLES[kind]}», сохранение #{version}. '
-                        'Вернуться к любому сохранению: «🗂 Сохранения».', parse_mode=None,
+                    tg, f'Сохранено {where}: «{prompts.TITLES[kind]}», сохранение #{version}. '
+                        'Вернуться к любому сохранению: «Сохранения».', parse_mode=None,
                     reply_markup=session_keyboard(False))
                 if bits[2] == 'all':
                     await tell_others(pool, bot, actor, kind, version, draft['note'])
@@ -283,18 +283,18 @@ def install(router, pool_getter):
         await prompts.update_draft(pool, tg, preview_ok=problem is None, previewed_body=draft['body'])
         if problem:
             await bot.send_message(
-                tg, f'⚠️ Пример не получился: {problem}.\nЕсли сохранить так, при сбое бот пришлёт причину и стандартную '
+                tg, f'Пример не получился: {problem}.\nЕсли сохранить так, при сбое бот пришлёт причину и стандартную '
                     'версию. Лучше поправить текст ещё раз.', parse_mode=None, reply_markup=save_keyboard(kind))
             return
         title = 'Пример разбора последнего звонка по новому тексту' if kind == 'review' else 'Пример отчёта по новому тексту'
-        await send_long(bot, tg, f'<b>👁 {title}</b>\n\n{text}')
+        await send_long(bot, tg, f'<b>{title}</b>\n\n{text}')
         extra = [[Button(text='Как было (сохранённый разбор)', callback_data=f'rv:d:{call_id}')]] if call_id else []
         await bot.send_message(tg, 'Сохранить?', parse_mode=None,
                                reply_markup=Keyboard(inline_keyboard=extra + save_keyboard(kind).inline_keyboard))
 
     async def show_check(pool, bot, actor, draft):
         tg = actor.telegram_user_id
-        await bot.send_message(tg, f'🧪 Разбираю {prompt_check.CALLS} последних звонков старым и новым текстом, '
+        await bot.send_message(tg, f'Разбираю {prompt_check.CALLS} последних звонков старым и новым текстом, '
                                    'это займёт 2–4 минуты…', parse_mode=None)
         report = await prompt_check.check(pool, actor.client_id, draft['body'])
         if not report['broken']:
@@ -309,15 +309,15 @@ def install(router, pool_getter):
         common = await prompts.active(pool, kind, 0)
         rows = []
         for v in await prompts.versions(pool, kind, tg):
-            marks = ('✅ ' if mine and mine['id'] == v['id'] else '') + ('🌐 ' if common and common['id'] == v['id'] else '')
+            marks = ('[ваша] ' if mine and mine['id'] == v['id'] else '') + ('[для всех] ' if common and common['id'] == v['id'] else '')
             label = (f"{marks}#{v['id']} {v['created_at'].astimezone(MSK):%d.%m %H:%M} · {scope_word(v['owner_tg'])} · "
                      f"{who.get(v['created_by'], 'бот') if v['created_by'] else 'бот'}: {v['note'] or ''}")
             rows.append([Button(text=label[:64], callback_data=f"pm:v:{v['id']}")])
         if mine:
             rows.append([Button(text='Убрать личную, получать общую', callback_data=f'pm:common:{kind}')])
         await bot.send_message(
-            tg, f'🗂 Сохранения «{prompts.TITLES[kind]}». ✅ — действует для вас, 🌐 — для всех '
-                '(если ни у одной нет 🌐, для всех действует исходная). Нажмите, чтобы посмотреть или вернуть.',
+            tg, f'Сохранения «{prompts.TITLES[kind]}». [ваша] — действует для вас, [для всех] — для всех '
+                '(если ни у одной нет [для всех], для всех действует исходная). Нажмите, чтобы посмотреть или вернуть.',
             parse_mode=None, reply_markup=Keyboard(inline_keyboard=rows))
 
     async def versions_action(pool, bot, actor, bits, draft, kind):
@@ -343,7 +343,7 @@ def install(router, pool_getter):
             await bot.send_message(
                 tg, f"Сохранение #{row['id']} «{prompts.TITLES[kind]}», {row['created_at'].astimezone(MSK):%d.%m.%Y %H:%M}, "
                     f"{scope_word(row['owner_tg'])}, автор: {who}.\n{row['note'] or ''}", parse_mode=None,
-                reply_markup=kb([('📄 Текст', f"pm:vt:{row['id']}")],
+                reply_markup=kb([('Текст', f"pm:vt:{row['id']}")],
                                 [('↩️ Вернуть для себя', f"pm:use:{row['id']}:me")],
                                 [('↩️ Вернуть для всех', f"pm:use:{row['id']}:all")]))
         elif bits[1] == 'use' and len(bits) == 4 and bits[3] in {'me', 'all'}:
@@ -364,7 +364,7 @@ def install(router, pool_getter):
             if chat == actor.telegram_user_id:
                 continue
             mine = await prompts.active(pool, kind, chat)
-            tail = (' У вас своя личная версия, она остаётся; общую можно включить в «🗂 Сохранения».'
+            tail = (' У вас своя личная версия, она остаётся; общую можно включить в «Сохранения».'
                     if mine else '')
             try:
                 await bot.send_message(chat, f'ℹ️ {who} изменил промт «{prompts.TITLES[kind]}» для всех '

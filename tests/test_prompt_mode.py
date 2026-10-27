@@ -52,8 +52,8 @@ class PureTests(unittest.TestCase):
 
     def test_diff_shows_added_and_removed_lines_escaped(self):
         text = prompts.diff('один\nдва <b>\nтри', 'один\nтри\nчетыре')
-        self.assertIn('➖ два &lt;b&gt;', text)
-        self.assertIn('➕ четыре', text)
+        self.assertIn('− два &lt;b&gt;', text)
+        self.assertIn('+ четыре', text)
 
     def test_broken_review(self):
         good = engine.validate(copy.deepcopy(LOST), TRANSCRIPT)
