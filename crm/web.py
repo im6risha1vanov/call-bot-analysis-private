@@ -888,9 +888,11 @@ async def api_prompt_action(request):
         out = await prompt_mode.edit(pool, who, kind, data.get('body'), data.get('history'), data.get('ask'))
     elif action == 'preview':
         out = await prompt_mode.preview(pool, who, kind, data.get('body'))
+    elif action == 'check':
+        out = await prompt_mode.check(pool, who, kind, data.get('body'))
     elif action == 'save':
         out = await prompt_mode.save(pool, who, kind, data.get('body'), data.get('note'), str(data.get('scope') or ''),
-                                     data.get('token'))
+                                     data.get('token'), data.get('check_token'))
     elif action == 'personal-off':
         await prompt_mode.drop_personal(pool, who, kind)
         out = {'ok': True}

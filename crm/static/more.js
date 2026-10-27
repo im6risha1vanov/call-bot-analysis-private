@@ -213,9 +213,31 @@ async function promptsView(view) {
   const o = await api('/api/prompts');
   const P = S.pm && o.kinds.some(k => k.kind === S.pm.kind) ? S.pm : (S.pm = {kind: o.kinds[0].kind});
   const st = await api('/api/prompts/' + P.kind);
-  if (P.start === undefined || P.loadedFor !== P.kind) Object.assign(P, {start: st.body, body: st.body, history: [], note: '', token: null, tokenBody: null, preview: null, diff: [], loadedFor: P.kind});
+  if (P.start === undefined || P.loadedFor !== P.kind) Object.assign(P, {start: st.body, body: st.body, history: [], note: '', token: null, tokenBody: null, preview: null, check: null, checkToken: null, checkBody: null, diff: [], loadedFor: P.kind});
   const changed = () => P.body !== P.start;
   const canSave = () => changed() && P.token && P.tokenBody === P.body;
+  // Разбор звонка для всех — только после проверки этого же текста на последних звонках.
+  const needCheck = () => P.kind === 'review';
+  const canSaveAll = () => canSave() && (!needCheck() || (P.checkToken && P.checkBody === P.body));
+  // Цвет строки: красный — результат пропал или сбой, зелёный — результат появился, жёлтый — поменялось остальное.
+  const rowTone = i => i.error || (i.before_ok && !i.after_ok) ? 'bad' : (!i.before_ok && i.after_ok ? 'good' : 'warn');
+  const checkHtml = c => {
+    if (!c) return '';
+    if (c.problem) return `<div class="card report open pm-check"><div class="pm-verdict bad"><b>Проверка не получилась:</b> ${esc(c.problem)}</div></div>`;
+    const rows = c.items.filter(i => i.changed.length);
+    const shift = c.success_after - c.success_before;
+    const tile = (tone, n, label) => `<div class="${tone}"><b>${n}</b><span>${label}</span></div>`;
+    return `<div class="card report open pm-check"><div class="rep-head"><b>Проверка на ${c.total} звонках</b><span class="hint">было: ${c.old_version ? 'общий промт, сохранение #' + c.old_version : 'исходный промт'} · стало: новый текст</span></div>
+      <div class="rep-body"><div class="pm-verdict ${c.level || 'warn'}">${esc(c.verdict)}</div>
+      <div class="pm-check-sum">${tile('good', c.same, 'без изменений')}${tile(c.diff ? 'warn' : '', c.diff, 'изменился итог')}
+        ${tile(shift < 0 ? 'bad' : shift > 0 ? 'warn' : '', `${c.success_before} → ${c.success_after}`, 'звонков с результатом')}${tile(c.broken ? 'bad' : '', c.broken, 'сбоев')}</div>
+      ${rows.length ? `<div class="pm-legend"><span class="bad">результат пропал или сбой</span><span class="good">результат появился</span><span class="warn">поменялись тип, шанс или категория</span></div>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Звонок</th><th>Что поменялось</th><th>Было</th><th>Стало</th><th></th></tr></thead><tbody>
+        ${rows.map(i => `<tr class="pm-row ${rowTone(i)}"><td class="nw"><div class="t">${esc(i.manager)}</div><div class="s">${esc(i.date)}</div></td><td>${esc(i.changed.join(', '))}</td>
+          <td class="wrap was">${esc(i.before)}</td><td class="wrap now">${esc(i.after)}${i.error ? `<div class="s">сбой: ${esc(i.error)}</div>` : ''}</td>
+          <td><button class="btn small" type="button" data-review="${i.call_id}">Разбор</button></td></tr>`).join('')}</tbody></table></div>` : ''}
+      <p class="hint">Оба текста прогнаны сейчас на одних и тех же звонках. Модель отвечает не всегда одинаково, поэтому пара изменений бывает и без правки.</p></div></div>`;
+  };
   const diffHtml = lines => lines.length ? `<div class="pm-diff">${lines.map(l => `<div class="${l.op === '+' ? 'add' : 'del'}">${l.op === '+' ? '+' : '−'} ${esc(l.text)}</div>`).join('')}</div>` : '';
   const again = () => { P.loadedFor = null; promptsView(view); };
   const render = () => {
@@ -232,14 +254,17 @@ async function promptsView(view) {
         <button class="btn" type="button" data-prev${changed() ? '' : ' disabled'}>Пример по новому тексту</button>
         <button class="btn" type="button" data-undo${changed() ? '' : ' disabled'}>Отменить правки</button>
         <button class="btn primary" type="button" data-save="me"${canSave() ? '' : ' disabled'}>Сохранить для себя</button>
-        <button class="btn primary" type="button" data-save="all"${canSave() ? '' : ' disabled'}>Сохранить для всех</button></div>
+        ${needCheck() ? `<button class="btn" type="button" data-check${changed() ? '' : ' disabled'}>Проверить на ${st.check_calls || 20} звонках</button>` : ''}
+        <button class="btn primary" type="button" data-save="all"${canSaveAll() ? '' : ' disabled'}>Сохранить для всех</button></div>
       ${changed() && !canSave() ? '<p class="hint">Сохранить можно после примера по этому тексту.</p>' : ''}
+      ${changed() && canSave() && !canSaveAll() ? '<p class="hint">Для всех: сначала проверка на звонках. Она покажет, где поменялся итог у последних звонков.</p>' : ''}
       ${P.preview ? `<div class="card report open" data-css="margin-top:12px">${P.preview.problem ? `<p><b>Пример не получился:</b> ${esc(P.preview.problem)}. Если сохранить так, при сбое бот пришлёт причину и стандартную версию. Лучше поправить текст ещё раз.</p>`
         : `<div class="rep-head"><b>${P.kind === 'review' ? 'Пример разбора последнего звонка по новому тексту' : 'Пример отчёта по новому тексту'}</b>${P.preview.call_id ? `<button class="btn small" type="button" data-review="${P.preview.call_id}">Как было</button>` : ''}</div><div class="rep-body">${P.preview.html}</div>`}</div>` : ''}
+      ${checkHtml(P.check)}
     </section>
-    ${moreBlock('Сохранения', `${st.versions.length}`, `<p class="hint" data-css="margin:0">✅ действует для вас, 🌐 для всех. Если 🌐 нет ни у одного, для всех действует исходная.</p>
+    ${moreBlock('Сохранения', `${st.versions.length}`, `<p class="hint" data-css="margin:0"><span class="chip acc">ваша</span> действует для вас, <span class="chip good">для всех</span> для всех. Если «для всех» нет ни у одного, для всех действует исходная.</p>
       ${st.personal ? '<div><button class="btn small" type="button" data-common>Убрать личную, получать общую</button></div>' : ''}
-      <div class="pm-vers">${st.versions.map(v => `<div class="pm-ver"><div><b>${v.mine ? '✅ ' : ''}${v.common ? '🌐 ' : ''}#${v.id}</b> · ${fmtWhen(v.at)} · ${esc(v.scope)} · ${esc(v.who)}</div>
+      <div class="pm-vers">${st.versions.map(v => `<div class="pm-ver"><div><b>#${v.id}</b>${v.mine ? ' <span class="chip acc">ваша</span>' : ''}${v.common ? ' <span class="chip good">для всех</span>' : ''} · ${fmtWhen(v.at)} · ${esc(v.scope)} · ${esc(v.who)}</div>
         ${v.note ? `<div class="hint">${esc(v.note)}</div>` : ''}
         <div class="row"><button class="btn small" type="button" data-vt="${v.id}">Текст</button><button class="btn small" type="button" data-use="${v.id}" data-scope="me">Вернуть для себя</button><button class="btn small" type="button" data-use="${v.id}" data-scope="all">Вернуть для всех</button></div></div>`).join('')}</div>`, 1)}`;
     bind();
@@ -264,7 +289,7 @@ async function promptsView(view) {
         render();
       } catch (err) { busy(btn, false); toast(err.message, true); }
     });
-    $('[data-undo]', view).addEventListener('click', () => { Object.assign(P, {body: P.start, diff: [], note: '', preview: null, token: null}); render(); });
+    $('[data-undo]', view).addEventListener('click', () => { Object.assign(P, {body: P.start, diff: [], note: '', preview: null, token: null, check: null, checkToken: null}); render(); });
     $('[data-prev]', view).addEventListener('click', async e => {
       const btn = e.currentTarget; busy(btn, true); btn.firstChild.textContent = 'Собираю пример, до минуты';
       const text = P.body;
@@ -274,11 +299,20 @@ async function promptsView(view) {
       } catch (err) { P.preview = {problem: err.message}; }
       render();
     });
+    $('[data-check]', view)?.addEventListener('click', async e => {
+      const btn = e.currentTarget; busy(btn, true); btn.firstChild.textContent = 'Разбираю звонки, 2–4 минуты';
+      const text = P.body;
+      try {
+        const r = await api(`/api/prompts/${P.kind}/check`, {method: 'POST', body: {body: text}});
+        Object.assign(P, {check: r, checkToken: r.token, checkBody: text});
+      } catch (err) { P.check = {problem: err.message}; }
+      render();
+    });
     $$('[data-save]', view).forEach(b => b.addEventListener('click', async () => {
       if (b.dataset.save === 'all' && !await askConfirm(P.kind === 'review' ? 'Сохранить для всех? Так будут разбираться все звонки, в том числе менеджерам.' : 'Сохранить для всех?', 'Сохранить для всех')) return;
       busy(b, true);
       try {
-        const r = await api(`/api/prompts/${P.kind}/save`, {method: 'POST', body: {body: P.body, note: P.note, scope: b.dataset.save, token: P.token}});
+        const r = await api(`/api/prompts/${P.kind}/save`, {method: 'POST', body: {body: P.body, note: P.note, scope: b.dataset.save, token: P.token, check_token: P.checkToken}});
         toast(`Сохранено ${b.dataset.save === 'all' ? 'для всех' : 'для вас'}: сохранение #${r.version}.`);
         again();
       } catch (err) { busy(b, false); toast(err.message, true); }
