@@ -10,6 +10,7 @@
 #                                                 Asterisk перезапустится сам, когда у робота не будет звонков
 #   bash scripts/webphone_setup.sh build-status — как идёт пересборка
 #   bash scripts/webphone_setup.sh add 10       — подключить добавочный: спросит SIP-логин и пароль его учётки из кабинета Mango
+#   bash scripts/webphone_setup.sh add 10 robot — то же, но звонить через SIP-учётку робота (для теста, ничего вводить не надо)
 #   bash scripts/webphone_setup.sh remove 10    — отключить добавочный
 #   bash scripts/webphone_setup.sh apply        — заново записать настройки на VPS (если робот пересоздал конфиги Asterisk)
 #   bash scripts/webphone_setup.sh off          — выключить телефон в браузере совсем (Talker работает как раньше)
@@ -169,12 +170,18 @@ case "${1:-check}" in
     EXT=${2:?"укажи добавочный: bash scripts/webphone_setup.sh add 10"}
     [[ "$EXT" =~ ^[0-9]+$ ]] || { echo "добавочный — только цифры"; exit 1; }
     DOMAIN=$(getenv MANGO_SIP_DOMAIN)
-    echo "SIP-логин учётки добавочного $EXT из кабинета Mango (Сотрудники -> сотрудник -> SIP-учётки),"
-    read -r -p "например user10@${DOMAIN:-vpbxXXXX.mangosip.ru}: " LOGIN
+    if [ "${3:-}" = robot ]; then
+      # тест на учётке робота (доб. 13): звонок уйдёт от робота, в разбор менеджеров не попадёт
+      LOGIN=$(getenv MANGO_SIP_LOGIN); PASS=$(getenv MANGO_SIP_PASSWORD)
+      echo "доб. $EXT в CRM будет звонить через SIP-учётку робота"
+    else
+      echo "SIP-логин учётки добавочного $EXT из кабинета Mango (Сотрудники -> сотрудник -> SIP-учётки),"
+      read -r -p "например user10@${DOMAIN:-vpbxXXXX.mangosip.ru}: " LOGIN
+    fi
     LOGIN=${LOGIN#sip:}
     if [[ "$LOGIN" == *@* ]]; then DOMAIN=${LOGIN#*@}; LOGIN=${LOGIN%%@*}; fi
     [ -n "$LOGIN" ] && [ -n "$DOMAIN" ] || { echo "нужен логин вида user@домен"; exit 1; }
-    read -r -s -p "пароль этой SIP-учётки (на экран не выводится): " PASS; echo
+    [ -n "${PASS:-}" ] || { read -r -s -p "пароль этой SIP-учётки (на экран не выводится): " PASS; echo; }
     [ -n "$PASS" ] || { echo "пароль пустой"; exit 1; }
     case "$LOGIN$PASS$DOMAIN" in *$'\t'*) echo "в логине или пароле есть табуляция"; exit 1;; esac
     BPASS=$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)
@@ -244,5 +251,5 @@ BUILD
     if modules_ok; then echo "модули WebRTC: есть"; else echo "модули WebRTC: пока нет"; fi
     ;;
   *)
-    sed -n '2,16p' "$0"; exit 1;;
+    sed -n '2,17p' "$0"; exit 1;;
 esac
