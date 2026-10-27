@@ -126,6 +126,9 @@ rewrite_contact=yes
 type=identify
 endpoint=mango
 match=$DOMAIN
+
+; телефон менеджеров в браузере (scripts/webphone_setup.sh), если подключён
+#tryinclude pjsip_webphone.conf
 CONF
 
 cat > /etc/asterisk/extensions.conf <<'CONF'
@@ -139,6 +142,9 @@ exten => s,1,NoOp(voicebot ${VOICE_ID})
 [voicebot-in]
 exten => _X.,1,Hangup()
 exten => s,1,Hangup()
+
+; телефон менеджеров в браузере (scripts/webphone_setup.sh), если подключён
+#tryinclude extensions_webphone.conf
 CONF
 
 cat > /etc/asterisk/http.conf <<'CONF'
