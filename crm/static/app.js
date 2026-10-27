@@ -409,6 +409,8 @@ function showLogin() {
 let moreOpen = false;
 const exitLink = () => S.me.support ? '<a class="ghost" href="/support-exit">Вернуться к себе</a>'
   : S.me.test ? '<a class="ghost" href="/test-exit">Сменить вход</a>' : '<button class="ghost" type="button" data-logout>Выйти</button>';
+// «Сменить учётку» без пароля: только у наших учёток с отметкой platform (crm/platform.py), окно в companies.js
+const switchBtn = () => S.me.switcher && window.switchAccount ? '<button class="ghost" type="button" data-switch>Сменить учётку</button>' : '';
 function shell() {
   const m = menu();
   moreOpen = m.more.includes(S.page);
@@ -419,10 +421,11 @@ function shell() {
       ${window.gptButton && hasModule('gpt') ? gptButton() : ''}
       <div class="side-foot"><span>${esc(S.me.name || '')} · ${esc(ROLE_NAME[S.me.role] || '')}${S.me.ext ? ', доб. ' + esc(S.me.ext) : ''}</span>
         <div class="row"><button class="ghost" type="button" data-theme-btn>${themeLabel()}</button>
-        ${exitLink()}</div></div>
+        ${exitLink()}${switchBtn()}</div></div>
     </aside>
     <div class="main">
-      ${S.me.support ? `<div class="banner"><b>Просмотр компании «${esc(S.me.company || '')}»</b><span>Глазами директора, только смотреть.</span><a href="/support-exit">Вернуться к себе</a></div>`
+      ${S.me.support && !S.me.test ? `<div class="banner"><b>Вы вошли как ${esc(S.me.name || '')} · ${esc(ROLE_NAME[S.me.role] || '')} · «${esc(S.me.company || '')}»</b><span>Всё, что делаете, идёт от имени этой учётки.</span>${switchBtn().replace('class="ghost"', 'class="linkish"')}<a href="/support-exit">Вернуться к себе</a></div>`
+        : S.me.support ? `<div class="banner"><b>Просмотр компании «${esc(S.me.company || '')}»</b><span>Глазами директора, только смотреть.</span><a href="/support-exit">Вернуться к себе</a></div>`
         : S.me.test ? `<div class="banner"><b>Просмотр · ${esc(ROLE_NAME[S.me.role] || '')}</b><span>Только смотреть: звонки и изменения работают под своим логином.</span><a href="/test-exit">Сменить вход</a></div>` : ''}
       <header class="top"><div class="top-in" id="top"></div></header>
       <main class="content" id="view"></main>
@@ -452,7 +455,7 @@ function moreSheet() {
   const m = menu();
   const rest = [...m.nav, ...m.more].filter(id => !m.tabs.includes(id));
   openDrawer({title: 'Ещё', html: `<div class="sheet-list">${rest.map(id => `<button type="button" data-go="${id}"${S.page === id ? ' aria-current="page"' : ''}>${svg(PAGES[id].icon)}<span>${esc(PAGES[id].name)}</span>${svg('chev')}</button>`).join('')}</div>
-    <div class="row"><button class="ghost" type="button" data-theme-btn>${themeLabel()}</button>${exitLink()}</div>
+    <div class="row"><button class="ghost" type="button" data-theme-btn>${themeLabel()}</button>${exitLink()}${switchBtn()}</div>
     <p class="hint">${esc(S.me.name || '')} · ${esc(ROLE_NAME[S.me.role] || '')}</p>`});
 }
 function setCount(page, n) {
@@ -515,6 +518,7 @@ document.addEventListener('click', e => {
     go(g.dataset.go, g.dataset.arg || null); return;
   }
   if (e.target.closest('[data-sheet]')) { moreSheet(); return; }
+  if (e.target.closest('[data-switch]')) { window.switchAccount?.(); return; }
   if (e.target.closest('[data-theme-btn]')) { nextTheme(); return; }
   if (e.target.closest('[data-logout]')) { api('/api/logout', {method: 'POST', body: {}}).catch(() => {}).then(() => showLogin()); }
 });

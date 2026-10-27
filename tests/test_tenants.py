@@ -525,3 +525,43 @@ class CallcenterDbTests(DBCase):
         # компания со своей таблицей меняет номера в таблице, а не здесь
         await self.pool.execute("""UPDATE company_settings SET settings='{"callcenter_sheet": "their-sheet"}' WHERE client_id=3""")
         self.assertEqual((await self.post('/api/callcenter/clients', {'name': 'Ещё'}))[0], 400)
+
+
+@unittest.skipUnless(DSN, 'METHODOLOGY_TEST_DATABASE_URL не задан')
+class SwitchAccountTests(PlatformTests):
+    """«Сменить учётку»: наша учётка platform входит в любую учётку без пароля и возвращается к себе."""
+
+    async def test_switch_between_accounts_and_back(self):
+        await self.login('boss', 'boss-pass-12')
+        me = await (await self.http.get('/api/me')).json()
+        self.assertFalse(me['switcher'])
+        self.assertEqual((await self.http.get('/api/platform/accounts')).status, 403)
+
+        await self.login('grisha', 'grisha-pass-1')
+        self.assertTrue((await (await self.http.get('/api/me')).json())['switcher'])
+        made = await (await self.http.post('/api/platform/companies', json={'name': 'Окна Юг', 'login': 'okna'},
+                                           headers=self.H)).json()
+        accs = {a['login']: a for a in (await (await self.http.get('/api/platform/accounts')).json())['accounts']}
+        self.assertEqual(set(accs), {'grisha', 'boss', 'okna'})
+
+        r = await self.http.post(f"/api/platform/accounts/{accs['boss']['id']}/switch", json={}, headers=self.H)
+        self.assertEqual(r.status, 200, await r.text())
+        me = await (await self.http.get('/api/me')).json()
+        self.assertEqual((me['name'], me['support'], me['readonly'], me['switcher'], me['platform']), ('Директор', True, False, True, False))
+        self.assertEqual((await self.http.get('/api/platform/companies')).status, 403)  # «Компании» только у себя
+        # полные права: можно менять от имени учётки
+        r = await self.http.post('/api/access', json={'role': 'director', 'name': 'Новый'}, headers=self.H)
+        self.assertEqual(r.status, 200, await r.text())
+
+        # из одной чужой учётки сразу в другую, в другой компании
+        r = await self.http.post(f"/api/platform/accounts/{accs['okna']['id']}/switch", json={}, headers=self.H)
+        me = await (await self.http.get('/api/me')).json()
+        self.assertEqual((me['company'], me['support']), ('Окна Юг', True))
+
+        r = await self.http.get('/support-exit', allow_redirects=False)
+        me = await (await self.http.get('/api/me')).json()
+        self.assertEqual((me['company'], me['platform'], me['support']), ('Averon', True, False))
+        last = await self.pool.fetchval("SELECT last_used_at FROM crm_invites WHERE login='okna'")
+        self.assertIsNone(last)  # вход под учёткой не выдаёт себя за её владельца
+        self.assertEqual([a for (a,) in await self.pool.fetch("SELECT action FROM platform_log WHERE action='switch'")], ['switch', 'switch'])
+        self.assertEqual(made['login'], 'okna')

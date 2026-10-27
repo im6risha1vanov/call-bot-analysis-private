@@ -91,7 +91,7 @@ code{font-family:var(--mono);font-size:.92em;background:var(--surface-2);padding
 .side-foot .row{gap:6px}
 .main{min-width:0;display:flex;flex-direction:column}
 .banner{background:var(--heat-soft);color:var(--heat);padding-block:8px;padding-left:max(24px, env(safe-area-inset-left, 0px));padding-right:max(24px, env(safe-area-inset-right, 0px));font-size:13px;display:flex;gap:12px;flex-wrap:wrap;align-items:center}
-.banner a{color:inherit;font-weight:600}
+.banner a,.banner .linkish{color:inherit;font-weight:600}
 .top{background:var(--surface);border-bottom:1px solid var(--line);position:sticky;top:env(safe-area-inset-top,0px);z-index:5}
 .top-in{padding-block:14px 12px;padding-left:max(24px, env(safe-area-inset-left, 0px));padding-right:max(24px, env(safe-area-inset-right, 0px));display:flex;flex-direction:column;gap:12px;max-width:1240px}
 .title-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-height:30px}

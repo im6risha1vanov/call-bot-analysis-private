@@ -38,7 +38,8 @@ class Viewer:
     test: bool = False
     client_id: int | None = None  # компания (clients.id); у клиента компании actor нет, поэтому храним отдельно
     platform: bool = False  # наша учётка с отметкой platform: вкладка «Компании» (crm/platform.py)
-    support: bool = False  # вход в чужую компанию для поддержки, только просмотр
+    support: bool = False  # вход из вкладки «Компании»: «Посмотреть» (только просмотр) или «Сменить учётку»
+    support_by: int | None = None  # чья это сессия на самом деле: наша учётка с отметкой platform
     invite_id: int | None = None  # учётная запись, под которой вошли
 
     @property
@@ -269,7 +270,7 @@ async def viewer_for(pool, session: str | None) -> Viewer | None:
            RETURNING telegram_user_id, role, client_id, extension, client_key, is_test, invite_id, support_by""", digest(session))
     if row is None:
         return None
-    extra = {'support': row['support_by'] is not None, 'invite_id': row['invite_id']}
+    extra = {'support': row['support_by'] is not None, 'support_by': row['support_by'], 'invite_id': row['invite_id']}
     if row['invite_id'] is not None:
         extra['platform'] = bool(await pool.fetchval('SELECT platform FROM crm_invites WHERE id=$1', row['invite_id']))
     if row['role']:

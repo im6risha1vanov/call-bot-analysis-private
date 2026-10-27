@@ -59,7 +59,8 @@ async def guard(request: web.Request, handler):
     hook = request.path.startswith('/hook/')
     if request.method not in ('GET', 'HEAD') and request.headers.get('X-CRM') != '1' and not hook:
         return fail(403, 'Запрос отклонён.')
-    if request.method not in ('GET', 'HEAD') and request.path not in VIEW_ONLY_POSTS:
+    if request.method not in ('GET', 'HEAD') and request.path not in VIEW_ONLY_POSTS \
+            and not request.path.startswith('/api/platform/accounts/'):  # из «Посмотреть» можно сразу сменить учётку
         # Тестовая ссылка и открытый сайт: смотреть можно всё, менять ничего (а не по списку разделов).
         who = await auth.viewer_for(request.app[POOL], request.cookies.get(COOKIE))
         if who is not None and who.test:
@@ -252,7 +253,7 @@ async def api_me(request):
     firm = await company.info(pool, who.company)
     cc_mode = ('sheet' if firm['settings'].get('callcenter_sheet') else 'db') if 'callcenter' in firm['modules'] else None
     firm = {'company': firm['name'], 'modules': firm['modules'], 'support': who.support, 'callcenter_mode': cc_mode,
-            'platform': who.platform and not who.support and firm['home']}
+            'platform': who.platform and not who.support and firm['home'], 'switcher': await can_switch(pool, who)}
     if who.role == 'client':
         return web.json_response({'name': who.client_key, 'role': 'client', 'test': who.test, 'client': who.client_key,
                                   'privileged': False, 'can_dial': False, 'team': [], **firm,
@@ -266,7 +267,8 @@ async def api_me(request):
     privileged = is_privileged(a)
     can_dial = str(a.extension or '').isdigit() and not who.test
     return web.json_response({
-        'name': name or ('Директор' if who.role == 'director' else ''), 'role': who.role, 'test': who.test,
+        'name': name or (await pool.fetchval('SELECT name FROM crm_invites WHERE id=$1', who.invite_id) if who.invite_id else None)
+        or ('Директор' if who.role == 'director' else ''), 'role': who.role, 'test': who.test,
         'ext': a.extension if str(a.extension or '').isdigit() else None,
         'can_dial': can_dial, 'privileged': privileged, 'readonly': who.test,
         'team': await store.team(pool, a.client_id) if privileged else [],
@@ -575,6 +577,39 @@ async def api_company_update(request):
 async def api_company_mango(request):
     who = await platform_viewer(request)
     return web.json_response(await platform.connect_mango(request.app[POOL], who, company_id(request), await body(request)))
+
+
+async def can_switch(pool, who) -> bool:
+    try:
+        await platform.switcher(pool, who)
+        return True
+    except Forbidden:
+        return False
+
+
+async def api_switch_accounts(request):
+    who = await viewer(request)
+    pool = request.app[POOL]
+    await platform.switcher(pool, who)
+    return web.json_response({'accounts': await platform.accounts_all(pool), 'current': who.invite_id})
+
+
+async def api_switch(request):
+    """Сменить учётку без пароля: своя сессия ждёт в BACK_COOKIE, «Вернуться к себе» — /support-exit."""
+    who = await viewer(request)
+    pool = request.app[POOL]
+    own = await platform.switcher(pool, who)
+    session = await platform.switch_session(pool, own, company_id(request))
+    if session is None:
+        return web.json_response({'go': '/support-exit'})
+    back = (request.cookies.get(BACK_COOKIE) if who.support else request.cookies.get(COOKIE)) or ''
+    if who.support:
+        await auth.logout(pool, request.cookies.get(COOKIE))  # прошлая чужая сессия больше не нужна
+    ttl = int(platform.SWITCH_TTL.total_seconds())
+    response = web.json_response({'go': '/'})
+    response.set_cookie(BACK_COOKIE, back, max_age=ttl, httponly=True, secure=SECURE_COOKIE, samesite='Lax', path='/')
+    response.set_cookie(COOKIE, session, max_age=ttl, httponly=True, secure=SECURE_COOKIE, samesite='Lax', path='/')
+    return response
 
 
 async def api_company_enter(request):
@@ -1145,6 +1180,8 @@ def build(pool) -> web.Application:
     app.router.add_post('/api/platform/companies/{id}', api_company_update)
     app.router.add_post('/api/platform/companies/{id}/mango', api_company_mango)
     app.router.add_post('/api/platform/companies/{id}/enter', api_company_enter)
+    app.router.add_get('/api/platform/accounts', api_switch_accounts)
+    app.router.add_post('/api/platform/accounts/{id}/switch', api_switch)
     app.router.add_get('/api/person', api_person)
     app.router.add_get('/api/deals', api_deals)
     app.router.add_get('/api/deals/{phone}', api_deal)
