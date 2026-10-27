@@ -183,7 +183,9 @@ def eleven_rate(sub: dict, models: list, model_id: str, rub: float) -> tuple[flo
     bill = PERIOD_MONTHS.get(sub.get('billing_period'), 1)
     refresh = PERIOD_MONTHS.get(sub.get('character_refresh_period') or sub.get('billing_period'), 1)
     credits = limit * bill / refresh
-    model = next((m for m in models if isinstance(m, dict) and m.get('model_id') == model_id), {})
+    model = next((m for m in models if isinstance(m, dict) and m.get('model_id') == model_id), None)
+    if model is None:  # без модели неизвестно, сколько кредитов стоит символ: 1.0 завысило бы цену вдвое
+        raise PriceError(f'в списке моделей ElevenLabs нет {model_id}')
     rates = model.get('model_rates') or {}
     per_char = (num(rates.get('character_cost_multiplier')) or 1.0) * (num(rates.get('cost_discount_multiplier')) or 1.0)
     money = cents / 100
@@ -204,8 +206,11 @@ async def eleven(http) -> tuple[float, str]:
     r.raise_for_status()
     sub = r.json()
     models = await http.get(ELEVEN_API + '/models', headers=headers)
+    if models.status_code in (401, 403):
+        raise PriceError('ключу ElevenLabs не хватает права Models → Read: без него неизвестно, сколько кредитов стоит символ')
+    models.raise_for_status()
     # цена v4: от неё считаются наборы робота (v4 Turbo вдвое дешевле, у голоса Яндекса своя цена)
-    return eleven_rate(sub, models.json() if models.status_code == 200 else [], 'eleven_v4',
+    return eleven_rate(sub, models.json(), 'eleven_v4',
                        await rub_per(http, str(sub.get('currency') or 'usd')))
 
 
@@ -405,6 +410,9 @@ async def probe(pool, http=None) -> list[str]:
             r = await http.get(ELEVEN_API + '/user/subscription', headers={'xi-api-key': key})
             detail = r.json().get('detail') if r.headers.get('content-type', '').startswith('application/json') else None
             out.append(f'elevenlabs: subscription answered {r.status_code} {json.dumps(detail, ensure_ascii=False)[:300] if detail else ""}')
+            m = await http.get(ELEVEN_API + '/models', headers={'xi-api-key': key})
+            ids = [x.get('model_id') for x in m.json() if isinstance(x, dict)] if m.status_code == 200 else []
+            out.append(f'elevenlabs models: answered {m.status_code}; {", ".join(i for i in ids if i)[:300]}')
         try:
             gpt = [k for k in await yandex_skus(http) if 'gpt' in f"{k.get('name', '')} {k.get('description', '')}".lower()]
             out.append(f'yandex billing: {len(gpt)} gpt skus')

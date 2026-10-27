@@ -85,6 +85,9 @@ class ParseTest(unittest.TestCase):
         self.assertAlmostEqual(value, 17.6)
         with self.assertRaises(rp.PriceError):
             rp.eleven_rate(dict(SUBSCRIPTION, next_invoice=None), MODELS, 'eleven_v3', 80)
+        # без списка моделей цена неизвестна: множитель 1.0 завысил бы её вдвое
+        with self.assertRaises(rp.PriceError):
+            rp.eleven_rate(SUBSCRIPTION, [], 'eleven_v4', 80)
 
     def test_yandex_billing(self):
         self.assertEqual(rp.yandex_sku_rate(SKUS, 'YandexGPT Pro 5.1')[0], 0.8)  # не асинхронные 0,41 и не будущие 9
