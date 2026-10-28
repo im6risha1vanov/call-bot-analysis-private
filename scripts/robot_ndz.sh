@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 DATABASE_URL=$(grep -m1 '^DATABASE_URL=' .env | cut -d= -f2- | sed "s/^[\"']//; s/[\"']\$//")
 DAYS=${1:-14}
 LIMIT=${2:-40}
-echo "== итоги за $DAYS дн. (без автотеста) =="
+echo "== итоги за $DAYS дн. =="
 psql "$DATABASE_URL" -P pager=off -c "
 SELECT outcome, count(*) AS calls, round(avg(duration_s)) AS avg_s, sum(llm_tokens) AS tokens,
        round(avg(llm_tokens)) AS avg_tokens, sum(tts_chars) AS chars
