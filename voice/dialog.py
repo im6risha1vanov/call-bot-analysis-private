@@ -324,7 +324,8 @@ class Dialog:
 
     async def conclude(self, reason: str = "клиент положил трубку") -> None:
         """Звонок оборвался до finish_call: просим модель записать итог по тому, что успели узнать."""
-        if self.finished or not any(who == "client" for who, _ in self.transcript[2:]):
+        # клиент ничего не сказал (только молчание): спрашивать модель не о чем, итог «оборван» без токенов
+        if self.finished or not any(who == "client" and text != SILENCE for who, text in self.transcript[2:]):
             return
         note = (f"(служебно: {reason}, разговор окончен. Клиенту ничего не говори, "
                 "только вызови finish_call с итогом по тому, что успели узнать.)")

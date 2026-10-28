@@ -74,6 +74,21 @@ def finish(data, *chunks):
     return (list(chunks), blocks, "tool_use")
 
 
+class MachineTest(unittest.TestCase):
+    def test_voicemail_and_secretaries_from_real_calls(self):
+        from voice.machine import detect
+        machines = ["Вызываемый абонент не отвечает. Звонок был перенаправлен на голосовой почтовый ящик.",
+                    "Абонент недоступен", "Вы можете оставить сообщение после звукового сигнала",
+                    "Произошёл сбой на моей стороне. Скажите ещё раз, что нужно передать.",
+                    "Сообщение записано и будет передано абоненту.", "Меня зовут Ассистент. Я готова записать ваше сообщение",
+                    "Подскажите, что именно вы хотели бы передать абоненту",
+                    "Я не смогу записать коммерческое предложение"]
+        people = ["Алло, слушаю", "Да, актуален, но я за рулём", "Не оставлял", "Нет, спасибо", "Кухня нужна, передайте специалисту",
+                  "Ну что у вас за добрый день", "Оставлял заявку, да"]
+        self.assertEqual([t for t in machines if not detect(t)], [])
+        self.assertEqual([t for t in people if detect(t)], [])
+
+
 class OperatorTest(unittest.TestCase):
     def test_kitchen_loads_and_prompt_has_script(self):
         op = load("kitchen")
@@ -1090,6 +1105,63 @@ class CallSessionTest(unittest.IsolatedAsyncioTestCase):
         await session.hangup()
         self.assertEqual(used[:2], ["11:Eva", load("kitchen").voice])
         self.assertEqual(len(audio), 1)
+
+    async def _session(self, client):
+        events = []
+
+        async def nothing(_):
+            pass
+
+        async def event(e):
+            events.append(e)
+
+        async def synth(text, voice):
+            return b"\x00\x00" * 16
+
+        async def save(dialog, **kw):
+            return results.record(dialog, **kw)
+
+        return CallSession(Dialog(load("kitchen"), AnthropicBackend(client=client)), nothing, event,
+                           synthesize=synth, save=save), events
+
+    async def test_voicemail_first_words_hang_up_without_model(self):
+        client = FakeClient([])
+        session, _ = await self._session(client)
+        await session.start("Вызываемый абонент не отвечает. Звонок был перенаправлен на голосовой почтовый ящик.")
+        self.assertTrue(session.done.is_set())
+        self.assertEqual((session.saved["outcome"], client.requests), ("ndz", []))
+        self.assertNotIn("robot", [who for who, _ in session.dialog.transcript])  # не здоровались
+
+    async def test_ai_secretary_mid_call_hangs_up_without_model(self):
+        client = FakeClient([])
+        session, _ = await self._session(client)
+        await session.start("Алло")
+        await session.heard("Произошёл сбой на моей стороне. Скажите ещё раз, что нужно передать.", True)
+        self.assertEqual((session.saved["outcome"], client.requests), ("ndz", []))
+        self.assertIn("Автоответчик", session.saved["comment"])
+
+    async def test_silence_after_greeting_without_model(self):
+        import voice.call as call_mod
+        client = FakeClient([])
+        session, _ = await self._session(client)
+        old = call_mod.SILENCE_AFTER_S
+        call_mod.SILENCE_AFTER_S = 0.05
+        try:
+            await session.start("Алло")
+            await asyncio.wait_for(session.done.wait(), 5)
+        finally:
+            call_mod.SILENCE_AFTER_S = old
+        robot = [text for who, text in session.dialog.transcript if who == "robot"]
+        self.assertEqual(robot[-1], call_mod.NO_ANSWER)  # раз переспросил заготовкой, потом положил трубку
+        self.assertEqual((session.saved["outcome"], client.requests), ("ndz", []))
+
+    async def test_hangup_before_any_answer_needs_no_model(self):
+        client = FakeClient([])
+        session, _ = await self._session(client)
+        await session.start("Алло")
+        session.dialog.transcript.append(("client", "(молчание)"))
+        await session.hangup()
+        self.assertEqual((session.saved["outcome"], client.requests), ("callback", []))  # как раньше, но без модели
 
     async def test_slow_greeting_is_not_dropped_by_hello_or_silence(self):
         import voice.call as call_mod

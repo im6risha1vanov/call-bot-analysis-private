@@ -14,8 +14,8 @@ import re
 import time
 from typing import Awaitable, Callable
 
-from voice import llm, results, speech
-from voice.dialog import SILENCE, Dialog, quick_static
+from voice import llm, machine, results, speech
+from voice.dialog import SILENCE, CallResult, Dialog, quick_static
 
 log = logging.getLogger("voice.call")
 
@@ -52,6 +52,7 @@ GOODBYE_WORDS = {"свидания", "доброго", "спасибо", "бла
 # Клиент снова заговорил меньше чем через столько секунд после конца своей реплики: это не новая реплика,
 # а продолжение той же фразы, которую закрыли слишком рано. Ответ робота на её начало отменяется.
 CONTINUE_S = 1.0
+NO_ANSWER = "Алло, вам меня слышно?"  # молчание после приветствия: заготовка вместо модели
 PARTING = {"thanks": "Вам спасибо, всего доброго.", "bye": "Всего доброго."}
 # Реплика озвучивается целиком, когда модель её дописала: ElevenLabs ведёт одну интонацию через всю реплику.
 # По предложениям быстрее на 0,3–0,6 с, но интонация начинается заново после каждой точки.
@@ -102,6 +103,7 @@ class CallSession:
         self.speaking_until = 0.0
         self.pending = 0         # фраз в очереди или в синтезе: робот уже «говорит», хотя звука ещё нет
         self.audio_sent = False
+        self.silences = 0  # молчаний подряд, пока клиент не сказал ни слова
         self.client_spoke = False  # клиент уже сказал что-то по делу (не «алло» поверх приветствия)
         self.generation = 0      # растёт при перебивании, старые фразы не озвучиваются
         self.ended = asyncio.Event()   # итог больше не меняется
@@ -128,6 +130,9 @@ class CallSession:
 
     async def start(self, first_words: str = "Алло") -> None:
         self.tts_task = asyncio.create_task(self._tts_worker())
+        if machine.detect(first_words):  # голосовая почта заговорила первой: не здороваемся и модель не зовём
+            await self._machine_end(first_words)
+            return
         if self.voice_enabled and self.synthesize is speech.synthesize_pcm:
             asyncio.create_task(self._warm_up_voice())
         greeting = self.dialog.greet(first_words)
@@ -179,6 +184,9 @@ class CallSession:
             if final:
                 self.after_end.put_nowait(text)
             return
+        if final and machine.detect(text):  # автоответчик, даже поверх приветствия робота
+            await self._machine_end(text)
+            return
         started = self.utterance_at or time.monotonic()
         # робот ещё говорил или думал, когда клиент снова заговорил: его ответ клиент толком не услышал
         over_robot = self.utterance_over_robot if self.utterance_at else self.is_speaking()
@@ -207,6 +215,7 @@ class CallSession:
                 and self.dialog.undo_robot():
             log.info("клиент договаривает прошлую фразу: «%s», ответ на её начало отменён", text)
         self.client_spoke = True
+        self.silences = 0
         self.heard_at = self.client_done_at = time.monotonic()
         await self.send_event({"type": "transcript", "role": "client", "text": text})
         self.reply_task = asyncio.create_task(self._respond(text))
@@ -245,7 +254,33 @@ class CallSession:
 
     # ------------------------------------------------------------------ робот
 
+    async def _machine_end(self, text: str) -> None:
+        """Автоответчик или ИИ-секретарь: кладём трубку молча, итог ndz без модели."""
+        found = machine.detect(text)
+        log.info("автоответчик («%s»): «%s», кладём трубку", found, text)
+        self._cancel_silence()
+        await self._barge_in(text)  # замолкаем и отменяем ответ модели, если она уже думала
+        self.dialog.transcript.append(("client", text))
+        self.dialog.result = CallResult("ndz", f"Автоответчик: «{text.strip()[:120]}»")
+        await self.send_event({"type": "transcript", "role": "client", "text": text})
+        await self._finish("автоответчик")
+
     async def _respond(self, text: str) -> None:
+        if text == SILENCE and not self.client_spoke:
+            # Никто не ответил на приветствие. Раньше молчание разбирала модель: два вызова по 2,5 тыс. токенов
+            # на пустой звонок. Теперь раз переспрашиваем заготовкой, на второй раз кладём трубку.
+            self.silences += 1
+            self.dialog.transcript.append(("client", SILENCE))
+            if self.silences >= 2:
+                self.dialog.result = CallResult("ndz", "Не ответил: молчание после приветствия")
+                await self._finish("молчание")
+                return
+            self.dialog.messages += [{"role": "user", "content": SILENCE}, {"role": "assistant", "content": NO_ANSWER}]
+            self.dialog.transcript.append(("robot", NO_ANSWER))
+            await self._say(NO_ANSWER)
+            await self.send_event({"type": "transcript", "role": "robot", "text": NO_ANSWER, "first_text_ms": 0})
+            self._arm_silence()
+            return
         quick = getattr(self.dialog, "quick_reply", None)
         fast = quick(text) if quick and text != SILENCE else None
         if fast:  # ожидаемый ответ клиента: заготовка из анкеты, без ожидания модели
@@ -371,7 +406,7 @@ class CallSession:
         """Соединение с синтезом и «так…», «угу…» в кэше заранее: в разговоре они звучат без задержки."""
         await speech.warm_up_tts(self.voice)
         quick = [quick_static(item["reply"]) for item in self.dialog.op.quick]
-        for word in FILLERS + NOTE_FILLERS + BACKCHANNELS + list(PARTING.values()) + [q for q in quick if q]:
+        for word in FILLERS + NOTE_FILLERS + BACKCHANNELS + list(PARTING.values()) + [NO_ANSWER] + [q for q in quick if q]:
             try:
                 await self.synthesize(word, self.voice)
             except Exception as e:
