@@ -26,4 +26,8 @@ dumps/
 *.log
 .DS_Store
 google-key.json
+yandex-sa-key.json
 *service-account*.json
+voice_calls.jsonl
+.voice_tts_cache/
+crm_private/

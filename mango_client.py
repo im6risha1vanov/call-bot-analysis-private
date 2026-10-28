@@ -40,6 +40,14 @@ async def call(method: str, vpbx_api_key: str, salt: str, payload: dict, timeout
     return r.json()
 
 
+async def callback(vpbx_api_key: str, salt: str, extension: str, to_number: str, command_id: str) -> dict:
+    """POST /commands/callback — звонок от имени сотрудника: Mango сначала звонит
+    на его добавочный, а когда он снимет трубку, набирает to_number. Ответ
+    {"result": 1000} значит, что команда принята; остальные коды — отказ."""
+    return await call("commands/callback", vpbx_api_key, salt, {
+        "command_id": command_id, "from": {"extension": str(extension)}, "to_number": to_number})
+
+
 async def fetch_employees(vpbx_api_key: str, salt: str) -> list[dict]:
     """POST /config/users/request без extension — возвращает всех сотрудников ВАТС."""
     data = await call("config/users/request", vpbx_api_key, salt, {})

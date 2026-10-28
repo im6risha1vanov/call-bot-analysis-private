@@ -58,13 +58,21 @@ async def record(conn, call, data: dict) -> int | None:
     """Закрыть открытые задачи по этому номеру и создать новую из разбора."""
     if not data.get('reviewed'):
         return None  # автоответчик или обрыв не выполняет перезвон
+    # Перезвон, который менеджер назначил в CRM после этого звонка, важнее
+    # разбора: его не закрываем и второй задачей не дублируем.
+    started = call.get('call_started_at')
     if call['client_number']:
         await conn.execute(
             """UPDATE callback_tasks SET status='closed_by_call', closed_call_id=$3, updated_at=now()
-               WHERE client_id=$1 AND client_number=$2 AND status='open' AND call_id<>$3""",
-            call['client_id'], call['client_number'], call['id'])
+               WHERE client_id=$1 AND client_number=$2 AND status='open' AND call_id IS DISTINCT FROM $3
+                 AND NOT (source='crm' AND $4::timestamptz IS NOT NULL AND created_at >= $4)""",
+            call['client_id'], call['client_number'], call['id'], started)
     found = step(data)
     if not found:
+        return None
+    if call['client_number'] and started and await conn.fetchval(
+            """SELECT 1 FROM callback_tasks WHERE client_id=$1 AND client_number=$2 AND status='open'
+               AND source='crm' AND created_at >= $3 LIMIT 1""", call['client_id'], call['client_number'], started):
         return None
     return await conn.fetchval(
         """INSERT INTO callback_tasks(client_id,extension,call_id,client_number,company,kind,due_date,due_time,date_is_estimate,raw)

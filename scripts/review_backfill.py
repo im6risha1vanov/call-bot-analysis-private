@@ -30,8 +30,9 @@ log = logging.getLogger('review-backfill')
 
 
 async def backfill(pool, since: datetime, meta=None, run=None, dry_run=False) -> dict:
-    from review import callbacks, engine, kitchen, store
-    run = run or engine.run
+    from review import callbacks, kitchen, prompts, store
+    # Тем же промтом, что и новые звонки: общая версия из режима промта или исходная.
+    run = run or (lambda transcript, call_meta: prompts.run_common_review(pool, transcript, call_meta))
     calls = await pool.fetch(
         """SELECT c.* FROM calls c
            WHERE c.call_started_at >= $1 AND c.status IN ('analyzed','delivered')

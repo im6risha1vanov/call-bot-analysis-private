@@ -81,7 +81,11 @@ class SheetsWriteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(batches[2], [{'deleteSheet': {'sheetId': 6}}])
         puts = [(path, body) for method, path, body in seen if method == 'PUT']
         self.assertEqual(puts[1][1]['values'][2], ['07.10.2026 11:40', 'Результат'])
-        styling = batches[3]
+        unmerge = batches[3]  # объединения снимаются до записи значений, иначе строка на месте разделителя теряет ячейки
+        self.assertEqual({r['unmergeCells']['range']['sheetId'] for r in unmerge}, {5, 9})
+        self.assertLess(seen.index(next(x for x in seen if x[2] is not None and x[2].get('requests') == unmerge)),
+                        seen.index(next(x for x in seen if x[0] == 'PUT')))
+        styling = batches[4]
         self.assertEqual(sum('deleteConditionalFormatRule' in r for r in styling), 2)
         merges = [r['mergeCells']['range'] for r in styling if 'mergeCells' in r]
         self.assertEqual([(m['sheetId'], m['startRowIndex']) for m in merges], [(5, 1)])
@@ -107,11 +111,13 @@ class CallbackStoreTests(unittest.IsolatedAsyncioTestCase):
         await self.pool.execute("""
             ALTER TABLE calls ADD COLUMN IF NOT EXISTS duration_seconds INTEGER DEFAULT 90;
             ALTER TABLE calls ADD COLUMN IF NOT EXISTS client_number TEXT;
+            ALTER TABLE calls ADD COLUMN IF NOT EXISTS direction INTEGER DEFAULT 2;
+            ALTER TABLE clients ADD COLUMN IF NOT EXISTS min_call_seconds INTEGER DEFAULT 30;
             ALTER TABLE employees ADD COLUMN IF NOT EXISTS id BIGSERIAL;
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS topic TEXT;
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS mode TEXT;
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS assigned_by_telegram_user_id BIGINT;""")
-        for name in ('008_call_reviews.sql', '009_callback_tasks.sql'):
+        for name in ('008_call_reviews.sql', '009_callback_tasks.sql', '021_manager_memory.sql'):
             await self.pool.execute((root / 'migrations' / name).read_text())
         await self.pool.execute('TRUNCATE clients CASCADE')
         await self.pool.execute("INSERT INTO clients VALUES(1,'Europe/Moscow',true)")
@@ -175,8 +181,25 @@ class CallbackStoreTests(unittest.IsolatedAsyncioTestCase):
     async def test_sheet_rows_from_database(self):
         await self.add(TIMED)
         await self.add(LOST, TRANSCRIPT, number='79990003344')
-        summary, days, calls, tasks = await sheets.collect(self.pool, datetime(2026, 10, 7, 12, tzinfo=MSK))
-        self.assertEqual([t.title for t in (summary, days, calls, tasks)], ['Сводка', 'По дням', 'Звонки', 'Перезвоны'])
+        summary, days, calls, tasks, everything, mem = await sheets.collect(self.pool, datetime(2026, 10, 7, 12, tzinfo=MSK))
+        self.assertEqual([t.title for t in (summary, days, calls, tasks, everything, mem)],
+                         ['Сводка', 'По дням', 'Звонки', 'Перезвоны', 'Все звонки', 'Память менеджеров'])
+        # память: неделя по менеджерам и где терялся результат, с примером звонка
+        first = next(r for r in mem.rows if r[:2] == ['Первый', '101'])
+        self.assertEqual(first[2:], [2, 1, '50%', '—', 0, 'не закреплён день перезвона · 1', ''])
+        lost_id = await self.pool.fetchval("SELECT id FROM calls WHERE client_number='79990003344'")
+        self.assertIn(['Первый', '101', 1, 1, 0, lost_id, '', 'не закреплён день перезвона'], mem.rows)
+        # карточка бота: фокус в недельной таблице и слабые места отдельным разделом
+        card = {'weak_spots': [{'category': 'no_callback_date', 'title': 'Не закрепляет день', 'pattern': 'Соглашается на «позже».',
+                                'advice': 'Спросите: «Завтра в 11?»', 'examples': [lost_id], 'counts': {'month': 3, 'week': 1, 'prev': 0}}],
+                'strengths': [], 'focus': 'Закреплять день перезвона.', 'trend': None}
+        await self.pool.execute("INSERT INTO manager_memory(client_id,extension,day,card,stats,talks,prompt_version) "
+                                "VALUES(1,'101','2026-10-07',$1::jsonb,'{}',2,'v')", json.dumps(card, ensure_ascii=False))
+        mem = (await sheets.collect(self.pool, datetime(2026, 10, 7, 12, tzinfo=MSK)))[5]
+        self.assertEqual(next(r for r in mem.rows if r[:2] == ['Первый', '101'])[8], 'Закреплять день перезвона.')
+        weak = next(r for r in mem.rows if len(r) > 7 and str(r[7]).startswith('Слабое место:'))
+        self.assertIn('Не закрепляет день', weak[7])
+        self.assertEqual(weak[8], 'Спросите: «Завтра в 11?»')
         self.assertEqual(calls.rows[0], sheets.CALLS_HEADER)
         self.assertEqual((calls.styles[1], calls.rows[1]), ('section', ['Звонки за 07.10.2026 · 2']))
         won = next(r for r in calls.rows[2:] if r[3] == 'ООО Ромашка')
@@ -188,6 +211,25 @@ class CallbackStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(['не закреплён день перезвона', 1], summary.rows)
         self.assertEqual([r[0] for r, s in zip(tasks.rows, tasks.styles) if s == 'section'], ['Дальше · 2'])
         self.assertEqual(tasks.rows[2][7], 'открыт')
+
+    async def test_all_calls_sheet_counts_every_mango_call(self):
+        await self.add(TIMED)  # разобранный разговор 90 с
+        day = datetime(2026, 10, 7, 10, 0, tzinfo=MSK)
+        await self.pool.execute(
+            """INSERT INTO calls(client_id,extension,direction,duration_seconds,call_started_at,status) VALUES
+               (1,'101',2,0,$1,'skipped'),(1,'101',2,12,$1,'skipped'),(1,'102',2,0,$1,'skipped'),
+               (1,'101',1,40,$1,'skipped'),(1,'101',1,0,$1,'skipped'),(1,NULL,1,0,$1,'skipped'),
+               (1,'101',3,50,$1,'skipped'),(1,'101',2,60,$2,'skipped')""", day, day.replace(day=6))
+        everything = (await sheets.collect(self.pool, datetime(2026, 10, 7, 12, tzinfo=MSK)))[4]
+        self.assertEqual(everything.rows[0], sheets.all_calls_header(30))
+        rows = {(r[0], r[1]): r for r in everything.rows[1:]}
+        # исходящих 3 (0, 12 и 90 с), дозвонились 2, разговоров от 30 с 1; входящих 2, пропущен 1; внутренний не считается
+        self.assertEqual(rows[('07.10.2026', 'Первый')][2:], ['101', 3, 2, 1, 2, 1, round((12 + 90 + 40) / 60), 1])
+        self.assertEqual(rows[('07.10.2026', 'Второй')][3:6], [1, 0, 0])
+        self.assertEqual(rows[('07.10.2026', 'Без сотрудника')][6:8], [1, 1])
+        self.assertEqual(rows[('06.10.2026', 'Первый')][3:6], [1, 1, 1])
+        self.assertEqual(everything.rows[1][0], '07.10.2026')
+        self.assertEqual(everything.rows[1][1], 'Первый')  # внутри дня больше всех исходящих выше
 
     async def test_train_assignment_and_scenario(self):
         import training_simulator

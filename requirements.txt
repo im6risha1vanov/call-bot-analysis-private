@@ -6,3 +6,4 @@ cryptography>=42,<44
 anthropic==1.4.0
 google-auth>=2.30,<3
 requests>=2.31,<3
+telethon>=1.36,<2
