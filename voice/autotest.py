@@ -42,7 +42,7 @@ from voice.llm import make_backend
 log = logging.getLogger("voice.autotest")
 
 CLIENT_VOICE = os.getenv("VOICE_AUTOTEST_CLIENT_VOICE", "filipp")
-DEFAULT_AUDIO = ["ready", "busy", "questions"]
+DEFAULT_AUDIO = ["ready", "busy", "questions", "voicemail"]
 VOICE_RMS = 400            # громче этого кадр робота считается речью
 ROBOT_DONE_S = 0.9         # абонент отвечает, когда робот молчит столько
 WAIT_ROBOT_S = 12.0        # столько ждём, что робот заговорит после реплики абонента
