@@ -2,7 +2,7 @@
 # Звонки робота для разбора автоответчиков: сводка по итогам и расшифровки звонков без дозвона.
 # Номера не печатаем. Запуск из /opt/callbot-astra: bash scripts/robot_ndz.sh [дней] [сколько расшифровок]
 set -euo pipefail
-cd "$(dirname "$0")/.."
+[ -f .env ] || cd "$(dirname "$0")/.."  # через git show ... | bash запускаем из /opt/callbot-astra
 DATABASE_URL=$(grep -m1 '^DATABASE_URL=' .env | cut -d= -f2- | sed "s/^[\"']//; s/[\"']\$//")
 DAYS=${1:-14}
 LIMIT=${2:-40}
