@@ -11,7 +11,7 @@ catch(e){console.error('NOT RUN: Playwright is unavailable. No browser checks or
 const rows=[];
 function intersects(a,b,gap=0){return a.x<b.x+b.width+gap&&a.x+a.width>b.x-gap&&a.y<b.y+b.height+gap&&a.y+a.height>b.y-gap;}
 async function state(page){return page.evaluate(()=>{const w=AveronLearningWorkspace.classroom,a=w.current(),st=w.lesson(w.state.active).steps[a.step],refs=AveronLearningEngine.refs(a);return {step:a.step,finished:w.finished(),st,values:st?Object.fromEntries(Object.entries(st.expected).map(([k,v])=>[k,Object.hasOwn(refs,v)?refs[v]:v])):{}};});}
-async function perform(page){const {st,values:a}=await state(page),click=s=>page.locator(s).last().click(),fill=(s,v)=>page.locator(s).fill(v);switch(st.action){
+async function perform(page){await page.waitForFunction(()=>!AveronLearningWorkspace.classroom.presentationBusy);const {st,values:a}=await state(page),click=s=>page.locator(s).last().click(),fill=(s,v)=>page.locator(s).fill(v);switch(st.action){
  case 'select_client':await click('[data-next] [data-i="1"]');break;
  case 'save_outcome':await click('[data-out="'+a.outcome+'"]');if(a.outcome==='callback'){await fill('[data-f="date"]',a.due_date);await fill('[data-f="time"]',a.due_time);await fill('[data-f="comment"]','Обсудить предложение');await click('[data-act="save"]');}break;
  case 'visit_page':{
@@ -48,7 +48,7 @@ async function main(){
   const card=page.locator('[data-learning-guide]');await card.waitFor();assert.equal(await card.evaluate(n=>getComputedStyle(n).position),'fixed');assert.equal(await card.evaluate(n=>n.parentElement===document.body),true);assert.equal(await page.locator('[data-learn-next],[data-check-answer],[data-answer]').count(),0);assert.equal(await page.locator('.banner').filter({hasText:'Учебная учётка'}).count(),1);
   if(role==='director'){
    for(let n=0;n<100;n++){const before=await state(page);if(before.finished)break;await perform(page);await page.waitForFunction(v=>AveronLearningWorkspace.classroom.current().step>v,before.step);}
-   await page.locator('[data-tab-lesson="calls"]').click();const filter=page.locator('[data-ext-pick]');await filter.waitFor();assert.equal((await page.locator('[data-learn-feedback]').textContent()).trim(),'');
+   await page.waitForFunction(()=>!AveronLearningWorkspace.classroom.presentationBusy);await page.locator('[data-tab-lesson="calls"]').click();const filter=page.locator('[data-ext-pick]');await filter.waitFor();assert.equal((await page.locator('[data-learn-feedback]').textContent()).trim(),'');
    const before=(await state(page)).step;await filter.click();await page.keyboard.press('Escape');await filter.selectOption('101');assert.equal((await state(page)).step,before);assert((await page.locator('[data-learn-feedback]').textContent()).includes('Бориса'));
    const control=await filter.boundingBox(),box=await card.boundingBox();assert(!intersects(box,control,2));const header=await page.locator('#top').boundingBox(),table=await page.locator('#view').boundingBox();await card.evaluate(n=>n.style.display='none');assert.deepEqual(header,await page.locator('#top').boundingBox());assert.deepEqual(table,await page.locator('#view').boundingBox());await card.evaluate(n=>n.style.display='');await page.waitForTimeout(60);
    await page.screenshot({path:path.join(out,theme==='light'?'director-filter.png':'director-filter-dark.png')});await filter.selectOption('102');await page.waitForFunction(v=>AveronLearningWorkspace.classroom.current().step===v+1,before);
@@ -57,6 +57,12 @@ async function main(){
    await page.locator('[data-f="date"]').fill(clock.callback.due_date);await page.locator('[data-f="time"]').fill(clock.callback.due_time);await page.locator('[data-f="comment"]').fill('Обсудить предложение');await page.waitForTimeout(80);
    for(const s of ['[data-f="date"]','[data-f="time"]','[data-act="save"]'])assert(!intersects(await card.boundingBox(),await page.locator(s).boundingBox(),2));await page.screenshot({path:path.join(out,theme==='dark'?'manager-callback.png':'manager-callback-light.png')});
    const before=(await state(page)).step;await page.locator('[data-learn-close]').click();assert.equal(await card.count(),0);assert.equal(await page.locator('.learn-highlight').count(),0);await page.locator('[data-learn-resume]').click();await card.waitFor();assert.equal((await state(page)).step,before);
+  }
+  if(role==='director'){
+   await page.waitForFunction(()=>!AveronLearningWorkspace.classroom.presentationBusy);await page.locator('[data-learn-catalog]').click();await page.locator('[data-tab-lesson="deals"]').click();await perform(page);await perform(page);await page.waitForFunction(()=>!AveronLearningWorkspace.classroom.presentationBusy);await page.locator('.rvm').waitFor();
+   assert(await card.evaluate(n=>Number(getComputedStyle(n).zIndex)>Number(getComputedStyle(document.querySelector('.rvm')).zIndex)));
+   assert(await card.evaluate(n=>{const r=n.getBoundingClientRect();return n.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2));}));
+   const handle=page.locator('[data-learn-drag]'),r=await handle.boundingBox(),before=await card.boundingBox();await page.mouse.move(r.x+20,r.y+15);await page.mouse.down();await page.mouse.move(r.x+100,r.y+65,{steps:8});await page.mouse.up();const after=await card.boundingBox();assert(after.x!==before.x||after.y!==before.y);assert.equal(await page.locator('.rvm').count(),1);
   }
   await page.setViewportSize({width:390,height:844});await page.evaluate(()=>window.dispatchEvent(new Event('resize')));await page.waitForTimeout(100);const box=await card.boundingBox();if(box)assert(box.x>=0&&box.y>=0&&box.x+box.width<=391&&box.y+box.height<=845);await page.keyboard.press('Tab');assert.equal(apiRequests.length,0);assert.equal(errors.length,0,errors.join(';'));rows.push({role,theme,result:'passed',apiRequests:0});await context.close();
  }}finally{await browser.close();}

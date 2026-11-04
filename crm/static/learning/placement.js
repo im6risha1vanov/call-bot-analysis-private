@@ -41,6 +41,41 @@
     result.arrowY=visible?clamp((t.top+t.bottom)/2-result.top,18,height-18):height/2;
     return result;
   }
-  const api={place,overlap,rect};
+  // A user-chosen position remains near the drop point, inside the visual
+  // viewport and clear of the target/controls. No DOM or operational actions.
+  function move({position,card,viewport,target,obstacles=[],dragging=false}){
+    const v=rect(viewport),margin=10,gap=7;
+    const width=Math.min(card.width,Math.max(1,v.width-2*margin)),height=Math.min(card.height,Math.max(1,v.height-2*margin));
+    const t=target?rect(target):null,visible=t&&t.width>0&&t.height>0&&overlap(t,v);
+    const blocks=[...(visible?[t]:[]),...obstacles.map(rect)].filter(r=>r.width>0&&r.height>0&&overlap(r,v));
+    const x=clamp(position.left,v.left+margin,v.right-width-margin),y=clamp(position.top,v.top+margin,v.bottom-height-margin);
+    const candidates=[];
+    function add(left,top){
+      left=clamp(left,v.left+margin,v.right-width-margin);top=clamp(top,v.top+margin,v.bottom-height-margin);
+      const r={left,top,width,height,right:left+width,bottom:top+height};
+      if(!dragging&&blocks.some(b=>overlap(r,b,5)))return;
+      candidates.push(r);
+    }
+    add(x,y);
+    if(!dragging){
+      for(const b of blocks){
+        for(const left of [b.left-width-gap,b.right+gap]){add(left,y);for(const top of [b.top-height-gap,b.bottom+gap])add(left,top);}
+        for(const top of [b.top-height-gap,b.bottom+gap])add(x,top);
+      }
+      for(const left of [v.left+margin,v.right-width-margin])for(const top of [v.top+margin,v.bottom-height-margin])add(left,top);
+    }
+    if(!candidates.length)return {blocked:true,width,height};
+    candidates.sort((a,b)=>(a.left-x)**2+(a.top-y)**2-((b.left-x)**2+(b.top-y)**2));
+    const result=candidates[0];result.side='dock';result.detached=true;
+    if(visible&&!dragging){
+      if(result.left>=t.right+5)result.side='right';else if(result.right<=t.left-5)result.side='left';
+      else if(result.top>=t.bottom+5)result.side='bottom';else if(result.bottom<=t.top-5)result.side='top';
+      result.detached=result.side==='dock';
+    }
+    result.arrowX=visible?clamp((t.left+t.right)/2-result.left,18,width-18):width/2;
+    result.arrowY=visible?clamp((t.top+t.bottom)/2-result.top,18,height-18):height/2;
+    return result;
+  }
+  const api={place,move,overlap,rect};
   if(typeof module!=='undefined'&&module.exports)module.exports=api;else root.AveronLearningPlacement=api;
 }(this));

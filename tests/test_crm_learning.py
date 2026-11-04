@@ -99,6 +99,26 @@ class CatalogTests(unittest.TestCase):
                     self.assertFalse(step['action'].startswith('answer_'))
                     self.assertTrue(step['explain'])
 
+    def test_illustrative_gifs_and_posters_decode_without_external_services(self):
+        import shutil,subprocess,struct
+        examples=json.loads((ROOT/'crm/learning_examples.json').read_text())
+        self.assertEqual(len(examples),37)
+        ffmpeg=shutil.which('ffmpeg')
+        self.assertIsNotNone(ffmpeg, 'Need local ffmpeg to decode actual media; do not mark this check passed without it.')
+        for key,item in examples.items():
+            for name in ('gif','poster'):
+                path=ROOT/'crm/static/learning/examples'/item[name]
+                content=path.read_bytes()
+                self.assertGreater(len(content),100)
+                if name=='gif':
+                    self.assertIn(content[:6],(b'GIF87a',b'GIF89a'))
+                    self.assertEqual(struct.unpack('<HH',content[6:10]),(480,280))
+                else:
+                    self.assertEqual(content[:8],b'\x89PNG\r\n\x1a\n')
+                decoded=subprocess.run([ffmpeg,'-hide_banner','-loglevel','error','-threads','1','-i',str(path),'-f','null','-'],capture_output=True,timeout=10)
+                self.assertEqual(decoded.returncode,0,key+' '+name+' failed to decode')
+            self.assertIn('Схематический',item['alt'])
+
     def test_no_duplicate_highlight_attributes(self):
         import re
         for f in (ROOT/'crm/static').rglob('*.js'):

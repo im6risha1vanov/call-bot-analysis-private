@@ -4,7 +4,7 @@
 .learn-catalog .card p{flex:1}
 .learn-catalog h2{font-size:18px;margin:4px 0}
 .learn-frame{display:block;width:100%;min-height:500px;border:1px solid var(--line);border-radius:14px;background:var(--bg);margin-top:12px}
-.learn-guide{position:fixed;inset:auto;margin:0;width:300px;max-width:calc(100vw - 20px);padding:14px;border:1px solid var(--accent);border-radius:12px;background:var(--surface);color:var(--fg);box-shadow:var(--shadow);z-index:55;display:flex;flex-direction:column;pointer-events:auto}
+.learn-guide{position:fixed;inset:auto;margin:0;width:300px;max-width:calc(100vw - 20px);padding:14px;border:1px solid var(--accent);border-radius:12px;background:var(--surface);color:var(--fg);box-shadow:var(--shadow);z-index:260;display:flex;flex-direction:column;pointer-events:auto}
 .learn-guide h2,.learn-guide h3{margin:8px 0 4px;font-size:16px}
 .learn-guide p{margin:6px 0}
 .learn-highlight{outline:3px solid var(--accent);outline-offset:4px;scroll-margin-block:30px}
@@ -62,7 +62,7 @@
 .learn-guide[data-compact="true"] .learn-body,.learn-guide[data-compact="true"] .learn-actions{display:none}
 .learn-guide[data-compact="true"] .learn-head b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px}
 .learn-guide[data-compact="true"] .learn-step{font-size:10px;margin-top:0}
-.learn-resume{position:fixed;display:flex;align-items:center;gap:6px;padding:6px;width:290px;max-width:calc(100vw - 20px);border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--fg);box-shadow:var(--shadow);z-index:55;font-size:12px}
+.learn-resume{position:fixed;display:flex;align-items:center;gap:6px;padding:6px;width:290px;max-width:calc(100vw - 20px);border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--fg);box-shadow:var(--shadow);z-index:260;font-size:12px}
 .learn-resume .btn,.learn-resume .ghost{min-height:32px;font-size:12px}.learn-resume[data-compact="true"]>span{display:none}
 @media(max-width:600px){.learn-actions .btn,.learn-close{min-height:44px}.learn-guide .field .inp{min-height:40px}}
 
@@ -70,3 +70,24 @@
 .learn-guide[data-placement="top"]::before,.learn-guide[data-placement="bottom"]::before{transform:translateX(-50%) rotate(45deg)}
 
 .learn-guide p.learn-explanation{font-size:12px;line-height:1.4;color:var(--muted);margin:7px 0 0}
+
+/* Above native CRM modals (201) and webphone (250), below toast (300). */
+.learn-handle{cursor:grab;touch-action:none;user-select:none;min-height:44px;flex:1;border-radius:6px}
+.learn-handle:active,.learn-guide.learn-dragging .learn-handle{cursor:grabbing}
+.learn-move-note{display:block;font-size:10px;color:var(--muted);margin-top:4px}
+.learn-guide.learn-dragging{user-select:none}
+.learn-guide p.learn-purpose{font-size:12px;line-height:1.45;margin:8px 0 0}
+.learn-purpose b{font-weight:600;color:var(--fg)}
+
+.learn-example{margin:12px 0 0;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--surface-2)}
+.learn-example figcaption{font-size:10px;color:var(--muted);padding:5px 8px}
+.learn-example img{display:block;width:100%;height:auto;max-height:155px;object-fit:contain;background:#fff}
+.learn-example .ghost{font-size:11px;padding:4px 8px;min-height:32px}
+.learn-success{display:flex;align-items:center;flex-direction:column;text-align:center;padding:12px 0;gap:8px}
+.learn-success svg{width:52px;height:52px;fill:none;stroke:var(--accent);stroke-width:3;stroke-linecap:round;stroke-linejoin:round;animation:learn-check-pop .3s ease-out both}
+.learn-success path{stroke-dasharray:48;stroke-dashoffset:48;animation:learn-check-draw .4s .1s ease-out forwards}
+.learn-success b{font-size:17px;color:var(--accent)}
+.learn-success p{font-size:13px;line-height:1.4;margin:0}.learn-success small{font-size:11px;color:var(--muted)}
+@keyframes learn-check-pop{from{opacity:0;transform:scale(.75)}to{opacity:1;transform:scale(1)}}
+@keyframes learn-check-draw{to{stroke-dashoffset:0}}
+@media(prefers-reduced-motion:reduce){.learn-success svg,.learn-success path{animation:none;stroke-dashoffset:0}}

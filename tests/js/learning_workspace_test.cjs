@@ -8,7 +8,7 @@ class Storage{constructor(){this.m=new Map();}get length(){return this.m.size;}k
 let seed=0,network=0;
 const ctx=vm.createContext({URL,Uint32Array,crypto:{getRandomValues(a){a[0]=++seed;return a;}},fetch(){network++;throw Error('Unexpected network');}});
 for(const file of ['engine.js','workspace-model.js'])vm.runInContext(read('crm/static/learning/'+file),ctx,{filename:file});
-function packet(role='manager', entry='entry-1',scope='account-1',modules=['contracts','automations','robot','gpt']){return {role,entry,scope,modules,clock,programme:JSON.parse(read('crm/learning_programme.json'))[role],lessons:catalog.lessons.filter(l=>l.role===role).map(l=>({...l,available:!l.module||modules.includes(l.module),guide:l.guide.filter(s=>!s.module||modules.includes(s.module))}))};}
+function packet(role='manager', entry='entry-1',scope='account-1',modules=['contracts','automations','robot','gpt']){return {role,entry,scope,modules,clock,examples:JSON.parse(read('crm/learning_examples.json')),programme:JSON.parse(read('crm/learning_programme.json'))[role],lessons:catalog.lessons.filter(l=>l.role===role).map(l=>({...l,available:!l.module||modules.includes(l.module),guide:l.guide.filter(s=>!s.module||modules.includes(s.module))}))};}
 function model(role='manager',entry='entry-1',storage=new Storage(),scope='account-1',modules){return new ctx.AveronClassroom.Classroom(packet(role,entry,scope,modules),storage);}
 function values(m){const l=m.lesson(m.state.active),s=m.current(),step=l.steps[s.step],r=ctx.AveronLearningEngine.refs(s),a={type:step.action};for(const [k,v]of Object.entries(step.expected))a[k]=Object.hasOwn(r,v)?r[v]:v;if(a.comment)a.comment='Обсудить предложение';return a;}
 async function perform(m,a){

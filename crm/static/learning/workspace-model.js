@@ -150,6 +150,7 @@
         } else {if(strict)throw new Error('Этот шаг выполнен. Нажмите «Далее →».');return false;}
       }
       if(this.finished()){if(strict)throw new Error('Урок уже пройден. Для новой попытки выберите «Пройти заново».');return false;}
+      if(this.presentationBusy){if(strict)throw new Error('Действие уже сохранено. Дождитесь следующей подсказки.');return false;}
       const result=E.apply(lesson,this.context,s,action);
       // Initial/background reads must not show errors before any user choice.
       if(!result.ok&&!strict&&((p?.manual&&!p.touched)||(this.inProgramme()&&this.touchedStep!==s.step)))return false;
@@ -158,7 +159,9 @@
         if(result.advanced)p.pending={from:s.step,before:copy(s),action:copy(action)};
         else if(s.step===p.cursor)p.pending=null;
       }
-      this.save();this.changed();
+      this.save();
+      if(result.advanced&&this.inProgramme())this.onStepCompleted?.({attemptId:s.id,from:s.step,to:result.state.step,step:lesson.steps[s.step]});
+      this.changed();
       if(strict && !result.ok)throw new Error(result.feedback);
       return result.ok;
     }

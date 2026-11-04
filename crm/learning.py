@@ -85,6 +85,7 @@ def context(who, firm: dict, zone: str, lesson_id: str | None = None, *, now=Non
             'clock': clock_for(zone, now), 'lessons': lessons,
             'programme': [tab for tab in json.loads((ROOT / 'learning_programme.json').read_text(encoding='utf-8'))[role]
                           if not tab.get('module') or tab['module'] in modules], 'progress': 'browser_local_only',
+            'examples': json.loads((ROOT / 'learning_examples.json').read_text(encoding='utf-8')),
             'work_readonly': bool(getattr(who, 'test', False)), 'practice_allowed': True}
 
 

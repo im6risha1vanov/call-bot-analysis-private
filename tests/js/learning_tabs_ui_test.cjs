@@ -11,7 +11,7 @@ async function open(role='manager',entry='same-entry',storage=new Storage(),modu
  const network=[],errors=[];const backend=learning?null:require('./learning_workspace_test.cjs').model(role);if(backend)backend.start('m1');
  const globals={console,URL,URLSearchParams,Response,Uint32Array,JSON,Number,document,location,crypto:{getRandomValues(a){a[0]=++nonce;return a;}},sessionStorage:storage,localStorage:new Storage(),matchMedia:()=>({matches:true}),innerWidth:1300,innerHeight:800,
   performance:{now:()=>0},requestAnimationFrame:fn=>fn(1000),scrollTo(){},getComputedStyle:()=>({}),queueMicrotask,
-  setTimeout:fn=>setTimeout(fn,0),clearTimeout,setInterval:()=>0,clearInterval(){},
+  setTimeout:(fn,ms)=>ms===1200?(queueMicrotask(fn),0):setTimeout(fn,0),clearTimeout,setInterval:()=>0,clearInterval(){},
   addEventListener(){},removeEventListener(){},navigator:{clipboard:{writeText:async()=>{} }},history:{pushState:(_,__,hash)=>location.hash=hash,replaceState:(_,__,hash)=>location.hash=hash},
   async fetch(resource,init={}){if(learning){network.push('RAW_FETCH');throw Error('NETWORK');}const opts={method:init.method||'GET',body:init.body?JSON.parse(init.body):undefined};network.push({path:resource,...opts});const data=await backend.request(resource,opts);if(resource==='/api/me')Object.assign(data,{learning:false,test:false,readonly:false});return new Response(JSON.stringify(data),{status:200});},WebSocket(){network.push('SOCKET');throw Error('NETWORK');},
   CustomEvent:class{constructor(type,values){this.type=type;Object.assign(this,values);}},
@@ -29,7 +29,7 @@ async function fill(ui,selector,value,event='input'){const n=ui.document.querySe
 async function start(ui){await click(ui,'[data-start-programme]');assert(ui.document.querySelector('[data-learning-guide]'),'No guide in CRM');assert(!ui.document.querySelector('iframe'));}
 const state=ui=>ui.model.current();
 function expected(ui){const s=state(ui),st=ui.model.lesson(ui.model.state.active).steps[s.step],r=ui.run('AveronLearningEngine.refs(AveronLearningWorkspace.classroom.current())'),a={};for(const[k,v]of Object.entries(st.expected))a[k]=Object.hasOwn(r,v)?r[v]:v;return {st,a};}
-async function perform(ui){const {st,a}=expected(ui);switch(st.action){
+async function perform(ui){const {st,a}=expected(ui);assert(ui.document.querySelector('[data-example-image]'),'No automatic example for '+st.action);switch(st.action){
  case 'select_client':await click(ui,'[data-next] [data-i="1"]');break;
  case 'save_outcome':await click(ui,'[data-out="'+a.outcome+'"]');if(a.outcome==='callback'){await fill(ui,'[data-f="date"]',a.due_date);await fill(ui,'[data-f="time"]',a.due_time);await fill(ui,'[data-f="comment"]','Обсудить предложение');await click(ui,'[data-act="save"]');}break;
  case 'visit_page':if(st.screen.selector==='[data-contract]')await click(ui,'[data-contract]');else if(a.page==='settings'&&a.arg==='access')await click(ui,'[data-tab="access"]');else await click(ui,'#nav [data-go="'+a.page+'"]');break;

@@ -7,11 +7,12 @@
   const lesson=()=>W?.lesson(W.state.active);
   const attempt=()=>W?.current();
   function clearHighlights(){for(const n of highlights)n.classList.remove('learn-highlight');highlights=[];}
-  function close(){if(W){W.draft('$filters',JSON.stringify(S.f));W.pause();}panel?.remove();panel=null;signature='';clearHighlights();}
+  function close(){endSuccess();cancelDrag();if(W){W.draft('$filters',JSON.stringify(S.f));W.pause();}panel?.remove();panel=null;signature='';clearHighlights();}
   function contextHint(){return 'Учебные примеры открываются в обычных вкладках CRM. Новый вход очищает данные и прогресс, обновление страницы сохраняет попытку.';}
   function resetFilters(){S.f={period:'today',ext:''};S.qnum=null;S.personTab='over';S.repFilter='all';S.calls={result:'',kind:'',q:''};S.deal={show:'active',days:'90',stage:0};}
   async function launch(id=null){
     if(!W)return;
+    if(W.presentationBusy)return;
     const replay=id&&!id.startsWith('programme_')&&!id.startsWith('replay_');
     const fresh=replay||!W.state.attempts[W.programme?.id];
     const tab=replay?W.startTab(id):W.startCourse();restorePlanned=true;
@@ -63,6 +64,7 @@
     $$('[data-tab-lesson]',view).forEach(b=>b.onclick=()=>launch(b.dataset.tabLesson).catch(e=>toast(e.message,true)));
   };
   let anchor=null, resume=null, frame=null, waitingSince=0, waitTimer=null, waitingKey='';
+  let manualPosition=null, positionKey='', drag=null, success=null, successTimer=null;
   const observed = typeof ResizeObserver==='function' ? new ResizeObserver(()=>queuePosition()) : null;
   const visibleStep=()=>W?.visibleStep();
   function activeStep(){const l=lesson();return l?.steps[visibleStep()];}
@@ -107,6 +109,77 @@
     }
     return result;
   }
+  function exampleKey(step){
+    if(step.action==='save_outcome')return 'save_outcome_'+step.expected.outcome;
+    if(step.action==='select_task'&&step.expected.open_context)return 'select_task_context';
+    if(step.action==='visit_page')return step.screen.selector==='[data-contract]'?'compose':'visit_'+(step.expected.arg==='access'?'access':step.expected.page);
+    return step.action;
+  }
+  function exampleMarkup(step){
+    const key=exampleKey(step),example=W.context.examples?.[key];
+    if(!example||!/^[a-z_]+$/.test(key))return '';
+    const still=matchMedia('(prefers-reduced-motion: reduce)').matches;
+    return `<figure class="learn-example" data-example="${key}"><figcaption>Пример на учебных данных</figcaption><img width="480" height="280" src="/static/learning/examples/${key}.${still?'png':'gif'}" alt="${esc(example.alt)}" data-example-image data-playing="${!still}"><button class="ghost" type="button" data-example-toggle aria-pressed="${!still}">${still?'Включить пример':'Приостановить пример'}</button></figure>`;
+  }
+  function bindExample(){
+    $('[data-example-toggle]',panel)?.addEventListener('click',event=>{
+      const image=$('[data-example-image]',panel),key=image.closest('[data-example]').dataset.example,play=image.dataset.playing!=='true';
+      image.src='/static/learning/examples/'+key+(play?'.gif':'.png');image.dataset.playing=String(play);
+      event.currentTarget.textContent=play?'Приостановить пример':'Включить пример';event.currentTarget.setAttribute('aria-pressed',String(play));queuePosition();
+    });
+    $('[data-example-image]',panel)?.addEventListener('load',queuePosition);
+  }
+  function endSuccess(){
+    clearTimeout(successTimer);successTimer=null;success=null;if(W)W.presentationBusy=false;
+  }
+  function showSuccess(event){
+    if(event.step.action.startsWith('verify_')||event.step.action==='open_section')return;
+    endSuccess();const tab=lesson().tabs.find(t=>event.from>=t.start&&event.from<t.end);
+    success={...event,tab};W.presentationBusy=true;
+    successTimer=setTimeout(()=>{endSuccess();signature='';schedule();},1200);
+  }
+  function successText(step){
+    return {select_client:'Нужная карточка открыта.',save_outcome:step.expected.outcome==='callback'?'Задача перезвона сохранена.':'Итог звонка сохранён в истории.',move_task:'Срок той же задачи изменён.',select_task:'Нужная задача открыта.',select_deal:'Нужная сделка открыта.',save_note:'Следующий шаг сохранён в истории сделки.',prepare_contract:'Учебный документ создан и связан со сделкой.',select_document:'Связанная сделка открыта из журнала.',set_period:'Нужный период выбран.',set_manager:'Нужный сотрудник выбран.',select_call:'Нужный разбор открыт.',select_report:'Нужный отчёт открыт.',select_person:'Карточка сотрудника открыта.',filter_deals:'Фильтр «Зависшие» применён.',close_review:'Просмотр разбора завершён.',close_deal:'Просмотр сделки завершён.',close_card:'Просмотр истории завершён.',visit_page:'Нужная вкладка открыта.'}[step.action]||'Действие выполнено.';
+  }
+  function stepPositionKey(){return [attempt()?.id,success?.from??visibleStep()].join(':');}
+  function restorePosition(){
+    const key=stepPositionKey();if(positionKey===key)return;
+    cancelDrag();positionKey=key;manualPosition=null;
+    try{const saved=JSON.parse(W.drafts().$hintPosition||'null');if(saved?.key===key&&Number.isFinite(saved.left)&&Number.isFinite(saved.top))manualPosition={left:saved.left,top:saved.top};}catch(e){/* Ignore an obsolete view preference; never change exercise data. */}
+  }
+  function rememberPosition(){if(manualPosition)W.draft('$hintPosition',JSON.stringify({key:positionKey,...manualPosition}));}
+  function resetPosition(){cancelDrag();manualPosition=null;W.draft('$hintPosition','');queuePosition();}
+  function cancelDrag(){
+    if(!drag)return;const old=drag;drag=null;old.card.classList.remove('learn-dragging');
+    try{old.handle.releasePointerCapture?.(old.pointerId);}catch(e){/* Pointer already released. */}
+  }
+  function beginDrag(event){
+    const handle=event.target.closest('[data-learn-drag]');
+    if(!handle||!panel?.contains(handle)||(event.button!==undefined&&event.button!==0)||event.isPrimary===false)return;
+    event.preventDefault();restorePosition();cancelDrag();const r=panel.getBoundingClientRect();
+    drag={card:panel,handle,pointerId:event.pointerId,x:event.clientX,y:event.clientY,left:r.left,top:r.top,before:manualPosition&&{...manualPosition}};
+    panel.classList.add('learn-dragging');handle.focus({preventScroll:true});
+    try{handle.setPointerCapture?.(event.pointerId);}catch(e){/* Document listeners also handle pointers without capture. */}
+  }
+  function dragMove(event){
+    if(!drag||event.pointerId!==drag.pointerId)return;
+    event.preventDefault();manualPosition={left:drag.left+event.clientX-drag.x,top:drag.top+event.clientY-drag.y};queuePosition();
+  }
+  function finishDrag(event){
+    if(!drag||event.pointerId!==drag.pointerId)return;
+    if(event.type==='pointercancel'||event.type==='lostpointercapture')manualPosition=drag.before;
+    else if(Number.isFinite(event.clientX)&&Number.isFinite(event.clientY))manualPosition={left:drag.left+event.clientX-drag.x,top:drag.top+event.clientY-drag.y};
+    cancelDrag();position();rememberPosition();
+  }
+  function moveWithKeys(event){
+    if(!event.target.matches('[data-learn-drag]'))return;
+    const delta={ArrowLeft:[-1,0],ArrowRight:[1,0],ArrowUp:[0,-1],ArrowDown:[0,1]}[event.key];
+    if(!delta&&!['Home','Enter',' '].includes(event.key))return;
+    event.preventDefault();event.stopImmediatePropagation();
+    if(!delta){resetPosition();return;}
+    restorePosition();const r=panel.getBoundingClientRect(),distance=event.shiftKey?30:10;
+    manualPosition={left:r.left+delta[0]*distance,top:r.top+delta[1]*distance};position();rememberPosition();
+  }
   function queuePosition(){if(frame!==null)return;frame=true;requestAnimationFrame(()=>{frame=null;position();});}
   function position(){
     const card=panel||resume;if(!card?.isConnected)return;
@@ -115,7 +188,9 @@
     card.style.width=Math.min(panel?300:290,Math.max(1,v.width-20))+'px';
     card.style.maxHeight=Math.max(44,v.height-20)+'px';
     const r=card.getBoundingClientRect(),target=anchor&&usable(anchor)?anchor.getBoundingClientRect():null;
-    const result=AveronLearningPlacement.place({target,card:{width:r.width||300,height:r.height||160},viewport:v,obstacles:obstaclesFor(card),narrow:v.width<680});
+    const options={target,card:{width:r.width||300,height:r.height||160},viewport:v,obstacles:obstaclesFor(card),narrow:v.width<680};
+    let result=panel&&manualPosition?AveronLearningPlacement.move({...options,position:manualPosition,dragging:!!drag}):AveronLearningPlacement.place(options);
+    if(result.blocked&&panel&&manualPosition)result=AveronLearningPlacement.place(options);
     if(result.blocked){
       // While the keyboard or another popup fills the available area, use a tiny
       // recoverable control. Never put an opaque box over the protected field.
@@ -123,7 +198,7 @@
       const small=AveronLearningPlacement.place({target,card:{width:Math.min(220,v.width-20),height:44},viewport:v,obstacles:obstaclesFor(card),narrow:true});
       if(small.blocked){card.hidden=true;return;}
       card.style.width=small.width+'px';applyPosition(card,small);
-    }else{card.dataset.compact='false';applyPosition(card,result);}
+    }else{card.dataset.compact='false';applyPosition(card,result);if(panel&&manualPosition&&!drag)manualPosition={left:result.left,top:result.top};}
     if(anchor&&target){
       const inView=AveronLearningPlacement.overlap(AveronLearningPlacement.rect(target),AveronLearningPlacement.rect(v));
       anchor.classList.toggle('learn-highlight',inView);
@@ -154,10 +229,10 @@
     // Preserve the existing optional AveronGPT tour without stacking two tours.
     if($('.tour')){panel?.remove();panel=null;clearHighlights();return;}
     restoreFields();
-    const l=lesson(),a=attempt(),done=showingDone();
+    const l=lesson(),a=attempt(),done=!success&&showingDone();restorePosition();
     if(done&&W.state.active.startsWith('replay_')&&S.page!=='learning'){go('learning');return;}
     if(done&&S.page==='learning'){panel?.remove();panel=null;clearHighlights();return;}
-    const index=visibleStep(),step=done?null:activeStep();
+    const index=success?.from??visibleStep(),step=success?.step||(done?null:activeStep());
     const visible=done?[]:anchorsFor(step);
     const previousAnchor=anchor;anchor=visible[0]||null;
     if(!panel){
@@ -170,25 +245,26 @@
       waitingKey=waitKey;
       clearHighlights();observed?.disconnect();observed?.observe(panel);if(anchor)observed?.observe(anchor);
       waitingSince=Date.now();clearTimeout(waitTimer);
-      if(!anchor&&!done)waitTimer=setTimeout(schedule,1400);
+      if(!anchor&&!done&&!success)waitTimer=setTimeout(schedule,1400);
     }
-    const waiting=!anchor&&!done&&Date.now()-waitingSince<1400;
-    const sig=[l.id,a.id,index,done,!!anchor,anchor?.dataset.go||anchor?.className,waiting,S.page,S.arg].join(':');
+    const waiting=!anchor&&!done&&!success&&Date.now()-waitingSince<1400;
+    const sig=[l.id,a.id,index,done,!!success,!!anchor,anchor?.dataset.go||anchor?.className,waiting,S.page,S.arg].join(':');
     if(sig!==signature){
       signature=sig;
-      const tab=W.tab(),title=tab.label,count=tab.end-tab.start;
+      const tab=success?.tab||W.tab(),title=tab.label,count=tab.end-tab.start;
       panel.dataset.learnStep=String(index);panel.dataset.mode='practice';
       const viaMore=anchor?.matches('.more,[data-sheet]')&&step?.action==='visit_page';
       const destination=step&&W.programme.tabs.find(t=>t.page===step.expected.page)?.title||'Обучение';
       const raw=done?'Урок пройден. Выберите следующую вкладку в программе.':viaMore?'Откройте «Ещё», затем «'+destination+'».':(step.hint||step.title);
       const explain=done?'Можно повторить отдельный урок с чистой учебной ситуацией.':AveronLearningEngine.interpolate(step.explain||'',a);
       const text=AveronLearningEngine.interpolate(raw,a);
-      panel.innerHTML=`<header class="learn-head"><div><b id="learn-heading" tabindex="-1" data-learn-heading>${esc(title)}</b><span class="learn-step">${done?'Урок пройден':`Шаг ${index-tab.start+1} из ${count}`}</span></div><button class="learn-close" type="button" aria-label="Приостановить урок" data-learn-close>×</button></header><div class="learn-body"><p class="learn-instruction">${esc(text)}</p><p class="learn-explanation">${esc(explain)}</p><p class="learn-status" role="status" data-learn-feedback></p>${!anchor&&!done?`<p class="learn-missing" data-missing-target>${waiting?'Ожидаю появления элемента…':'Элемент не найден. Откройте нужную вкладку или вернитесь к программе.'}</p>`:''}</div><footer class="learn-actions"><button class="ghost" type="button" data-learn-catalog>К программе</button>${anchor?'<button class="ghost" type="button" data-learn-focus aria-label="Перейти к выделенному элементу">К элементу</button>':''}</footer>`;
+      panel.innerHTML=`<header class="learn-head"><div class="learn-handle" data-learn-drag tabindex="0" role="button" aria-label="Переместить подсказку: перетащите заголовок или используйте стрелки. Enter возвращает к элементу."><b id="learn-heading" tabindex="-1" data-learn-heading>${esc(title)}</b><span class="learn-step">${success?'Выполнено':done?'Урок пройден':`Шаг ${index-tab.start+1} из ${count}`}</span><span class="learn-move-note">Перетащите за заголовок</span></div><button class="learn-close" type="button" aria-label="Приостановить урок" data-learn-close>×</button></header><div class="learn-body">${success?`<div class="learn-success" role="status" aria-live="polite" data-learning-success><svg viewBox="0 0 52 52" aria-hidden="true"><circle cx="26" cy="26" r="23"/><path d="m14 26 8 8 16-17"/></svg><b>${success.to===success.tab.end?'Урок пройден':'Выполнено'}</b><p>${esc(successText(step))}</p><small>Сейчас появится следующая подсказка…</small></div>`:`<p class="learn-instruction">${esc(text)}</p><p class="learn-explanation">${esc(explain)}</p>${!done&&tab.purpose?`<p class="learn-purpose"><b>Когда пригодится.</b> ${esc(tab.purpose)}</p>`:''}${!done?exampleMarkup(step):''}<p class="learn-status" role="status" data-learn-feedback></p>${!anchor&&!done?`<p class="learn-missing" data-missing-target>${waiting?'Ожидаю появления элемента…':'Элемент не найден. Откройте нужную вкладку или вернитесь к программе.'}</p>`:''}` }</div><footer class="learn-actions"><button class="ghost" type="button" data-learn-catalog>К программе</button>${anchor?'<button class="ghost" type="button" data-learn-focus aria-label="Перейти к выделенному элементу">К элементу</button>':''}</footer>`;
+      bindExample();
       $('[data-learn-close]',panel).onclick=close;
       $('[data-learn-catalog]',panel).onclick=()=>{
         if(step?.action==='visit_page'&&step.expected.page==='learning')go('learning');else{close();go('learning');}
       };
-      $('[data-learn-focus]',panel)?.addEventListener('click',()=>{anchor?.scrollIntoView({block:'center',behavior:reduce?'auto':'smooth'});if(anchor?.matches('input,select,textarea,button'))anchor.focus({preventScroll:true});queuePosition();});
+      $('[data-learn-focus]',panel)?.addEventListener('click',()=>{resetPosition();anchor?.scrollIntoView({block:'center',behavior:reduce?'auto':'smooth'});if(anchor?.matches('input,select,textarea,button'))anchor.focus({preventScroll:true});queuePosition();});
     }
     const feedback=$('[data-learn-feedback]',panel);
     const message=a?.feedback&&!a.feedback.startsWith('Верно.')&&!a.completed?a.feedback:'';
@@ -198,10 +274,16 @@
     for(const n of next)if(!n.classList.contains('learn-highlight'))n.classList.add('learn-highlight');
     highlights=next;
     queuePosition();
+    if(success)return;
     // Observe only visible saved results. This never clicks or saves on behalf of the learner.
     if(!done&&a){
       const checkKey=[l.id,a.id,W.state.active,a.step,JSON.stringify(a.data.outcomes),JSON.stringify(a.data.tasks),JSON.stringify(a.data.deals)].join(':');
       if(checkKey===verification)return;
+      if(step.action==='set_period'&&$('[data-seg="period"] [aria-pressed="true"]')?.dataset.v===step.expected.period)W.observe('set_period',{period:step.expected.period});
+      if(step.action==='set_manager'){
+        const selected=$('[data-ext-pick]')?.value||$('[data-seg="ext"] [aria-pressed="true"]')?.dataset.v;
+        if(selected==='102')W.observe('set_manager',{manager:'boris'});
+      }
       if(step.action==='verify_outcome'&&$('[data-learning-target="client-history"]')?.textContent.includes('Не взял трубку')){verification=checkKey;W.observe('verify_outcome');}
       if(step.action==='verify_history'&&$('.rvm-body')?.textContent.includes(AveronLearningEngine.refs(a).expectedNote)){verification=checkKey;W.observe('verify_history');}
       if(step.action==='verify_task'&&S.page==='callbacks'&&$('[data-learning-target="callback-list"]')){verification=checkKey;W.observe('verify_task');}
@@ -218,7 +300,10 @@
   }
   if(W){
     if(W.state.active&&!W.inProgramme()){W.state.active=null;W.save();}
-    W.changed=schedule;
+    W.changed=schedule;W.onStepCompleted=showSuccess;
+    document.addEventListener('pointerdown',beginDrag);document.addEventListener('pointermove',dragMove);
+    document.addEventListener('pointerup',finishDrag);document.addEventListener('pointercancel',finishDrag);document.addEventListener('lostpointercapture',finishDrag);
+    document.addEventListener('keydown',moveWithKeys,true);
     document.addEventListener('crm-review-closed',event=>W.observe('close_review',{call:event.detail.id}));
     document.addEventListener('crm-deal-closed',event=>{const d=W.data().deals.find(d=>AveronClassroom.number(d.client)===event.detail.number);if(d)W.observe('close_deal',{deal:d.id});});
     document.addEventListener('crm-card-closed',event=>{const a=W.current(),t=a?.data.tasks.find(t=>t.id===a.ui.taskContext);if(t&&AveronClassroom.number(t.client)===event.detail.number)W.observe('close_card',{task:t.id});});

@@ -1,0 +1,70 @@
+{
+  "snapshot_utc": "2026-11-04T21:03:25.903124+00:00",
+  "branch": "feat/crm-learning-guided-programme",
+  "previous_commit": "7a538c0",
+  "production_changed": false,
+  "production_services_restarted": false,
+  "python": {
+    "passed": 42,
+    "failed": 0,
+    "skipped": 0
+  },
+  "javascript": {
+    "local_model": 17,
+    "native_controller_dom": 13,
+    "floating_drag_media_feedback": 18,
+    "failed": 0,
+    "changed_files_syntax_checked": 8
+  },
+  "media": {
+    "gifs": 37,
+    "posters": 37,
+    "bytes": 957330,
+    "all_74_files_decoded_with_ffmpeg": true,
+    "source": "schematic examples using actual control labels and fictional data; not browser recordings",
+    "first_and_result_frame_inspected": "filter_deals.gif"
+  },
+  "timing": {
+    "success_delay_ms": 1200,
+    "unit_test": "controlled timer held before release; duplicate save rejected",
+    "normal_dom_suites": "timers accelerated in explicit test adapter"
+  },
+  "new_checks": [
+    "CSS hint z-index 260 exceeds modal 201",
+    "pointer drag and touch cancellation",
+    "keyboard arrows, Home reset",
+    "manual viewport clamp and obstacle avoidance",
+    "pause/reload preserves position",
+    "automatic GIF and pause/resume do not grade",
+    "every exercised programme action has an example",
+    "wrong action does not show success",
+    "successful save is retained while success display is paused"
+  ],
+  "secret_scan": {
+    "working_tree_files": 460,
+    "working_tree_pattern_hits": 0,
+    "history_blobs": 1474,
+    "history_pattern_hits": 0,
+    "method": "heuristic patterns, no values printed"
+  },
+  "browser": {
+    "status": "NOT RUN",
+    "exit_code": 2,
+    "reason": "Playwright/Chromium unavailable",
+    "screenshots": [],
+    "remaining": [
+      "real stacking/elementFromPoint check",
+      "native dropdowns",
+      "desktop/mobile layout with full explanatory text",
+      "physical touch/keyboard",
+      "visual light/dark inspection"
+    ]
+  },
+  "backup": {
+    "path": "/tmp/averon-crm-hints-before-20261104.tar.gz",
+    "mode": "600"
+  },
+  "test_server_restarted": false,
+  "database_migrations": false,
+  "new_crm_runtime_dependencies": false
+}
