@@ -270,6 +270,15 @@
     }
     $('genBtn').onclick = function () {
       var f = form();
+      if (opts.learning && window.AveronLearningWorkspace) {
+        if (!$('learningCheck').checked) { $('result').textContent = 'Сверьте реквизиты и отметьте подтверждение.'; return; }
+        $('genBtn').disabled = true;
+        api('/api/contracts/register', {method:'POST',body:{type:f.type,date:f.date,client:L.clientName(f),inn:f.inn,sum:f.sum,deal:deal ? deal.phone : ''}}).then(function (res) {
+          $('result').innerHTML = '<section class="dg-note dg-ok"><h3>Учебный договор ' + esc(res.num) + '</h3><p>Клиент: ' + esc(L.clientName(f)) + '. ИНН: ' + esc(f.inn) + '.</p><p>Связан со сделкой «' + esc(deal.title) + '». Не отправлен. Не для подписания.</p><p>Найдите эту запись в журнале ниже и откройте связанную сделку.</p></section>';
+          if (opts.onDone) opts.onDone();
+        }).catch(function (e) { $('result').textContent = e.message; }).finally(function () { $('genBtn').disabled = false; });
+        return;
+      }
       // Сначала проверяем, что шаблон собирается, и только потом занимаем номер в журнале.
       try { render(f); } catch (e) { $('result').innerHTML = '<div class="dg-note dg-err">Не удалось собрать договор: ' + esc(e.message) + '</div>'; return; }
       $('genBtn').disabled = true; $('result').innerHTML = '';
@@ -293,7 +302,7 @@
     };
 
     function loadNextNum() {
-      api('/api/contracts/next-number').then(function (d) { $('num').value = String(d.num); $('numHint').textContent = 'Номер присваивается автоматически при скачивании.'; }).catch(function () {});
+      api('/api/contracts/next-number').then(function (d) { $('num').value = String(d.num); $('numHint').textContent = opts.learning ? 'Учебный номер не относится к рабочему журналу.' : 'Номер присваивается автоматически при скачивании.'; }).catch(function () {});
     }
 
     // ---------- старт ----------
@@ -322,6 +331,22 @@
       if (opts.readonly) {
         $('genBtn').disabled = true;
         $('modeHint').textContent = 'Это вход только для просмотра: скачать договор можно по личной ссылке.';
+      }
+      if (opts.learning && window.AveronLearningWorkspace) {
+        el.querySelector('.dg-sub').textContent = 'Сверьте вымышленные реквизиты и сформируйте учебный документ на этой странице.';
+        $('genBtn').closest('.dg-card').querySelector('h2').textContent = 'Проверка и учебный документ';
+        $('genBtn').textContent = 'Сформировать учебный договор';
+        $('modeHint').textContent = 'Только локальный журнал. Скачивания, отправки, рабочего номера и внешних проверок нет.';
+        var confirm = document.createElement('label'); confirm.className = 'dg-row';
+        confirm.innerHTML = '<input type="checkbox" id="dg-learningCheck"> Реквизиты учебного клиента сверены';
+        $('genBtn').parentNode.insertBefore(confirm, $('genBtn'));
+        $('numHint').textContent = 'Учебный номер не относится к рабочему журналу.';
+        var drafts = window.AveronLearningWorkspace.classroom.drafts();
+        Object.keys(drafts).forEach(function (key) {
+          if (key.indexOf('contract:dg-') !== 0) return;
+          var input = document.getElementById(key.slice(9)); if (!input) return;
+          if (input.type === 'checkbox') input.checked = drafts[key] === 'true'; else input.value = drafts[key];
+        });
       }
       loadNextNum();
       update();

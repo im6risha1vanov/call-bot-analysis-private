@@ -1,6 +1,6 @@
 """Run learning and related pure regressions without production providers or DB.
 
-A socket-free JS/DOM harness exercises the actual engine and practice controller.
+Socket-free JS/DOM harnesses exercise the local API and actual ordinary CRM views.
 It does not replace Chromium desktop/mobile/CSP validation. No dependency install.
 """
 from contextlib import ExitStack
@@ -49,13 +49,14 @@ def main():
     if not node:
         print('Parent/iframe checks require Node. Set CRM_LEARNING_NODE to its executable.', file=sys.stderr)
         return 2
-    check = subprocess.run([node, 'tests/js/learning_parent_test.cjs'],
-                           cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=60)
-    if check.returncode:
-        print(check.stdout, file=sys.stderr); print(check.stderr, file=sys.stderr)
-        return 1
-    cases = json.loads(check.stdout)['cases']
-    print(f'Parent/iframe DOM adapter: {len(cases)} cases passed (not a browser).')
+    for filename in ('learning_workspace_test.cjs', 'learning_tabs_ui_test.cjs'):
+        check = subprocess.run([node, 'tests/js/' + filename],
+                               cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=60)
+        if check.returncode:
+            print(check.stdout, file=sys.stderr); print(check.stderr, file=sys.stderr)
+            return 1
+        data = json.loads(check.stdout)
+        print(f'{filename}: {len(data["cases"])} cases passed (not a browser).')
     return 0
 
 

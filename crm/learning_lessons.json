@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "lessons": [
     {
       "id": "m1",
@@ -8,7 +8,7 @@
       "result": "Недозвон сохранён у нужного клиента.",
       "situation": "Клиент «Учебный Кедр» не ответил. Найдите его в очереди и отметьте «Не взял трубку». Это недозвон, а не отказ от предложения.",
       "module": null,
-      "version": 1,
+      "version": 2,
       "kind": "practice",
       "steps": [
         {
@@ -16,6 +16,10 @@
           "title": "Откройте «Учебный Кедр».",
           "expected": {
             "client": "targetClient"
+          },
+          "screen": {
+            "page": "queue",
+            "selector": "[data-next] .item"
           }
         },
         {
@@ -24,12 +28,20 @@
           "expected": {
             "client": "targetClient",
             "outcome": "no_answer"
+          },
+          "screen": {
+            "page": "queue",
+            "selector": "[data-learning-target=\"outcome-grid\"], .outform:not(.hidden)"
           }
         },
         {
           "action": "verify_outcome",
           "title": "Проверьте итог в истории клиента.",
-          "expected": {}
+          "expected": {},
+          "screen": {
+            "page": "queue",
+            "selector": "[data-learning-target=\"client-history\"]"
+          }
         }
       ],
       "guide": [
@@ -61,7 +73,7 @@
       "result": "Одна задача с комментарием и новым сроком, исходный срок сохранён.",
       "situation": "«Учебный Кедр» просит перезвонить {{callbackMoscowDate}} в 15:00 по Москве, чтобы обсудить предложение. В полях CRM это {{callbackDate}} {{callbackTime}} ({{timezone}}). После сохранения клиент перенесёт разговор на {{moveMoscowDate}} в 11:30 по Москве: в CRM {{moveDate}} {{moveTime}}.",
       "module": null,
-      "version": 1,
+      "version": 2,
       "kind": "practice",
       "steps": [
         {
@@ -69,6 +81,10 @@
           "title": "Откройте нужную карточку.",
           "expected": {
             "client": "targetClient"
+          },
+          "screen": {
+            "page": "queue",
+            "selector": "[data-next] .item"
           }
         },
         {
@@ -80,6 +96,10 @@
             "due_date": "callbackDate",
             "due_time": "callbackTime",
             "comment": "required"
+          },
+          "screen": {
+            "page": "queue",
+            "selector": "[data-learning-target=\"outcome-grid\"], .outform:not(.hidden)"
           }
         },
         {
@@ -87,6 +107,10 @@
           "title": "Откройте список «Перезвоны».",
           "expected": {
             "section": "callbacks"
+          },
+          "screen": {
+            "page": "callbacks",
+            "selector": "[data-go=\"callbacks\"]"
           }
         },
         {
@@ -94,6 +118,10 @@
           "title": "Найдите только что созданную задачу.",
           "expected": {
             "task": "createdTask"
+          },
+          "screen": {
+            "page": "callbacks",
+            "selector": ".cb"
           }
         },
         {
@@ -103,12 +131,20 @@
             "task": "createdTask",
             "due_date": "moveDate",
             "due_time": "moveTime"
+          },
+          "screen": {
+            "page": "callbacks",
+            "selector": ".cb [data-move], .cb .move"
           }
         },
         {
           "action": "verify_task",
           "title": "Проверьте новый срок, комментарий и отсутствие второй задачи.",
-          "expected": {}
+          "expected": {},
+          "screen": {
+            "page": "callbacks",
+            "selector": "[data-learning-target=\"callback-list\"]"
+          }
         }
       ],
       "guide": [
@@ -134,7 +170,7 @@
       "result": "Следующий шаг записан в истории нужной сделки.",
       "situation": "По сделке «Учебный Кедр» уже отправлены материалы. Прочитайте историю и запишите следующий шаг через «Заметка»: «Обсудить предложение {{callbackDate}} в {{callbackTime}}».",
       "module": null,
-      "version": 1,
+      "version": 2,
       "kind": "practice",
       "steps": [
         {
@@ -142,6 +178,10 @@
           "title": "Откройте нужную сделку и прочитайте историю.",
           "expected": {
             "deal": "targetDeal"
+          },
+          "screen": {
+            "page": "deals",
+            "selector": "[data-learning-target=\"deal-list\"]"
           }
         },
         {
@@ -150,12 +190,20 @@
           "expected": {
             "deal": "targetDeal",
             "note": "expectedNote"
+          },
+          "screen": {
+            "page": "deals",
+            "selector": "[data-learning-target=\"deal-note\"], .rvm [data-form]"
           }
         },
         {
           "action": "verify_history",
-          "title": "Найдите свою заметку в истории.",
-          "expected": {}
+          "title": "Откройте эту сделку ещё раз и проверьте заметку в истории.",
+          "expected": {},
+          "screen": {
+            "page": "deals",
+            "selector": ".rvm-body"
+          }
         }
       ],
       "guide": [
@@ -181,7 +229,7 @@
       "result": "Учебный документ связан со сделкой и виден в учебном журнале.",
       "situation": "Откройте сделку «Учебный Кедр». Сверьте вымышленные реквизиты, составьте учебный договор и найдите его в журнале. Договор не считается отправленным.",
       "module": "contracts",
-      "version": 1,
+      "version": 2,
       "kind": "practice",
       "steps": [
         {
@@ -189,6 +237,10 @@
           "title": "Откройте нужную сделку.",
           "expected": {
             "deal": "targetDeal"
+          },
+          "screen": {
+            "page": "deals",
+            "selector": "[data-learning-target=\"deal-list\"]"
           }
         },
         {
@@ -198,6 +250,10 @@
             "deal": "targetDeal",
             "company": "targetCompany",
             "inn": "targetInn"
+          },
+          "screen": {
+            "page": "deals",
+            "selector": "[data-contract], #dg-name, #dg-inn, #dg-genBtn"
           }
         },
         {
@@ -205,13 +261,21 @@
           "title": "Перейдите на вкладку «Договоры».",
           "expected": {
             "section": "contracts"
+          },
+          "screen": {
+            "page": "deals",
+            "selector": "[data-go=\"deals\"]"
           }
         },
         {
           "action": "select_document",
-          "title": "Откройте свой документ в журнале и проверьте связь со сделкой.",
+          "title": "В журнале нажмите на созданную запись и проверьте связь со сделкой.",
           "expected": {
             "document": "createdDocument"
+          },
+          "screen": {
+            "page": "deals",
+            "selector": "[data-learning-target=\"contract-journal\"]"
           }
         }
       ],
@@ -230,7 +294,7 @@
           "result": "В рабочей CRM скачивание .docx присваивает номер и пишет журнал. Учебный просмотр делает только локальную запись."
         }
       ],
-      "adaptation": "В рабочем процессе «Скачать договор (.docx)» одновременно регистрирует договор. В упражнении — встроенный учебный просмотр без скачивания, рабочего номера и DaData."
+      "adaptation": "Используется обычная форма CRM. В учебной учётке вместо скачивания создаётся встроенный учебный документ и локальная запись журнала. Рабочей нумерации, отправки и внешнего поиска нет. Вымышленные реквизиты: Учебный Кедр; ИНН 0000000000."
     },
     {
       "id": "m5",
@@ -239,7 +303,7 @@
       "result": "Найдены нужный разговор, подтверждённый вывод и личный отчёт за нужную дату.",
       "situation": "В «Звонках» за 7 дней найдите разговор «Учебный Кедр» {{callDate}}. Узнайте, что не согласовано. Затем откройте в «Отчётах бота» личный итог за {{reportDate}}.",
       "module": null,
-      "version": 1,
+      "version": 2,
       "kind": "practice",
       "steps": [
         {
@@ -247,6 +311,10 @@
           "title": "Выберите период «7 дней».",
           "expected": {
             "period": "7"
+          },
+          "screen": {
+            "page": "calls",
+            "selector": "[data-seg=\"period\"]"
           }
         },
         {
@@ -254,6 +322,10 @@
           "title": "Откройте нужный разговор.",
           "expected": {
             "call": "targetCall"
+          },
+          "screen": {
+            "page": "calls",
+            "selector": "[data-learning-target=\"call-list\"], [data-review]"
           }
         },
         {
@@ -261,13 +333,37 @@
           "title": "Ответьте по тексту разбора.",
           "expected": {
             "answer": "callback_missing"
-          }
+          },
+          "quiz": [
+            {
+              "key": "answer",
+              "label": "Что подтверждено разбором?",
+              "options": [
+                [
+                  "meeting_agreed",
+                  "Встреча согласована"
+                ],
+                [
+                  "callback_missing",
+                  "Дата следующего разговора не согласована"
+                ],
+                [
+                  "refusal",
+                  "Клиент отказался"
+                ]
+              ]
+            }
+          ]
         },
         {
           "action": "open_section",
           "title": "Откройте «Отчёты».",
           "expected": {
             "section": "reports"
+          },
+          "screen": {
+            "page": "reports",
+            "selector": "[data-go=\"reports\"]"
           }
         },
         {
@@ -275,6 +371,10 @@
           "title": "Найдите личный итог за заданную дату.",
           "expected": {
             "report": "personalReport"
+          },
+          "screen": {
+            "page": "reports",
+            "selector": "[data-learning-target=\"report-feed\"]"
           }
         }
       ],
@@ -301,7 +401,7 @@
       "result": "Показатель указан для правильного менеджера и периода.",
       "situation": "В «Сводке» выберите «7 дней» и учебного менеджера Бориса. Сколько у него разговоров с результатом? Значения разных сотрудников и периодов отличаются.",
       "module": null,
-      "version": 1,
+      "version": 2,
       "kind": "practice",
       "steps": [
         {
@@ -309,6 +409,10 @@
           "title": "Выберите «7 дней».",
           "expected": {
             "period": "7"
+          },
+          "screen": {
+            "page": "summary",
+            "selector": "[data-seg=\"period\"]"
           }
         },
         {
@@ -316,6 +420,10 @@
           "title": "Выберите Бориса.",
           "expected": {
             "manager": "targetManager"
+          },
+          "screen": {
+            "page": "summary",
+            "selector": "[data-seg=\"ext\"]"
           }
         },
         {
@@ -323,7 +431,14 @@
           "title": "Найдите «Разговоров с результатом» и укажите число.",
           "expected": {
             "value": "targetMetric"
-          }
+          },
+          "quiz": [
+            {
+              "key": "value",
+              "label": "Разговоров с результатом",
+              "type": "number"
+            }
+          ]
         }
       ],
       "guide": [
@@ -349,7 +464,7 @@
       "result": "Разговор и вывод относятся к указанному сотруднику.",
       "situation": "Найдите звонок Бориса по «Учебному Кедру» {{callDate}} в периоде «7 дней» и назовите подтверждённый вывод. В журнале есть похожий разговор Анны.",
       "module": null,
-      "version": 1,
+      "version": 2,
       "kind": "practice",
       "steps": [
         {
@@ -357,6 +472,10 @@
           "title": "Выберите Бориса.",
           "expected": {
             "manager": "targetManager"
+          },
+          "screen": {
+            "page": "calls",
+            "selector": "[data-ext-pick]"
           }
         },
         {
@@ -364,6 +483,10 @@
           "title": "Выберите «7 дней».",
           "expected": {
             "period": "7"
+          },
+          "screen": {
+            "page": "calls",
+            "selector": "[data-seg=\"period\"]"
           }
         },
         {
@@ -371,6 +494,10 @@
           "title": "Откройте разговор Бориса.",
           "expected": {
             "call": "targetCall"
+          },
+          "screen": {
+            "page": "calls",
+            "selector": "[data-learning-target=\"call-list\"], [data-review]"
           }
         },
         {
@@ -378,7 +505,27 @@
           "title": "Назовите вывод из открытого разбора.",
           "expected": {
             "answer": "callback_missing"
-          }
+          },
+          "quiz": [
+            {
+              "key": "answer",
+              "label": "Что подтверждено разбором?",
+              "options": [
+                [
+                  "meeting_agreed",
+                  "Встреча согласована"
+                ],
+                [
+                  "callback_missing",
+                  "Дата следующего разговора не согласована"
+                ],
+                [
+                  "refusal",
+                  "Клиент отказался"
+                ]
+              ]
+            }
+          ]
         }
       ],
       "guide": [
@@ -404,7 +551,7 @@
       "result": "Определены задача, клиент, исходный срок и контекст без изменения задачи.",
       "situation": "В перезвонах Бориса найдите просроченную задачу по «Учебному Кедру». Укажите исходную дату и откройте историю клиента. Закрывать или переносить задачу не требуется.",
       "module": null,
-      "version": 1,
+      "version": 2,
       "kind": "practice",
       "steps": [
         {
@@ -412,6 +559,10 @@
           "title": "Выберите Бориса.",
           "expected": {
             "manager": "targetManager"
+          },
+          "screen": {
+            "page": "calls",
+            "selector": "[data-ext-pick]"
           }
         },
         {
@@ -420,6 +571,10 @@
           "expected": {
             "task": "overdueTask",
             "open_context": true
+          },
+          "screen": {
+            "page": "callbacks",
+            "selector": ".cb"
           }
         },
         {
@@ -430,7 +585,55 @@
             "due_date": "overdueDate",
             "answer": "proposal_waits",
             "due_time": "10:00"
-          }
+          },
+          "quiz": [
+            {
+              "key": "client",
+              "label": "Клиент",
+              "options": [
+                [
+                  "client-1",
+                  "Учебный Кедр · УЧ-001"
+                ],
+                [
+                  "client-2",
+                  "Другой Учебный Кедр · УЧ-002"
+                ],
+                [
+                  "client-3",
+                  "Учебный Лён · УЧ-003"
+                ]
+              ]
+            },
+            {
+              "key": "due_date",
+              "label": "Исходная дата",
+              "type": "date"
+            },
+            {
+              "key": "due_time",
+              "label": "Исходное время",
+              "type": "time"
+            },
+            {
+              "key": "answer",
+              "label": "Что известно из истории?",
+              "options": [
+                [
+                  "proposal_waits",
+                  "Клиент ждёт обсуждения предложения"
+                ],
+                [
+                  "paid",
+                  "Получена оплата"
+                ],
+                [
+                  "none",
+                  "Контекст не найден"
+                ]
+              ]
+            }
+          ]
         }
       ],
       "guide": [
@@ -456,7 +659,7 @@
       "result": "Этап, событие и отсутствие следующего шага подтверждены историей.",
       "situation": "Выберите «Зависшие» и сделку «Учебный Кедр». Сверьте этап, последнее событие и следующий шаг. Если шага нет — ответьте «Не зафиксирован», не угадывайте причину.",
       "module": null,
-      "version": 1,
+      "version": 2,
       "kind": "practice",
       "steps": [
         {
@@ -464,6 +667,10 @@
           "title": "Выберите «Зависшие».",
           "expected": {
             "filter": "stalled"
+          },
+          "screen": {
+            "page": "deals",
+            "selector": "[data-seg=\"show\"]"
           }
         },
         {
@@ -471,6 +678,10 @@
           "title": "Откройте указанную сделку.",
           "expected": {
             "deal": "targetDeal"
+          },
+          "screen": {
+            "page": "deals",
+            "selector": "[data-learning-target=\"deal-list\"]"
           }
         },
         {
@@ -480,7 +691,63 @@
             "stage": "messenger",
             "last_event": "materials",
             "next_step": "not_recorded"
-          }
+          },
+          "quiz": [
+            {
+              "key": "stage",
+              "label": "Этап",
+              "options": [
+                [
+                  "messenger",
+                  "Telegram или почта"
+                ],
+                [
+                  "contract",
+                  "Договор"
+                ],
+                [
+                  "paid",
+                  "Оплата"
+                ]
+              ]
+            },
+            {
+              "key": "last_event",
+              "label": "Последнее событие",
+              "options": [
+                [
+                  "materials",
+                  "Отправлены материалы"
+                ],
+                [
+                  "contract_sent",
+                  "Договор отправлен"
+                ],
+                [
+                  "paid",
+                  "Оплата получена"
+                ]
+              ]
+            },
+            {
+              "key": "next_step",
+              "label": "Следующий шаг",
+              "options": [
+                [
+                  "not_recorded",
+                  "Не зафиксирован"
+                ],
+                [
+                  "meeting",
+                  "Назначить встречу"
+                ],
+                [
+                  "pay",
+                  "Ждать оплату"
+                ]
+              ]
+            }
+          ]
         }
       ],
       "guide": [
@@ -506,7 +773,7 @@
       "result": "Вывод о менеджере подкреплён нужным отчётом и примером звонка.",
       "situation": "Откройте отчёт отдела «Сводка за неделю» за {{weekStart}}–{{weekEnd}}. Найдите Бориса, затем в «Сотрудниках» откройте его карточку и пример разговора по «Учебному Кедру». Что стоит обсудить?",
       "module": null,
-      "version": 1,
+      "version": 2,
       "kind": "practice",
       "steps": [
         {
@@ -514,6 +781,10 @@
           "title": "Откройте отчёт за указанный период.",
           "expected": {
             "report": "weeklyReport"
+          },
+          "screen": {
+            "page": "reports",
+            "selector": "[data-learning-target=\"report-feed\"]"
           }
         },
         {
@@ -521,6 +792,10 @@
           "title": "Перейдите в «Сотрудники» и откройте Бориса.",
           "expected": {
             "manager": "targetManager"
+          },
+          "screen": {
+            "page": "staff",
+            "selector": "[data-learning-target=\"staff-list\"]"
           }
         },
         {
@@ -528,6 +803,10 @@
           "title": "Откройте подтверждающий пример звонка.",
           "expected": {
             "call": "targetCall"
+          },
+          "screen": {
+            "page": "calls",
+            "selector": "[data-learning-target=\"call-list\"], [data-review]"
           }
         },
         {
@@ -535,7 +814,27 @@
           "title": "Выберите вывод, подтверждённый примером.",
           "expected": {
             "answer": "callback_missing"
-          }
+          },
+          "quiz": [
+            {
+              "key": "answer",
+              "label": "Что подтверждено разбором?",
+              "options": [
+                [
+                  "meeting_agreed",
+                  "Встреча согласована"
+                ],
+                [
+                  "callback_missing",
+                  "Дата следующего разговора не согласована"
+                ],
+                [
+                  "refusal",
+                  "Клиент отказался"
+                ]
+              ]
+            }
+          ]
         }
       ],
       "guide": [
@@ -561,7 +860,7 @@
       "result": "Вы знаете, где сотрудники, доступы и подключённые модули.",
       "situation": "Только навигация и объяснения. Настройки, права и кампании не меняются.",
       "module": null,
-      "version": 1,
+      "version": 2,
       "kind": "guide",
       "steps": [],
       "guide": [

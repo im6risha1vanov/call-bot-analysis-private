@@ -71,12 +71,16 @@ function plural(n, one, few, many) {
 function heights(el) { $$('[data-h]', el).forEach(x => { x.style.height = x.dataset.h + '%'; }); }
 const initials = name => String(name || '?').trim().split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() || '?';
 const store = {
-  get(k, d) { try { return JSON.parse(localStorage.getItem(k) || 'null') ?? d; } catch (e) { return d; } },
-  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* без хранилища */ } },
+  get(k, d) { if (window.AveronLearningWorkspace) return AveronLearningWorkspace.classroom?.pref(k) ?? d; try { return JSON.parse(localStorage.getItem(k) || 'null') ?? d; } catch (e) { return d; } },
+  set(k, v) { if (window.AveronLearningWorkspace) return AveronLearningWorkspace.classroom?.pref(k, v, true); try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* без хранилища */ } },
 };
 
 // ---------- сервер ----------
 async function api(path, opts = {}) {
+  if (location.pathname === '/learning/workspace') {
+    if (!window.AveronLearningWorkspace) throw new Error('Учебная учётка не загрузилась. Войдите заново через «Обучение».');
+    return AveronLearningWorkspace.request(path, opts);
+  }
   const init = {method: opts.method || 'GET', credentials: 'same-origin', headers: {}};
   if (opts.body !== undefined) {
     init.headers['Content-Type'] = 'application/json';
@@ -432,7 +436,7 @@ function showLogin() {
 }
 
 let moreOpen = false;
-const exitLink = () => S.me.support ? '<a class="ghost" href="/support-exit">Вернуться к себе</a>'
+const exitLink = () => S.me.learning ? '<a class="ghost" href="/learning/exit">Выйти из учебной учётки</a>' : S.me.support ? '<a class="ghost" href="/support-exit">Вернуться к себе</a>'
   : S.me.test ? '<a class="ghost" href="/test-exit">Сменить вход</a>' : '<button class="ghost" type="button" data-logout>Выйти</button>';
 // «Сменить учётку» без пароля: только у наших учёток с отметкой platform (crm/platform.py), окно в companies.js
 const switchBtn = () => S.me.switcher && window.switchAccount ? '<button class="ghost" type="button" data-switch>Сменить учётку</button>' : '';
@@ -449,7 +453,7 @@ function shell() {
         ${exitLink()}${switchBtn()}</div></div>
     </aside>
     <div class="main">
-      ${S.me.support && !S.me.test ? `<div class="banner"><b>Вы вошли как ${esc(S.me.name || '')} · ${esc(ROLE_NAME[S.me.role] || '')} · «${esc(S.me.company || '')}»</b><span>Всё, что делаете, идёт от имени этой учётки.</span>${switchBtn().replace('class="ghost"', 'class="linkish"')}<a href="/support-exit">Вернуться к себе</a></div>`
+      ${S.me.learning ? '<div class="banner"><b>Учебная учётка</b><span>Все записи вымышленные. Изменения сохраняются в браузере до нового входа.</span><a href="/learning/exit">Выйти</a></div>' : S.me.support && !S.me.test ? `<div class="banner"><b>Вы вошли как ${esc(S.me.name || '')} · ${esc(ROLE_NAME[S.me.role] || '')} · «${esc(S.me.company || '')}»</b><span>Всё, что делаете, идёт от имени этой учётки.</span>${switchBtn().replace('class="ghost"', 'class="linkish"')}<a href="/support-exit">Вернуться к себе</a></div>`
         : S.me.support ? `<div class="banner"><b>Просмотр компании «${esc(S.me.company || '')}»</b><span>Глазами директора, только смотреть.</span><a href="/support-exit">Вернуться к себе</a></div>`
         : S.me.test ? `<div class="banner"><b>Просмотр · ${esc(ROLE_NAME[S.me.role] || '')}</b><span data-readonly-notice>Только смотреть: звонки и изменения работают под своим логином.</span><a href="/test-exit">Сменить вход</a></div>` : ''}
       <header class="top"><div class="top-in" id="top"></div></header>
@@ -505,6 +509,10 @@ async function go(target, arg = null, opts = {}) {
   const [page, a] = resolve(target, arg);
   const same = page === S.page;
   S.page = page; S.arg = a;
+  if (window.AveronLearningWorkspace?.classroom) {
+    const classroom = AveronLearningWorkspace.classroom;
+    classroom.navigation(page, a); S.me.readonly = classroom.readonly(page);
+  }
   if (!same) S.shown = {};
   if (opts.push !== false) {
     const hash = '#' + page + (a && !String(a).startsWith('import:') ? '/' + a : '');
@@ -590,9 +598,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   try {
     S.me = await api('/api/me');
   } catch (e) {
-    if (!S.me) showLogin(e.message);
+    if (location.pathname === '/learning/workspace') root.innerHTML = errCard(e.message);
+    else if (!S.me) showLogin(e.message);
     return;
   }
+  if (window.AveronLearningWorkspace?.classroom?.current()?.ui.selectedClient) S.qnum = AveronClassroom.number(AveronLearningWorkspace.classroom.current().ui.selectedClient);
   const saved = store.get('crm-f', {});
   if (saved.period) S.f.period = saved.period;
   if (S.me.role === 'director' && S.me.team.some(p => p.ext === saved.ext)) S.f.ext = saved.ext;
@@ -602,7 +612,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   go(page || store.get('crm-page', '') || HOME[S.me.role], arg, {replace: true});
   addEventListener('popstate', () => { const [p, a] = fromHash(); go(p || HOME[S.me.role], a, {push: false}); });
   refreshCounts();
-  if (window.gptFirstVisit && hasModule('gpt')) gptFirstVisit();
+  if (!S.me.learning && window.gptFirstVisit && hasModule('gpt')) gptFirstVisit();
   // Раз в минуту обновляем счётчики, а очередь менеджера, если он ничего не заполняет.
   setInterval(() => {
     if (document.hidden) return;

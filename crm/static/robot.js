@@ -11,13 +11,13 @@ const RB_TABS = [
   ['voice', 'Голос', 'director'], ['settings', 'Настройки', 'director'],
 ];
 const RB_OLD_TAB = {contacts: 'numbers', stop: 'numbers', analytics: 'calls', integrations: 'settings'};
-try { const saved = JSON.parse(localStorage.getItem('crm-robot') || '{}'); RB.tab = RB_OLD_TAB[saved.tab] || saved.tab || RB.tab; RB.owner = saved.owner || ''; } catch (e) { /* без хранилища */ }
+try { const saved = (window.AveronLearningWorkspace ? store.get('crm-robot', {}) : JSON.parse(localStorage.getItem('crm-robot') || '{}')); RB.tab = RB_OLD_TAB[saved.tab] || saved.tab || RB.tab; RB.owner = saved.owner || ''; } catch (e) { /* без хранилища */ }
 
 const rbq = (path, extra = {}) => '/api/robot/cab' + path + qs({owner: RB.owner, ...extra});
 const rbGet = (path, extra) => api(rbq(path, extra));
 const rbPost = (path, body = {}) => api('/api/robot/cab' + path, {method: 'POST', body: {...body, owner: RB.owner}});
 const rbRO = () => RB.st.readonly ? ' disabled' : '';
-const rbSave = () => { try { localStorage.setItem('crm-robot', JSON.stringify({tab: RB.tab, owner: RB.owner})); } catch (e) { /* без хранилища */ } };
+const rbSave = () => { try { if (window.AveronLearningWorkspace) store.set('crm-robot', {tab: RB.tab, owner: RB.owner}); else localStorage.setItem('crm-robot', JSON.stringify({tab: RB.tab, owner: RB.owner})); } catch (e) { /* без хранилища */ } };
 const money = v => v == null ? '—' : `${Number(v).toLocaleString('ru-RU', {maximumFractionDigits: 2})} ₽`;
 const opName = id => (RB.st.operators || []).find(o => o.id === id)?.name || id;
 

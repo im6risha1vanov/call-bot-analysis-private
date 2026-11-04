@@ -1,208 +1,163 @@
-/* Shared manager/director program. Production navigation is read-only guidance;
-   every exercise lives in a separate sandbox document with no network access. */
+/* Lessons guide real CRM views. In the classroom the same forms use local APIs.
+   Outside it, the catalog offers an explicit entry; no production action is graded. */
 (function () {
   'use strict';
-  const E = window.AveronLearningEngine, P = window.AveronLearningProgress;
-  let context = null, practice = null, guide = null, guideTimer = null;
-  const saved = lesson => P.read(localStorage, context, lesson);
-  const persist = (lesson, record) => P.write(localStorage, context, lesson, record);
-  const selectedLesson = id => context?.lessons.find(l => l.id === id);
-  const uid = () => [...crypto.getRandomValues(new Uint32Array(4))].map(n => n.toString(16)).join('-');
-  function recordFor(lesson) { return saved(lesson) || {state: null, guide: null}; }
-  async function freshContext(id) {
-    const data = await api('/api/learning/context' + (id ? '?lesson=' + encodeURIComponent(id) : ''));
-    if (context && context.scope !== data.scope) endGuide();
-    context = data;
-    return data;
+  const W=window.AveronLearningWorkspace?.classroom, restoredInputs=new WeakSet();
+  let context=null, panel=null, highlights=[], scheduled=false, signature='', verification='', hints=true, restorePlanned=true;
+  const lesson=()=>W?.lesson(W.state.active);
+  const attempt=()=>W?.current();
+  function clearHighlights(){for(const n of highlights)n.classList.remove('learn-highlight');highlights=[];}
+  function close(){W?.pause();panel?.remove();panel=null;signature='';clearHighlights();}
+  function contextHint(){return W?'Все действия выполняются в обычных вкладках на учебных данных. Новый вход очищает примеры и прогресс; обновление страницы сохраняет текущую попытку.':'В учебной учётке доступны те же вкладки CRM с вымышленными записями. Каждый новый вход начинает обучение с чистого состояния.';}
+  function resetFilters(){S.f={period:'today',ext:''};S.qnum=null;S.personTab='over';S.repFilter='all';S.calls={result:'',kind:'',q:''};S.deal={show:'active',days:'90',stage:0};}
+  async function launch(id,repeat=false){
+    const l=W.lesson(id);if(!l?.available)throw new Error('Этот урок недоступен.');
+    if(repeat&&!await askConfirm('Начать этот урок с чистых учебных данных?', 'Пройти заново'))return;
+    W.start(id,repeat);resetFilters();restorePlanned=true;
+    if(W.current()?.ui.selectedClient)S.qnum=AveronClassroom.number(W.current().ui.selectedClient);
+    const a=attempt();
+    // Continue where the user left the actual CRM, including a selected card.
+    const last=W.state.drafts[id]?.['$page'];
+    const step=l.kind==='guide'?l.guide[Math.min(W.state.guides[id]?.index||0,l.guide.length-1)]:l.steps[a.step];
+    const page=repeat?null:last;
+    const first=l.kind==='guide'?step:l.guide[0];
+    await go(page||first.page, page?W.state.drafts[id]?.['$arg']||null:first.arg||null);
+    schedule();
   }
-  function status(lesson) { return P.status(saved(lesson), lesson, context, E); }
-  function notice(view, text) {
-    const out = $('[data-learning-notice]', view);
-    if (out) { out.textContent = text; out.hidden = !text; }
-    else toast(text, true);
-  }
-  function localHint() { return '<p class="hint">В упражнениях можно менять и сохранять учебные записи — даже из входа «Только просмотр». Рабочая база не меняется. Прогресс хранится в этом браузере отдельно для вашего входа, компании и роли.</p>'; }
-  function programSummary() {
-    const available = context.lessons.filter(l => l.available);
-    const complete = available.filter(l => status(l) === 'Пройден').length;
-    return `<p class="card" data-learning-program role="status">Пройдено ${complete} из ${available.length} доступных уроков.${complete === available.length && available.length ? ' Программа пройдена.' : ''}</p>`;
-  }
-  function refreshStatus(lesson) {
-    const badge = $('[data-learning-status]');
-    if (badge) badge.textContent = status(lesson);
-  }
-  VIEWS.learning = async (view, arg) => {
-    endGuide();
-    practice = null;
-    await freshContext(arg || null);
-    if (!view.isConnected) return;
-    setHead({title: 'Обучение', back: arg ? () => go('learning') : null});
-    if (!arg) {
-      view.innerHTML = `<div class="page">${localHint()}<p data-learning-notice role="status" hidden></p><h2>Программа ${context.role === 'director' ? 'директора' : 'менеджера'}</h2>${programSummary()}<div class="learn-catalog">${context.lessons.map(lesson => {
-        const state = status(lesson);
-        return `<section class="card"><span class="chip${state === 'Пройден' ? ' good' : ''}">${esc(state)}</span><h2>${esc(lesson.title)}</h2><p>${esc(lesson.result)}</p>${lesson.available ? `<button class="btn primary" type="button" data-lesson="${lesson.id}">${state === 'Не начат' ? 'Начать урок' : state === 'Пройден' ? 'Посмотреть результат' : 'Продолжить'}</button>${state !== 'Не начат' ? ` <button class="btn" type="button" data-restart="${lesson.id}">Пройти заново</button>` : ''}` : `<p class="hint">${esc(lesson.unavailable_reason)}</p><button type="button" class="btn" disabled>Модуль недоступен</button>`}</section>`;
-      }).join('')}</div></div>`;
-      $$('[data-lesson]', view).forEach(b => b.onclick = () => go('learning', b.dataset.lesson));
-      $$('[data-restart]', view).forEach(b => b.onclick = () => restart(selectedLesson(b.dataset.restart)).catch(e => notice(view, e.message)));
-      return;
+  async function restoreSelection(){
+    const a=attempt();if(!a||a.completed)return;
+    const pending=lesson().steps[a.step];
+    // This opens a card, never saves or clicks an operational button.
+    if(S.page==='deals'&&a.ui.selectedDeal&&['save_note','verify_history','answer_stalled'].includes(pending.action)) {
+      const phone=AveronClassroom.number(a.data.deals.find(d=>d.id===a.ui.selectedDeal).client);
+      await dealCard(phone);
+      if(pending.action==='save_note'&&W.drafts().$noteOpened==='true') {
+        const box=$$('.rvm').at(-1),d=await W.request('/api/deals/'+phone);
+        if(box)dealForm(box,d,'note',()=>reload());
+      }
     }
-    const lesson = selectedLesson(arg);
-    if (!lesson?.available) throw new Error('Этот урок недоступен вашей роли или компании.');
-    view.innerHTML = `<div class="page">${localHint()}<p data-learning-notice role="status" hidden></p><section class="card"><span class="chip" data-learning-status>${esc(status(lesson))}</span><h2>${esc(lesson.title)}</h2><p>${esc(lesson.result)}</p><h3>Рабочая ситуация</h3><p>${esc(lesson.situation.includes('{{') ? 'Точные даты и время будут закреплены при начале попытки.' : lesson.situation)}</p>${lesson.adaptation ? `<p class="hint">${esc(lesson.adaptation)}</p>` : ''}<div class="row"><button type="button" class="btn" data-mode="guide">Показать, где нажать</button>${lesson.kind === 'practice' ? '<button type="button" class="btn primary" data-mode="practice">Практика · учебные изменения разрешены</button>' : ''}<button type="button" class="btn" data-restart>Пройти заново</button><button type="button" class="ghost" data-exit>К программе</button></div></section><div data-exercise></div></div>`;
-    $('[data-exit]', view).onclick = () => go('learning');
-    $('[data-restart]', view).onclick = () => restart(lesson).catch(e => notice(view, e.message));
-    $$('[data-mode]', view).forEach(b => b.onclick = async () => {
-      try {
-        await freshContext(lesson.id);
-        if (b.dataset.mode === 'guide' && (context.work_readonly || S.me.readonly) && lesson.kind === 'practice') {
-          mountPractice(view, selectedLesson(lesson.id), true);
-          notice(view, 'Рабочие записи доступны только для просмотра. Открыта учебная копия: здесь можно сохранять изменения и завершить урок.');
-        } else if (b.dataset.mode === 'guide') await beginGuide(selectedLesson(lesson.id));
-        else mountPractice(view, selectedLesson(lesson.id));
-      } catch (e) { notice(view, e.message); }
-    });
-    // Opening an actual lesson is an explicit request to work on its fictional data.
-    // Merely opening #learning never launches a tour or an exercise.
-    if (lesson.kind === 'practice') mountPractice(view, lesson);
+    if(S.page==='callbacks'&&pending.action==='move_task'&&W.drafts().$moving===a.ui.selectedTask) {
+      const row=$('.cb[data-id="'+a.ui.selectedTask+'"]'),task=a.data.tasks.find(t=>t.id===a.ui.selectedTask);
+      if(row&&task&&!$('.move',row))callbackMove(row,W.task(task),a.clock.today);
+    }
+    if(S.page==='callbacks'&&pending.action==='answer_task'&&a.ui.selectedTask) {
+      const task=a.data.tasks.find(t=>t.id===a.ui.selectedTask);if(task)workDrawer(W.task(task),{ext:AveronClassroom.ext(task.manager)});
+    }
+    if(S.page==='calls'&&a.ui.selectedCall&&pending.quiz)CRMReview.open(a.ui.selectedCall);
+  }
+  VIEWS.learning=async(view,arg)=>{
+    context=W?W.context:await api('/api/learning/context'+(arg?'?lesson='+encodeURIComponent(arg):''));
+    if(!view.isConnected)return;
+    setHead({title:'Обучение'});
+    if(arg&&W){await launch(arg);return;}
+    const lessons=context.lessons;
+    const done=W?lessons.filter(l=>l.available&&W.status(l.id)==='Пройден').length:0;
+    view.innerHTML=`<div class="page"><p class="hint">${esc(contextHint())}</p>${!W?'<a class="btn primary" href="/learning/enter">Войти в учебную учётку</a>':''}<h2>Программа ${context.role==='director'?'директора':'менеджера'}</h2>${W?`<p role="status" data-learning-program>Пройдено ${done} из ${lessons.filter(l=>l.available).length} доступных уроков.</p>`:''}<div class="learn-catalog">${lessons.map(l=>`<section class="card"><h2>${esc(l.title)}</h2><p>${esc(l.result)}</p>${W?`<span class="chip">${esc(W.status(l.id))}</span>`:''}${l.available?W?`<button class="btn primary" data-lesson="${l.id}">${W.status(l.id)==='Не начат'?'Начать урок':W.status(l.id)==='Пройден'?'Посмотреть результат':'Продолжить'}</button><button class="btn" data-repeat="${l.id}">Пройти заново</button>`:`<a class="btn" href="/learning/enter?lesson=${l.id}">Начать урок в учебной учётке</a>`:`<p class="hint">${esc(l.unavailable_reason)}</p>`}</section>`).join('')}</div></div>`;
+    $$('[data-lesson]',view).forEach(b=>b.onclick=()=>launch(b.dataset.lesson).catch(e=>toast(e.message,true)));
+    $$('[data-repeat]',view).forEach(b=>b.onclick=()=>launch(b.dataset.repeat,true).catch(e=>toast(e.message,true)));
   };
-  async function restart(lesson) {
-    if (!lesson?.available) throw new Error('Урок недоступен.');
-    if (!await askConfirm('Начать чистую учебную ситуацию? Текущая попытка этого урока будет заменена только в вашем браузере.', 'Пройти заново')) return;
-    await freshContext(lesson.id);
-    endGuide();
-    const record = {state: lesson.kind === 'practice' ? E.start(lesson, context, context.clock, uid(), crypto.getRandomValues(new Uint32Array(1))[0]) : null, guide: null};
-    persist(lesson, record);
-    await go('learning', lesson.id);
-    if (lesson.kind !== 'practice') await beginGuide(lesson);
+  function targetNodes(step){
+    const selector=step?.selector || (step?.target?'[data-learning-target="'+step.target+'"]':'');
+    if(!selector)return[];
+    const scope=$$('.rvm').at(-1)||($('#drawer')?.classList.contains('open')?$('#drawer'):document);
+    const shared=window.tourFind ? tourFind(selector) : null;
+    return $$(selector,scope).filter(n=>!n.closest('.hidden')&&n.isConnected&&(n===shared||(n.getBoundingClientRect().width>0&&n.getBoundingClientRect().height>0)));
   }
-  function mountPractice(view, lesson, withHints = false) {
-    endGuide();
-    let record = recordFor(lesson), state = E.restore(record.state, lesson, context);
-    if (!state) { state = E.start(lesson, context, context.clock, uid(), crypto.getRandomValues(new Uint32Array(1))[0]); record.state = state; persist(lesson, record); }
-    const host = $('[data-exercise]', view);
-    if (!host) return;
-    host.innerHTML = '<div class="row"><p class="hint">Сохранение учебных итогов, перезвонов, заметок и документов разрешено. Рабочие записи и интеграции изолированы.</p><button type="button" class="btn" data-close-practice>Закрыть упражнение</button></div><iframe class="learn-frame" title="Учебное упражнение" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>';
-    const frame = $('iframe', host);
-    practice = {frame, lesson, state, record, nonce: uid(), scope: context.scope, withHints};
-    $('[data-close-practice]', host).onclick = () => { practice = null; host.innerHTML = ''; go('learning'); };
-    frame.src = '/learning/practice?lesson=' + encodeURIComponent(lesson.id);
-    refreshStatus(lesson);
-  }
-  addEventListener('message', event => {
-    const current = practice;
-    if (!current || event.source !== current.frame.contentWindow || !event.data || typeof event.data !== 'object') return;
-    const packet = event.data;
-    if (packet.type === 'learning:ready') {
-      current.frame.contentWindow.postMessage({type: 'learning:init', nonce: current.nonce, lesson: current.lesson, context: {scope: context.scope, role: context.role, modules: context.modules}, state: current.state, withHints: current.withHints, theme: document.documentElement.getAttribute('data-theme')}, '*');
-      return;
+  function schedule(){if(scheduled)return;scheduled=true;queueMicrotask(()=>{scheduled=false;draw();});}
+  function draw(){
+    if(!W||!lesson()||W.state.paused){panel?.remove();panel=null;clearHighlights();return;}
+    restoreFields();
+    const l=lesson(),a=attempt(),isGuide=l.kind==='guide',g=W.state.guides[l.id];
+    const done=isGuide?g?.complete:a?.completed;
+    const step=done?null:isGuide?l.guide[g.index]:l.steps[a.step];
+    const host=$$('.rvm .rvm-body').at(-1)||($('#drawer')?.classList.contains('open')?$('#drawer .dr-b'):null)||$('.main')||$('#view')?.parentNode;
+    if(!host)return;
+    if(!panel){panel=document.createElement('section');panel.className='card learn-guide';panel.setAttribute('data-learning-guide','');panel.setAttribute('aria-label','Подсказка урока');}
+    if(panel.parentNode!==host)host.insertBefore(panel,host.firstChild);
+    const visible=done?[]:targetNodes(isGuide?step:step.screen);
+    const sig=[l.id,a?.step,g?.index,done,visible.length>0,S.page,S.arg].join(':');
+    if(sig!==signature){
+      signature=sig;
+      const situation=a?AveronLearningEngine.interpolate(l.situation,a):l.situation;
+      panel.innerHTML=`<div class="row"><b>${esc(l.title)}</b><span class="sp"></span><button class="btn small" data-learn-close>Приостановить урок</button></div>${done?`<h3>Урок пройден</h3><p>${esc(l.result)}</p><button class="btn primary" data-learn-catalog>К программе обучения</button>`:`<details><summary>Рабочая ситуация</summary><p>${esc(situation)}</p>${l.adaptation?`<p>${esc(l.adaptation)}</p>`:''}</details><h3>Что сделать</h3><p>${esc(isGuide?step.text:step.title)}</p><p class="hint">${isGuide?esc(step.result):(step.action==='open_section'&&$('.rvm')?'Закройте карточку крестиком, затем откройте указанный раздел.':'Сделайте действие сами. Подсказка ничего не нажимает и не сохраняет за вас.')}</p>${step.quiz?'<div data-learn-quiz>'+step.quiz.map(f=>`<label class="field">${esc(f.label)}${f.options?`<select class="inp" data-answer="${f.key}"><option value="">Выберите</option>${f.options.map(([v,t])=>`<option value="${esc(v)}">${esc(t)}</option>`).join('')}</select>`:`<input class="inp" type="${f.type||'text'}" data-answer="${f.key}">`}</label>`).join('')+'<button class="btn primary" data-check-answer>Проверить ответ</button></div>':''}<p role="status" data-learn-feedback></p><div class="row"><button class="btn small" data-learn-hint>${hints?'Скрыть выделение':'Выделить нужный блок'}</button>${!visible.length&&step.screen?`<button class="btn small" data-learn-open>Открыть раздел «${esc(PAGES[step.screen.page]?.name||'CRM')}»</button>`:''}${isGuide?`<button class="btn primary" data-guide-next ${visible.length?'':'disabled'}>${g.index===l.guide.length-1?'Завершить показ':'Далее'}</button>`:''}<button class="btn small" data-learn-catalog>К программе</button></div>`}`;
+      $('[data-learn-close]',panel).onclick=close;
+      $('[data-learn-catalog]',panel).onclick=()=>{close();go('learning');};
+      $('[data-learn-hint]',panel)?.addEventListener('click',()=>{hints=!hints;signature='';schedule();});
+      $('[data-learn-open]',panel)?.addEventListener('click',()=>{if($('.rvm')){toast('Сначала закройте карточку крестиком.',true);return;}go(step.screen.page);});
+      $('[data-guide-next]',panel)?.addEventListener('click',async()=>{
+        if(!targetNodes(step).length)return;
+        const rec=AveronLearningProgress.advanceGuide({guide:g},g.index,l.guide.length,true);
+        W.state.guides[l.id]=rec.guide;W.save();
+        if(!rec.guide.complete){const next=l.guide[rec.guide.index];await go(next.page,next.arg||null);}
+        signature='';schedule();
+      });
+      $('[data-check-answer]',panel)?.addEventListener('click',()=>{const action={type:step.action};$$('[data-answer]',panel).forEach(n=>action[n.dataset.answer]=n.value);W.action(action);});
+      for(const f of $$('[data-answer]',panel))f.value=W.drafts()['quiz:'+f.dataset.answer]||'';
     }
-    if (packet.nonce !== current.nonce || context.scope !== current.scope) return;
-    if (packet.type === 'learning:height' && Number.isFinite(packet.height)) { current.frame.style.height = Math.max(340, Math.min(2600, packet.height)) + 'px'; return; }
-    if (packet.type === 'learning:exit') { practice = null; go('learning'); return; }
-    if (packet.type !== 'learning:state') return;
-    try {
-      if (JSON.stringify(packet.state).length > 120000) throw new Error('Учебная попытка слишком велика. Начните заново.');
-      const next = E.restore(packet.state, current.lesson, context);
-      if (!next || next.id !== current.state.id || next.revision < current.state.revision || next.revision > current.state.revision + 1) throw new Error('Состояние попытки изменилось. Продолжите урок заново из программы.');
-      const latest = saved(current.lesson);
-      if (latest?.state?.id && (latest.state.id !== next.id || latest.state.revision > current.state.revision)) throw new Error('Попытка изменена в другой вкладке. Откройте «Продолжить».');
-      current.state = next; current.record.state = next;
-      persist(current.lesson, current.record);
-      refreshStatus(current.lesson);
-    } catch (e) { notice($('#view'), e.message); practice = null; current.frame.remove(); }
-  });
+    const feedback=$('[data-learn-feedback]',panel);
+    const message=a?.feedback||(!visible.length&&!step?.quiz?'Нужный блок пока не виден. Откройте карточку или указанный раздел.':'');
+    if(feedback&&feedback.textContent!==message)feedback.textContent=message;
+    const next=hints?visible:[];
+    for(const n of highlights)if(!next.includes(n))n.classList.remove('learn-highlight');
+    for(const n of next)if(!n.classList.contains('learn-highlight'))n.classList.add('learn-highlight');
+    highlights=next;
+    // Verification reads the visible saved result. It cannot create the result.
+    if(!done&&a){
+      const checkKey=[l.id,a.step,JSON.stringify(a.data.outcomes),JSON.stringify(a.data.tasks),JSON.stringify(a.data.deals)].join(':');
+      if(checkKey===verification)return;
+      if(step.action==='verify_outcome'&&$('[data-learning-target="client-history"]')?.textContent.includes('Не взял трубку')){verification=checkKey;W.observe('verify_outcome');}
+      if(step.action==='verify_history'&&$('.rvm-body')?.textContent.includes(AveronLearningEngine.refs(a).expectedNote)){verification=checkKey;W.observe('verify_history');}
+      if(step.action==='verify_task'&&S.page==='callbacks'&&$('[data-learning-target="callback-list"]')){verification=checkKey;W.observe('verify_task');}
+    }
+  }
+  function fieldKey(input){
+    if(input.dataset.answer)return 'quiz:'+input.dataset.answer;
+    if(input.dataset.f)return 'work:'+S.qnum+':'+input.dataset.f;
+    if(input.dataset.v&&input.tagName.toLowerCase()==='textarea')return 'deal:'+input.dataset.v;
+    if(input.closest('.move')&&input.tagName.toLowerCase()==='input')return 'move:'+input.closest('.cb').dataset.id+':'+input.type;
+    if(input.id?.startsWith('dg-'))return 'contract:'+input.id;
+    return null;
+  }
+  if(W){
+    W.changed=schedule;
+    document.addEventListener('click',event=>{
+      const node=event.target;
+      const queueItem=node.closest('[data-next] .item');if(queueItem)W.observe('select_client',{client:['client-2','client-1','client-3'][+queueItem.dataset.i]});
+      const row=node.closest('.cb');if(row&&node.closest('[data-move],[data-call]'))W.observe('select_task',{task:row.dataset.id});
+      const filter=node.closest('[data-seg="show"] button');if(filter)W.observe('filter_deals',{filter:filter.dataset.v});
+      const report=node.closest('[data-learning-report]');if(report&&!node.closest('button,a'))W.observe('select_report',{report:report.dataset.learningReport});
+      const contract=node.closest('[data-learning-target="contract-journal"] [data-deal]');
+      if(contract){const doc=W.data().documents.find(d=>AveronClassroom.number(W.data().deals.find(x=>x.id===d.deal).client)===contract.dataset.deal);if(doc)W.observe('select_document',{document:doc.id});}
+      if(row&&node.closest('[data-move]'))W.draft('$moving',$('.move',row)?'':row.dataset.id);
+      if(node.closest('[data-ev="note"]'))W.draft('$noteOpened','true');
+      if(node.closest('[data-contract]'))W.draft('$contractOpened','true');
+      const out=node.closest('[data-out]');if(out){W.draft('$outcome',out.dataset.out);W.draft('$outcomeNumber',S.qnum||'');}
+      schedule();
+    },true);
+    document.addEventListener('input',event=>{const key=fieldKey(event.target);if(key)W.draft(key,event.target.type==='checkbox'?String(event.target.checked):event.target.value);},true);
+    document.addEventListener('change',event=>{const key=fieldKey(event.target);if(key)W.draft(key,event.target.type==='checkbox'?String(event.target.checked):event.target.value);},true);
+    addEventListener('keydown',event=>{if(event.key==='Escape')close();});
+    new MutationObserver(schedule).observe(document.body,{childList:true,subtree:true});
+  }
+  function restoreFields(){
+    if(!W)return;
+    const drafts=W.drafts();
+    for(const node of $$('input,textarea,select')) {
+      const key=fieldKey(node);if(!key||!Object.hasOwn(drafts,key)||(document.activeElement===node&&restoredInputs.has(node)))continue;
+      restoredInputs.add(node);
+      if(node.type==='checkbox')node.checked=drafts[key]==='true';
+      else if(node.value!==drafts[key])node.value=drafts[key];
+    }
+  }
+  window.learningPageChanged=()=>{
+    if(!W)return;
+    const targets={summary:{'summary-filters':'#top .bar-f'},calls:{'call-filters':'#top .bar-f'},callbacks:{'callback-filters':'#top .bar-f'},deals:{'deal-filters':'#top .bar-f'},settings:{'settings-tabs':'#view .tabs'},robot:{'robot-tabs':'#view .tabs'}};
+    for(const [id,selector] of Object.entries(targets[S.page]||{})){const n=$(selector);if(n)n.dataset.learningTarget=id;}
 
-  function endGuide() {
-    if (guide?.target) guide.target.classList.remove('learn-highlight');
-    const focus = guide?.returnFocus;
-    guide = null; clearTimeout(guideTimer);
-    $('[data-learning-guide]')?.remove();
-    if (focus?.isConnected) focus.focus({preventScroll: true});
-    else ($('dialog[open] button') || $('[data-go="learning"]'))?.focus({preventScroll: true});
-  }
-  function addTargets() {
-    const targets = {summary: {'summary-filters': '#top .bar-f'}, calls: {'call-filters': '#top .bar-f'}, callbacks: {'callback-filters': '#top .bar-f'}, deals: {'deal-filters': '#top .bar-f'}, settings: {'settings-tabs': '#view .tabs'}, robot: {'robot-tabs': '#view .tabs'}};
-    Object.entries(targets[S.page] || {}).forEach(([name, selector]) => { const node = $(selector); if (node) node.dataset.learningTarget = name; });
-  }
-  async function beginGuide(lesson) {
-    endGuide();
-    const record = recordFor(lesson);
-    record.guide = record.guide || {index: 0, seen: [], complete: false};
-    if (record.guide.complete || record.guide.index >= lesson.guide.length) record.guide = {index: 0, seen: [], complete: false};
-    persist(lesson, record);
-    guide = {lesson, record, index: record.guide.index, returnFocus: document.activeElement, target: null, signature: ''};
-    if (window.GPT?.tour) tourEnd();
-    const step = lesson.guide[guide.index];
-    await go(step.page, step.arg || null);
-    showGuide(true);
-  }
-  function showGuide(force = false) {
-    if (!guide) return;
-    addTargets();
-    const g = guide, step = g.lesson.guide[g.index];
-    const correctPage = S.page === step.page && (!step.arg || S.arg === step.arg);
-    const selector = '[data-learning-target="' + step.target + '"]';
-    const modal = $('dialog[open]');
-    let target = correctPage ? (window.tourFind ? tourFind(selector) : $(selector)) : null;
-    if (modal && target && !modal.contains(target)) target = null; // underlying screen is inert
-    const signature = [S.page, S.arg, g.index, !!target, !!modal].join(':');
-    if (!force && g.signature === signature && g.target === target && g.modal === modal) return;
-    g.modal = modal;
-    g.signature = signature;
-    if (g.target) g.target.classList.remove('learn-highlight');
-    g.target = target;
-    if (target) target.classList.add('learn-highlight');
-    $('[data-learning-guide]')?.remove();
-    const panel = document.createElement('section');
-    panel.className = 'card learn-guide'; panel.dataset.learningGuide = '1'; panel.setAttribute('aria-label', 'Подсказка обучения');
-    panel.innerHTML = `<div class="row"><b>${esc(g.lesson.title)} · ${g.index + 1}/${g.lesson.guide.length}</b><span class="sp"></span><button type="button" class="ghost" data-guide-close>Закрыть обучение · Esc</button></div><h2>Где это находится</h2><p>В обычной работе: ${esc(step.text)}</p><h3>Как проверить результат</h3><p>${esc(step.result)}</p>${modal && !target ? '<p role="status">Сначала закройте рабочую карточку крестиком. Обучение не закрывает её автоматически и не теряет несохранённые поля.</p>' : ''}${!target ? `<p role="status">${correctPage ? 'Нужный элемент пока не виден: список может быть пустым, карточка не открыта или данных/прав недостаточно. Откройте нужную карточку вручную.' : 'Откройте нужный раздел.'} Учебный пример доступен в режиме практики.</p>` : '<p class="hint">Нужный блок выделен рамкой. Подсказка расположена в потоке страницы и не перекрывает кнопку.</p>'}${g.lesson.omitted_guide_modules?.length ? '<p class="hint">Отключённые модули пропущены: ' + esc(g.lesson.omitted_guide_modules.join(', ')) + '.</p>' : ''}<div class="row">${target ? '<button type="button" class="btn" data-guide-focus>К выделенному блоку</button>' : ''}<button type="button" class="btn" data-guide-open>Открыть раздел «${esc(PAGES[step.page].name)}»</button>${g.lesson.kind === 'practice' ? '<button type="button" class="btn" data-guide-practice>Учебный пример</button>' : ''}<button type="button" class="btn primary" data-guide-next ${target ? '' : 'disabled'}>${g.index === g.lesson.guide.length - 1 ? 'Закончить показ' : 'Далее'}</button></div><p class="hint">Это необязательный показ интерфейса. Не сохраняйте рабочие записи ради урока: проверяемые действия выполняются в учебной практике.</p>`;
-    const view = $('#view');
-    if (modal) modal.insertBefore(panel, modal.firstChild);
-    else view.parentNode.insertBefore(panel, view);
-    $('[data-guide-close]', panel).onclick = () => endGuide();
-    $('[data-guide-focus]', panel)?.addEventListener('click', () => {
-      const node = g.target; if (!node?.isConnected) return;
-      node.scrollIntoView({block: 'center', behavior: reduce ? 'auto' : 'smooth'});
-      const control = node.matches('button,input,select,textarea,a') ? node : $('button,input,select,textarea,a', node);
-      control?.focus({preventScroll: true});
-    });
-    $('[data-guide-open]', panel).onclick = () => {
-      if ($('dialog[open]')) { toast('Сначала закройте рабочую карточку крестиком: её поля сохраняются только вашей кнопкой.', true); return; }
-      go(step.page, step.arg || null);
-    };
-    $('[data-guide-practice]', panel)?.addEventListener('click', async () => { if ($('dialog[open]')) { toast('Сначала закройте рабочую карточку крестиком.', true); return; } const lesson = g.lesson; endGuide(); await go('learning', lesson.id); });
-    $('[data-guide-next]', panel).onclick = async () => {
-      if (!g.target || !g.target.isConnected) return;
-      try {
-        g.record = P.advanceGuide(g.record, g.index, g.lesson.guide.length, !!g.target?.isConnected);
-        persist(g.lesson, g.record);
-      } catch (e) { toast(e.message, true); return; }
-      g.index = g.record.guide.index;
-      const done = g.record.guide.complete;
-      if (done) { endGuide(); toast(g.lesson.kind === 'guide' ? 'Экскурсия пройдена. Можно продолжить работу.' : 'Показ завершён. Практика — в разделе «Обучение».'); return; }
-      const next = g.lesson.guide[g.index];
-      if (!$('dialog[open]')) await go(next.page, next.arg || null);
-      showGuide(true);
-    };
-    // Non-modal normal flow: no fixed tooltip over an action, keyboard never trapped.
-    $('[data-guide-close]', panel).focus({preventScroll: true});
-  }
-  window.learningPageChanged = function () {
-    addTargets();
-    const readonlyNote = $('[data-readonly-notice]');
-    if (readonlyNote) readonlyNote.textContent = S.page === 'learning'
-      ? 'Рабочие данные доступны только для просмотра. В уроках учебные изменения разрешены.'
-      : 'Только смотреть: звонки и изменения работают под своим логином.';
-    if (S.page !== 'learning') practice = null;
-    if (guide) showGuide(true);
+    if(W.state.active&&S.page!=='learning'){W.draft('$page',S.page);W.draft('$arg',S.arg||'');}
+    // Restore values only, never submit or click. Native forms remain in control.
+    restoreFields();
+    if(restorePlanned&&W.state.active&&S.page!=='learning') {restorePlanned=false;restoreSelection().then(schedule).catch(e=>toast(e.message,true));}
+    schedule();
   };
-  new MutationObserver(() => {
-    if (!guide || guideTimer) return;
-    guideTimer = setTimeout(() => { guideTimer = null; showGuide(); }, 80);
-  }).observe(document.body, {childList: true, subtree: true});
-  addEventListener('keydown', e => {
-    if (e.key !== 'Escape') return;
-    if (guide) endGuide();
-    if (practice) { practice = null; go('learning'); }
-  });
 }());

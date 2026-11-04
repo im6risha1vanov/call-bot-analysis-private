@@ -177,7 +177,7 @@
     s.feedback = s.completed ? 'Урок пройден. Результат проверен на учебных данных.' : 'Верно. ' + lesson.steps[s.step].title;
     return {state: s, ok: true, advanced: true, feedback: s.feedback};
   }
-  var api = {VERSION: VERSION, copy: copy, find: find, day: day, refs: refs, interpolate: interpolate, allowed: allowed, start: start, restore: restore, apply: apply};
+  var api = {VERSION: VERSION, fixtures: fixtures, copy: copy, find: find, day: day, refs: refs, interpolate: interpolate, allowed: allowed, start: start, restore: restore, apply: apply};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.AveronLearningEngine = api;
 }(this));

@@ -70,7 +70,7 @@ async function leadsView(box) {
 
 // ---------- отчёты и вопросы ----------
 S.repFilter = 'all';
-const reportHtml = (r, i) => `<article class="card report click" tabindex="0" data-css="--i:${i}">
+const reportHtml = (r, i) => `<article class="card report click" tabindex="0"${r.id ? ` data-learning-report="${esc(r.id)}"` : ''} data-css="--i:${i}">
   <div class="rep-head"><b>${esc(r.title)}</b>${r.who ? `<span>${esc(r.who)}</span>` : ''}<span class="hint">${fmtWhen(r.at)}</span>${r.note ? `<span class="chip">${esc(r.note)}</span>` : ''}</div>
   <div class="rep-body">${r.html}</div>
   ${r.calls.length ? `<div class="rep-calls">${r.calls.map(c => `<button class="btn small" type="button" data-review="${c.id}">${esc(c.label)}</button>`).join('')}</div>` : ''}</article>`;

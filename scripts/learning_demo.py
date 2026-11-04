@@ -7,6 +7,7 @@ it via Caddy, public bind or production systemd. All POST/PUT/PATCH/DELETE rejec
 """
 from __future__ import annotations
 import argparse
+import secrets
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -52,7 +53,8 @@ async def login(request):
     role = request.match_info['role']
     if role not in {'manager', 'director', 'client', 'manager-other', 'director-other-company', 'manager-base', 'director-base'}:
         raise web.HTTPNotFound()
-    response = web.HTTPFound('/#learning')
+    response = web.HTTPFound('/learning/workspace#learning')
+    response.set_cookie(learning.ENTRY_COOKIE, secrets.token_urlsafe(24), httponly=True, samesite='Strict', path='/learning')
     response.set_cookie('learning_demo', role, httponly=True, samesite='Strict')
     return response
 
@@ -66,6 +68,27 @@ async def index(request):
 
 async def learning_context(request):
     return web.json_response(ctx(request, request.query.get('lesson')))
+
+
+async def enter(request):
+    ctx(request, request.query.get('lesson'))
+    response = web.HTTPFound('/learning/workspace#learning' + ('/' + request.query['lesson'] if request.query.get('lesson') else ''))
+    response.set_cookie(learning.ENTRY_COOKIE, secrets.token_urlsafe(24), httponly=True, samesite='Strict', path='/learning')
+    return response
+
+
+async def workspace(request):
+    data = ctx(request)
+    entry = request.cookies.get(learning.ENTRY_COOKIE)
+    if not entry: return web.HTTPFound('/learning/enter')
+    return learning.workspace_response(data, entry, request.cookies.get('learning_demo', ''))
+
+
+async def exit_workspace(request):
+    response = web.HTTPFound('/')
+    response.del_cookie(learning.ENTRY_COOKIE, path='/learning')
+    response.del_cookie('learning_demo')
+    return response
 
 
 async def practice(request):
@@ -136,6 +159,9 @@ def build():
     app.router.add_get('/demo/{role}', login)
     app.router.add_get('/api/learning/context', learning_context)
     app.router.add_get('/learning/practice', practice)
+    app.router.add_get('/learning/enter', enter)
+    app.router.add_get('/learning/workspace', workspace)
+    app.router.add_get('/learning/exit', exit_workspace)
     app.router.add_get('/api/{tail:.*}', fixture_api)
     # Register assets before wildcard matching (router uses registration order).
     app.router.add_static('/static/', STATIC, show_index=False)

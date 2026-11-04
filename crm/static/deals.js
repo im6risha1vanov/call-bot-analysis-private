@@ -261,7 +261,7 @@ function contractScripts() {
   // Библиотеки весят ~200 КБ, поэтому грузим их только при открытии генератора.
   contractJs = contractJs || CONTRACT_JS.reduce((p, name) => p.then(() => new Promise((ok, fail) => {
     const el = document.createElement('script');
-    el.src = '/static/contracts/' + name;
+    el.src = '/static/contracts/' + name + (name === 'generator.js' ? '?v=20261104c' : '');
     el.onload = ok;
     el.onerror = () => { contractJs = null; fail(new Error('Генератор договоров не загрузился. Обновите страницу.')); };
     document.head.appendChild(el);
@@ -271,7 +271,7 @@ function contractScripts() {
 const contractTitle = c => `${c.type_title}${c.num ? ' № ' + c.num : c.base_num ? ' к № ' + c.base_num : ''}${c.date ? ' от ' + ddmm(c.date) + '.' + c.date.slice(0, 4) : ''}${c.amount ? ' · ' + rub(c.amount) : ''}`;
 
 async function contractsView(view) {
-  const deal = S.contractDeal || null;
+  const deal = S.contractDeal || (S.me.learning ? window.AveronLearningWorkspace?.classroom?.restoreContractDeal() : null) || null;
   S.contractDeal = null;
   setHead({title: 'Сделки'});
   const first = await loading(view, api('/api/contracts'), 'table');
@@ -298,7 +298,7 @@ async function contractsView(view) {
     try { await contractScripts(); } catch (e) { busy(btn, false); toast(e.message, true); return; }
     if (btn) btn.hidden = true;
     box.className = 'card blk';
-    await window.ContractGenerator.mount(box, {api, deal: withDeal, readonly: S.me.readonly,
+    await window.ContractGenerator.mount(box, {api, deal: withDeal, readonly: S.me.readonly, learning: !!S.me.learning,
       onDone: () => api('/api/contracts').then(journal).catch(e => toast(e.message, true))});
     box.scrollIntoView({behavior: reduce ? 'auto' : 'smooth', block: 'start'});
   };

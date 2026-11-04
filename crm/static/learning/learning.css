@@ -32,3 +32,7 @@
 @media(max-width:600px){.learn-guide{margin:8px;padding:12px}.learn-exercise{padding:6px}.learn-exercise .outform{grid-template-columns:1fr}.learn-frame{border-radius:8px}.learn-exercise .card{padding:12px}.learn-exercise h1{font-size:19px}}
 
 .learn-action-hint{outline:3px solid var(--accent);outline-offset:3px}
+
+.learn-guide .btn{min-height:44px;white-space:normal}
+.learn-guide .row{flex-wrap:wrap}
+.learn-guide .field{display:flex;flex-direction:column;gap:6px;margin:10px 0}

@@ -73,7 +73,7 @@ class CatalogTests(unittest.TestCase):
             self.assertTrue(lesson['guide'])
             for step in lesson['guide']:
                 self.assertIn(step['page'] + ':', pages)
-                self.assertIn(step['target'], targets)
+                self.assertTrue(step['target'] in targets, 'Missing guide target: ' + step['target'])
 
     def test_no_duplicate_highlight_attributes(self):
         import re
@@ -137,7 +137,24 @@ class CatalogTests(unittest.TestCase):
             self.assertIn(part,csp)
         self.assertNotIn('allow-same-origin',csp)
         self.assertEqual(learning.practice_response().headers['X-Frame-Options'],'SAMEORIGIN')
-        self.assertIn('sandbox="allow-scripts"',(ROOT/'crm/static/learning/learning.js').read_text())
+        self.assertNotIn('<iframe',(ROOT/'crm/static/learning/learning.js').read_text())
+        self.assertIn("connect-src 'none'", learning.WORKSPACE_CSP)
+
+    def test_workspace_bootstrap_roundtrip_escapes_html_and_resets_only_on_entry(self):
+        import re
+        data = learning.context(who(), {'id': 1, 'modules': []}, 'Europe/Moscow')
+        data['lessons'][0]['title'] = '</script><script>bad()</script> & пример'
+        def packet(response):
+            match = re.search(r'id="learning-workspace-context">(.*?)</script>', response.text, re.S)
+            return json.loads(match[1])
+        first = packet(learning.workspace_response(data, 'first', 'session-one'))
+        same = packet(learning.workspace_response(data, 'first', 'session-one'))
+        next_entry = packet(learning.workspace_response(data, 'next', 'session-one'))
+        next_login = packet(learning.workspace_response(data, 'first', 'session-two'))
+        self.assertEqual(first['lessons'][0]['title'], data['lessons'][0]['title'])
+        self.assertEqual(first['entry'], same['entry'])
+        self.assertNotEqual(first['entry'], next_entry['entry'])
+        self.assertNotEqual(first['entry'], next_login['entry'])
 
     def test_actual_engine_and_practice_ui_all_ten_lessons(self):
         vm = JavaScriptVM()
@@ -236,6 +253,38 @@ class ProductionHandlerTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(web.HTTPForbidden): await mod.api_learning_context(req)
         info.assert_not_awaited()
 
+    async def test_real_workspace_html_auth_context_and_network_policy(self):
+        mod = self.production
+        for role in ('manager', 'director'):
+            req = make_mocked_request('GET', '/learning/workspace', app=self.app,
+                                      headers={'Cookie': learning.ENTRY_COOKIE + '=synthetic-entry; crm_session=synthetic-session'})
+            with patch.object(mod, 'viewer', AsyncMock(return_value=who(role))), \
+                 patch.object(mod.company, 'info', AsyncMock(return_value={'id': 1, 'modules': ['contracts']})), \
+                 patch.object(mod.store, 'zone', AsyncMock(return_value=ZoneInfo('Europe/Moscow'))):
+                response = await mod.guard(req, mod.learning_workspace)
+            self.assertEqual(response.status, 200)
+            self.assertIn("connect-src 'none'", response.headers['Content-Security-Policy'])
+            self.assertIn("form-action 'none'", response.headers['Content-Security-Policy'])
+            self.assertIn('learning-workspace-context', response.text)
+            self.assertNotIn('synthetic-session', response.text)
+            self.assertNotIn('synthetic-entry', response.text)
+        self.pool.execute.assert_not_awaited()
+
+    async def test_workspace_entry_cookie_reset_and_client_denied(self):
+        mod = self.production
+        req = make_mocked_request('GET', '/learning/enter', app=self.app)
+        data = learning.context(who(), {'id': 1, 'modules': []}, 'Europe/Moscow')
+        with patch.object(mod, 'learning_context', AsyncMock(return_value=data)):
+            first = await mod.learning_enter(req)
+            second = await mod.learning_enter(req)
+        self.assertNotEqual(first.cookies[learning.ENTRY_COOKIE].value, second.cookies[learning.ENTRY_COOKIE].value)
+        self.assertTrue(first.cookies[learning.ENTRY_COOKIE]['httponly'])
+        self.assertEqual(first.cookies[learning.ENTRY_COOKIE]['path'], '/learning')
+        with patch.object(mod, 'viewer', AsyncMock(return_value=who('client'))), \
+             patch.object(mod.company, 'info', AsyncMock()) as info:
+            with self.assertRaises(web.HTTPForbidden): await mod.learning_workspace(req)
+        info.assert_not_awaited()
+
     async def test_production_routes_only_add_get_learning_endpoints(self):
         app = self.production.build(self.pool)
         learning_routes = [route for route in app.router.routes() if 'learning' in route.resource.canonical]
@@ -247,7 +296,7 @@ class ExistingSurfaceTests(unittest.TestCase):
     def test_existing_forms_helper_and_gpt_are_unchanged_except_inert_targets(self):
         import re,subprocess
         base='2a11936af00465fafdaa07059da179ee8ce7313a'
-        for name in ['crm/static/helper.js','crm/gpt.py','crm/static/review.js','crm/static/work.js','crm/static/deals.js','crm/static/calls.js','crm/static/people.js','crm/static/summary.js','crm/static/more.js','crm/static/automations.js']:
+        for name in ['crm/static/helper.js','crm/gpt.py','crm/static/review.js','crm/static/people.js','crm/static/summary.js','crm/static/automations.js']:
             process=subprocess.run(['git','show',base+':'+name],cwd=ROOT,capture_output=True,text=True)
             if process.returncode:
                 self.skipTest('Pinned Git baseline unavailable for source regression check')

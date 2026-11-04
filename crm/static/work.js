@@ -39,7 +39,7 @@ function workCard(el, item, onDone, opts = {}) {
       <button class="btn" type="button" data-act="copy">Скопировать номер</button>
     </div>
     ${canDial && !ro ? dialModeSeg() : ''}
-    ${canDial ? '' : `<div class="ringing">${ro ? 'Тестовый вход: звонок и итог работают во входе самого менеджера.' : 'Звонить можно только со своего добавочного в Mango.'}</div>`}
+    ${canDial ? '' : `<div class="ringing">${S.me.learning ? 'Учебный вход: звонки отключены, итоги сохраняются локально.' : ro ? 'Тестовый вход: звонок и итог работают во входе самого менеджера.' : 'Звонить можно только со своего добавочного в Mango.'}</div>`}
     <div class="ringing hidden" data-ring></div>
     <div class="outs${ro ? ' hidden' : ''}">
       <h3>Итог звонка</h3>
@@ -49,7 +49,7 @@ function workCard(el, item, onDone, opts = {}) {
         <label class="field">Дата<input type="date" data-f="date" min="${isoToday()}"></label>
         <label class="field">Время<input type="time" data-f="time" step="300"></label>
         <label class="field wide">Комментарий<textarea data-f="comment" maxlength="1000" placeholder="Что важно помнить к следующему звонку"></textarea></label>
-        <div class="row wide"><button class="btn primary" type="button" data-act="save">Сохранить${inDrawer ? '' : ' и дальше'}</button><button class="btn" type="button" data-act="cancel">Отмена</button></div>
+        <div class="row wide"><button class="btn primary" type="button" data-act="save">Сохранить${inDrawer || S.me.learning ? '' : ' и дальше'}</button><button class="btn" type="button" data-act="cancel">Отмена</button></div>
       </div>
     </div>
   </div>
@@ -120,13 +120,23 @@ function workCard(el, item, onDone, opts = {}) {
         due_date: dueDate, due_time: field('time').value || null, ext: outcomeExt(opts.ext),
         dial_id: S.dial && S.dial.number === item.number ? S.dial.id : null}});
       S.dial = null;
-      toast(chosen === 'no_answer' ? 'Не дозвонились: номер вернётся в очередь через 2 часа' : 'Итог сохранён');
+      toast(S.me.learning ? 'Учебный итог сохранён. Проверьте историю клиента.' : chosen === 'no_answer' ? 'Не дозвонились: номер вернётся в очередь через 2 часа' : 'Итог сохранён');
       onDone && onDone(chosen);
     } catch (e) {
       toast(e.message, true);
       busy($('[data-act="save"]', el), false);
     } finally {
       S.busy = false;
+    }
+  }
+  if (S.me.learning && window.AveronLearningWorkspace) {
+    const classroom=AveronLearningWorkspace.classroom, draft=classroom.drafts();
+    const step=classroom.lesson(classroom.state.active)?.steps[classroom.current()?.step];
+    if (step?.action==='save_outcome' && draft.$outcome==='callback' && draft.$outcomeNumber===item.number) {
+      // Restore the form only. Never call saveOutcome or click its button.
+      chosen='callback';form.classList.remove('hidden');
+      $('[data-out="callback"]',el).setAttribute('aria-pressed','true');
+      for (const key of ['date','time','comment']) field(key).value=draft['work:'+item.number+':'+key]||'';
     }
   }
   loadHistory(item.number, $('.hist', el), opts.ext);
@@ -218,6 +228,7 @@ VIEWS.queue = async (view, arg) => {
     const item = q.items[pos];
     S.qnum = item.number; S.dial = null;
     workCard($('[data-work]', view), item, () => {
+      if (S.me.learning) { reload(); return; } // Keep the saved fictional card visible for the history check.
       q.items.splice(pos, 1);
       S.qnum = q.items[pos % Math.max(1, q.items.length)]?.number || null;
       reload();

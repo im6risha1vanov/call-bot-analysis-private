@@ -1,4 +1,4 @@
-"""Read-only learning catalog and a network-disabled practice document.
+"""Read-only learning context and a network-disabled classroom using the real CRM views.
 
 No progress, fictional rows or grading is written to PostgreSQL. Browser-local
 progress is separated by a server-derived account/company/role scope. Importing
@@ -91,4 +91,32 @@ def practice_response() -> web.FileResponse:
         'Content-Security-Policy': PRACTICE_CSP,
         'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
         'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'SAMEORIGIN',
+    })
+
+
+ENTRY_COOKIE = 'crm_learning_entry'
+WORKSPACE_CSP = "; ".join((
+    "default-src 'self'", "script-src 'self'", "style-src 'self'",
+    "img-src 'self' data:", "connect-src 'none'", "media-src 'none'",
+    "form-action 'none'", "base-uri 'none'", "object-src 'none'",
+    "frame-src 'none'", "frame-ancestors 'none'", "worker-src 'none'",
+))
+
+
+def workspace_response(data: dict, entry: str, session: str) -> web.Response:
+    """Same CRM HTML and view scripts; only synthetic bootstrap data is embedded.
+
+    entry/session are never sent to JS. The derived ID is not an auth capability.
+    A new entry/login resets state; a plain reload retains the current attempt.
+    """
+    data = dict(data)
+    data['entry'] = hashlib.sha256(json.dumps(['classroom-v2', data['scope'], entry, session]).encode()).hexdigest()
+    packet = json.dumps(data, ensure_ascii=False).replace('<', chr(92) + 'u003c').replace('>', chr(92) + 'u003e').replace('&', chr(92) + 'u0026')
+    # The context is data, not executable inline code. JS is an external self script.
+    document = (ROOT / 'static/index.html').read_text(encoding='utf-8')
+    document = document.replace('<head>', '<head>\n<script type="application/json" id="learning-workspace-context">' + packet + '</script>', 1)
+    return web.Response(text=document, content_type='text/html', headers={
+        'Content-Security-Policy': WORKSPACE_CSP, 'X-Frame-Options': 'DENY',
+        'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer',
+        'X-Content-Type-Options': 'nosniff',
     })

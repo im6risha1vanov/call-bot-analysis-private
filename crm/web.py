@@ -92,7 +92,7 @@ async def guard(request: web.Request, handler):
     if isinstance(response, web.WebSocketResponse):  # сокет телефона уже закрыт, заголовки ему не нужны
         return response
     for key, value in HEADERS.items():
-        if request.path != '/learning/practice' or key not in {'Content-Security-Policy', 'X-Frame-Options'} or key not in response.headers:
+        if request.path not in {'/learning/practice', '/learning/workspace'} or key not in {'Content-Security-Policy', 'X-Frame-Options'} or key not in response.headers:
             response.headers[key] = value
     if request.path.startswith('/api/'):
         response.headers['Cache-Control'] = 'no-store'
@@ -1213,6 +1213,31 @@ async def learning_practice(request):
     return learning.practice_response()
 
 
+async def learning_enter(request):
+    import secrets
+    await learning_context(request)
+    lesson = request.query.get('lesson')
+    response = web.HTTPFound('/learning/workspace#learning' + ('/' + lesson if lesson else ''))
+    response.set_cookie(learning.ENTRY_COOKIE, secrets.token_urlsafe(24), httponly=True,
+                        samesite='Strict', secure=request.secure, path='/learning')
+    return response
+
+
+async def learning_workspace(request):
+    data = await learning_context(request)
+    entry = request.cookies.get(learning.ENTRY_COOKIE)
+    if not entry:
+        return web.HTTPFound('/learning/enter')
+    return learning.workspace_response(data, entry, request.cookies.get(COOKIE, ''))
+
+
+async def learning_exit(request):
+    await viewer(request)
+    response = web.HTTPFound('/#learning')
+    response.del_cookie(learning.ENTRY_COOKIE, path='/learning')
+    return response
+
+
 def build(pool) -> web.Application:
     app = web.Application(middlewares=[guard], client_max_size=512 * 1024)
     app[POOL] = pool
@@ -1229,6 +1254,9 @@ def build(pool) -> web.Application:
     app.router.add_get('/api/me', api_me)
     app.router.add_get('/api/learning/context', api_learning_context)
     app.router.add_get('/learning/practice', learning_practice)
+    app.router.add_get('/learning/enter', learning_enter)
+    app.router.add_get('/learning/workspace', learning_workspace)
+    app.router.add_get('/learning/exit', learning_exit)
     app.router.add_get('/api/test/options', api_test_options)
     app.router.add_post('/api/test/login', api_test_login)
     app.router.add_get('/api/docs', api_docs)

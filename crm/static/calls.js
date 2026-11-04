@@ -120,6 +120,13 @@ function cbRow(t, today) {
       ${ro ? '' : '<button class="btn small" type="button" data-move>Перенести</button><button class="btn small" type="button" data-done>Выполнено</button>'}</div></div>`;
 }
 
+function callbackMove(row, t, today) {
+  row.insertAdjacentHTML('beforeend', `<div class="move"><input class="inp" type="date" min="${today}" value="${nextWorkday(today)}" aria-label="Новая дата">
+    <input class="inp" type="time" step="300" aria-label="Время" value="${esc(t.due_time || '')}"><button class="btn small primary" type="button" data-save>Сохранить</button>
+    <span class="sp"></span><button class="btn small danger ghost" type="button" data-cancel>Отменить перезвон</button></div>`);
+  $('.move input', row).focus();
+}
+
 VIEWS.callbacks = async view => {
   setHead({filters: managerSelect(S.f.ext)});
   bindManager($('#top'), () => reload());
@@ -168,10 +175,7 @@ VIEWS.callbacks = async view => {
     }
     if (e.target.closest('[data-move]')) {
       if ($('.move', row)) { $('.move', row).remove(); return; }
-      row.insertAdjacentHTML('beforeend', `<div class="move"><input class="inp" type="date" min="${today}" value="${nextWorkday(today)}" aria-label="Новая дата">
-        <input class="inp" type="time" step="300" aria-label="Время" value="${esc(t.due_time || '')}"><button class="btn small primary" type="button" data-save>Сохранить</button>
-        <span class="sp"></span><button class="btn small danger ghost" type="button" data-cancel>Отменить перезвон</button></div>`);
-      $('.move input', row).focus();
+      callbackMove(row, t, today);
       return;
     }
     const save = e.target.closest('[data-save]');
