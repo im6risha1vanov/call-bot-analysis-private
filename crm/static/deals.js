@@ -73,7 +73,7 @@ VIEWS.deals = async (view, arg) => {
         <button class="btn small" type="button" data-unlinked>Привязать</button></div>` : ''}
       ${d.unlinked_chats?.length ? `<div class="alert acc blk" data-css="--i:${i++}"><span class="pdot"></span><p><b>${plainItems(d.unlinked_chats.length, 'переписка', 'переписки', 'переписок')} в Telegram без клиента</b>: бот не нашёл в них номер клиента.</p>
         <button class="btn small" type="button" data-unlinked-chats>Привязать</button></div>` : ''}
-      <section class="card blk" data-css="--i:${i++}"><div class="card-h"><h2>${esc(DEAL_SHOW.find(x => x[0] === f.show)[1])}${picked ? ` · этап «${esc(picked.name)}»` : ''}</h2><span class="hint">${fmt(list.length)}</span>
+      <section class="card blk" data-learning-target="deal-list" data-css="--i:${i++}"><div class="card-h"><h2>${esc(DEAL_SHOW.find(x => x[0] === f.show)[1])}${picked ? ` · этап «${esc(picked.name)}»` : ''}</h2><span class="hint">${fmt(list.length)}</span>
         ${fn.paid ? `<span class="sp"></span><span class="hint">оплачено ${fmt(fn.paid)}${fn.paid_sum ? ' на ' + rub(fn.paid_sum) : ''}</span>` : ''}</div>
       ${list.length ? `<div class="tbl-wrap"><table class="tbl anim"><thead><tr><th>Клиент</th>${dir ? '<th class="hide-m">Менеджер</th>' : ''}<th>Этап</th><th class="hide-m">Последнее</th><th class="hide-m">Что дальше</th></tr></thead><tbody>
         ${list.slice(0, 300).map((x, r) => `<tr class="click" tabindex="0" data-deal="${esc(x.phone)}" data-css="--r:${Math.min(r, 30)}"><td><div class="t">${esc(dealName(x))}</div>${x.company ? `<div class="s num">${esc(phone(x.number))}</div>` : ''}</td>
@@ -205,7 +205,7 @@ async function dealCard(ph, onChange) {
     <div class="rvm-body">
       ${dealSteps(d)}
       <div class="row">${S.me.role !== 'client' ? `<button class="btn small primary" type="button" data-dcall>${svg('phone', '')}${S.me.can_dial ? 'Позвонить' : 'Карточка клиента'}</button>` : ''}
-        ${ro || !hasModule('contracts') ? '' : '<button class="btn small" type="button" data-contract>Составить договор</button>'}</div>
+        ${ro || !hasModule('contracts') ? '' : '<button class="btn small" type="button" data-contract data-learning-target="deal-contract">Составить договор</button>'}</div>
       ${d.status === 'lost' ? `<div class="rvm-item miss"><b>Отказ: ${esc(d.lost.reason)}</b>${d.lost.note ? `<div>${esc(d.lost.note)}</div>` : ''}
         <div class="rvm-q">${d.lost.auto ? 'CRM поставила сама по последнему разговору. Если это не так, нажмите «Снова в работе».' : 'Отмечено ' + esc(when(d.lost.at))}</div></div>` : ''}
       ${d.waiting ? `<div class="rvm-item miss"><b>Клиент ждёт ответа в Telegram</b><div class="rvm-q">Написал ${esc(when(d.waiting))}, ответа пока нет.</div></div>` : ''}
@@ -213,7 +213,7 @@ async function dealCard(ph, onChange) {
       ${d.missing.length && d.status === 'active' ? `<section><h3>Для договора не хватает</h3><div class="chips">${d.missing.map(m => `<span class="chip warn">${esc(m)}</span>`).join('')}</div></section>` : ''}
       ${d.contracts.length ? `<section><h3>Договоры</h3>${d.contracts.map(c => `<div>${esc(contractTitle(c))}${c.by ? ` <span class="rvm-mut">· ${esc(c.by)}</span>` : ''}</div>`).join('')}</section>` : ''}
       ${ro ? '' : `<section><h3>Отметить</h3><div class="chips">${acts.map(([k, t]) => `<button class="btn small${k === 'lost' ? ' danger' : ''}" type="button" data-ev="${k}">${t}</button>`).join('')}
-        <button class="btn small" type="button" data-ev="note">Заметка</button></div><div data-form></div></section>`}
+        <button class="btn small" type="button" data-ev="note" data-learning-target="deal-note">Заметка</button></div><div data-form></div></section>`}
       <section><h3>История</h3>${dealTimeline([...d.timeline].reverse()) || '<div class="rvm-mut">Пусто.</div>'}</section>
     </div>`;
   $$('[data-ev]', box).forEach(b => b.addEventListener('click', () => {
@@ -275,7 +275,7 @@ async function contractsView(view) {
   S.contractDeal = null;
   setHead({title: 'Сделки'});
   const first = await loading(view, api('/api/contracts'), 'table');
-  view.innerHTML = `<div class="page">${dealTabs('contracts')}<div data-gen></div><section class="card blk" data-css="--i:1" data-log></section></div>`;
+  view.innerHTML = `<div class="page">${dealTabs('contracts')}<div data-gen></div><section class="card blk" data-learning-target="contract-journal" data-css="--i:1" data-log></section></div>`;
   bindDealTabs(view);
   const journal = d => {
     const box = $('[data-log]', view);

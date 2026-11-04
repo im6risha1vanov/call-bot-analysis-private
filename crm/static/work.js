@@ -29,7 +29,7 @@ function workCard(el, item, onDone, opts = {}) {
   const inDrawer = !!opts.drawer;
   const ro = S.me.readonly;
   const src = item.source ? `<span class="chip">${esc(SOURCE_NAME[item.source] || item.source)}</span>` : '';
-  el.innerHTML = `<div class="${inDrawer ? '' : 'card blk '}work" data-css="--i:1">
+  el.innerHTML = `<div class="${inDrawer ? '' : 'card blk '}work" data-learning-target="queue-card" data-css="--i:1">
     ${itemChip(item) || src || opts.extra ? `<div class="who">${itemChip(item)}${src}<span class="sp"></span>${opts.extra || ''}</div>` : ''}
     ${inDrawer ? '' : `<div class="phone"><a href="tel:+${esc(item.number)}">${esc(phone(item.number))}</a></div>
     ${item.title ? `<div class="title">${esc(item.title)}</div>` : ''}`}
@@ -43,7 +43,7 @@ function workCard(el, item, onDone, opts = {}) {
     <div class="ringing hidden" data-ring></div>
     <div class="outs${ro ? ' hidden' : ''}">
       <h3>Итог звонка</h3>
-      <div class="outgrid">${OUT_ORDER.map(k => `<button type="button" data-out="${k}" class="${OUT_CLASS[k]}" aria-pressed="false">${esc(S.me.outcomes[k])}</button>`).join('')}</div>
+      <div class="outgrid" data-learning-target="outcome-grid">${OUT_ORDER.map(k => `<button type="button" data-out="${k}" class="${OUT_CLASS[k]}" aria-pressed="false">${esc(S.me.outcomes[k])}</button>`).join('')}</div>
       <div class="outform hidden">
         <div class="quick"></div>
         <label class="field">Дата<input type="date" data-f="date" min="${isoToday()}"></label>
@@ -53,7 +53,7 @@ function workCard(el, item, onDone, opts = {}) {
       </div>
     </div>
   </div>
-  <section class="${inDrawer ? '' : 'card blk'}" data-css="--i:2">${inDrawer ? '<h3 data-css="margin-bottom:12px">История клиента</h3>' : '<div class="card-h"><h2>История клиента</h2></div>'}<div class="hist"><div class="sk line"></div><div class="sk line" data-css="width:70%"></div></div></section>`;
+  <section class="${inDrawer ? '' : 'card blk'}" data-css="--i:2">${inDrawer ? '<h3 data-css="margin-bottom:12px">История клиента</h3>' : '<div class="card-h"><h2>История клиента</h2></div>'}<div class="hist" data-learning-target="client-history"><div class="sk line"></div><div class="sk line" data-css="width:70%"></div></div></section>`;
 
   let chosen = null;
   const form = $('.outform', el), ring = $('[data-ring]', el);

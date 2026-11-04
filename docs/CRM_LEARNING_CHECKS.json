@@ -1,0 +1,82 @@
+{
+  "date": "2026-11-04",
+  "unittest_count": 34,
+  "unittest_result": "passed",
+  "javascript": {
+    "lessons": [
+      {
+        "id": "m1",
+        "result": "passed",
+        "actions": 3
+      },
+      {
+        "id": "m2",
+        "result": "passed",
+        "actions": 6
+      },
+      {
+        "id": "m3",
+        "result": "passed",
+        "actions": 3
+      },
+      {
+        "id": "m4",
+        "result": "passed",
+        "actions": 4
+      },
+      {
+        "id": "m5",
+        "result": "passed",
+        "actions": 5
+      },
+      {
+        "id": "d1",
+        "result": "passed",
+        "actions": 3
+      },
+      {
+        "id": "d2",
+        "result": "passed",
+        "actions": 4
+      },
+      {
+        "id": "d3",
+        "result": "passed",
+        "actions": 3
+      },
+      {
+        "id": "d4",
+        "result": "passed",
+        "actions": 3
+      },
+      {
+        "id": "d5",
+        "result": "passed",
+        "actions": 4
+      }
+    ],
+    "correctActions": 38,
+    "wrongAttempts": 38,
+    "restores": 38,
+    "uiLessons": 10,
+    "uiWrongAttempts": 20,
+    "uiResumes": 50,
+    "networkCalls": 0,
+    "directorGuide": {
+      "steps": 5,
+      "missingTargetRejected": true,
+      "resume": true,
+      "passed": true
+    }
+  },
+  "test_environment": "Duktape + explicit DOM model + aiohttp socket-free request/router checks",
+  "browser_layout_and_actual_csp_enforcement": "not_run: no browser and no loopback bind permission",
+  "production_database": "not_used",
+  "production_services_restarted": false,
+  "native_node": {
+    "version": "v24.5.0",
+    "first_party_js_syntax_files": 27,
+    "same_ui_harness": "passed",
+    "actual_browser": false
+  }
+}

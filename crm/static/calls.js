@@ -58,7 +58,7 @@ VIEWS.calls = async view => {
       <div class="row blk" data-css="--i:0"><div class="filters">${results.map(([k, t]) => `<button type="button" data-r="${k}" aria-pressed="${st.result === k}">${esc(t)}</button>`).join('')}</div>
         <span class="sp"></span><select class="inp" data-kind aria-label="Тип звонка"><option value="">Любой тип</option>${kinds.map(([k, t]) =>
           `<option value="${k}"${st.kind === k ? ' selected' : ''}>${esc(t[0].toUpperCase() + t.slice(1))}</option>`).join('')}</select></div>
-      ${items.length ? `<section class="card blk" data-css="--i:1"><div class="tbl-wrap"><table class="tbl anim"><thead><tr><th>Когда</th>${isDir() ? '<th class="hide-m">Менеджер</th>' : ''}
+      ${items.length ? `<section class="card blk" data-learning-target="call-list" data-css="--i:1"><div class="tbl-wrap"><table class="tbl anim"><thead><tr><th>Когда</th>${isDir() ? '<th class="hide-m">Менеджер</th>' : ''}
         <th>Клиент</th><th class="n hide-m">Длит.</th><th>Итог</th><th></th></tr></thead><tbody>${items.map(callRow).join('')}</tbody></table></div>
         ${data.more ? '<div class="empty" data-more><div class="sk line" data-css="max-width:240px;margin:0 auto"></div></div>' : ''}</section>`
         : emptyCard(st.q || st.result || st.kind ? 'Таких звонков нет. Попробуйте другой фильтр.' : 'За этот период звонков нет.', 1)}</div>`;
@@ -135,7 +135,7 @@ VIEWS.callbacks = async view => {
   }
   const groups = [['late', 'Просрочено', t => t.due_date < today], ['today', 'Сегодня', t => t.due_date === today], ['next', 'Дальше', t => t.due_date > today]];
   let n = 0;
-  view.innerHTML = `<div class="page"><section class="card blk">${groups.map(([k, name, test]) => {
+  view.innerHTML = `<div class="page"><section class="card blk" data-learning-target="callback-list">${groups.map(([k, name, test]) => {
     const list = items.filter(test);
     return list.length ? `<div class="group${k === 'late' ? ' late' : ''}" data-g="${k}">${name}<span class="count">${list.length}</span></div>
       <div class="list">${list.map(t => cbRow({...t, _i: n++}, today)).join('')}</div>` : '';

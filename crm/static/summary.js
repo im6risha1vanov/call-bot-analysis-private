@@ -121,7 +121,7 @@ VIEWS.summary = async view => {
         help: 'Встреча, перезвон с датой, отправленное КП или контакт ЛПР. Считает бот по разбору разговора.'},
       {key: 'meet', label: 'Встречи и КП', value: c.meet, delta: hasPrev ? delta(c.meet, p.meet) : '', vs},
     ];
-    html.push(`<div class="kpis">${kpis.map(k => kpiHtml(k, i++)).join('')}</div>`);
+    html.push(`<div class="kpis" data-learning-target="summary-kpis">${kpis.map(k => kpiHtml(k, i++)).join('')}</div>`);
     const rows = chartRows(data);
     const cut = !data.hourly && rows.length < data.series.length;
     html.push(`<section class="card blk" data-css="--i:${i++}"><div class="card-h"><h2>${data.hourly ? 'Сегодня по часам' : 'По дням'}</h2>

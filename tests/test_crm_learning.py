@@ -1,0 +1,254 @@
+"""Network-free learning acceptance checks; no production DB, secrets or models."""
+from __future__ import annotations
+import ctypes
+import ctypes.util
+from datetime import datetime, timezone
+import json
+import os
+from pathlib import Path
+import unittest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+from zoneinfo import ZoneInfo
+
+from aiohttp import web
+from aiohttp.test_utils import make_mocked_request
+from crm import learning
+from scripts import learning_demo
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def who(role='manager', company=1, account=101):
+    actor = SimpleNamespace(client_id=company, telegram_user_id=account, extension='101') if role != 'client' else None
+    return SimpleNamespace(role=role, company=company, actor=actor, invite_id=account, test=False, support_by=None)
+
+
+class JavaScriptVM:
+    """Duktape is used for actual ES5 controller code, not to emulate Chromium."""
+    def __init__(self):
+        lib = ctypes.util.find_library('duktape')
+        if not lib:
+            raise unittest.SkipTest('Duktape unavailable; run tests/js/learning_test.js with a JS engine')
+        self.lib = ctypes.CDLL(lib)
+        self.lib.duk_create_heap.argtypes = [ctypes.c_void_p] * 5
+        self.lib.duk_create_heap.restype = ctypes.c_void_p
+        self.lib.duk_destroy_heap.argtypes = [ctypes.c_void_p]
+        self.lib.duk_get_global_string.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+        self.lib.duk_push_lstring.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t]
+        self.lib.duk_pcall.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        self.lib.duk_safe_to_lstring.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(ctypes.c_size_t)]
+        self.lib.duk_safe_to_lstring.restype = ctypes.c_void_p
+        self.lib.duk_pop.argtypes = [ctypes.c_void_p]
+        self.ctx = self.lib.duk_create_heap(None, None, None, None, None)
+        if not self.ctx:
+            raise RuntimeError('Cannot create isolated JavaScript heap')
+
+    def evaluate(self, code):
+        data = code.encode()
+        self.lib.duk_get_global_string(self.ctx, b'eval')
+        self.lib.duk_push_lstring(self.ctx, data, len(data))
+        result = self.lib.duk_pcall(self.ctx, 1)
+        size = ctypes.c_size_t()
+        pointer = self.lib.duk_safe_to_lstring(self.ctx, -1, ctypes.byref(size))
+        text = ctypes.string_at(pointer, size.value).decode(errors='replace')
+        self.lib.duk_pop(self.ctx)
+        if result:
+            raise AssertionError(text)
+        return text
+
+    def close(self):
+        self.lib.duk_destroy_heap(self.ctx)
+
+
+class CatalogTests(unittest.TestCase):
+    def test_two_complete_programs_and_exact_source_routes(self):
+        data = learning.catalog()['lessons']
+        self.assertEqual([l['id'] for l in data if l['role'] == 'manager'], ['m1','m2','m3','m4','m5'])
+        self.assertEqual([l['id'] for l in data if l['role'] == 'director'], ['d1','d2','d3','d4','d5','d6'])
+        self.assertEqual(sum(l['kind'] == 'practice' for l in data), 10)
+        pages = (ROOT/'crm/static/app.js').read_text()
+        targets = ''.join(f.read_text() for f in (ROOT/'crm/static').rglob('*.js') if '.min.' not in f.name)
+        for lesson in data:
+            self.assertTrue(lesson['guide'])
+            for step in lesson['guide']:
+                self.assertIn(step['page'] + ':', pages)
+                self.assertIn(step['target'], targets)
+
+    def test_no_duplicate_highlight_attributes(self):
+        import re
+        for f in (ROOT/'crm/static').rglob('*.js'):
+            if '.min.' in f.name: continue
+            for tag in re.findall(r'<[^>]+>', f.read_text()):
+                self.assertLessEqual(tag.count('data-learning-target='), 1, str(f))
+
+    def test_roles_company_and_module_restrictions(self):
+        for role in ('client', 'guest'):
+            with self.assertRaises(web.HTTPForbidden):
+                learning.context(who(role), {'modules':['contracts']}, 'Europe/Moscow')
+        with self.assertRaises(web.HTTPForbidden):
+            learning.context(who(), {'modules':['contracts']}, 'Europe/Moscow', 'd1')
+        with self.assertRaises(web.HTTPForbidden):
+            learning.context(who(), {'modules':[]}, 'Europe/Moscow', 'm4')
+        with self.assertRaises(web.HTTPForbidden):
+            learning.context(who(), {'id':2,'modules':[]}, 'Europe/Moscow')
+        owner = who(); owner.actor.client_id = 2
+        with self.assertRaises(web.HTTPForbidden):
+            learning.context(owner, {'modules':[]}, 'Europe/Moscow')
+        c = learning.context(who('director'), {'modules':[]}, 'Europe/Moscow')
+        tour = next(l for l in c['lessons'] if l['id'] == 'd6')
+        self.assertEqual(len(tour['guide']),3)
+        self.assertEqual(tour['omitted_guide_modules'], ['automations','robot'])
+
+    def test_progress_scopes_differ_by_account_company_role(self):
+        scopes = {learning.context(who(role, company, account), {'modules':[]}, 'Europe/Moscow')['scope']
+                  for role,company,account in [('manager',1,101),('manager',1,102),('manager',2,101),('director',1,101)]}
+        self.assertEqual(len(scopes),4)
+
+    def test_clock_is_frozen_and_converts_moscow_to_crm_timezone(self):
+        at = datetime(2026,11,4,21,30,tzinfo=timezone.utc)
+        msk = learning.clock_for('Europe/Moscow',at)
+        self.assertEqual(msk['today'],'2026-11-05')
+        self.assertEqual(msk['callback']['due_date'],'2026-11-06')
+        self.assertEqual(msk['callback']['due_time'],'15:00')
+        berlin = learning.clock_for('Europe/Berlin',at)
+        self.assertEqual(berlin['today'],'2026-11-04')
+        self.assertEqual(berlin['callback']['due_time'],'13:00')
+        self.assertEqual(berlin['move']['due_time'],'09:30')
+        with self.assertRaises(ValueError): learning.clock_for('Europe/Moscow',datetime(2026,11,4))
+
+    def test_sandbox_has_no_production_api_fallback(self):
+        html = (ROOT/'crm/static/learning/practice.html').read_text()
+        script = (ROOT/'crm/static/learning/practice.js').read_text()
+        self.assertNotIn('/static/app.js',html)
+        for bad in ('fetch(', 'XMLHttpRequest(', 'WebSocket(', '/api/outcome', '/api/contracts', '/api/dial', 'eval(', 'sendBeacon('):
+            self.assertNotIn(bad,script)
+        csp = learning.practice_response().headers['Content-Security-Policy']
+        for part in ("connect-src 'none'", "form-action 'none'", 'sandbox allow-scripts', "frame-ancestors 'self'"):
+            self.assertIn(part,csp)
+        self.assertNotIn('allow-same-origin',csp)
+        self.assertEqual(learning.practice_response().headers['X-Frame-Options'],'SAMEORIGIN')
+        self.assertIn('sandbox="allow-scripts"',(ROOT/'crm/static/learning/learning.js').read_text())
+
+    def test_actual_engine_and_practice_ui_all_ten_lessons(self):
+        vm = JavaScriptVM()
+        try:
+            for name in ('engine.js','progress.js'):
+                vm.evaluate((ROOT/'crm/static/learning'/name).read_text())
+            clock = learning.clock_for('Europe/Moscow',datetime(2026,11,4,10,tzinfo=timezone.utc))
+            vm.evaluate('var TEST_CATALOG = '+json.dumps(learning.catalog(),ensure_ascii=False)+';\nvar TEST_CLOCK = '+json.dumps(clock)+';\nvar TEST_PRACTICE_SOURCE = '+json.dumps((ROOT/'crm/static/learning/practice.js').read_text(),ensure_ascii=False)+';')
+            result = json.loads(vm.evaluate((ROOT/'tests/js/learning_test.js').read_text()))
+            self.assertEqual(len(result['lessons']),10)
+            self.assertEqual(result['uiLessons'],10)
+            self.assertEqual(result['networkCalls'],0)
+            (Path('/tmp')/'averon-learning-js-results.json').write_text(json.dumps(result,ensure_ascii=False,indent=2)+'\n')
+        finally:
+            vm.close()
+
+
+class DemoRouterTests(unittest.IsolatedAsyncioTestCase):
+    async def request(self, method, path, role='manager'):
+        app = learning_demo.build()
+        req = make_mocked_request(method,path,headers={'Cookie':'learning_demo='+role},app=app)
+        match = await app.router.resolve(req)
+        req._match_info = match
+        return await learning_demo.isolated(req,match.handler)
+
+    async def test_demo_both_roles_catalog_and_practice(self):
+        for role,lesson in [('manager','m1'),('director','d5')]:
+            response = await self.request('GET','/api/learning/context',role)
+            self.assertEqual(json.loads(response.text)['role'],role)
+            response = await self.request('GET','/learning/practice?lesson='+lesson,role)
+            self.assertIsInstance(response,web.FileResponse)
+            self.assertIn("connect-src 'none'",response.headers['Content-Security-Policy'])
+
+    async def test_direct_links_client_wrong_role_and_disabled_module(self):
+        for role,lesson in [('manager','d1'),('client','m1'),('manager-base','m4')]:
+            with self.assertRaises(web.HTTPForbidden):
+                await self.request('GET','/learning/practice?lesson='+lesson,role)
+
+    async def test_all_working_mutations_are_blocked_even_after_failure(self):
+        for method,path in [('POST','/api/outcome'),('POST','/api/tasks/1'),('POST','/api/deals/123/event'),('POST','/api/contracts/register'),('POST','/api/dial'),('POST','/api/gpt'),('POST','/api/robot/call'),('POST','/api/automations'),('DELETE','/api/leads/1')]:
+            response = await self.request(method,path,'director')
+            self.assertEqual(response.status,403,path)
+        response = await self.request('GET','/api/learning/context?lesson=m2')
+        self.assertEqual(response.status,200)
+
+    async def test_static_assets_are_not_caught_by_api_deny_route(self):
+        app = learning_demo.build()
+        req = make_mocked_request('GET','/static/learning/engine.js',app=app)
+        match = await app.router.resolve(req)
+        self.assertEqual(match.http_exception,None)
+        self.assertEqual(match.route.resource.get_info()['prefix'],'/static')
+
+class ProductionHandlerTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        # No .env read or provider connection, including during module imports.
+        self.env = patch.dict(os.environ, {'BOT_TOKEN':'123456:synthetic-test-token', 'TRAIN_BOT_TOKEN':'123456:synthetic-test-token', 'CVC_API_KEY':'synthetic-test-key', 'ANTHROPIC_API_KEY':'synthetic-test-key'}, clear=True)
+        self.dotenv = patch('dotenv.load_dotenv', return_value=False)
+        self.env.start(); self.dotenv.start()
+        self.addCleanup(self.env.stop); self.addCleanup(self.dotenv.stop)
+        import crm.web as production
+        self.production = production
+        self.pool = AsyncMock()
+        self.app = web.Application()
+        self.app[production.POOL] = self.pool
+
+    async def test_real_guard_preserves_sandbox_policy_for_both_roles(self):
+        mod = self.production
+        for role,lesson in [('manager','m2'),('director','d3')]:
+            req = make_mocked_request('GET','/learning/practice?lesson='+lesson,app=self.app)
+            with patch.object(mod,'viewer',AsyncMock(return_value=who(role))), \
+                 patch.object(mod.company,'info',AsyncMock(return_value={'id':1,'modules':['contracts']})), \
+                 patch.object(mod.store,'zone',AsyncMock(return_value=ZoneInfo('Europe/Moscow'))):
+                response = await mod.guard(req,mod.learning_practice)
+            self.assertEqual(response.headers['X-Frame-Options'],'SAMEORIGIN')
+            self.assertIn("connect-src 'none'",response.headers['Content-Security-Policy'])
+            self.assertIn('sandbox allow-scripts',response.headers['Content-Security-Policy'])
+        self.pool.execute.assert_not_awaited()
+        self.pool.fetch.assert_not_awaited()
+
+    async def test_real_handler_rechecks_role_before_firm_or_db_access(self):
+        mod = self.production
+        req = make_mocked_request('GET','/api/learning/context',app=self.app)
+        with patch.object(mod,'viewer',AsyncMock(return_value=who('client'))), \
+             patch.object(mod.company,'info',AsyncMock()) as info:
+            with self.assertRaises(web.HTTPForbidden): await mod.api_learning_context(req)
+        info.assert_not_awaited()
+
+    async def test_production_routes_only_add_get_learning_endpoints(self):
+        app = self.production.build(self.pool)
+        learning_routes = [route for route in app.router.routes() if 'learning' in route.resource.canonical]
+        self.assertTrue(learning_routes)
+        self.assertTrue(all(route.method in {'GET','HEAD'} for route in learning_routes))
+        self.pool.execute.assert_not_awaited()
+
+class ExistingSurfaceTests(unittest.TestCase):
+    def test_existing_forms_helper_and_gpt_are_unchanged_except_inert_targets(self):
+        import re,subprocess
+        base='2a11936af00465fafdaa07059da179ee8ce7313a'
+        for name in ['crm/static/helper.js','crm/gpt.py','crm/static/review.js','crm/static/work.js','crm/static/deals.js','crm/static/calls.js','crm/static/people.js','crm/static/summary.js','crm/static/more.js','crm/static/automations.js']:
+            process=subprocess.run(['git','show',base+':'+name],cwd=ROOT,capture_output=True,text=True)
+            if process.returncode:
+                self.skipTest('Pinned Git baseline unavailable for source regression check')
+            current=(ROOT/name).read_text()
+            current=re.sub(r' data-learning-target="[^"]+"','',current)
+            self.assertEqual(current,process.stdout,name+' changed functional code')
+
+    def test_learning_does_not_run_automatically_or_call_gpt(self):
+        script=(ROOT/'crm/static/learning/learning.js').read_text()
+        self.assertNotIn('gptAsk(',script)
+        self.assertNotIn('gptTour(',script)
+        self.assertNotIn('.click()',script)
+        self.assertNotIn('setInterval(',script)
+        self.assertIn('window.tourFind ? tourFind(',script)
+        self.assertIn("'Escape'",script)
+        css=(ROOT/'crm/static/learning/learning.css').read_text()
+        self.assertIn('.learn-guide{position:relative',css)
+        self.assertIn('@media(max-width:600px)',css)
+        self.assertIn(':focus-visible',css)
+        self.assertIn('min-height:44px',css)
+
+
+if __name__ == "__main__":
+    unittest.main()

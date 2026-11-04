@@ -373,13 +373,14 @@ const PAGES = {
   sources: {name: 'Источники', icon: 'source', roles: ['director', 'manager']},
   reports: {name: 'Отчёты', icon: 'report', roles: ['director', 'manager']},
   auto: {name: 'Автоматизации', icon: 'flow', roles: ['director']},
+  learning: {name: 'Обучение', icon: 'report', roles: ['manager', 'director']},
   settings: {name: 'Настройки', icon: 'gear', roles: ['director']},
   cab: {name: 'Кабинет', icon: 'home', roles: ['client']},
   companies: {name: 'Компании', icon: 'building', roles: ['director']},
 };
 const MENU = {
-  director: {nav: ['summary', 'calls', 'callbacks', 'deals', 'staff', 'callcenter', 'robot'], more: ['sources', 'reports', 'auto', 'settings', 'companies'], tabs: ['summary', 'calls', 'callbacks', 'deals']},
-  manager: {nav: ['queue', 'callbacks', 'deals', 'calls', 'me'], more: ['callcenter', 'sources', 'reports'], tabs: ['queue', 'callbacks', 'deals', 'calls']},
+  director: {nav: ['summary', 'calls', 'callbacks', 'deals', 'staff', 'callcenter', 'robot'], more: ['learning', 'sources', 'reports', 'auto', 'settings', 'companies'], tabs: ['summary', 'calls', 'callbacks', 'deals']},
+  manager: {nav: ['queue', 'callbacks', 'deals', 'calls', 'me'], more: ['learning', 'callcenter', 'sources', 'reports'], tabs: ['queue', 'callbacks', 'deals', 'calls']},
   client: {nav: ['cab', 'robot'], more: [], tabs: ['cab', 'robot']},
 };
 const HOME = {director: 'summary', manager: 'queue', client: 'cab'};
@@ -524,6 +525,7 @@ async function go(target, arg = null, opts = {}) {
   if (!same && !opts.keepScroll) scrollTo({top: 0});
   try {
     await VIEWS[page](view, a);
+    if (seq === navSeq && window.learningPageChanged) learningPageChanged();
   } catch (e) {
     if (seq === navSeq) view.innerHTML = errCard(e.message);
   }

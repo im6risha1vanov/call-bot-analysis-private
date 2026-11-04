@@ -23,6 +23,7 @@ from aiohttp import web  # noqa: E402
 
 import mango_client  # noqa: E402
 from tools import Forbidden, home_client_id, is_privileged  # noqa: E402
+from . import learning
 from . import accounts, ask as asking, auth, automation_agent, automations, cabinet, callcenter_db, company, contracts, deals, donor_agent, gpt, journal, overview, people, platform, recording, reviews, sources, staff, store, training  # noqa: E402
 from . import prompts as prompt_mode, robot, webphone, robot_api, robot_prices, robot_runner, robot_store  # noqa: E402
 from review import store as review_store  # noqa: E402
@@ -90,7 +91,9 @@ async def guard(request: web.Request, handler):
         response = fail(500, 'Что-то пошло не так. Попробуйте ещё раз.')
     if isinstance(response, web.WebSocketResponse):  # сокет телефона уже закрыт, заголовки ему не нужны
         return response
-    response.headers.update(HEADERS)
+    for key, value in HEADERS.items():
+        if request.path != '/learning/practice' or key not in {'Content-Security-Policy', 'X-Frame-Options'} or key not in response.headers:
+            response.headers[key] = value
     if request.path.startswith('/api/'):
         response.headers['Cache-Control'] = 'no-store'
     else:  # страница и её файлы: браузер сверяется с сервером, чтобы после выкатки не смешать старые и новые скрипты
@@ -1188,6 +1191,28 @@ async def api_callbacks(request):
     return web.json_response(await overview.callbacks(request.app[POOL], who, request.query.get('ext') or None))
 
 
+async def learning_context(request):
+    who = await viewer(request)
+    # Authorization first: client sessions never query firm settings for a lesson.
+    if who.role not in {'manager', 'director'} or who.actor is None:
+        raise web.HTTPForbidden(reason='Обучение доступно менеджеру и директору.')
+    pool = request.app[POOL]
+    firm = await company.info(pool, who.company)
+    zone = str(await store.zone(pool, who.company))
+    return learning.context(who, firm, zone, request.query.get('lesson'))
+
+
+async def api_learning_context(request):
+    return web.json_response(await learning_context(request), headers={'Cache-Control': 'no-store'})
+
+
+async def learning_practice(request):
+    if not request.query.get('lesson'):
+        raise web.HTTPBadRequest(reason='Выберите урок в разделе «Обучение».')
+    await learning_context(request)
+    return learning.practice_response()
+
+
 def build(pool) -> web.Application:
     app = web.Application(middlewares=[guard], client_max_size=512 * 1024)
     app[POOL] = pool
@@ -1202,6 +1227,8 @@ def build(pool) -> web.Application:
     app.router.add_static('/static/', STATIC, show_index=False)
     app.router.add_post('/api/logout', api_logout)
     app.router.add_get('/api/me', api_me)
+    app.router.add_get('/api/learning/context', api_learning_context)
+    app.router.add_get('/learning/practice', learning_practice)
     app.router.add_get('/api/test/options', api_test_options)
     app.router.add_post('/api/test/login', api_test_login)
     app.router.add_get('/api/docs', api_docs)

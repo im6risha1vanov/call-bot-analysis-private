@@ -18,7 +18,7 @@ VIEWS.auto = async view => {
     <p class="hint blk">Запусков в этом месяце: <b>${used}</b> · включено сценариев: <b>${u.active}${u.max_active ? ' из ' + u.max_active : ''}</b>.
       Сценарий включается только после пробного запуска, а любая правка его выключает.</p>
     ${ro ? '' : '<section class="card blk au-agent" data-css="--i:1" data-agent></section>'}
-    <section class="card blk" data-css="--i:1"><div class="card-h"><h2>Сценарии</h2><span class="hint">${list.length}</span></div>
+    <section class="card blk" data-learning-target="automation-list" data-css="--i:1"><div class="card-h"><h2>Сценарии</h2><span class="hint">${list.length}</span></div>
       ${list.length ? `<div class="au-list">${list.map(auCard).join('')}</div>` : '<div class="empty">Сценариев пока нет. Начните с шаблона ниже.</div>'}</section>
     ${ro ? '' : `<section class="card blk" data-css="--i:2"><div class="card-h"><h2>Готовые шаблоны</h2><span class="hint">откроется редактор, останется выбрать чат или таблицу</span></div>
       <div class="au-tpls">${auCat().templates.map(t => `<button class="au-tpl" type="button" data-tpl="${esc(t.id)}"><b>${esc(t.title)}</b><span>${esc(t.about)}</span></button>`).join('')}</div></section>`}

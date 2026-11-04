@@ -14,7 +14,7 @@ VIEWS.staff = async (view, arg) => {
   const d = await loading(view, api('/api/staff'), 'table');
   const order = {manager: 0, head: 1, owner: 2};
   const items = [...d.items].sort((a, b) => (order[a.role] ?? 3) - (order[b.role] ?? 3));
-  view.innerHTML = `<div class="page"><section class="card blk"><div class="tbl-wrap"><table class="tbl anim">
+  view.innerHTML = `<div class="page"><section class="card blk" data-learning-target="staff-list"><div class="tbl-wrap"><table class="tbl anim">
     <thead><tr><th>Сотрудник</th><th>Бот</th><th class="hide-m">Вход в CRM</th><th></th></tr></thead><tbody>
     ${items.map((p, r) => `<tr class="click" tabindex="0" data-person="${esc(p.ext)}" data-css="--r:${r}">
       <td><span class="who">${ava(p.name)}<span>${esc(p.name)}<small>${esc(p.role_title)}${/^\d+$/.test(p.ext) ? ' · доб. ' + esc(p.ext) : ''}${p.kitchen ? ' · свой скрипт' : ''}</small></span></span></td>

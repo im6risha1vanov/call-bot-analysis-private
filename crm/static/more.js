@@ -83,7 +83,7 @@ VIEWS.reports = async view => {
   const rep = await loading(view, api('/api/reports'), 'cards');
   // Вопросы про звонки переехали в AveronGPT (кнопка внизу меню), здесь только лента отчётов бота.
   view.innerHTML = `<div class="page"><p class="hint blk">Вопрос про звонки задайте ${S.me.readonly ? 'AveronGPT' : '<button class="linkish" type="button" data-gpt>AveronGPT</button>'}: он отвечает по разборам и подсказывает по сайту.</p>
-    <div class="feed" data-feed></div></div>`;
+    <div class="feed" data-learning-target="report-feed" data-feed></div></div>`;
   const feed = $('[data-feed]', view);
   const draw = () => {
     const f = S.repFilter;
@@ -125,7 +125,7 @@ async function accessView(box) {
     <td>${i.login ? `<code>${esc(i.login)}</code>` : '<span class="s">старая ссылка</span>'}</td><td>${i.login ? pass(i) : ''}</td>
     <td class="nw hide-m">${i.used ? fmtWhen(i.used) : '<span class="s">ещё не входил</span>'}</td>
     <td class="nw">${ro ? '' : `${i.login ? `<button class="btn small" type="button" data-edit="${i.id}">Изменить</button> ` : ''}<button class="btn small" type="button" data-revoke="${i.id}">${i.login ? 'Удалить' : 'Отозвать'}</button>`}</td></tr>`).join('');
-  box.innerHTML = `<section class="card blk"><div class="card-h"><h2>Учётные записи</h2><span class="hint">${d.invites.length}</span><span class="sp"></span>
+  box.innerHTML = `<section class="card blk" data-learning-target="access-list"><div class="card-h"><h2>Учётные записи</h2><span class="hint">${d.invites.length}</span><span class="sp"></span>
       ${ro ? '' : '<button class="btn primary" type="button" data-new>Новая учётная запись</button>'}</div>
     ${d.invites.length ? `<div class="tbl-wrap"><table class="tbl anim"><thead><tr><th>Кто</th><th class="hide-m">Вход</th><th>Логин</th><th>Пароль</th><th class="hide-m">Последний вход</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
       : '<div class="empty">Учётных записей ещё нет.</div>'}

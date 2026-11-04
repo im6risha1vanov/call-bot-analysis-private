@@ -1,0 +1,606 @@
+{
+  "version": 1,
+  "lessons": [
+    {
+      "id": "m1",
+      "role": "manager",
+      "title": "М1. Сохранить итог звонка",
+      "result": "Недозвон сохранён у нужного клиента.",
+      "situation": "Клиент «Учебный Кедр» не ответил. Найдите его в очереди и отметьте «Не взял трубку». Это недозвон, а не отказ от предложения.",
+      "module": null,
+      "version": 1,
+      "kind": "practice",
+      "steps": [
+        {
+          "action": "select_client",
+          "title": "Откройте «Учебный Кедр».",
+          "expected": {
+            "client": "targetClient"
+          }
+        },
+        {
+          "action": "save_outcome",
+          "title": "Нажмите «Не взял трубку»: итог сохраняется сразу.",
+          "expected": {
+            "client": "targetClient",
+            "outcome": "no_answer"
+          }
+        },
+        {
+          "action": "verify_outcome",
+          "title": "Проверьте итог в истории клиента.",
+          "expected": {}
+        }
+      ],
+      "guide": [
+        {
+          "page": "queue",
+          "target": "queue-card",
+          "text": "Откройте карточку нужного номера.",
+          "result": "Название и номер относятся к вашему клиенту."
+        },
+        {
+          "page": "queue",
+          "target": "outcome-grid",
+          "text": "После недозвона нажмите «Не взял трубку».",
+          "result": "Этот итог сохраняется сразу. «Отказ» означает, что клиент ответил и отказался."
+        },
+        {
+          "page": "queue",
+          "target": "client-history",
+          "text": "Проверьте «Историю клиента».",
+          "result": "Должна появиться ваша отметка, не новая сделка."
+        }
+      ],
+      "adaptation": ""
+    },
+    {
+      "id": "m2",
+      "role": "manager",
+      "title": "М2. Назначить и перенести перезвон",
+      "result": "Одна задача с комментарием и новым сроком, исходный срок сохранён.",
+      "situation": "«Учебный Кедр» просит перезвонить {{callbackMoscowDate}} в 15:00 по Москве, чтобы обсудить предложение. В полях CRM это {{callbackDate}} {{callbackTime}} ({{timezone}}). После сохранения клиент перенесёт разговор на {{moveMoscowDate}} в 11:30 по Москве: в CRM {{moveDate}} {{moveTime}}.",
+      "module": null,
+      "version": 1,
+      "kind": "practice",
+      "steps": [
+        {
+          "action": "select_client",
+          "title": "Откройте нужную карточку.",
+          "expected": {
+            "client": "targetClient"
+          }
+        },
+        {
+          "action": "save_outcome",
+          "title": "Выберите «Перезвонить», дату, время и комментарий. Затем сохраните.",
+          "expected": {
+            "client": "targetClient",
+            "outcome": "callback",
+            "due_date": "callbackDate",
+            "due_time": "callbackTime",
+            "comment": "required"
+          }
+        },
+        {
+          "action": "open_section",
+          "title": "Откройте список «Перезвоны».",
+          "expected": {
+            "section": "callbacks"
+          }
+        },
+        {
+          "action": "select_task",
+          "title": "Найдите только что созданную задачу.",
+          "expected": {
+            "task": "createdTask"
+          }
+        },
+        {
+          "action": "move_task",
+          "title": "Клиент сообщил новое время. Перенесите эту же задачу.",
+          "expected": {
+            "task": "createdTask",
+            "due_date": "moveDate",
+            "due_time": "moveTime"
+          }
+        },
+        {
+          "action": "verify_task",
+          "title": "Проверьте новый срок, комментарий и отсутствие второй задачи.",
+          "expected": {}
+        }
+      ],
+      "guide": [
+        {
+          "page": "queue",
+          "target": "outcome-grid",
+          "text": "Выберите «Перезвонить».",
+          "result": "Заполните дату, время и комментарий, затем «Сохранить»."
+        },
+        {
+          "page": "callbacks",
+          "target": "callback-list",
+          "text": "В «Перезвонах» найдите клиента и нажмите «Перенести».",
+          "result": "Меняются дата и время этой же задачи. Комментарий при переносе не редактируется."
+        }
+      ],
+      "adaptation": ""
+    },
+    {
+      "id": "m3",
+      "role": "manager",
+      "title": "М3. Продолжить работу по сделке",
+      "result": "Следующий шаг записан в истории нужной сделки.",
+      "situation": "По сделке «Учебный Кедр» уже отправлены материалы. Прочитайте историю и запишите следующий шаг через «Заметка»: «Обсудить предложение {{callbackDate}} в {{callbackTime}}».",
+      "module": null,
+      "version": 1,
+      "kind": "practice",
+      "steps": [
+        {
+          "action": "select_deal",
+          "title": "Откройте нужную сделку и прочитайте историю.",
+          "expected": {
+            "deal": "targetDeal"
+          }
+        },
+        {
+          "action": "save_note",
+          "title": "Выберите «Заметка» и сохраните следующий шаг.",
+          "expected": {
+            "deal": "targetDeal",
+            "note": "expectedNote"
+          }
+        },
+        {
+          "action": "verify_history",
+          "title": "Найдите свою заметку в истории.",
+          "expected": {}
+        }
+      ],
+      "guide": [
+        {
+          "page": "deals",
+          "target": "deal-list",
+          "text": "Откройте строку нужной сделки.",
+          "result": "В карточке видны этап и история."
+        },
+        {
+          "page": "deals",
+          "target": "deal-note",
+          "text": "В карточке нажмите «Заметка» и сохраните следующий шаг.",
+          "result": "Заметка появляется в «Истории»; отдельной кнопки «Следующий шаг» в CRM нет."
+        }
+      ],
+      "adaptation": "Следующий шаг фиксируется через существующую «Заметка», а не через выдуманный статус."
+    },
+    {
+      "id": "m4",
+      "role": "manager",
+      "title": "М4. Подготовить договор",
+      "result": "Учебный документ связан со сделкой и виден в учебном журнале.",
+      "situation": "Откройте сделку «Учебный Кедр». Сверьте вымышленные реквизиты, составьте учебный договор и найдите его в журнале. Договор не считается отправленным.",
+      "module": "contracts",
+      "version": 1,
+      "kind": "practice",
+      "steps": [
+        {
+          "action": "select_deal",
+          "title": "Откройте нужную сделку.",
+          "expected": {
+            "deal": "targetDeal"
+          }
+        },
+        {
+          "action": "prepare_contract",
+          "title": "Нажмите «Составить договор», проверьте реквизиты и сформируйте учебный документ.",
+          "expected": {
+            "deal": "targetDeal",
+            "company": "targetCompany",
+            "inn": "targetInn"
+          }
+        },
+        {
+          "action": "open_section",
+          "title": "Перейдите на вкладку «Договоры».",
+          "expected": {
+            "section": "contracts"
+          }
+        },
+        {
+          "action": "select_document",
+          "title": "Откройте свой документ в журнале и проверьте связь со сделкой.",
+          "expected": {
+            "document": "createdDocument"
+          }
+        }
+      ],
+      "guide": [
+        {
+          "page": "deals",
+          "target": "deal-contract",
+          "text": "В карточке сделки нажмите «Составить договор».",
+          "result": "Сделка должна остаться связанной с документом."
+        },
+        {
+          "page": "deals",
+          "arg": "contracts",
+          "target": "contract-journal",
+          "text": "В «Договорах» проверьте журнал.",
+          "result": "В рабочей CRM скачивание .docx присваивает номер и пишет журнал. Учебный просмотр делает только локальную запись."
+        }
+      ],
+      "adaptation": "В рабочем процессе «Скачать договор (.docx)» одновременно регистрирует договор. В упражнении — встроенный учебный просмотр без скачивания, рабочего номера и DaData."
+    },
+    {
+      "id": "m5",
+      "role": "manager",
+      "title": "М5. Найти разбор и личный отчёт",
+      "result": "Найдены нужный разговор, подтверждённый вывод и личный отчёт за нужную дату.",
+      "situation": "В «Звонках» за 7 дней найдите разговор «Учебный Кедр» {{callDate}}. Узнайте, что не согласовано. Затем откройте в «Отчётах бота» личный итог за {{reportDate}}.",
+      "module": null,
+      "version": 1,
+      "kind": "practice",
+      "steps": [
+        {
+          "action": "set_period",
+          "title": "Выберите период «7 дней».",
+          "expected": {
+            "period": "7"
+          }
+        },
+        {
+          "action": "select_call",
+          "title": "Откройте нужный разговор.",
+          "expected": {
+            "call": "targetCall"
+          }
+        },
+        {
+          "action": "answer_review",
+          "title": "Ответьте по тексту разбора.",
+          "expected": {
+            "answer": "callback_missing"
+          }
+        },
+        {
+          "action": "open_section",
+          "title": "Откройте «Отчёты».",
+          "expected": {
+            "section": "reports"
+          }
+        },
+        {
+          "action": "select_report",
+          "title": "Найдите личный итог за заданную дату.",
+          "expected": {
+            "report": "personalReport"
+          }
+        }
+      ],
+      "guide": [
+        {
+          "page": "calls",
+          "target": "call-filters",
+          "text": "Выберите период и найдите нужный разговор.",
+          "result": "Нажатие на строку открывает разбор."
+        },
+        {
+          "page": "reports",
+          "target": "report-feed",
+          "text": "Откройте личный отчёт по заголовку и дате.",
+          "result": "В ленте нет фильтра периода: сверяйте дату самого отчёта."
+        }
+      ],
+      "adaptation": "Период выбирается в журнале звонков. В ленте отчётов — нужная дата/период заголовка без несуществующего фильтра."
+    },
+    {
+      "id": "d1",
+      "role": "director",
+      "title": "Д1. Проверить сводку отдела",
+      "result": "Показатель указан для правильного менеджера и периода.",
+      "situation": "В «Сводке» выберите «7 дней» и учебного менеджера Бориса. Сколько у него разговоров с результатом? Значения разных сотрудников и периодов отличаются.",
+      "module": null,
+      "version": 1,
+      "kind": "practice",
+      "steps": [
+        {
+          "action": "set_period",
+          "title": "Выберите «7 дней».",
+          "expected": {
+            "period": "7"
+          }
+        },
+        {
+          "action": "set_manager",
+          "title": "Выберите Бориса.",
+          "expected": {
+            "manager": "targetManager"
+          }
+        },
+        {
+          "action": "answer_metric",
+          "title": "Найдите «Разговоров с результатом» и укажите число.",
+          "expected": {
+            "value": "targetMetric"
+          }
+        }
+      ],
+      "guide": [
+        {
+          "page": "summary",
+          "target": "summary-filters",
+          "text": "Выберите период и менеджера.",
+          "result": "Период относится к цифрам сводки."
+        },
+        {
+          "page": "summary",
+          "target": "summary-kpis",
+          "text": "Найдите «Разговоров с результатом».",
+          "result": "Сверьте выбранный период и сотрудника перед выводом."
+        }
+      ],
+      "adaptation": ""
+    },
+    {
+      "id": "d2",
+      "role": "director",
+      "title": "Д2. Найти звонок менеджера",
+      "result": "Разговор и вывод относятся к указанному сотруднику.",
+      "situation": "Найдите звонок Бориса по «Учебному Кедру» {{callDate}} в периоде «7 дней» и назовите подтверждённый вывод. В журнале есть похожий разговор Анны.",
+      "module": null,
+      "version": 1,
+      "kind": "practice",
+      "steps": [
+        {
+          "action": "set_manager",
+          "title": "Выберите Бориса.",
+          "expected": {
+            "manager": "targetManager"
+          }
+        },
+        {
+          "action": "set_period",
+          "title": "Выберите «7 дней».",
+          "expected": {
+            "period": "7"
+          }
+        },
+        {
+          "action": "select_call",
+          "title": "Откройте разговор Бориса.",
+          "expected": {
+            "call": "targetCall"
+          }
+        },
+        {
+          "action": "answer_review",
+          "title": "Назовите вывод из открытого разбора.",
+          "expected": {
+            "answer": "callback_missing"
+          }
+        }
+      ],
+      "guide": [
+        {
+          "page": "calls",
+          "target": "call-filters",
+          "text": "Выберите менеджера и период.",
+          "result": "Поиск по номеру или компании дополняет фильтры."
+        },
+        {
+          "page": "calls",
+          "target": "call-list",
+          "text": "Откройте нужную строку.",
+          "result": "Проверьте имя сотрудника в разборе."
+        }
+      ],
+      "adaptation": ""
+    },
+    {
+      "id": "d3",
+      "role": "director",
+      "title": "Д3. Проверить просроченный перезвон",
+      "result": "Определены задача, клиент, исходный срок и контекст без изменения задачи.",
+      "situation": "В перезвонах Бориса найдите просроченную задачу по «Учебному Кедру». Укажите исходную дату и откройте историю клиента. Закрывать или переносить задачу не требуется.",
+      "module": null,
+      "version": 1,
+      "kind": "practice",
+      "steps": [
+        {
+          "action": "set_manager",
+          "title": "Выберите Бориса.",
+          "expected": {
+            "manager": "targetManager"
+          }
+        },
+        {
+          "action": "select_task",
+          "title": "Найдите просроченный перезвон.",
+          "expected": {
+            "task": "overdueTask",
+            "open_context": true
+          }
+        },
+        {
+          "action": "answer_task",
+          "title": "Назовите клиента, исходный срок и вывод истории.",
+          "expected": {
+            "client": "targetClient",
+            "due_date": "overdueDate",
+            "answer": "proposal_waits",
+            "due_time": "10:00"
+          }
+        }
+      ],
+      "guide": [
+        {
+          "page": "callbacks",
+          "target": "callback-filters",
+          "text": "Выберите менеджера.",
+          "result": "Вверху списка — группа «Просрочено»."
+        },
+        {
+          "page": "callbacks",
+          "target": "callback-list",
+          "text": "У задачи «Позвонить» открывает карточку, затем смотрите историю.",
+          "result": "Не нажимайте второй «Позвонить» в карточке: для проверки нужен только контекст."
+        }
+      ],
+      "adaptation": "Используется имеющийся переход из «Позвонить» в карточку/историю. Упражнение никогда не набирает номер."
+    },
+    {
+      "id": "d4",
+      "role": "director",
+      "title": "Д4. Разобраться с зависшей сделкой",
+      "result": "Этап, событие и отсутствие следующего шага подтверждены историей.",
+      "situation": "Выберите «Зависшие» и сделку «Учебный Кедр». Сверьте этап, последнее событие и следующий шаг. Если шага нет — ответьте «Не зафиксирован», не угадывайте причину.",
+      "module": null,
+      "version": 1,
+      "kind": "practice",
+      "steps": [
+        {
+          "action": "filter_deals",
+          "title": "Выберите «Зависшие».",
+          "expected": {
+            "filter": "stalled"
+          }
+        },
+        {
+          "action": "select_deal",
+          "title": "Откройте указанную сделку.",
+          "expected": {
+            "deal": "targetDeal"
+          }
+        },
+        {
+          "action": "answer_stalled",
+          "title": "Назовите этап, последнее событие и следующий шаг.",
+          "expected": {
+            "stage": "messenger",
+            "last_event": "materials",
+            "next_step": "not_recorded"
+          }
+        }
+      ],
+      "guide": [
+        {
+          "page": "deals",
+          "target": "deal-filters",
+          "text": "В списке выберите «Зависшие».",
+          "result": "Откройте нужную сделку."
+        },
+        {
+          "page": "deals",
+          "target": "deal-list",
+          "text": "Сверьте этап и историю.",
+          "result": "Не выводите причину застоя, если клиент её не называл."
+        }
+      ],
+      "adaptation": ""
+    },
+    {
+      "id": "d5",
+      "role": "director",
+      "title": "Д5. Сверить отчёт и карточку",
+      "result": "Вывод о менеджере подкреплён нужным отчётом и примером звонка.",
+      "situation": "Откройте отчёт отдела «Сводка за неделю» за {{weekStart}}–{{weekEnd}}. Найдите Бориса, затем в «Сотрудниках» откройте его карточку и пример разговора по «Учебному Кедру». Что стоит обсудить?",
+      "module": null,
+      "version": 1,
+      "kind": "practice",
+      "steps": [
+        {
+          "action": "select_report",
+          "title": "Откройте отчёт за указанный период.",
+          "expected": {
+            "report": "weeklyReport"
+          }
+        },
+        {
+          "action": "select_person",
+          "title": "Перейдите в «Сотрудники» и откройте Бориса.",
+          "expected": {
+            "manager": "targetManager"
+          }
+        },
+        {
+          "action": "select_call",
+          "title": "Откройте подтверждающий пример звонка.",
+          "expected": {
+            "call": "targetCall"
+          }
+        },
+        {
+          "action": "answer_review",
+          "title": "Выберите вывод, подтверждённый примером.",
+          "expected": {
+            "answer": "callback_missing"
+          }
+        }
+      ],
+      "guide": [
+        {
+          "page": "reports",
+          "target": "report-feed",
+          "text": "Выберите отчёт по заголовку и периоду.",
+          "result": "Сверьте строку нужного менеджера."
+        },
+        {
+          "page": "staff",
+          "target": "staff-list",
+          "text": "Откройте сотрудника.",
+          "result": "В карточке — цифры за 7/30 дней и кнопки примеров звонков."
+        }
+      ],
+      "adaptation": "В отчётах нет фильтра дат. Сначала выбирается датированный отчёт, затем «Сотрудники» и доступный пример из карточки."
+    },
+    {
+      "id": "d6",
+      "role": "director",
+      "title": "Д6. Настройки и доступы",
+      "result": "Вы знаете, где сотрудники, доступы и подключённые модули.",
+      "situation": "Только навигация и объяснения. Настройки, права и кампании не меняются.",
+      "module": null,
+      "version": 1,
+      "kind": "guide",
+      "steps": [],
+      "guide": [
+        {
+          "page": "staff",
+          "target": "staff-list",
+          "text": "Здесь сотрудники и их карточки.",
+          "result": "Добавлять людей для урока не требуется."
+        },
+        {
+          "page": "settings",
+          "arg": "access",
+          "target": "settings-tabs",
+          "text": "В «Настройках» есть «Промты» и «Доступы».",
+          "result": "Изменения промтов влияют на разборы. В этом уроке ничего не сохраняйте."
+        },
+        {
+          "page": "settings",
+          "arg": "access",
+          "target": "access-list",
+          "text": "На вкладке «Доступы» находятся учётные записи.",
+          "result": "Не создавайте учётную запись и не меняйте пароль ради урока."
+        },
+        {
+          "page": "auto",
+          "target": "automation-list",
+          "text": "Автоматизации связывают события с действиями.",
+          "result": "Только просмотр; запуск и включение не нужны.",
+          "module": "automations"
+        },
+        {
+          "page": "robot",
+          "target": "robot-tabs",
+          "text": "В «Роботе» — кампании, номера, звонки и операторы.",
+          "result": "Не запускайте кампанию и не делайте тестовый звонок.",
+          "module": "robot"
+        }
+      ],
+      "adaptation": "Отключённые модули пропускаются с явным пояснением. Пройдено — после просмотра всех доступных шагов."
+    }
+  ]
+}
