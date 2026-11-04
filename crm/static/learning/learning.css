@@ -4,7 +4,7 @@
 .learn-catalog .card p{flex:1}
 .learn-catalog h2{font-size:18px;margin:4px 0}
 .learn-frame{display:block;width:100%;min-height:500px;border:1px solid var(--line);border-radius:14px;background:var(--bg);margin-top:12px}
-.learn-guide{position:relative;inset:auto;margin:12px 24px;border:2px solid var(--accent);z-index:auto;max-width:1100px}
+.learn-guide{position:fixed;inset:auto;margin:0;width:300px;max-width:calc(100vw - 20px);padding:14px;border:1px solid var(--accent);border-radius:12px;background:var(--surface);color:var(--fg);box-shadow:var(--shadow);z-index:55;display:flex;flex-direction:column;pointer-events:auto}
 .learn-guide h2,.learn-guide h3{margin:8px 0 4px;font-size:16px}
 .learn-guide p{margin:6px 0}
 .learn-highlight{outline:3px solid var(--accent);outline-offset:4px;scroll-margin-block:30px}
@@ -29,10 +29,42 @@
 .learn-check input{width:22px;min-height:22px}
 .learn-feedback{padding:12px;background:var(--accent-soft);border-radius:8px;overflow-wrap:anywhere}
 .learn-exercise :focus-visible,.learn-guide :focus-visible,.learn-catalog :focus-visible{outline:3px solid var(--accent);outline-offset:3px}
-@media(max-width:600px){.learn-guide{margin:8px;padding:12px}.learn-exercise{padding:6px}.learn-exercise .outform{grid-template-columns:1fr}.learn-frame{border-radius:8px}.learn-exercise .card{padding:12px}.learn-exercise h1{font-size:19px}}
+@media(max-width:600px){.learn-guide{padding:12px}.learn-exercise{padding:6px}.learn-exercise .outform{grid-template-columns:1fr}.learn-frame{border-radius:8px}.learn-exercise .card{padding:12px}.learn-exercise h1{font-size:19px}}
 
 .learn-action-hint{outline:3px solid var(--accent);outline-offset:3px}
 
 .learn-guide .btn{min-height:44px;white-space:normal}
 .learn-guide .row{flex-wrap:wrap}
 .learn-guide .field{display:flex;flex-direction:column;gap:6px;margin:10px 0}
+
+/* One non-modal card for every active manager/director step. No scrim/backdrop. */
+.learn-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;flex:none}
+.learn-head>div{min-width:0}.learn-head b{display:block;font-size:13px;line-height:1.35}
+.learn-step{display:block;font-size:11px;color:var(--muted);margin-top:3px}
+.learn-close{width:32px;height:32px;flex:none;border:0;border-radius:8px;background:none;color:var(--muted);font-size:24px;line-height:1;padding:0}
+.learn-close:hover{background:var(--surface-2);color:var(--fg)}
+.learn-body{min-height:0;overflow:auto;overscroll-behavior:contain;margin-top:10px}
+.learn-guide p.learn-instruction{margin:0;font-size:14px;line-height:1.45;overflow-wrap:anywhere}
+.learn-guide p.learn-status{margin:8px 0 0;font-size:12px;color:var(--muted)}
+.learn-status:empty{display:none}.learn-guide p.learn-missing{font-size:12px;line-height:1.4;color:var(--muted);margin:8px 0 0}
+.learn-actions{display:flex;align-items:center;gap:6px;margin-top:10px;flex:none}
+.learn-actions .ghost{font-size:12px;padding:4px;white-space:normal;min-height:32px}
+.learn-actions [data-learn-next],.learn-actions [data-guide-next]{margin-left:auto;font-size:13px;min-height:36px}
+.learn-guide .field{font-size:12px;margin:8px 0}
+.learn-guide .field .inp{width:100%;min-height:36px}
+.learn-guide::before{content:"";position:absolute;width:9px;height:9px;background:var(--surface);transform:rotate(45deg);pointer-events:none}
+.learn-guide[data-placement="right"]::before{left:-5px;top:var(--arrow-y);border-left:1px solid var(--accent);border-bottom:1px solid var(--accent)}
+.learn-guide[data-placement="left"]::before{right:-5px;top:var(--arrow-y);border-right:1px solid var(--accent);border-top:1px solid var(--accent)}
+.learn-guide[data-placement="bottom"]::before{top:-5px;left:var(--arrow-x);border-top:1px solid var(--accent);border-left:1px solid var(--accent)}
+.learn-guide[data-placement="top"]::before{bottom:-5px;left:var(--arrow-x);border-bottom:1px solid var(--accent);border-right:1px solid var(--accent)}
+.learn-guide[data-detached="true"]::before{display:none}
+.learn-guide[data-compact="true"]{padding:6px;height:44px;min-height:44px;overflow:hidden}
+.learn-guide[data-compact="true"] .learn-body,.learn-guide[data-compact="true"] .learn-actions{display:none}
+.learn-guide[data-compact="true"] .learn-head b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px}
+.learn-guide[data-compact="true"] .learn-step{font-size:10px;margin-top:0}
+.learn-resume{position:fixed;display:flex;align-items:center;gap:6px;padding:6px;width:290px;max-width:calc(100vw - 20px);border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--fg);box-shadow:var(--shadow);z-index:55;font-size:12px}
+.learn-resume .btn,.learn-resume .ghost{min-height:32px;font-size:12px}.learn-resume[data-compact="true"]>span{display:none}
+@media(max-width:600px){.learn-actions .btn,.learn-close{min-height:44px}.learn-guide .field .inp{min-height:40px}}
+
+.learn-guide[data-placement="right"]::before,.learn-guide[data-placement="left"]::before{transform:translateY(-50%) rotate(45deg)}
+.learn-guide[data-placement="top"]::before,.learn-guide[data-placement="bottom"]::before{transform:translateX(-50%) rotate(45deg)}

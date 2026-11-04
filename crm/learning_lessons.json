@@ -100,7 +100,8 @@
           "screen": {
             "page": "queue",
             "selector": "[data-learning-target=\"outcome-grid\"], .outform:not(.hidden)"
-          }
+          },
+          "hint": "«Перезвонить»: {{callbackDate}} {{callbackTime}} ({{timezone}}). Комментарий — обсудить предложение."
         },
         {
           "action": "open_section",
@@ -135,7 +136,8 @@
           "screen": {
             "page": "callbacks",
             "selector": ".cb [data-move], .cb .move"
-          }
+          },
+          "hint": "Перенесите эту же задачу на {{moveDate}} в {{moveTime}}."
         },
         {
           "action": "verify_task",
@@ -194,7 +196,8 @@
           "screen": {
             "page": "deals",
             "selector": "[data-learning-target=\"deal-note\"], .rvm [data-form]"
-          }
+          },
+          "hint": "Добавьте «Заметку»: «{{expectedNote}}»."
         },
         {
           "action": "verify_history",
@@ -254,7 +257,8 @@
           "screen": {
             "page": "deals",
             "selector": "[data-contract], #dg-name, #dg-inn, #dg-genBtn"
-          }
+          },
+          "hint": "Сверьте «Учебный Кедр», ИНН 0000000000, и сформируйте учебный договор."
         },
         {
           "action": "open_section",
@@ -326,7 +330,8 @@
           "screen": {
             "page": "calls",
             "selector": "[data-learning-target=\"call-list\"], [data-review]"
-          }
+          },
+          "hint": "Откройте разбор звонка «Учебный Кедр» от {{callDate}}."
         },
         {
           "action": "answer_review",
@@ -375,7 +380,8 @@
           "screen": {
             "page": "reports",
             "selector": "[data-learning-target=\"report-feed\"]"
-          }
+          },
+          "hint": "Найдите личный итог дня от {{reportDate}}."
         }
       ],
       "guide": [
@@ -424,7 +430,8 @@
           "screen": {
             "page": "summary",
             "selector": "[data-seg=\"ext\"]"
-          }
+          },
+          "hint": "В переключателе менеджеров выберите Бориса Учебного."
         },
         {
           "action": "answer_metric",
@@ -476,7 +483,8 @@
           "screen": {
             "page": "calls",
             "selector": "[data-ext-pick]"
-          }
+          },
+          "hint": "В фильтре «Все менеджеры» выберите Бориса Учебного."
         },
         {
           "action": "set_period",
@@ -563,7 +571,8 @@
           "screen": {
             "page": "calls",
             "selector": "[data-ext-pick]"
-          }
+          },
+          "hint": "В фильтре менеджеров выберите Бориса Учебного."
         },
         {
           "action": "select_task",
@@ -785,7 +794,8 @@
           "screen": {
             "page": "reports",
             "selector": "[data-learning-target=\"report-feed\"]"
-          }
+          },
+          "hint": "Откройте «Сводку за неделю» за {{weekStart}}–{{weekEnd}}."
         },
         {
           "action": "select_person",

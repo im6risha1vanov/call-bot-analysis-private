@@ -75,6 +75,15 @@ class CatalogTests(unittest.TestCase):
                 self.assertIn(step['page'] + ':', pages)
                 self.assertTrue(step['target'] in targets, 'Missing guide target: ' + step['target'])
 
+    def test_floating_copy_does_not_change_lesson_checks_or_content(self):
+        import subprocess
+        baseline = json.loads(subprocess.check_output(['git', 'show', '9bc7669:crm/learning_lessons.json'], cwd=ROOT, text=True))
+        current = learning.catalog()
+        for data in (baseline, current):
+            for lesson in data['lessons']:
+                for step in lesson['steps']: step.pop('hint', None)
+        self.assertEqual(current, baseline)
+
     def test_no_duplicate_highlight_attributes(self):
         import re
         for f in (ROOT/'crm/static').rglob('*.js'):
@@ -313,7 +322,8 @@ class ExistingSurfaceTests(unittest.TestCase):
         self.assertIn('window.tourFind ? tourFind(',script)
         self.assertIn("'Escape'",script)
         css=(ROOT/'crm/static/learning/learning.css').read_text()
-        self.assertIn('.learn-guide{position:relative',css)
+        self.assertIn('.learn-guide{position:fixed',css)
+        self.assertIn('document.body.appendChild(panel)',script)
         self.assertIn('@media(max-width:600px)',css)
         self.assertIn(':focus-visible',css)
         self.assertIn('min-height:44px',css)

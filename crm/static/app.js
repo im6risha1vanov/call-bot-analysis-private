@@ -285,10 +285,12 @@ function trapTab(box, e) {
   if (e.key !== 'Tab') return;
   // checkVisibility отсекает и кнопки внутри свёрнутого <details>, у них offsetParent не пустой
   const shown = el => (el.checkVisibility ? el.checkVisibility() : el.offsetParent !== null);
-  const items = $$(FOCUSABLE, box).filter(el => shown(el) || el === document.activeElement);
+  const extra = window.learningFocusScope?.(box);
+  const inScope = el => box.contains(el) || !!extra?.contains(el);
+  const items = [...$$(FOCUSABLE, box), ...(extra ? $$(FOCUSABLE, extra) : [])].filter(el => shown(el) || el === document.activeElement);
   if (!items.length) return;
   const first = items[0], last = items[items.length - 1];
-  if (!box.contains(document.activeElement)) { e.preventDefault(); first.focus(); }
+  if (!inScope(document.activeElement)) { e.preventDefault(); first.focus(); }
   else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
   else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
 }

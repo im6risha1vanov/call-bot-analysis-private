@@ -1,248 +1,280 @@
 {
   "date": "2026-11-04",
-  "implementation": "ordinary CRM tabs, local classroom, reset on new entry",
-  "branch": "feat/crm-learning-tabs",
-  "base_commit": "5da8dafcaddca00a22838dcb05af33ab1ab5018a",
+  "implementation": "shared floating lesson card, explicit acknowledged steps",
+  "branch": "feat/crm-learning-floating-hints",
+  "base_commit": "9bc7669d2acd1d24b5bd6ea5f899d41c5815cb88",
   "python_tests": {
-    "count": 39,
-    "result": "passed",
-    "command": "CRM_LEARNING_NODE=<node> .venv/bin/python -B scripts/check_crm_learning.py"
+    "count": 40,
+    "result": "passed"
   },
-  "native_node": {
-    "version": "v24.5.0",
+  "javascript": {
     "local_api_cases": 17,
-    "ordinary_ui_cases": 19,
+    "ordinary_crm_controller_cases": 19,
+    "floating_hint_cases": 17,
     "result": "passed",
-    "syntax_files_js_and_cjs": 33,
-    "actual_browser": false
+    "environment": "Node VM + explicit DOM/event adapter and numeric geometry fixtures; not browser"
   },
-  "verified": [
-    "All ten practices: valid and invalid native UI actions",
-    "Director guide, enabled and disabled optional modules",
-    "Actual app DOMContentLoaded and local API bootstrap",
-    "M1 immediate save and visible history; M2 same task moved without duplicates",
-    "Incorrect content answers rejected",
-    "Reload preserves callback, note, contract and move drafts without submission",
-    "Pause, continue and confirmed clean repeat",
-    "New classroom entry resets; reload retains attempt; role/company scopes separate",
-    "Manager direct director lesson denied; unknown operations fail closed",
-    "Missing or broken bootstrap cannot fall back to production fetch",
-    "Normal login retains native API transport using a fake server",
-    "HTML JSON escape roundtrip; authenticated workspace headers preserve connect-src none",
-    "Existing helper/GPT/review source and pure regressions"
-  ],
-  "working_network_calls_in_classroom_dom_model": 0,
-  "http_stand_start": "failed: OSError could not bind 127.0.0.1:8098 in execution sandbox",
-  "actual_browser_desktop_mobile_csp_enforcement": "not run: browser unavailable, loopback binding denied",
+  "browser_checks": {
+    "result": "not_run",
+    "runner": "scripts/check_crm_learning_browser.cjs",
+    "attempt_exit_code": 2,
+    "reason": "Playwright/Chromium unavailable; loopback TCP denied by execution sandbox"
+  },
+  "requested_screenshots": {
+    "produced": false,
+    "expected": [
+      "director-d2-filter.png",
+      "manager-m2-callback.png"
+    ]
+  },
   "production_database": "not used",
   "production_services_restarted": false,
-  "historical_previous_iframe_version": {
+  "previous_tabs_results": {
     "date": "2026-11-04",
-    "unittest_count": 36,
-    "unittest_result": "passed",
-    "javascript": {
-      "lessons": [
-        {
-          "id": "m1",
-          "result": "passed",
-          "actions": 3
-        },
-        {
-          "id": "m2",
-          "result": "passed",
-          "actions": 6
-        },
-        {
-          "id": "m3",
-          "result": "passed",
-          "actions": 3
-        },
-        {
-          "id": "m4",
-          "result": "passed",
-          "actions": 4
-        },
-        {
-          "id": "m5",
-          "result": "passed",
-          "actions": 5
-        },
-        {
-          "id": "d1",
-          "result": "passed",
-          "actions": 3
-        },
-        {
-          "id": "d2",
-          "result": "passed",
-          "actions": 4
-        },
-        {
-          "id": "d3",
-          "result": "passed",
-          "actions": 3
-        },
-        {
-          "id": "d4",
-          "result": "passed",
-          "actions": 3
-        },
-        {
-          "id": "d5",
-          "result": "passed",
-          "actions": 4
-        }
-      ],
-      "correctActions": 38,
-      "wrongAttempts": 38,
-      "restores": 38,
-      "uiLessons": 10,
-      "uiWrongAttempts": 20,
-      "uiResumes": 50,
-      "networkCalls": 0,
-      "directorGuide": {
-        "steps": 5,
-        "missingTargetRejected": true,
-        "resume": true,
-        "passed": true
-      }
+    "implementation": "ordinary CRM tabs, local classroom, reset on new entry",
+    "branch": "feat/crm-learning-tabs",
+    "base_commit": "5da8dafcaddca00a22838dcb05af33ab1ab5018a",
+    "python_tests": {
+      "count": 39,
+      "result": "passed",
+      "command": "CRM_LEARNING_NODE=<node> .venv/bin/python -B scripts/check_crm_learning.py"
     },
-    "test_environment": "Duktape + explicit child DOM model + two native Node VM contexts with parent/iframe DOM/event adapter + aiohttp socket-free request/router checks",
-    "browser_layout_and_actual_csp_enforcement": "not_run: no browser and no loopback bind permission",
-    "production_database": "not_used",
-    "production_services_restarted": false,
     "native_node": {
       "version": "v24.5.0",
-      "first_party_js_syntax_files": 27,
-      "same_ui_harness": "passed",
+      "local_api_cases": 17,
+      "ordinary_ui_cases": 19,
+      "result": "passed",
+      "syntax_files_js_and_cjs": 33,
       "actual_browser": false
     },
-    "parent_iframe": {
-      "mode": "two VM contexts + DOM/event adapter; not browser",
-      "cases": [
-        {
-          "name": "readonly-guidance-m1-must-not-enter-working-write-screen",
-          "result": "passed"
-        },
-        {
-          "name": "m1-parent-completion-and-return-to-catalog",
-          "result": "passed"
-        },
-        {
-          "name": "m2-parent-completion-and-return-to-catalog",
-          "result": "passed"
-        },
-        {
-          "name": "catalog-does-not-auto-open-lesson",
-          "result": "passed"
-        },
-        {
-          "name": "m1-default-practice-and-hint-do-not-complete-step",
-          "result": "passed"
-        },
-        {
-          "name": "m2-default-practice-and-hint-do-not-complete-step",
-          "result": "passed"
-        },
-        {
-          "name": "m1-readonly-wrong-client-and-outcome-rejected",
-          "result": "passed"
-        },
-        {
-          "name": "m2-readonly-wrong-client-and-outcome-rejected",
-          "result": "passed"
-        },
-        {
-          "name": "m1-exit-refresh-resume-repeat-clean-state",
-          "result": "passed"
-        },
-        {
-          "name": "m2-draft-refresh-midnight-wrong-time-and-single-task-move",
-          "result": "passed"
-        },
-        {
-          "name": "close-and-escape-return-to-program-and-preserve-attempt",
-          "result": "passed"
-        },
-        {
-          "name": "stale-frame-cannot-update-a-restarted-lesson",
-          "result": "passed"
-        },
-        {
-          "name": "manager-readonly-full-path-m1",
-          "result": "passed"
-        },
-        {
-          "name": "manager-readonly-full-path-m2",
-          "result": "passed"
-        },
-        {
-          "name": "manager-readonly-full-path-m3",
-          "result": "passed"
-        },
-        {
-          "name": "manager-readonly-full-path-m4",
-          "result": "passed"
-        },
-        {
-          "name": "manager-readonly-full-path-m5",
-          "result": "passed"
-        },
-        {
-          "name": "director-readonly-full-path-d1",
-          "result": "passed"
-        },
-        {
-          "name": "director-readonly-full-path-d2",
-          "result": "passed"
-        },
-        {
-          "name": "director-readonly-full-path-d3",
-          "result": "passed"
-        },
-        {
-          "name": "director-readonly-full-path-d4",
-          "result": "passed"
-        },
-        {
-          "name": "director-readonly-full-path-d5",
-          "result": "passed"
+    "verified": [
+      "All ten practices: valid and invalid native UI actions",
+      "Director guide, enabled and disabled optional modules",
+      "Actual app DOMContentLoaded and local API bootstrap",
+      "M1 immediate save and visible history; M2 same task moved without duplicates",
+      "Incorrect content answers rejected",
+      "Reload preserves callback, note, contract and move drafts without submission",
+      "Pause, continue and confirmed clean repeat",
+      "New classroom entry resets; reload retains attempt; role/company scopes separate",
+      "Manager direct director lesson denied; unknown operations fail closed",
+      "Missing or broken bootstrap cannot fall back to production fetch",
+      "Normal login retains native API transport using a fake server",
+      "HTML JSON escape roundtrip; authenticated workspace headers preserve connect-src none",
+      "Existing helper/GPT/review source and pure regressions"
+    ],
+    "working_network_calls_in_classroom_dom_model": 0,
+    "http_stand_start": "failed: OSError could not bind 127.0.0.1:8098 in execution sandbox",
+    "actual_browser_desktop_mobile_csp_enforcement": "not run: browser unavailable, loopback binding denied",
+    "production_database": "not used",
+    "production_services_restarted": false,
+    "historical_previous_iframe_version": {
+      "date": "2026-11-04",
+      "unittest_count": 36,
+      "unittest_result": "passed",
+      "javascript": {
+        "lessons": [
+          {
+            "id": "m1",
+            "result": "passed",
+            "actions": 3
+          },
+          {
+            "id": "m2",
+            "result": "passed",
+            "actions": 6
+          },
+          {
+            "id": "m3",
+            "result": "passed",
+            "actions": 3
+          },
+          {
+            "id": "m4",
+            "result": "passed",
+            "actions": 4
+          },
+          {
+            "id": "m5",
+            "result": "passed",
+            "actions": 5
+          },
+          {
+            "id": "d1",
+            "result": "passed",
+            "actions": 3
+          },
+          {
+            "id": "d2",
+            "result": "passed",
+            "actions": 4
+          },
+          {
+            "id": "d3",
+            "result": "passed",
+            "actions": 3
+          },
+          {
+            "id": "d4",
+            "result": "passed",
+            "actions": 3
+          },
+          {
+            "id": "d5",
+            "result": "passed",
+            "actions": 4
+          }
+        ],
+        "correctActions": 38,
+        "wrongAttempts": 38,
+        "restores": 38,
+        "uiLessons": 10,
+        "uiWrongAttempts": 20,
+        "uiResumes": 50,
+        "networkCalls": 0,
+        "directorGuide": {
+          "steps": 5,
+          "missingTargetRejected": true,
+          "resume": true,
+          "passed": true
         }
-      ],
-      "programs": {
-        "manager": {
-          "summary": "Пройдено 5 из 5 доступных уроков. Программа пройдена.",
-          "contextReads": 10,
-          "workingApiRequests": 0,
-          "errors": []
-        },
-        "director": {
-          "summary": "Пройдено 5 из 6 доступных уроков.",
-          "contextReads": 10,
-          "workingApiRequests": 0,
-          "errors": []
+      },
+      "test_environment": "Duktape + explicit child DOM model + two native Node VM contexts with parent/iframe DOM/event adapter + aiohttp socket-free request/router checks",
+      "browser_layout_and_actual_csp_enforcement": "not_run: no browser and no loopback bind permission",
+      "production_database": "not_used",
+      "production_services_restarted": false,
+      "native_node": {
+        "version": "v24.5.0",
+        "first_party_js_syntax_files": 27,
+        "same_ui_harness": "passed",
+        "actual_browser": false
+      },
+      "parent_iframe": {
+        "mode": "two VM contexts + DOM/event adapter; not browser",
+        "cases": [
+          {
+            "name": "readonly-guidance-m1-must-not-enter-working-write-screen",
+            "result": "passed"
+          },
+          {
+            "name": "m1-parent-completion-and-return-to-catalog",
+            "result": "passed"
+          },
+          {
+            "name": "m2-parent-completion-and-return-to-catalog",
+            "result": "passed"
+          },
+          {
+            "name": "catalog-does-not-auto-open-lesson",
+            "result": "passed"
+          },
+          {
+            "name": "m1-default-practice-and-hint-do-not-complete-step",
+            "result": "passed"
+          },
+          {
+            "name": "m2-default-practice-and-hint-do-not-complete-step",
+            "result": "passed"
+          },
+          {
+            "name": "m1-readonly-wrong-client-and-outcome-rejected",
+            "result": "passed"
+          },
+          {
+            "name": "m2-readonly-wrong-client-and-outcome-rejected",
+            "result": "passed"
+          },
+          {
+            "name": "m1-exit-refresh-resume-repeat-clean-state",
+            "result": "passed"
+          },
+          {
+            "name": "m2-draft-refresh-midnight-wrong-time-and-single-task-move",
+            "result": "passed"
+          },
+          {
+            "name": "close-and-escape-return-to-program-and-preserve-attempt",
+            "result": "passed"
+          },
+          {
+            "name": "stale-frame-cannot-update-a-restarted-lesson",
+            "result": "passed"
+          },
+          {
+            "name": "manager-readonly-full-path-m1",
+            "result": "passed"
+          },
+          {
+            "name": "manager-readonly-full-path-m2",
+            "result": "passed"
+          },
+          {
+            "name": "manager-readonly-full-path-m3",
+            "result": "passed"
+          },
+          {
+            "name": "manager-readonly-full-path-m4",
+            "result": "passed"
+          },
+          {
+            "name": "manager-readonly-full-path-m5",
+            "result": "passed"
+          },
+          {
+            "name": "director-readonly-full-path-d1",
+            "result": "passed"
+          },
+          {
+            "name": "director-readonly-full-path-d2",
+            "result": "passed"
+          },
+          {
+            "name": "director-readonly-full-path-d3",
+            "result": "passed"
+          },
+          {
+            "name": "director-readonly-full-path-d4",
+            "result": "passed"
+          },
+          {
+            "name": "director-readonly-full-path-d5",
+            "result": "passed"
+          }
+        ],
+        "programs": {
+          "manager": {
+            "summary": "Пройдено 5 из 5 доступных уроков. Программа пройдена.",
+            "contextReads": 10,
+            "workingApiRequests": 0,
+            "errors": []
+          },
+          "director": {
+            "summary": "Пройдено 5 из 6 доступных уроков.",
+            "contextReads": 10,
+            "workingApiRequests": 0,
+            "errors": []
+          }
         }
+      },
+      "regressions_before_fix": {
+        "mode": "two VM contexts + DOM/event adapter; not browser",
+        "cases": [
+          {
+            "name": "readonly-guidance-m1-must-not-enter-working-write-screen",
+            "result": "FAILED",
+            "error": "Guide sent a read-only learner to the ordinary CRM instead of an editable exercise\n+ actual - expected\n\n+ 'queue'\n- 'learning'\n"
+          },
+          {
+            "name": "m1-parent-completion-and-return-to-catalog",
+            "result": "FAILED",
+            "error": "Parent still says not started/in progress after the exercise completed"
+          },
+          {
+            "name": "m2-parent-completion-and-return-to-catalog",
+            "result": "FAILED",
+            "error": "Parent still says not started/in progress after the exercise completed"
+          }
+        ]
       }
-    },
-    "regressions_before_fix": {
-      "mode": "two VM contexts + DOM/event adapter; not browser",
-      "cases": [
-        {
-          "name": "readonly-guidance-m1-must-not-enter-working-write-screen",
-          "result": "FAILED",
-          "error": "Guide sent a read-only learner to the ordinary CRM instead of an editable exercise\n+ actual - expected\n\n+ 'queue'\n- 'learning'\n"
-        },
-        {
-          "name": "m1-parent-completion-and-return-to-catalog",
-          "result": "FAILED",
-          "error": "Parent still says not started/in progress after the exercise completed"
-        },
-        {
-          "name": "m2-parent-completion-and-return-to-catalog",
-          "result": "FAILED",
-          "error": "Parent still says not started/in progress after the exercise completed"
-        }
-      ]
     }
   }
 }

@@ -25,45 +25,92 @@
         if (!lesson?.available || !E.restore(attempt, lesson, context)) delete this.state.attempts[id];
       }
       if (this.state.active && !this.lesson(this.state.active)?.available) this.state.active = null;
+      this.state.presenters ||= {}; this.state.previews ||= {}; this.state.showDrafts ||= {};
+      for(const [id,p] of Object.entries(this.state.presenters)) {
+        const a=this.state.attempts[id],l=this.lesson(id);
+        if(!a||p.attemptId!==a.id){delete this.state.presenters[id];continue;}
+        if(!Number.isInteger(p.cursor)||p.cursor<0||p.cursor>a.step){p.cursor=a.step;p.pending=null;}
+        if(p.pending&&(!E.restore(p.pending.before,l,context)||p.pending.before.id!==a.id||p.pending.before.step!==p.cursor||a.step!==p.cursor+1)){p.pending=null;p.cursor=a.step;}
+      }
+      if(this.state.active&&this.state.mode!=='show'&&this.lesson(this.state.active)?.kind==='practice'&&!this.state.attempts[this.state.active])this.state.active=null;
       this.base = E.fixtures(7, context.role, context.clock);
       this.save();
     }
     lesson(id) { return this.context.lessons.find(l => l.id === id && l.role === this.context.role); }
     current() { return this.state.attempts[this.state.active] || null; }
-    data() { return this.current()?.data || this.base; }
+    data() { return this.showing() ? this.base : this.current()?.data || this.base; }
+    showing() { return this.state.mode === 'show' || this.lesson(this.state.active)?.kind === 'guide'; }
+    guide() { return this.lesson(this.state.active)?.kind === 'guide' ? this.state.guides[this.state.active] : this.state.previews[this.state.active]; }
+    presenter() { return this.state.presenters[this.state.active] || null; }
+    visibleStep() { return this.presenter()?.manual ? this.presenter().cursor : this.current()?.step; }
+    awaiting() { return !this.showing()&&!!this.presenter()?.pending; }
+    touch() { if(this.showing())return;const p=this.presenter();if(p){p.touched=true;this.save();} }
+    confirm(id, cursor, attemptId) {
+      const p=this.presenter(),a=this.current();
+      if(this.state.paused || this.showing() || this.state.active!==id || !p?.pending || p.cursor!==cursor || a.id!==attemptId)return false;
+      p.cursor=a.step;p.pending=null;p.touched=false;a.feedback='';this.save();this.changed();return true;
+    }
+    editAnswer() {
+      if(this.showing())return;
+      const p=this.presenter();
+      if(p?.pending && this.lesson(this.state.active).steps[p.cursor].quiz){this.state.attempts[this.state.active]=p.pending.before;p.pending=null;p.touched=true;this.save();this.changed();}
+    }
     save() {
       try { this.storage.setItem(this.key, JSON.stringify(this.state)); }
       catch (e) { throw new Error('Не удалось сохранить учебные данные в браузере. Разрешите хранилище; рабочая CRM не используется.'); }
     }
-    status(id) { const l=this.lesson(id),s=this.state.attempts[id]; return l?.kind==='guide' ? this.state.guides[id] ? this.state.guides[id].complete ? 'Пройден':'В процессе' : 'Не начат' : s ? s.completed?'Пройден':'В процессе':'Не начат'; }
-    start(id, repeat=false) {
+    status(id) { const l=this.lesson(id),s=this.state.attempts[id]; return l?.kind==='guide' ? this.state.guides[id] ? this.state.guides[id].complete ? 'Пройден':'В процессе' : 'Не начат' : s ? s.completed&&!this.state.presenters[id]?.pending?'Пройден':'В процессе':'Не начат'; }
+    start(id, repeat=false, options={}) {
       const lesson = this.lesson(id);
       if (!lesson?.available) throw new Error('Урок недоступен вашей роли или модулю компании.');
-      if (lesson.kind === 'practice' && (!this.state.attempts[id] || repeat)) {
+      const mode=lesson.kind==='guide'||options.mode==='show'?'show':'practice';
+      if (mode==='practice' && (!this.state.attempts[id] || repeat)) {
         const seed = root.crypto.getRandomValues(new Uint32Array(1))[0];
         this.state.attempts[id] = E.start(lesson,this.context,this.context.clock,contextId(this.context.entry,seed),seed);
         this.state.drafts[id] = {};
       }
       if (lesson.kind === 'guide' && (!this.state.guides[id] || repeat)) this.state.guides[id]={index:0,seen:[],complete:false};
-      this.state.active=id; this.state.paused=false; this.save(); this.changed(); return lesson;
+      if (lesson.kind==='practice' && mode==='show' && (!this.state.previews[id]||repeat))this.state.previews[id]={index:0,seen:[],complete:false};
+      if(mode==='practice' && options.manual) {
+        const a=this.state.attempts[id],p=this.state.presenters[id];
+        if(repeat||!p||p.attemptId!==a.id){this.state.presenters[id]={manual:true,attemptId:a.id,cursor:a.step,pending:null,touched:false};a.feedback='';}
+      }
+      this.state.active=id; this.state.mode=mode; this.state.paused=false; this.save(); this.changed(); return lesson;
     }
     pause() { this.state.paused=true; this.save(); this.changed(); }
     action(action, strict=false) {
-      const lesson=this.lesson(this.state.active),s=this.current();
-      if (!s || s.completed || this.state.paused) { if(strict)throw new Error('Начните или продолжите нужный урок в «Обучении».'); return false; }
+      const lesson=this.lesson(this.state.active),p=this.presenter();
+      let s=this.current();
+      if(this.showing()) {if(strict)throw new Error('В режиме показа сохранение отключено. Выберите «Попробовать самому» в программе.');return false;}
+      if(this.state.paused || !s) {if(strict)throw new Error('Продолжите урок через «Обучение».');return false;}
+      if(p?.manual && p.pending) {
+        const reversible=['set_manager','set_period','filter_deals','select_client','select_deal','select_task','select_call','select_person','select_report','answer_review','answer_metric','answer_task','answer_stalled'];
+        if(action.type===lesson.steps[p.cursor].action && reversible.includes(action.type)) {
+          if(JSON.stringify(action)===JSON.stringify(p.pending.action))return true;
+          s=p.pending.before;
+        } else {if(strict)throw new Error('Этот шаг выполнен. Нажмите «Далее →».');return false;}
+      }
+      if(s.completed){if(strict)throw new Error('Урок уже пройден. Для новой попытки выберите «Пройти заново».');return false;}
       const result=E.apply(lesson,this.context,s,action);
-      this.state.attempts[lesson.id]=result.state; this.save(); this.changed();
-      if (strict && !result.ok) throw new Error(result.feedback);
+      // Initial/background reads must not show errors before any user choice.
+      if(p?.manual && !result.ok && !p.touched && !strict)return false;
+      this.state.attempts[lesson.id]=result.state;
+      if(p?.manual) {
+        if(result.advanced)p.pending={from:s.step,before:copy(s),action:copy(action)};
+        else if(s.step===p.cursor)p.pending=null;
+      }
+      this.save();this.changed();
+      if(strict && !result.ok)throw new Error(result.feedback);
       return result.ok;
     }
     observe(type, values={}) {
       const l=this.lesson(this.state.active),s=this.current();
-      if (s && !s.completed && l.steps[s.step].action === type) return this.action(type==='open_section'?{type:'navigate',...values}:{type,...values});
+      if (s && !this.showing() && ((!s.completed && l.steps[s.step].action===type) || (this.presenter()?.pending && l.steps[this.visibleStep()].action===type))) return this.action(type==='open_section'?{type:'navigate',...values}:{type,...values});
       return false;
     }
-    navigation(page,arg=null) { this.page=page; this.arg=arg; const section=page==='deals'&&arg==='contracts'?'contracts':page; if(['queue','callbacks','deals','contracts','calls','reports','summary','staff'].includes(section)&&this.current()&&!this.current().completed&&!this.state.paused)this.action({type:'navigate',section}); }
-    draft(key,value) { if(!this.state.active)return; (this.state.drafts[this.state.active] ||= {})[key]=String(value).slice(0,2000);this.save(); }
-    drafts() { return this.state.drafts[this.state.active] || {}; }
+    navigation(page,arg=null) { this.page=page; this.arg=arg; const section=page==='deals'&&arg==='contracts'?'contracts':page; if(['queue','callbacks','deals','contracts','calls','reports','summary','staff'].includes(section)&&this.current()&&!this.current().completed&&!this.state.paused&&!this.awaiting()&&!this.showing())this.action({type:'navigate',section}); }
+    draft(key,value) { if(!this.state.active)return; ((this.showing()?this.state.showDrafts:this.state.drafts)[this.state.active] ||= {})[key]=String(value).slice(0,2000);this.save(); }
+    drafts() { return (this.showing()?this.state.showDrafts:this.state.drafts)[this.state.active] || {}; }
     pref(key, value, write=false) { if(write){this.state.prefs[key]=value;this.save();}return this.state.prefs[key]; }
     readonly(page) { return !['queue','callbacks','deals'].includes(page); }
     name(id) { return this.data().managers.find(m=>m.id===id)?.name || 'Учебный сотрудник'; }
