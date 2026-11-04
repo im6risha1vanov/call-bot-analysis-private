@@ -300,6 +300,7 @@ let lastFocus = null;
 function openDrawer({title = '', sub = '', avatar = '', html = '', wide = false}) {
   lastFocus = document.activeElement;
   const dr = $('#drawer'), scrim = $('#scrim');
+  delete dr.dataset.learningNumber;
   dr.className = 'drawer' + (wide ? ' wide' : '');
   dr.innerHTML = `<div class="dr-h">${avatar ? ava(avatar) : ''}<div data-css="min-width:0"><h2 id="dr-title">${esc(title)}</h2>${sub ? `<span class="hint">${sub}</span>` : ''}</div><span class="sp"></span>
       <button class="x" type="button" id="dr-x" aria-label="Закрыть">${svg('x', '')}</button></div><div class="dr-b">${html}</div>`;
@@ -310,6 +311,7 @@ function openDrawer({title = '', sub = '', avatar = '', html = '', wide = false}
 }
 function closeDrawer() {
   const dr = $('#drawer'); if (!dr || !dr.classList.contains('open')) return;
+  document.dispatchEvent(new CustomEvent('crm-card-closed',{detail:{number:dr.dataset.learningNumber}}));
   dr.classList.remove('open'); $('#scrim').classList.remove('open');
   $$('audio', dr).forEach(a => a.pause());
   if (lastFocus && document.contains(lastFocus)) lastFocus.focus({preventScroll: true});
@@ -327,6 +329,7 @@ function modal(html, wide = false) {
   document.body.append(veil, box);
   setTimeout(() => { if (!box.contains(document.activeElement)) ($('.rvm-x', box) || $(FOCUSABLE, box))?.focus({preventScroll: true}); }, 0);
   const close = () => {
+    if(box.dataset.learningDeal)document.dispatchEvent(new CustomEvent('crm-deal-closed',{detail:{number:box.dataset.learningDeal}}));
     $$('audio', box).forEach(a => a.pause()); veil.remove(); box.remove(); document.removeEventListener('keydown', onKey, true);
     if (opener && document.contains(opener)) opener.focus({preventScroll: true}); // фокус туда, откуда окно открыли
   };

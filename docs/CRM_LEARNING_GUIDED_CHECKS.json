@@ -1,0 +1,53 @@
+{
+  "snapshot_utc": "2026-11-04T20:38:50.556545+00:00",
+  "branch": "feat/crm-learning-guided-programme",
+  "production_deployed": false,
+  "production_services_restarted": false,
+  "python_tests": {
+    "passed": 41,
+    "failed": 0,
+    "skipped": 0,
+    "provider_and_db_calls": "blocked by mocked dependencies"
+  },
+  "javascript_suites": {
+    "workspace": {
+      "passed": 17,
+      "mode": "socket-free real JS; DOM/event adapter where applicable",
+      "browser": false
+    },
+    "tabs_ui": {
+      "passed": 13,
+      "mode": "socket-free real JS; DOM/event adapter where applicable",
+      "browser": false
+    },
+    "floating": {
+      "passed": 12,
+      "mode": "socket-free real JS; DOM/event adapter where applicable",
+      "browser": false
+    }
+  },
+  "changed_javascript_syntax_checked": 11,
+  "secret_pattern_scan": {
+    "changed_files_matches": 0,
+    "scope": "files in this update, heuristic scan, no claim of full historical audit"
+  },
+  "real_browser": {
+    "status": "NOT RUN",
+    "exit_code": 2,
+    "reason": "Playwright/Chromium absent",
+    "screenshots": []
+  },
+  "manual_browser_remaining": [
+    "desktop placement and native select dropdown",
+    "light/dark rendering",
+    "physical mobile keyboard",
+    "AveronGPT and original tour visual interaction"
+  ],
+  "test_stand_listening": "not verified: TCP sockets unavailable in tool environment",
+  "limitations": [
+    "Local browser progress is not shared employee statistics.",
+    "Closing a read window indicates navigation, not proof of understanding.",
+    "Full programme is reset on each new classroom login."
+  ],
+  "source_backup_commit": "b19b3c10285336d44bcbe02dca5bdbef883d0f53"
+}

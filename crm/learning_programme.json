@@ -1,0 +1,571 @@
+{
+  "version": 1,
+  "manager": [
+    {
+      "id": "queue",
+      "title": "Очередь",
+      "page": "queue",
+      "description": "Здесь находятся клиенты для следующего обращения. Нужен «Учебный Кедр», УЧ-001.",
+      "steps": [
+        {
+          "action": "select_client",
+          "title": "Откройте «Учебный Кедр».",
+          "expected": {
+            "client": "targetClient"
+          },
+          "screen": {
+            "page": "queue",
+            "selector": "[data-next] .item"
+          },
+          "explain": "Здесь находятся клиенты для следующего обращения. Нужен «Учебный Кедр», УЧ-001."
+        },
+        {
+          "action": "save_outcome",
+          "title": "Нажмите «Не взял трубку»: итог сохраняется сразу.",
+          "expected": {
+            "client": "targetClient",
+            "outcome": "no_answer"
+          },
+          "screen": {
+            "page": "queue",
+            "selector": "[data-learning-target=\"outcome-grid\"], .outform:not(.hidden)"
+          },
+          "explain": "Недозвон — клиент не ответил. Отказ означает, что клиент ответил и отказался."
+        },
+        {
+          "action": "verify_outcome",
+          "title": "Проверьте итог в истории клиента.",
+          "expected": {},
+          "screen": {
+            "page": "queue",
+            "selector": "[data-learning-target=\"client-history\"]"
+          },
+          "explain": "Недозвон сразу появляется в истории клиента."
+        },
+        {
+          "action": "save_outcome",
+          "title": "Выберите «Перезвонить», дату, время и комментарий. Затем сохраните.",
+          "expected": {
+            "client": "targetClient",
+            "outcome": "callback",
+            "due_date": "callbackDate",
+            "due_time": "callbackTime",
+            "comment": "required"
+          },
+          "screen": {
+            "page": "queue",
+            "selector": "[data-learning-target=\"outcome-grid\"], .outform:not(.hidden)"
+          },
+          "hint": "«Перезвонить»: {{callbackDate}} {{callbackTime}} ({{timezone}}). Комментарий — обсудить предложение.",
+          "explain": "Теперь учебный клиент ответил и просит обсудить предложение завтра в 15:00 по Москве. В полях укажите время CRM ({{timezone}})."
+        }
+      ]
+    },
+    {
+      "id": "callbacks",
+      "title": "Перезвоны",
+      "page": "callbacks",
+      "description": "Найдите «Учебный Кедр», УЧ-001, и нажмите «Перенести». Это задача из предыдущей вкладки.",
+      "steps": [
+        {
+          "action": "select_task",
+          "title": "Найдите только что созданную задачу.",
+          "expected": {
+            "task": "createdTask"
+          },
+          "screen": {
+            "page": "callbacks",
+            "selector": ".cb"
+          },
+          "explain": "Найдите «Учебный Кедр», УЧ-001, и нажмите «Перенести». Это задача из предыдущей вкладки."
+        },
+        {
+          "action": "move_task",
+          "title": "Клиент сообщил новое время. Перенесите эту же задачу.",
+          "expected": {
+            "task": "createdTask",
+            "due_date": "moveDate",
+            "due_time": "moveTime"
+          },
+          "screen": {
+            "page": "callbacks",
+            "selector": ".cb [data-move], .cb .move"
+          },
+          "hint": "Перенесите эту же задачу на {{moveDate}} в {{moveTime}}.",
+          "explain": "Клиент перенёс разговор на {{moveMoscowDate}} в 11:30 по Москве. Меняем срок той же задачи, а не создаём новую."
+        },
+        {
+          "action": "verify_task",
+          "title": "Проверьте новый срок, комментарий и отсутствие второй задачи.",
+          "expected": {},
+          "screen": {
+            "page": "callbacks",
+            "selector": "[data-learning-target=\"callback-list\"]"
+          },
+          "explain": "Комментарий и первоначальная договорённость остаются у одной задачи."
+        }
+      ]
+    },
+    {
+      "id": "deals",
+      "title": "Сделки",
+      "page": "deals",
+      "description": "История показывает последнее событие по сделке. Нужен «Учебный Кедр», УЧ-001.",
+      "steps": [
+        {
+          "action": "select_deal",
+          "title": "Откройте нужную сделку и прочитайте историю.",
+          "expected": {
+            "deal": "targetDeal"
+          },
+          "screen": {
+            "page": "deals",
+            "selector": "[data-learning-target=\"deal-list\"]"
+          },
+          "explain": "История показывает последнее событие по сделке. Нужен «Учебный Кедр», УЧ-001."
+        },
+        {
+          "action": "save_note",
+          "title": "Выберите «Заметка» и сохраните следующий шаг.",
+          "expected": {
+            "deal": "targetDeal",
+            "note": "expectedNote"
+          },
+          "screen": {
+            "page": "deals",
+            "selector": "[data-learning-target=\"deal-note\"], .rvm [data-form]"
+          },
+          "hint": "Добавьте «Заметку»: «{{expectedNote}}».",
+          "explain": "Следующий шаг фиксируется заметкой: действие, дата и время."
+        },
+        {
+          "action": "verify_history",
+          "title": "Откройте эту сделку ещё раз и проверьте заметку в истории.",
+          "expected": {},
+          "screen": {
+            "page": "deals",
+            "selector": ".rvm-body"
+          },
+          "explain": "После сохранения откройте сделку снова: заметка должна быть в истории."
+        }
+      ],
+      "compose": true
+    },
+    {
+      "id": "contracts",
+      "title": "Договоры",
+      "page": "deals",
+      "description": "Учебный документ связан с открытой сделкой. Проверка реквизитов и номер остаются локальными.",
+      "steps": [
+        {
+          "action": "prepare_contract",
+          "title": "Нажмите «Составить договор», проверьте реквизиты и сформируйте учебный документ.",
+          "expected": {
+            "deal": "targetDeal",
+            "company": "targetCompany",
+            "inn": "targetInn"
+          },
+          "screen": {
+            "page": "deals",
+            "selector": "[data-contract], #dg-name, #dg-inn, #dg-genBtn"
+          },
+          "hint": "Сверьте «Учебный Кедр», ИНН 0000000000, и сформируйте учебный договор.",
+          "explain": "Учебный документ связан с открытой сделкой. Проверка реквизитов и номер остаются локальными."
+        },
+        {
+          "action": "open_section",
+          "title": "Перейдите на вкладку «Договоры».",
+          "expected": {
+            "section": "contracts"
+          },
+          "screen": {
+            "page": "deals",
+            "selector": "[data-go=\"deals\"]"
+          },
+          "explain": "Создание документа записывает его в журнал. Отправка клиенту — отдельное рабочее действие."
+        },
+        {
+          "action": "select_document",
+          "title": "В журнале нажмите на созданную запись и проверьте связь со сделкой.",
+          "expected": {
+            "document": "createdDocument"
+          },
+          "screen": {
+            "page": "deals",
+            "selector": "[data-learning-target=\"contract-journal\"]"
+          },
+          "explain": "Строка журнала открывает связанную сделку: это способ проверить, кому подготовлен договор."
+        },
+        {
+          "action": "close_deal",
+          "title": "Посмотрите связь с договором и закройте карточку крестиком.",
+          "hint": "Посмотрите связь с договором и закройте карточку крестиком.",
+          "explain": "Документ создан для «Учебного Кедра». В этом упражнении ничего не скачивается и не отправляется.",
+          "expected": {
+            "deal": "targetDeal"
+          },
+          "screen": {
+            "selector": ".rvm-x"
+          }
+        }
+      ],
+      "arg": "contracts",
+      "module": "contracts"
+    },
+    {
+      "id": "calls",
+      "title": "Звонки",
+      "page": "calls",
+      "description": "Период относится к списку звонков; сегодня учебного разговора здесь нет.",
+      "steps": [
+        {
+          "action": "set_period",
+          "title": "Выберите период «7 дней».",
+          "expected": {
+            "period": "7"
+          },
+          "screen": {
+            "page": "calls",
+            "selector": "[data-seg=\"period\"]"
+          },
+          "explain": "Период относится к списку звонков; сегодня учебного разговора здесь нет."
+        },
+        {
+          "action": "select_call",
+          "title": "Откройте нужный разговор.",
+          "expected": {
+            "call": "call-1",
+            "period": "7"
+          },
+          "screen": {
+            "page": "calls",
+            "selector": "[data-learning-target=\"call-list\"], [data-review]"
+          },
+          "hint": "Откройте разбор звонка «Учебный Кедр» от {{callDate}}.",
+          "explain": "В разборе отдельно указаны результат разговора и то, что стоит улучшить."
+        },
+        {
+          "action": "close_review",
+          "title": "Прочитайте разбор и закройте его крестиком.",
+          "hint": "Прочитайте разбор и закройте его крестиком.",
+          "explain": "Предложение отправить согласовано, но дата продолжения не назначена. В следующем разговоре согласуйте время.",
+          "expected": {
+            "call": "call-1"
+          },
+          "screen": {
+            "selector": ".rvm-x"
+          }
+        }
+      ]
+    },
+    {
+      "id": "reports",
+      "title": "Отчёты",
+      "page": "reports",
+      "description": "В ленте нет фильтра периода: личный итог выбирают по дате самого сообщения.",
+      "steps": [
+        {
+          "action": "select_report",
+          "title": "Найдите личный итог за заданную дату.",
+          "expected": {
+            "report": "personalReport"
+          },
+          "screen": {
+            "page": "reports",
+            "selector": "[data-learning-target=\"report-feed\"]"
+          },
+          "hint": "Найдите личный итог дня от {{reportDate}}.",
+          "explain": "В ленте нет фильтра периода: личный итог выбирают по дате самого сообщения."
+        }
+      ]
+    }
+  ],
+  "director": [
+    {
+      "id": "summary",
+      "title": "Сводка",
+      "page": "summary",
+      "description": "Сводка показывает результаты отдела за выбранный период.",
+      "steps": [
+        {
+          "action": "set_period",
+          "title": "Выберите «7 дней».",
+          "expected": {
+            "period": "7"
+          },
+          "screen": {
+            "page": "summary",
+            "selector": "[data-seg=\"period\"]"
+          },
+          "explain": "Сводка показывает результаты отдела за выбранный период."
+        },
+        {
+          "action": "set_manager",
+          "title": "Выберите Бориса.",
+          "expected": {
+            "manager": "targetManager"
+          },
+          "screen": {
+            "page": "summary",
+            "selector": "[data-seg=\"ext\"]"
+          },
+          "hint": "В переключателе менеджеров выберите Бориса Учебного.",
+          "explain": "Показатели меняются вместе с сотрудником. Сравнивайте их за один и тот же период."
+        }
+      ]
+    },
+    {
+      "id": "calls",
+      "title": "Звонки",
+      "page": "calls",
+      "description": "Сначала ограничьте список нужным сотрудником.",
+      "steps": [
+        {
+          "action": "set_manager",
+          "title": "Выберите Бориса.",
+          "expected": {
+            "manager": "targetManager"
+          },
+          "screen": {
+            "page": "calls",
+            "selector": "[data-ext-pick]"
+          },
+          "hint": "В фильтре «Все менеджеры» выберите Бориса Учебного.",
+          "explain": "Сначала ограничьте список нужным сотрудником."
+        },
+        {
+          "action": "set_period",
+          "title": "Выберите «7 дней».",
+          "expected": {
+            "period": "7"
+          },
+          "screen": {
+            "page": "calls",
+            "selector": "[data-seg=\"period\"]"
+          },
+          "explain": "Период и сотрудник вместе определяют выборку разговоров."
+        },
+        {
+          "action": "select_call",
+          "title": "Откройте разговор Бориса.",
+          "expected": {
+            "call": "call-1",
+            "period": "7",
+            "manager": "targetManager"
+          },
+          "screen": {
+            "page": "calls",
+            "selector": "[data-learning-target=\"call-list\"], [data-review]"
+          },
+          "explain": "Нужен разговор Бориса с «Учебным Кедром», УЧ-001, от {{callDate}}."
+        },
+        {
+          "action": "close_review",
+          "title": "Прочитайте разбор и закройте его крестиком.",
+          "hint": "Прочитайте разбор и закройте его крестиком.",
+          "explain": "Материалы согласованы, но время следующего разговора не назначено. Это конкретная тема для обратной связи.",
+          "expected": {
+            "call": "call-1"
+          },
+          "screen": {
+            "selector": ".rvm-x"
+          }
+        }
+      ]
+    },
+    {
+      "id": "callbacks",
+      "title": "Перезвоны",
+      "page": "callbacks",
+      "description": "Проверьте задачи именно Бориса, а не всего отдела.",
+      "steps": [
+        {
+          "action": "set_manager",
+          "title": "Выберите Бориса.",
+          "expected": {
+            "manager": "targetManager"
+          },
+          "screen": {
+            "page": "calls",
+            "selector": "[data-ext-pick]"
+          },
+          "hint": "В фильтре менеджеров выберите Бориса Учебного.",
+          "explain": "Проверьте задачи именно Бориса, а не всего отдела."
+        },
+        {
+          "action": "select_task",
+          "title": "Найдите просроченный перезвон.",
+          "expected": {
+            "task": "overdueTask",
+            "open_context": true
+          },
+          "screen": {
+            "page": "callbacks",
+            "selector": ".cb"
+          },
+          "explain": "Нужен «Учебный Кедр», УЧ-001, срок {{overdueDate}} 10:00. «Позвонить» здесь сначала открывает карточку, звонок не начинается."
+        },
+        {
+          "action": "close_card",
+          "title": "Посмотрите историю клиента и закройте карточку крестиком.",
+          "hint": "Посмотрите историю клиента и закройте карточку крестиком.",
+          "explain": "Клиент ждёт обсуждения предложения. Для контроля не нужно переносить или закрывать его задачу.",
+          "expected": {
+            "task": "overdueTask"
+          },
+          "screen": {
+            "selector": "#dr-x"
+          }
+        }
+      ]
+    },
+    {
+      "id": "deals",
+      "title": "Сделки",
+      "page": "deals",
+      "description": "Список «Зависшие» помогает найти сделки без продвижения.",
+      "steps": [
+        {
+          "action": "filter_deals",
+          "title": "Выберите «Зависшие».",
+          "expected": {
+            "filter": "stalled"
+          },
+          "screen": {
+            "page": "deals",
+            "selector": "[data-seg=\"show\"]"
+          },
+          "explain": "Список «Зависшие» помогает найти сделки без продвижения."
+        },
+        {
+          "action": "select_deal",
+          "title": "Откройте указанную сделку.",
+          "expected": {
+            "deal": "targetDeal",
+            "filter": "stalled"
+          },
+          "screen": {
+            "page": "deals",
+            "selector": "[data-learning-target=\"deal-list\"]"
+          },
+          "explain": "Нужен «Учебный Кедр», УЧ-001. В истории видны этап и последнее действие."
+        },
+        {
+          "action": "close_deal",
+          "title": "Сверьте этап и историю, затем закройте карточку крестиком.",
+          "hint": "Сверьте этап и историю, затем закройте карточку крестиком.",
+          "explain": "Этап — «Telegram или почта», материалы отправлены, следующий шаг не зафиксирован. Причина застоя неизвестна.",
+          "expected": {
+            "deal": "targetDeal"
+          },
+          "screen": {
+            "selector": ".rvm-x"
+          }
+        }
+      ]
+    },
+    {
+      "id": "reports",
+      "title": "Отчёты",
+      "page": "reports",
+      "description": "Найдите недельный итог за {{weekStart}}–{{weekEnd}}: в нём отмечена работа Бориса.",
+      "steps": [
+        {
+          "action": "select_report",
+          "title": "Откройте отчёт за указанный период.",
+          "expected": {
+            "report": "weeklyReport"
+          },
+          "screen": {
+            "page": "reports",
+            "selector": "[data-learning-target=\"report-feed\"]"
+          },
+          "hint": "Откройте «Сводку за неделю» за {{weekStart}}–{{weekEnd}}.",
+          "explain": "Найдите недельный итог за {{weekStart}}–{{weekEnd}}: в нём отмечена работа Бориса."
+        }
+      ]
+    },
+    {
+      "id": "staff",
+      "title": "Сотрудники",
+      "page": "staff",
+      "description": "Карточка сотрудника помогает перейти от вывода в отчёте к конкретным примерам.",
+      "steps": [
+        {
+          "action": "select_person",
+          "title": "Перейдите в «Сотрудники» и откройте Бориса.",
+          "expected": {
+            "manager": "targetManager"
+          },
+          "screen": {
+            "page": "staff",
+            "selector": "[data-learning-target=\"staff-list\"]"
+          },
+          "explain": "Карточка сотрудника помогает перейти от вывода в отчёте к конкретным примерам."
+        },
+        {
+          "action": "select_call",
+          "title": "Откройте подтверждающий пример звонка.",
+          "expected": {
+            "call": "call-weekly",
+            "person": "targetManager"
+          },
+          "screen": {
+            "page": "calls",
+            "selector": "[data-learning-target=\"call-list\"], [data-review]"
+          },
+          "explain": "Откройте пример в блоке «Дата продолжения не согласована»."
+        },
+        {
+          "action": "close_review",
+          "title": "Прочитайте пример и закройте разбор крестиком.",
+          "hint": "Прочитайте пример и закройте разбор крестиком.",
+          "explain": "В отчёте и примере одна тема: согласование времени продолжения. Обсуждайте с сотрудником конкретную реплику.",
+          "expected": {
+            "call": "call-weekly"
+          },
+          "screen": {
+            "selector": ".rvm-x"
+          }
+        }
+      ]
+    },
+    {
+      "id": "settings",
+      "title": "Настройки",
+      "page": "settings",
+      "description": "В настройках находятся промты и учётные записи. Для знакомства ничего менять не требуется.",
+      "steps": [
+        {
+          "action": "visit_page",
+          "title": "Откройте вкладку «Доступы».",
+          "hint": "Откройте вкладку «Доступы».",
+          "explain": "В настройках находятся промты и учётные записи. Для знакомства ничего менять не требуется.",
+          "expected": {
+            "page": "settings",
+            "arg": "access"
+          },
+          "screen": {
+            "selector": "[data-tab=\"access\"]"
+          }
+        }
+      ]
+    },
+    {
+      "id": "auto",
+      "title": "Автоматизации",
+      "page": "auto",
+      "description": "Автоматизации связывают события и действия. Здесь достаточно посмотреть раздел; запускать правила не нужно.",
+      "steps": [],
+      "module": "automations"
+    },
+    {
+      "id": "robot",
+      "title": "Робот",
+      "page": "robot",
+      "description": "В разделе находятся кампании и звонки робота. Для знакомства не запускайте кампанию и не звоните.",
+      "steps": [],
+      "module": "robot"
+    }
+  ]
+}

@@ -82,7 +82,9 @@ def context(who, firm: dict, zone: str, lesson_id: str | None = None, *, now=Non
         if selected is None or not selected['available']:
             raise web.HTTPForbidden(reason='Урок недоступен вашей роли или компании.')
     return {'version': all_lessons['version'], 'role': role, 'scope': scope, 'modules': modules,
-            'clock': clock_for(zone, now), 'lessons': lessons, 'progress': 'browser_local_only',
+            'clock': clock_for(zone, now), 'lessons': lessons,
+            'programme': [tab for tab in json.loads((ROOT / 'learning_programme.json').read_text(encoding='utf-8'))[role]
+                          if not tab.get('module') or tab['module'] in modules], 'progress': 'browser_local_only',
             'work_readonly': bool(getattr(who, 'test', False)), 'practice_allowed': True}
 
 

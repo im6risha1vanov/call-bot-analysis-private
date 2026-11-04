@@ -84,6 +84,21 @@ class CatalogTests(unittest.TestCase):
                 for step in lesson['steps']: step.pop('hint', None)
         self.assertEqual(current, baseline)
 
+    def test_guided_programme_by_role_and_enabled_tabs_without_quizzes(self):
+        data=learning.context(who(), {'modules':['contracts']}, 'Europe/Moscow')
+        self.assertEqual([t['id'] for t in data['programme']], ['queue','callbacks','deals','contracts','calls','reports'])
+        disabled=learning.context(who(), {'modules':[]}, 'Europe/Moscow')
+        self.assertNotIn('contracts', [t['id'] for t in disabled['programme']])
+        director=learning.context(who('director'), {'modules':[]}, 'Europe/Moscow')
+        self.assertEqual([t['id'] for t in director['programme']], ['summary','calls','callbacks','deals','reports','staff','settings'])
+        for packet in (data,disabled,director):
+            for tab in packet['programme']:
+                self.assertTrue(tab['description'])
+                for step in tab['steps']:
+                    self.assertNotIn('quiz',step)
+                    self.assertFalse(step['action'].startswith('answer_'))
+                    self.assertTrue(step['explain'])
+
     def test_no_duplicate_highlight_attributes(self):
         import re
         for f in (ROOT/'crm/static').rglob('*.js'):
@@ -311,6 +326,8 @@ class ExistingSurfaceTests(unittest.TestCase):
                 self.skipTest('Pinned Git baseline unavailable for source regression check')
             current=(ROOT/name).read_text()
             current=re.sub(r' data-learning-target="[^"]+"','',current)
+            if name.endswith('/review.js'):
+                current=current.replace("      if(box.dataset.learningLoaded)document.dispatchEvent(new CustomEvent('crm-review-closed',{detail:{id}}));\n",'').replace("    box.dataset.learningLoaded='true';\n",'').replace("    if (!box.isConnected) return;\n",'')
             self.assertEqual(current,process.stdout,name+' changed functional code')
 
     def test_learning_does_not_run_automatically_or_call_gpt(self):

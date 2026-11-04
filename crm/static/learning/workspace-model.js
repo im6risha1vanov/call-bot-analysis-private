@@ -9,10 +9,26 @@
   const ext = id => id === 'boris' ? '102' : '101';
   const manager = value => value === '102' ? 'boris' : value === '101' ? 'anna' : '';
   const labels = {no_answer:'Не взял трубку',callback:'Перезвонить',not_interested:'Отказ',meeting:'Назначил встречу',proposal:'Отправил КП',interested:'Интерес, думает',bad_number:'Неверный номер'};
+  const ordinal=['один','два','три','четыре','пять','шесть','семь','восемь','девять'];
+  function programme(context) {
+    const tabs=copy(context.programme||[]).filter(t=>!t.module||context.modules.includes(t.module));
+    if(!tabs.length)return null;
+    const steps=[];
+    tabs.forEach((t,i)=>{
+      t.start=steps.length;t.label='Урок '+(ordinal[i]||String(i+1))+'. '+t.title;
+      steps.push(...t.steps);
+      const next=tabs[i+1],page=next?.page||'learning',arg=next?.arg||null;
+      const compose=t.compose&&next?.id==='contracts';
+      if(t.compose&&!compose)steps.push({action:'close_deal',title:'Закройте карточку сделки крестиком.',hint:'Закройте карточку сделки крестиком.',explain:'Следующий шаг сохранён в истории сделки.',expected:{deal:'targetDeal'},screen:{selector:'.rvm-x'}});
+      steps.push({action:'visit_page',title:'Откройте «'+(next?.title||'Обучение')+'».',hint:compose?'В карточке нажмите «Составить договор».':'Откройте «'+(next?.title||'Обучение')+'».',explain:(!t.steps.length?t.description: t.id==='summary'?'Перед переходом посмотрите «Разговоров с результатом»: это цифра Бориса за 7 дней.':t.id==='reports'?'Прочитайте открытый отчёт: рекомендации связаны с выбранным периодом.':t.id==='settings'?'Здесь управляют учётными записями. Для знакомства не создавайте доступ и не меняйте пароль.':'Действие выполнено. '+(next?'Продолжим в следующей вкладке.':'Вернитесь к программе — теперь можно выбирать отдельные уроки.')),expected:{page,...(arg?{arg}:{})},screen:{selector:compose?'[data-contract]':'#nav [data-go="'+page+'"]'}});
+      t.end=steps.length;
+    });
+    return {id:'programme_'+context.role,role:context.role,kind:'practice',version:'tabs-1:'+tabs.map(t=>t.id).join(','),available:true,title:'Обучение по вкладкам',result:'Обучение пройдено. Теперь доступны отдельные уроки по вкладкам.',guide:[{page:tabs[0].page,arg:tabs[0].arg||null}],tabs,steps};
+  }
   class Classroom {
     constructor(context, storage) {
       if (!context || !context.entry || !['manager','director'].includes(context.role) || !context.scope) throw new Error('Откройте учебную учётку из раздела «Обучение».');
-      this.context = copy(context); this.storage = storage; this.page = 'learning'; this.arg = null; this.changed = () => {};
+      this.context = copy(context); this.programme=programme(this.context); this.storage = storage; this.page = 'learning'; this.arg = null; this.changed = () => {};
       this.prefix = 'averon-classroom:v2:' + context.scope + ':' + context.role + ':';
       this.key = this.prefix + context.entry;
       // Delete only this account/company/role's older entries, never CRM preferences.
@@ -25,6 +41,9 @@
         if (!lesson?.available || !E.restore(attempt, lesson, context)) delete this.state.attempts[id];
       }
       if (this.state.active && !this.lesson(this.state.active)?.available) this.state.active = null;
+      this.state.course ||= {completed:false,snapshots:{}};
+      if(this.programme&&!this.state.attempts[this.programme.id])this.state.course={completed:false,snapshots:{}};
+      if(!this.state.attempts[this.programme?.id]?.completed)this.state.course.completed=false;
       this.state.presenters ||= {}; this.state.previews ||= {}; this.state.showDrafts ||= {};
       for(const [id,p] of Object.entries(this.state.presenters)) {
         const a=this.state.attempts[id],l=this.lesson(id);
@@ -36,7 +55,47 @@
       this.base = E.fixtures(7, context.role, context.clock);
       this.save();
     }
-    lesson(id) { return this.context.lessons.find(l => l.id === id && l.role === this.context.role); }
+    lesson(id) {
+      if(this.programme&&id===this.programme.id)return this.programme;
+      if(this.programme&&id==='replay_'+this.context.role){
+        const p={...this.programme,steps:[...this.programme.steps]},limit=this.state?.course?.limit;
+        if(limit){const st=p.steps[limit-1];p.steps[limit-1]={...st,hint:'Вернитесь во вкладку «Обучение».',title:'Вернитесь во вкладку «Обучение».',expected:{page:'learning'},screen:{selector:'#nav [data-go="learning"]'},explain:'Урок пройден. В программе можно повторить любую другую вкладку.'};
+          const tab=this.programme.tabs.find(t=>t.end===limit);
+          if(tab?.compose&&this.context.modules.includes('contracts'))p.steps[limit-1]={action:'close_deal',hint:'Закройте карточку сделки крестиком.',title:'Закройте карточку сделки крестиком.',expected:{deal:'targetDeal'},screen:{selector:'.rvm-x'},explain:'Заметка сохранена. Вернёмся к программе.'};
+        }
+        return p;
+      }
+      return this.context.lessons.find(l=>l.id===id&&l.role===this.context.role);
+    }
+    inProgramme() { return !!this.programme&&[this.programme.id,'replay_'+this.context.role].includes(this.state.active); }
+    courseDone() { return !!this.state.attempts[this.programme?.id]?.completed; }
+    tab() { const s=this.current();return this.programme?.tabs.find(t=>s&&s.step>=t.start&&s.step<t.end)||this.programme?.tabs.at(-1); }
+    finished() { return !!this.current()&&(this.current().completed || (this.inProgramme()&&this.state.active.startsWith('replay_')&&this.current().step>=this.state.course.limit)); }
+    startCourse() {
+      if(!this.programme)throw new Error('Программа недоступна. Обновите тестовый стенд.');
+      this.start(this.programme.id,false,{manual:false});delete this.state.presenters[this.state.active];
+      this.state.course.limit=null;this.checkpoint();this.save();return this.tab();
+    }
+    startTab(id) {
+      if(!this.courseDone())throw new Error('Сначала пройдите всю программу.');
+      const t=this.programme.tabs.find(t=>t.id===id),base=t&&this.state.course.snapshots[id];
+      if(!t||!E.restore(base,this.programme,this.context))throw new Error('Урок недоступен или сохранённая ситуация отсутствует.');
+      const key='replay_'+this.context.role,s=copy(base),seed=root.crypto.getRandomValues(new Uint32Array(1))[0];
+      s.id=contextId(this.context.entry,seed);s.feedback='';
+      if(['summary','calls','callbacks'].includes(t.id)){s.ui.manager='';s.ui.period='today';}
+      if(t.id==='calls')s.ui.selectedCall=null;
+      if(t.id==='callbacks')s.ui.selectedTask=null;
+      if(t.id==='deals'){s.ui.selectedDeal=null;s.ui.dealFilter=null;}
+      if(t.id==='reports')s.ui.selectedReport=null;
+      if(t.id==='staff'){s.ui.selectedPerson=null;s.ui.selectedCall=null;}this.state.attempts[key]=s;this.state.drafts[key]={};delete this.state.presenters[key];
+      this.touchedStep=null;this.state.active=key;this.state.paused=false;this.state.mode='practice';this.state.course.limit=t.end;this.save();this.changed();return t;
+    }
+    checkpoint() {
+      if(!this.inProgramme()||this.state.active!==this.programme.id)return;
+      const a=this.current(),t=this.programme.tabs.find(t=>t.start===a.step);
+      if(t&&!this.state.course.snapshots[t.id])this.state.course.snapshots[t.id]=copy(a);
+      this.state.course.completed=a.completed;
+    }
     current() { return this.state.attempts[this.state.active] || null; }
     data() { return this.showing() ? this.base : this.current()?.data || this.base; }
     showing() { return this.state.mode === 'show' || this.lesson(this.state.active)?.kind === 'guide'; }
@@ -44,7 +103,7 @@
     presenter() { return this.state.presenters[this.state.active] || null; }
     visibleStep() { return this.presenter()?.manual ? this.presenter().cursor : this.current()?.step; }
     awaiting() { return !this.showing()&&!!this.presenter()?.pending; }
-    touch() { if(this.showing())return;const p=this.presenter();if(p){p.touched=true;this.save();} }
+    touch() { if(this.showing())return;const p=this.presenter();if(p)p.touched=true;this.touchedStep=this.current()?.step;this.save(); }
     confirm(id, cursor, attemptId) {
       const p=this.presenter(),a=this.current();
       if(this.state.paused || this.showing() || this.state.active!==id || !p?.pending || p.cursor!==cursor || a.id!==attemptId)return false;
@@ -90,11 +149,11 @@
           s=p.pending.before;
         } else {if(strict)throw new Error('Этот шаг выполнен. Нажмите «Далее →».');return false;}
       }
-      if(s.completed){if(strict)throw new Error('Урок уже пройден. Для новой попытки выберите «Пройти заново».');return false;}
+      if(this.finished()){if(strict)throw new Error('Урок уже пройден. Для новой попытки выберите «Пройти заново».');return false;}
       const result=E.apply(lesson,this.context,s,action);
       // Initial/background reads must not show errors before any user choice.
-      if(p?.manual && !result.ok && !p.touched && !strict)return false;
-      this.state.attempts[lesson.id]=result.state;
+      if(!result.ok&&!strict&&((p?.manual&&!p.touched)||(this.inProgramme()&&this.touchedStep!==s.step)))return false;
+      this.state.attempts[this.state.active]=result.state;this.checkpoint();
       if(p?.manual) {
         if(result.advanced)p.pending={from:s.step,before:copy(s),action:copy(action)};
         else if(s.step===p.cursor)p.pending=null;
@@ -105,10 +164,20 @@
     }
     observe(type, values={}) {
       const l=this.lesson(this.state.active),s=this.current();
-      if (s && !this.showing() && ((!s.completed && l.steps[s.step].action===type) || (this.presenter()?.pending && l.steps[this.visibleStep()].action===type))) return this.action(type==='open_section'?{type:'navigate',...values}:{type,...values});
+      if (s && !this.finished() && !this.showing() && ((!s.completed && l.steps[s.step].action===type) || (this.presenter()?.pending && l.steps[this.visibleStep()].action===type))) return this.action(type==='open_section'?{type:'navigate',...values}:{type,...values});
       return false;
     }
-    navigation(page,arg=null) { this.page=page; this.arg=arg; const section=page==='deals'&&arg==='contracts'?'contracts':page; if(['queue','callbacks','deals','contracts','calls','reports','summary','staff'].includes(section)&&this.current()&&!this.current().completed&&!this.state.paused&&!this.awaiting()&&!this.showing())this.action({type:'navigate',section}); }
+    navigation(page,arg=null) {
+      this.page=page;this.arg=arg;const a=this.current();
+      if(!a||this.state.paused||this.finished()||this.showing()||this.awaiting())return;
+      if(this.inProgramme()){
+        const st=this.lesson(this.state.active).steps[a.step];
+        if(page==='learning'&&!(st.action==='visit_page'&&st.expected.page==='learning')){this.pause();return;}
+        this.observe('visit_page',{page,arg});return;
+      }
+      const section=page==='deals'&&arg==='contracts'?'contracts':page;
+      if(['queue','callbacks','deals','contracts','calls','reports','summary','staff'].includes(section))this.action({type:'navigate',section});
+    }
     draft(key,value) { if(!this.state.active)return; ((this.showing()?this.state.showDrafts:this.state.drafts)[this.state.active] ||= {})[key]=String(value).slice(0,2000);this.save(); }
     drafts() { return (this.showing()?this.state.showDrafts:this.state.drafts)[this.state.active] || {}; }
     pref(key, value, write=false) { if(write){this.state.prefs[key]=value;this.save();}return this.state.prefs[key]; }
@@ -131,7 +200,7 @@
     report(r) {return {...r,title:r.title+' · '+r.from+' — '+r.to,who:this.name(r.manager),at:r.to+'T18:00:00+03:00',note:'Учебный пример',html:'<p>'+safe(r.text)+'</p>',calls:r.calls.map(id=>({id,label:'Учебный разбор'}))};}
     restoreContractDeal() {
       const a=this.current(),l=this.lesson(this.state.active);
-      if(!a||a.completed||l.steps[a.step].action!=='prepare_contract'||this.drafts().$contractOpened!=='true')return null;
+      if(!a||a.completed||l.steps[a.step].action!=='prepare_contract'||(!this.inProgramme()&&this.drafts().$contractOpened!=='true'))return null;
       const d=a.data.deals.find(d=>d.id===a.ui.selectedDeal);
       return d ? {phone:number(d.client),number:number(d.client),title:d.company,missing:[]} : null;
     }
@@ -201,7 +270,7 @@
         const m=this.person(q.get('person')||'101');if(!m||!this.owned(m.id))throw new Error('Сотрудник недоступен.');
         // Only opening the full employee page counts; background loss hints don't.
         if(this.page==='staff'&&this.arg===ext(m.id))this.observe('select_person',{manager:m.id});
-        const stats={talks:17,success:4,hot:2};return {ext:ext(m.id),name:m.name,role_title:'Менеджер',manager:true,kitchen:false,access:null,dials:{week:{dials:80},prev:{dials:60},month:{dials:180}},periods:{week:stats,prev:{talks:10,success:2}},memory:[],memory_on:false,mistakes:[{label:'Дата продолжения не согласована',month:4,examples:[{id:this.state.active==='d5'?'call-weekly':'call-1',at:ctx.clock.week_end}]}],positives:[]};
+        const stats={talks:17,success:4,hot:2};return {ext:ext(m.id),name:m.name,role_title:'Менеджер',manager:true,kitchen:false,access:null,dials:{week:{dials:80},prev:{dials:60},month:{dials:180}},periods:{week:stats,prev:{talks:10,success:2}},memory:[],memory_on:false,mistakes:[{label:'Дата продолжения не согласована',month:4,examples:[{id:(this.state.active==='d5'||this.current()?.ui.selectedReport==='report-weekly')?'call-weekly':'call-1',at:ctx.clock.week_end}]}],positives:[]};
       }
       if(p==='/api/access'){this.requireDirector();return {invites:[],directors:[]};}
       if(p==='/api/prompts'){this.requireDirector();return {kinds:[{kind:'review',title:'Разбор звонков'}]};}

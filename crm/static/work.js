@@ -145,6 +145,7 @@ function workCard(el, item, onDone, opts = {}) {
 // Карточка номера в выдвижной панели: из перезвонов, журнала звонков, разбора.
 function workDrawer(item, {ext = null, onDone = null} = {}) {
   const body = openDrawer({title: phone(item.number), sub: esc(item.title || item.manager || '')});
+  body.closest('#drawer').dataset.learningNumber=item.number;
   workCard(body, item, k => { closeDrawer(); onDone && onDone(k); }, {ext, drawer: true});
 }
 

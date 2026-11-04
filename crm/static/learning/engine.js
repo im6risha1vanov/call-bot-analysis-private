@@ -70,8 +70,15 @@
     if (action.type === 'set_period') s.ui.period = action.period;
     if (action.type === 'set_manager') s.ui.manager = action.manager;
     if (action.type === 'filter_deals') s.ui.dealFilter = action.filter;
-    if (action.type !== st.action) return bad('Сейчас: ' + st.title + ' «Далее» не заменяет рабочее действие.');
+    if (action.type !== st.action) return bad('Сейчас: ' + st.title);
     switch (action.type) {
+    case 'visit_page':
+      if(action.page!==expected('page')||(e.arg&&action.arg!==expected('arg')))error='Откройте вкладку, указанную в подсказке.';
+      else {s.ui.section=action.page;s.ui.arg=action.arg||null;}
+      break;
+    case 'close_review':if(s.ui.selectedCall!==expected('call')||action.call!==expected('call'))error='Сначала откройте указанный разбор.';break;
+    case 'close_deal':if(s.ui.selectedDeal!==expected('deal')||action.deal!==expected('deal'))error='Сначала откройте нужную сделку.';break;
+    case 'close_card':if(s.ui.selectedTask!==expected('task')||s.ui.taskContext!==expected('task')||action.task!==expected('task'))error='Откройте историю нужного перезвона.';break;
     case 'set_period': if (action.period !== expected('period')) error = 'Выберите период «7 дней», затем повторите действие.'; break;
     case 'set_manager': if (action.manager !== expected('manager')) error = 'Выберите Бориса Учебного: сейчас выбран другой сотрудник.'; break;
     case 'filter_deals': if (action.filter !== expected('filter')) error = 'Нужен список «Зависшие», а не все сделки.'; break;
@@ -85,7 +92,7 @@
       else if (e.due_date && (action.due_date !== expected('due_date') || action.due_time !== expected('due_time'))) error = 'Дата или время не совпадают с договорённостью. В CRM: ' + r.callbackDate + ' ' + r.callbackTime + ' (' + r.timezone + ').';
       else if (e.comment && text(action.comment).length < 4) error = 'Добавьте комментарий о том, что нужно обсудить предложение.';
       if (!error) {
-        s.data.outcomes.push({id: 'outcome-1', client: action.client, outcome: action.outcome, comment: text(action.comment), due_date: action.due_date || null, due_time: action.due_time || null});
+        s.data.outcomes.push({id: 'outcome-' + (s.data.outcomes.length+1), client: action.client, outcome: action.outcome, comment: text(action.comment), due_date: action.due_date || null, due_time: action.due_time || null});
         if (action.outcome === 'callback') { s.createdTask = 'task-created'; s.data.tasks.push({id: s.createdTask, client: action.client, manager: r.targetManager, due_date: action.due_date, due_time: action.due_time, original_date: action.due_date, original_time: action.due_time, note: text(action.comment)}); }
         s.ui.form = null; s.ui.draft = {};
       }
@@ -111,7 +118,7 @@
       break;
     case 'select_deal':
       row = find(s.data.deals, action.deal);
-      if (!row || action.deal !== expected('deal') || row.manager !== r.targetManager || (lesson.id === 'd4' && s.ui.dealFilter !== 'stalled')) error = 'Откройте нужную сделку «Учебный Кедр» в заданном списке.';
+      if (!row || action.deal !== expected('deal') || row.manager !== r.targetManager || ((lesson.id === 'd4'||e.filter) && s.ui.dealFilter !== (e.filter||'stalled'))) error = 'Откройте нужную сделку «Учебный Кедр» в заданном списке.';
       else { s.ui.selectedDeal = row.id; s.ui.section = 'deals'; }
       break;
     case 'save_note':
@@ -137,7 +144,7 @@
       break;
     case 'select_call':
       row = find(s.data.calls, action.call);
-      if (!row || action.call !== expected('call') || row.manager !== r.targetManager || (['m5', 'd2'].indexOf(lesson.id) >= 0 && s.ui.period !== '7') || (lesson.id === 'd2' && s.ui.manager !== r.targetManager) || (lesson.id === 'd5' && s.ui.selectedPerson !== r.targetManager)) error = 'Выбран другой разговор, менеджер или период. Нужен звонок УЧ-001 за 7 дней.';
+      if (!row || action.call !== expected('call') || row.manager !== r.targetManager || (['m5', 'd2'].indexOf(lesson.id) >= 0 && s.ui.period !== '7') || (lesson.id === 'd2' && s.ui.manager !== r.targetManager) || ((lesson.id === 'd5'||e.person) && s.ui.selectedPerson !== r.targetManager) || (e.period && s.ui.period!==expected('period')) || (e.manager && s.ui.manager!==expected('manager'))) error = 'Выбран другой разговор, менеджер или период. Нужен звонок УЧ-001 за 7 дней.';
       else { s.ui.selectedCall = row.id; s.ui.section = 'calls'; if (lesson.id === 'd5') { s.ui.period = '7'; s.ui.manager = r.targetManager; } }
       break;
     case 'answer_review':

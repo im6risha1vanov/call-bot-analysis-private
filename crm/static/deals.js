@@ -196,6 +196,7 @@ async function dealCard(ph, onChange) {
   let d;
   try { d = await api('/api/deals/' + encodeURIComponent(ph)); } catch (e) { $('h2', box).textContent = e.message; $('.rvm-body', box).remove(); return; }
   if (!box.isConnected) return;
+  box.dataset.learningDeal=ph;
   const ro = S.me.readonly;
   const acts = d.status === 'active' ? [
     ['presentation', 'Презентация проведена'], ['materials', 'Отправил материалы'], ['contract_sent', 'Договор отправлен'],

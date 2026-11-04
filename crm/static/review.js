@@ -62,6 +62,7 @@
     const opener = document.activeElement;
     document.body.append(veil, box);
     const close = () => {
+      if(box.dataset.learningLoaded)document.dispatchEvent(new CustomEvent('crm-review-closed',{detail:{id}}));
       const a = box.querySelector('audio'); if (a) a.pause(); veil.remove(); box.remove(); document.removeEventListener('keydown', onKey, true);
       if (opener && document.contains(opener)) opener.focus({preventScroll: true}); // фокус туда, откуда открыли разбор
     };
@@ -90,6 +91,8 @@
       box.innerHTML = `<header class="rvm-head"><div>${esc(e.message)}</div><button class="rvm-x" aria-label="Закрыть">×</button></header>`;
       return;
     }
+    if (!box.isConnected) return;
+    box.dataset.learningLoaded='true';
     box.innerHTML = body(r);
     // CRM добавляет в шапку свои кнопки (позвонить клиенту): static/calls.js.
     document.dispatchEvent(new CustomEvent('crm-review', {detail: {box, review: r, close}}));

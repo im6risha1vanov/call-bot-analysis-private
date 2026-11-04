@@ -1,3 +1,5 @@
+> Исторический этап. Актуальная программа: [CRM_LEARNING_GUIDED.md](CRM_LEARNING_GUIDED.md).
+
 # Плавающие подсказки обучения AveronCRM
 
 Дата: 4 ноября 2026. Рабочая копия: `/tmp/averon-crm-learning-20261104`.

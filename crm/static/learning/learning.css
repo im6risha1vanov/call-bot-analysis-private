@@ -68,3 +68,5 @@
 
 .learn-guide[data-placement="right"]::before,.learn-guide[data-placement="left"]::before{transform:translateY(-50%) rotate(45deg)}
 .learn-guide[data-placement="top"]::before,.learn-guide[data-placement="bottom"]::before{transform:translateX(-50%) rotate(45deg)}
+
+.learn-guide p.learn-explanation{font-size:12px;line-height:1.4;color:var(--muted);margin:7px 0 0}
