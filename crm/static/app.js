@@ -451,7 +451,7 @@ function shell() {
     <div class="main">
       ${S.me.support && !S.me.test ? `<div class="banner"><b>Вы вошли как ${esc(S.me.name || '')} · ${esc(ROLE_NAME[S.me.role] || '')} · «${esc(S.me.company || '')}»</b><span>Всё, что делаете, идёт от имени этой учётки.</span>${switchBtn().replace('class="ghost"', 'class="linkish"')}<a href="/support-exit">Вернуться к себе</a></div>`
         : S.me.support ? `<div class="banner"><b>Просмотр компании «${esc(S.me.company || '')}»</b><span>Глазами директора, только смотреть.</span><a href="/support-exit">Вернуться к себе</a></div>`
-        : S.me.test ? `<div class="banner"><b>Просмотр · ${esc(ROLE_NAME[S.me.role] || '')}</b><span>Только смотреть: звонки и изменения работают под своим логином.</span><a href="/test-exit">Сменить вход</a></div>` : ''}
+        : S.me.test ? `<div class="banner"><b>Просмотр · ${esc(ROLE_NAME[S.me.role] || '')}</b><span data-readonly-notice>Только смотреть: звонки и изменения работают под своим логином.</span><a href="/test-exit">Сменить вход</a></div>` : ''}
       <header class="top"><div class="top-in" id="top"></div></header>
       <main class="content" id="view"></main>
     </div></div>

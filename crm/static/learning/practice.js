@@ -2,7 +2,7 @@
    its API helper, work forms, dial handlers, contracts generator or AveronGPT. */
 (function () {
   'use strict';
-  var E = window.AveronLearningEngine, lesson, context, state, nonce, initialized = false;
+  var E = window.AveronLearningEngine, lesson, context, state, nonce, initialized = false, hints = false;
   var root = document.getElementById('exercise');
   function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]; }); }
   function el(selector) { return root.querySelector(selector); }
@@ -98,8 +98,15 @@
     var names = {queue: 'Очередь', callbacks: 'Перезвоны', deals: 'Сделки', calls: 'Звонки', reports: 'Отчёты', summary: 'Сводка', staff: 'Сотрудники', contracts: 'Договоры'};
     var nav = context.role === 'manager' ? ['queue', 'callbacks', 'deals', 'calls', 'reports'] : ['summary', 'calls', 'callbacks', 'deals', 'reports', 'staff'];
     if (context.modules.indexOf('contracts') >= 0) nav.push('contracts');
-    root.innerHTML = '<div class="learn-exercise"><header class="card learn-task"><div class="row"><b>Учебные данные · рабочие операции отключены</b><span class="sp"></span>' + button('Выйти из урока', 'exit') + '</div><h1>' + esc(lesson.title) + '</h1><h3>Рабочая ситуация</h3><p>' + esc(E.interpolate(lesson.situation, state)) + '</p><details><summary>Объяснение · можно пропустить</summary><p>' + esc(lesson.adaptation || 'Выполните действие в нужной записи. Учебные изменения сохраняются только в этой попытке, не в рабочей CRM.') + '</p></details><h2>Что сделать</h2><p>' + esc(state.completed ? lesson.result : lesson.steps[state.step].title) + '</p><p>Шаг ' + Math.min(state.step + 1, lesson.steps.length) + ' из ' + lesson.steps.length + '</p><p class="learn-feedback" data-feedback role="status" tabindex="-1">' + esc(state.feedback || 'Выполните действие сами. Переход по разделам не заменяет проверку.') + '</p></header>' + '<nav class="row learn-local-nav" aria-label="Учебные разделы">' + nav.map(function (k) { return button(names[k], 'navigate', k, ' aria-current="' + (state.ui.section === k ? 'page' : 'false') + '"'); }).join('') + '</nav>' + (state.completed ? card('Пройдено', '<p>' + esc(lesson.result) + '</p><p>Записи остались только в этом упражнении.</p>' + button('К программе обучения', 'exit')) : (routes[state.ui.section] || outcomes)() + question()) + '</div>';
+    root.innerHTML = '<div class="learn-exercise"><header class="card learn-task"><div class="row"><b>Учебные данные · изменения в упражнении разрешены</b><span class="sp"></span>' + button('Подсказать, где нажать', 'hint') + button('Выйти из урока', 'exit') + '</div><h1>' + esc(lesson.title) + '</h1><h3>Рабочая ситуация</h3><p>' + esc(E.interpolate(lesson.situation, state)) + '</p><details><summary>Объяснение · можно пропустить</summary><p>' + esc(lesson.adaptation || 'Выполните действие в нужной записи. Учебные изменения сохраняются только в этой попытке, не в рабочей CRM.') + '</p></details><h2>Что сделать</h2><p>' + esc(state.completed ? lesson.result : lesson.steps[state.step].title) + '</p><p>Шаг ' + Math.min(state.step + 1, lesson.steps.length) + ' из ' + lesson.steps.length + '</p><p class="learn-feedback" data-feedback role="status" tabindex="-1">' + esc(state.feedback || 'Выполните действие сами. Переход по разделам не заменяет проверку.') + '</p></header>' + '<nav class="row learn-local-nav" aria-label="Учебные разделы">' + nav.map(function (k) { return button(names[k], 'navigate', k, ' aria-current="' + (state.ui.section === k ? 'page' : 'false') + '"'); }).join('') + '</nav>' + (state.completed ? card('Пройдено', '<p>' + esc(lesson.result) + '</p><p>Записи остались только в этом упражнении.</p>' + button('К программе обучения', 'exit')) : (routes[state.ui.section] || outcomes)() + question()) + '</div>';
+    if (hints) showHint();
     height();
+  }
+  function showHint() {
+    var step = lesson.steps[state.step]; if (!step) return;
+    var selectors = {select_client: '[data-action="select_client"]', save_outcome: state.ui.form === 'outcome' ? '[data-action="save_callback"], [data-field="date"], [data-field="time"], [data-field="comment"]' : '[data-action="outcome"]', open_section: '[data-action="navigate"]', select_task: '[data-action="select_task"]', move_task: state.ui.form === 'move' ? '[data-action="move_task"]' : '[data-action="show_move"]', select_deal: '[data-action="select_deal"]', save_note: state.ui.form === 'note' ? '[data-action="save_note"]' : '[data-action="show_note"]', prepare_contract: state.ui.form === 'contract' ? '[data-action="prepare_contract"]' : '[data-action="show_contract"]', select_document: '[data-action="select_document"]', set_period: '[data-action="set_period"]', set_manager: '[data-field="managerFilter"]', select_call: '[data-action="select_call"]', select_report: '[data-action="select_report"]', select_person: '[data-action="select_person"], [data-action="navigate"]', filter_deals: '[data-action="filter_deals"]'};
+    var nodes = root.querySelectorAll(selectors[step.action] || '[data-action="' + step.action + '"]');
+    for (var i = 0; i < nodes.length; i++) nodes[i].classList.add('learn-action-hint');
   }
   root.addEventListener('change', function (event) {
     var input = event.target, key = input.getAttribute('data-field'); if (!key || !state) return;
@@ -113,6 +120,7 @@
   root.addEventListener('click', function (event) {
     var b = event.target.closest('[data-action]'); if (!b || !state) return;
     var type = b.getAttribute('data-action'), id = b.getAttribute('data-id');
+    if (type === 'hint') { hints = true; showHint(); return; }
     if (type === 'exit') { send('learning:exit'); return; }
     if (type === 'clients') { state.ui.selectedClient = null; state.revision++; render(); emit(); return; }
     if (type === 'outcome') {
@@ -140,7 +148,7 @@
     var packet = event.data; lesson = packet.lesson; context = packet.context; nonce = packet.nonce;
     state = E.restore(packet.state, lesson, context);
     if (!state) { root.textContent = 'Попытка недоступна. Откройте урок из программы обучения.'; return; }
-    initialized = true;
+    initialized = true; hints = packet.withHints === true;
     if (packet.theme) document.documentElement.setAttribute('data-theme', packet.theme);
     render(); emit();
   });

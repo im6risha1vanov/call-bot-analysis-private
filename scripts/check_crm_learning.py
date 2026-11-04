@@ -7,6 +7,9 @@ from contextlib import ExitStack
 import os
 from pathlib import Path
 import signal
+import shutil
+import subprocess
+import json
 import sys
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -16,6 +19,7 @@ sys.dont_write_bytecode = True
 
 
 def main():
+    node = os.environ.get("CRM_LEARNING_NODE") or shutil.which("node")
     import asyncpg
     import httpx
     import aiohttp
@@ -40,7 +44,19 @@ def main():
     if result.skipped:
         print('Acceptance checks are incomplete: skipped tests must be resolved.', file=sys.stderr)
         return 2
-    return 0 if result.wasSuccessful() else 1
+    if not result.wasSuccessful():
+        return 1
+    if not node:
+        print('Parent/iframe checks require Node. Set CRM_LEARNING_NODE to its executable.', file=sys.stderr)
+        return 2
+    check = subprocess.run([node, 'tests/js/learning_parent_test.cjs'],
+                           cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=60)
+    if check.returncode:
+        print(check.stdout, file=sys.stderr); print(check.stderr, file=sys.stderr)
+        return 1
+    cases = json.loads(check.stdout)['cases']
+    print(f'Parent/iframe DOM adapter: {len(cases)} cases passed (not a browser).')
+    return 0
 
 
 if __name__ == '__main__':

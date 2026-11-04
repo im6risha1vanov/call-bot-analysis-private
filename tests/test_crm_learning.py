@@ -100,6 +100,15 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(len(tour['guide']),3)
         self.assertEqual(tour['omitted_guide_modules'], ['automations','robot'])
 
+    def test_readonly_work_does_not_disable_fictional_practice(self):
+        for role in ('manager', 'director'):
+            account = who(role); account.test = True
+            data = learning.context(account, {'id': 1, 'modules': ['contracts']}, 'Europe/Moscow')
+            self.assertTrue(data['work_readonly'])
+            self.assertTrue(data['practice_allowed'])
+            self.assertTrue(all(l['available'] for l in data['lessons']))
+        self.assertFalse(learning.context(who(), {'id': 1, 'modules': []}, 'Europe/Moscow')['work_readonly'])
+
     def test_progress_scopes_differ_by_account_company_role(self):
         scopes = {learning.context(who(role, company, account), {'modules':[]}, 'Europe/Moscow')['scope']
                   for role,company,account in [('manager',1,101),('manager',1,102),('manager',2,101),('director',1,101)]}
@@ -161,6 +170,17 @@ class DemoRouterTests(unittest.IsolatedAsyncioTestCase):
             response = await self.request('GET','/learning/practice?lesson='+lesson,role)
             self.assertIsInstance(response,web.FileResponse)
             self.assertIn("connect-src 'none'",response.headers['Content-Security-Policy'])
+
+    async def test_demo_declares_work_readonly_and_allows_local_practice(self):
+        for role in ('manager', 'director'):
+            response = await self.request('GET', '/api/me', role)
+            me = json.loads(response.text)
+            self.assertTrue(me['readonly'])
+            self.assertFalse(me['can_dial'])
+            response = await self.request('GET', '/api/learning/context', role)
+            data = json.loads(response.text)
+            self.assertTrue(data['work_readonly'])
+            self.assertTrue(data['practice_allowed'])
 
     async def test_direct_links_client_wrong_role_and_disabled_module(self):
         for role,lesson in [('manager','d1'),('client','m1'),('manager-base','m4')]:

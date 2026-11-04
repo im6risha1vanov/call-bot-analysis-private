@@ -30,7 +30,7 @@ def identity(request):
     role, company, account = choices[token]
     actor = SimpleNamespace(client_id=company, telegram_user_id=account, extension='101', role='manager' if role == 'manager' else 'owner') if role != 'client' else None
     return SimpleNamespace(role=role, company=company, actor=actor, invite_id=account,
-                           test=False, support_by=None, modules=[] if token.endswith('-base') else MODULES)
+                           test=True, support_by=None, modules=[] if token.endswith('-base') else MODULES)
 
 
 def ctx(request, lesson=None):
@@ -84,7 +84,7 @@ async def fixture_api(request):
     team = [{'ext': '101', 'name': 'Анна Учебная'}, {'ext': '102', 'name': 'Борис Учебный'}]
     if route == 'me':
         return web.json_response({'name': 'Учебный сотрудник', 'company': 'Учебная компания', 'role': who.role,
-            'ext': '101', 'test': False, 'readonly': False, 'modules': who.modules,
+            'ext': '101', 'test': True, 'readonly': True, 'modules': who.modules,
             'privileged': who.role == 'director', 'can_dial': False, 'platform': False, 'switcher': False,
             'team': team if who.role == 'director' else [], 'outcomes': {'no_answer': 'Не взял трубку', 'callback': 'Перезвонить', 'meeting': 'Назначил встречу', 'proposal': 'Отправил КП', 'interested': 'Интерес, думает', 'not_interested': 'Отказ', 'bad_number': 'Неверный номер'}, 'needs_date': ['callback', 'meeting'], 'lead_status': {}, 'robot': False})
     if route == 'queue':

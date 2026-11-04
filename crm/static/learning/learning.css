@@ -30,3 +30,5 @@
 .learn-feedback{padding:12px;background:var(--accent-soft);border-radius:8px;overflow-wrap:anywhere}
 .learn-exercise :focus-visible,.learn-guide :focus-visible,.learn-catalog :focus-visible{outline:3px solid var(--accent);outline-offset:3px}
 @media(max-width:600px){.learn-guide{margin:8px;padding:12px}.learn-exercise{padding:6px}.learn-exercise .outform{grid-template-columns:1fr}.learn-frame{border-radius:8px}.learn-exercise .card{padding:12px}.learn-exercise h1{font-size:19px}}
+
+.learn-action-hint{outline:3px solid var(--accent);outline-offset:3px}

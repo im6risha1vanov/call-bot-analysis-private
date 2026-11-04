@@ -1,6 +1,6 @@
 {
   "date": "2026-11-04",
-  "unittest_count": 34,
+  "unittest_count": 36,
   "unittest_result": "passed",
   "javascript": {
     "lessons": [
@@ -69,7 +69,7 @@
       "passed": true
     }
   },
-  "test_environment": "Duktape + explicit DOM model + aiohttp socket-free request/router checks",
+  "test_environment": "Duktape + explicit child DOM model + two native Node VM contexts with parent/iframe DOM/event adapter + aiohttp socket-free request/router checks",
   "browser_layout_and_actual_csp_enforcement": "not_run: no browser and no loopback bind permission",
   "production_database": "not_used",
   "production_services_restarted": false,
@@ -78,5 +78,132 @@
     "first_party_js_syntax_files": 27,
     "same_ui_harness": "passed",
     "actual_browser": false
+  },
+  "parent_iframe": {
+    "mode": "two VM contexts + DOM/event adapter; not browser",
+    "cases": [
+      {
+        "name": "readonly-guidance-m1-must-not-enter-working-write-screen",
+        "result": "passed"
+      },
+      {
+        "name": "m1-parent-completion-and-return-to-catalog",
+        "result": "passed"
+      },
+      {
+        "name": "m2-parent-completion-and-return-to-catalog",
+        "result": "passed"
+      },
+      {
+        "name": "catalog-does-not-auto-open-lesson",
+        "result": "passed"
+      },
+      {
+        "name": "m1-default-practice-and-hint-do-not-complete-step",
+        "result": "passed"
+      },
+      {
+        "name": "m2-default-practice-and-hint-do-not-complete-step",
+        "result": "passed"
+      },
+      {
+        "name": "m1-readonly-wrong-client-and-outcome-rejected",
+        "result": "passed"
+      },
+      {
+        "name": "m2-readonly-wrong-client-and-outcome-rejected",
+        "result": "passed"
+      },
+      {
+        "name": "m1-exit-refresh-resume-repeat-clean-state",
+        "result": "passed"
+      },
+      {
+        "name": "m2-draft-refresh-midnight-wrong-time-and-single-task-move",
+        "result": "passed"
+      },
+      {
+        "name": "close-and-escape-return-to-program-and-preserve-attempt",
+        "result": "passed"
+      },
+      {
+        "name": "stale-frame-cannot-update-a-restarted-lesson",
+        "result": "passed"
+      },
+      {
+        "name": "manager-readonly-full-path-m1",
+        "result": "passed"
+      },
+      {
+        "name": "manager-readonly-full-path-m2",
+        "result": "passed"
+      },
+      {
+        "name": "manager-readonly-full-path-m3",
+        "result": "passed"
+      },
+      {
+        "name": "manager-readonly-full-path-m4",
+        "result": "passed"
+      },
+      {
+        "name": "manager-readonly-full-path-m5",
+        "result": "passed"
+      },
+      {
+        "name": "director-readonly-full-path-d1",
+        "result": "passed"
+      },
+      {
+        "name": "director-readonly-full-path-d2",
+        "result": "passed"
+      },
+      {
+        "name": "director-readonly-full-path-d3",
+        "result": "passed"
+      },
+      {
+        "name": "director-readonly-full-path-d4",
+        "result": "passed"
+      },
+      {
+        "name": "director-readonly-full-path-d5",
+        "result": "passed"
+      }
+    ],
+    "programs": {
+      "manager": {
+        "summary": "Пройдено 5 из 5 доступных уроков. Программа пройдена.",
+        "contextReads": 10,
+        "workingApiRequests": 0,
+        "errors": []
+      },
+      "director": {
+        "summary": "Пройдено 5 из 6 доступных уроков.",
+        "contextReads": 10,
+        "workingApiRequests": 0,
+        "errors": []
+      }
+    }
+  },
+  "regressions_before_fix": {
+    "mode": "two VM contexts + DOM/event adapter; not browser",
+    "cases": [
+      {
+        "name": "readonly-guidance-m1-must-not-enter-working-write-screen",
+        "result": "FAILED",
+        "error": "Guide sent a read-only learner to the ordinary CRM instead of an editable exercise\n+ actual - expected\n\n+ 'queue'\n- 'learning'\n"
+      },
+      {
+        "name": "m1-parent-completion-and-return-to-catalog",
+        "result": "FAILED",
+        "error": "Parent still says not started/in progress after the exercise completed"
+      },
+      {
+        "name": "m2-parent-completion-and-return-to-catalog",
+        "result": "FAILED",
+        "error": "Parent still says not started/in progress after the exercise completed"
+      }
+    ]
   }
 }

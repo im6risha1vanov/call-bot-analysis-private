@@ -21,7 +21,16 @@
     if (out) { out.textContent = text; out.hidden = !text; }
     else toast(text, true);
   }
-  function localHint() { return '<p class="hint">Прогресс сохраняется только в этом браузере для вашего входа, компании и роли. Это не общая статистика директора. Все клиенты и звонки упражнений вымышлены.</p>'; }
+  function localHint() { return '<p class="hint">В упражнениях можно менять и сохранять учебные записи — даже из входа «Только просмотр». Рабочая база не меняется. Прогресс хранится в этом браузере отдельно для вашего входа, компании и роли.</p>'; }
+  function programSummary() {
+    const available = context.lessons.filter(l => l.available);
+    const complete = available.filter(l => status(l) === 'Пройден').length;
+    return `<p class="card" data-learning-program role="status">Пройдено ${complete} из ${available.length} доступных уроков.${complete === available.length && available.length ? ' Программа пройдена.' : ''}</p>`;
+  }
+  function refreshStatus(lesson) {
+    const badge = $('[data-learning-status]');
+    if (badge) badge.textContent = status(lesson);
+  }
   VIEWS.learning = async (view, arg) => {
     endGuide();
     practice = null;
@@ -29,9 +38,9 @@
     if (!view.isConnected) return;
     setHead({title: 'Обучение', back: arg ? () => go('learning') : null});
     if (!arg) {
-      view.innerHTML = `<div class="page">${localHint()}<p data-learning-notice role="status" hidden></p><h2>Программа ${context.role === 'director' ? 'директора' : 'менеджера'}</h2><div class="learn-catalog">${context.lessons.map(lesson => {
+      view.innerHTML = `<div class="page">${localHint()}<p data-learning-notice role="status" hidden></p><h2>Программа ${context.role === 'director' ? 'директора' : 'менеджера'}</h2>${programSummary()}<div class="learn-catalog">${context.lessons.map(lesson => {
         const state = status(lesson);
-        return `<section class="card"><span class="chip${state === 'Пройден' ? ' good' : ''}">${esc(state)}</span><h2>${esc(lesson.title)}</h2><p>${esc(lesson.result)}</p>${lesson.available ? `<button class="btn primary" type="button" data-lesson="${lesson.id}">${state === 'Не начат' ? 'Начать урок' : 'Продолжить'}</button>${state !== 'Не начат' ? ` <button class="btn" type="button" data-restart="${lesson.id}">Пройти заново</button>` : ''}` : `<p class="hint">${esc(lesson.unavailable_reason)}</p><button type="button" class="btn" disabled>Модуль недоступен</button>`}</section>`;
+        return `<section class="card"><span class="chip${state === 'Пройден' ? ' good' : ''}">${esc(state)}</span><h2>${esc(lesson.title)}</h2><p>${esc(lesson.result)}</p>${lesson.available ? `<button class="btn primary" type="button" data-lesson="${lesson.id}">${state === 'Не начат' ? 'Начать урок' : state === 'Пройден' ? 'Посмотреть результат' : 'Продолжить'}</button>${state !== 'Не начат' ? ` <button class="btn" type="button" data-restart="${lesson.id}">Пройти заново</button>` : ''}` : `<p class="hint">${esc(lesson.unavailable_reason)}</p><button type="button" class="btn" disabled>Модуль недоступен</button>`}</section>`;
       }).join('')}</div></div>`;
       $$('[data-lesson]', view).forEach(b => b.onclick = () => go('learning', b.dataset.lesson));
       $$('[data-restart]', view).forEach(b => b.onclick = () => restart(selectedLesson(b.dataset.restart)).catch(e => notice(view, e.message)));
@@ -39,16 +48,22 @@
     }
     const lesson = selectedLesson(arg);
     if (!lesson?.available) throw new Error('Этот урок недоступен вашей роли или компании.');
-    view.innerHTML = `<div class="page">${localHint()}<p data-learning-notice role="status" hidden></p><section class="card"><span class="chip">${esc(status(lesson))}</span><h2>${esc(lesson.title)}</h2><p>${esc(lesson.result)}</p><h3>Рабочая ситуация</h3><p>${esc(lesson.situation.includes('{{') ? 'Точные даты и время будут закреплены при начале попытки.' : lesson.situation)}</p>${lesson.adaptation ? `<p class="hint">${esc(lesson.adaptation)}</p>` : ''}<div class="row"><button type="button" class="btn" data-mode="guide">Показать, где нажать</button>${lesson.kind === 'practice' ? '<button type="button" class="btn primary" data-mode="practice">Попробовать самому</button>' : ''}<button type="button" class="btn" data-restart>Пройти заново</button><button type="button" class="ghost" data-exit>К программе</button></div></section><div data-exercise></div></div>`;
+    view.innerHTML = `<div class="page">${localHint()}<p data-learning-notice role="status" hidden></p><section class="card"><span class="chip" data-learning-status>${esc(status(lesson))}</span><h2>${esc(lesson.title)}</h2><p>${esc(lesson.result)}</p><h3>Рабочая ситуация</h3><p>${esc(lesson.situation.includes('{{') ? 'Точные даты и время будут закреплены при начале попытки.' : lesson.situation)}</p>${lesson.adaptation ? `<p class="hint">${esc(lesson.adaptation)}</p>` : ''}<div class="row"><button type="button" class="btn" data-mode="guide">Показать, где нажать</button>${lesson.kind === 'practice' ? '<button type="button" class="btn primary" data-mode="practice">Практика · учебные изменения разрешены</button>' : ''}<button type="button" class="btn" data-restart>Пройти заново</button><button type="button" class="ghost" data-exit>К программе</button></div></section><div data-exercise></div></div>`;
     $('[data-exit]', view).onclick = () => go('learning');
     $('[data-restart]', view).onclick = () => restart(lesson).catch(e => notice(view, e.message));
     $$('[data-mode]', view).forEach(b => b.onclick = async () => {
       try {
         await freshContext(lesson.id);
-        if (b.dataset.mode === 'guide') await beginGuide(selectedLesson(lesson.id));
+        if (b.dataset.mode === 'guide' && (context.work_readonly || S.me.readonly) && lesson.kind === 'practice') {
+          mountPractice(view, selectedLesson(lesson.id), true);
+          notice(view, 'Рабочие записи доступны только для просмотра. Открыта учебная копия: здесь можно сохранять изменения и завершить урок.');
+        } else if (b.dataset.mode === 'guide') await beginGuide(selectedLesson(lesson.id));
         else mountPractice(view, selectedLesson(lesson.id));
       } catch (e) { notice(view, e.message); }
     });
+    // Opening an actual lesson is an explicit request to work on its fictional data.
+    // Merely opening #learning never launches a tour or an exercise.
+    if (lesson.kind === 'practice') mountPractice(view, lesson);
   };
   async function restart(lesson) {
     if (!lesson?.available) throw new Error('Урок недоступен.');
@@ -58,32 +73,32 @@
     const record = {state: lesson.kind === 'practice' ? E.start(lesson, context, context.clock, uid(), crypto.getRandomValues(new Uint32Array(1))[0]) : null, guide: null};
     persist(lesson, record);
     await go('learning', lesson.id);
-    if (lesson.kind === 'practice') mountPractice($('#view'), lesson);
-    else await beginGuide(lesson);
+    if (lesson.kind !== 'practice') await beginGuide(lesson);
   }
-  function mountPractice(view, lesson) {
+  function mountPractice(view, lesson, withHints = false) {
     endGuide();
     let record = recordFor(lesson), state = E.restore(record.state, lesson, context);
     if (!state) { state = E.start(lesson, context, context.clock, uid(), crypto.getRandomValues(new Uint32Array(1))[0]); record.state = state; persist(lesson, record); }
     const host = $('[data-exercise]', view);
     if (!host) return;
-    host.innerHTML = '<div class="row"><p class="hint">Учебный экран изолирован от телефонии, рабочих записей, уведомлений и внешних сервисов.</p><button type="button" class="btn" data-close-practice>Закрыть упражнение</button></div><iframe class="learn-frame" title="Учебное упражнение" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>';
+    host.innerHTML = '<div class="row"><p class="hint">Сохранение учебных итогов, перезвонов, заметок и документов разрешено. Рабочие записи и интеграции изолированы.</p><button type="button" class="btn" data-close-practice>Закрыть упражнение</button></div><iframe class="learn-frame" title="Учебное упражнение" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>';
     const frame = $('iframe', host);
-    practice = {frame, lesson, state, record, nonce: uid(), scope: context.scope};
-    $('[data-close-practice]', host).onclick = () => { practice = null; host.innerHTML = ''; go('learning', lesson.id); };
+    practice = {frame, lesson, state, record, nonce: uid(), scope: context.scope, withHints};
+    $('[data-close-practice]', host).onclick = () => { practice = null; host.innerHTML = ''; go('learning'); };
     frame.src = '/learning/practice?lesson=' + encodeURIComponent(lesson.id);
+    refreshStatus(lesson);
   }
   addEventListener('message', event => {
     const current = practice;
     if (!current || event.source !== current.frame.contentWindow || !event.data || typeof event.data !== 'object') return;
     const packet = event.data;
     if (packet.type === 'learning:ready') {
-      current.frame.contentWindow.postMessage({type: 'learning:init', nonce: current.nonce, lesson: current.lesson, context: {scope: context.scope, role: context.role, modules: context.modules}, state: current.state, theme: document.documentElement.getAttribute('data-theme')}, '*');
+      current.frame.contentWindow.postMessage({type: 'learning:init', nonce: current.nonce, lesson: current.lesson, context: {scope: context.scope, role: context.role, modules: context.modules}, state: current.state, withHints: current.withHints, theme: document.documentElement.getAttribute('data-theme')}, '*');
       return;
     }
     if (packet.nonce !== current.nonce || context.scope !== current.scope) return;
     if (packet.type === 'learning:height' && Number.isFinite(packet.height)) { current.frame.style.height = Math.max(340, Math.min(2600, packet.height)) + 'px'; return; }
-    if (packet.type === 'learning:exit') { practice = null; go('learning', current.lesson.id); return; }
+    if (packet.type === 'learning:exit') { practice = null; go('learning'); return; }
     if (packet.type !== 'learning:state') return;
     try {
       if (JSON.stringify(packet.state).length > 120000) throw new Error('Учебная попытка слишком велика. Начните заново.');
@@ -93,6 +108,7 @@
       if (latest?.state?.id && (latest.state.id !== next.id || latest.state.revision > current.state.revision)) throw new Error('Попытка изменена в другой вкладке. Откройте «Продолжить».');
       current.state = next; current.record.state = next;
       persist(current.lesson, current.record);
+      refreshStatus(current.lesson);
     } catch (e) { notice($('#view'), e.message); practice = null; current.frame.remove(); }
   });
 
@@ -139,7 +155,7 @@
     $('[data-learning-guide]')?.remove();
     const panel = document.createElement('section');
     panel.className = 'card learn-guide'; panel.dataset.learningGuide = '1'; panel.setAttribute('aria-label', 'Подсказка обучения');
-    panel.innerHTML = `<div class="row"><b>${esc(g.lesson.title)} · ${g.index + 1}/${g.lesson.guide.length}</b><span class="sp"></span><button type="button" class="ghost" data-guide-close>Закрыть обучение · Esc</button></div><h2>Что сделать</h2><p>${esc(step.text)}</p><h3>Как проверить результат</h3><p>${esc(step.result)}</p>${modal && !target ? '<p role="status">Сначала закройте рабочую карточку крестиком. Обучение не закрывает её автоматически и не теряет несохранённые поля.</p>' : ''}${!target ? `<p role="status">${correctPage ? 'Нужный элемент пока не виден: список может быть пустым, карточка не открыта или данных/прав недостаточно. Откройте нужную карточку вручную.' : 'Откройте нужный раздел.'} Учебный пример доступен в режиме практики.</p>` : '<p class="hint">Нужный блок выделен рамкой. Подсказка расположена в потоке страницы и не перекрывает кнопку.</p>'}${g.lesson.omitted_guide_modules?.length ? '<p class="hint">Отключённые модули пропущены: ' + esc(g.lesson.omitted_guide_modules.join(', ')) + '.</p>' : ''}<div class="row">${target ? '<button type="button" class="btn" data-guide-focus>К выделенному блоку</button>' : ''}<button type="button" class="btn" data-guide-open>Открыть раздел «${esc(PAGES[step.page].name)}»</button>${g.lesson.kind === 'practice' ? '<button type="button" class="btn" data-guide-practice>Учебный пример</button>' : ''}<button type="button" class="btn primary" data-guide-next ${target ? '' : 'disabled'}>${g.index === g.lesson.guide.length - 1 ? 'Закончить показ' : 'Далее'}</button></div><p class="hint">Показ не засчитывает практическое упражнение. Рабочие кнопки и формы система не нажимает.</p>`;
+    panel.innerHTML = `<div class="row"><b>${esc(g.lesson.title)} · ${g.index + 1}/${g.lesson.guide.length}</b><span class="sp"></span><button type="button" class="ghost" data-guide-close>Закрыть обучение · Esc</button></div><h2>Где это находится</h2><p>В обычной работе: ${esc(step.text)}</p><h3>Как проверить результат</h3><p>${esc(step.result)}</p>${modal && !target ? '<p role="status">Сначала закройте рабочую карточку крестиком. Обучение не закрывает её автоматически и не теряет несохранённые поля.</p>' : ''}${!target ? `<p role="status">${correctPage ? 'Нужный элемент пока не виден: список может быть пустым, карточка не открыта или данных/прав недостаточно. Откройте нужную карточку вручную.' : 'Откройте нужный раздел.'} Учебный пример доступен в режиме практики.</p>` : '<p class="hint">Нужный блок выделен рамкой. Подсказка расположена в потоке страницы и не перекрывает кнопку.</p>'}${g.lesson.omitted_guide_modules?.length ? '<p class="hint">Отключённые модули пропущены: ' + esc(g.lesson.omitted_guide_modules.join(', ')) + '.</p>' : ''}<div class="row">${target ? '<button type="button" class="btn" data-guide-focus>К выделенному блоку</button>' : ''}<button type="button" class="btn" data-guide-open>Открыть раздел «${esc(PAGES[step.page].name)}»</button>${g.lesson.kind === 'practice' ? '<button type="button" class="btn" data-guide-practice>Учебный пример</button>' : ''}<button type="button" class="btn primary" data-guide-next ${target ? '' : 'disabled'}>${g.index === g.lesson.guide.length - 1 ? 'Закончить показ' : 'Далее'}</button></div><p class="hint">Это необязательный показ интерфейса. Не сохраняйте рабочие записи ради урока: проверяемые действия выполняются в учебной практике.</p>`;
     const view = $('#view');
     if (modal) modal.insertBefore(panel, modal.firstChild);
     else view.parentNode.insertBefore(panel, view);
@@ -154,7 +170,7 @@
       if ($('dialog[open]')) { toast('Сначала закройте рабочую карточку крестиком: её поля сохраняются только вашей кнопкой.', true); return; }
       go(step.page, step.arg || null);
     };
-    $('[data-guide-practice]', panel)?.addEventListener('click', async () => { if ($('dialog[open]')) { toast('Сначала закройте рабочую карточку крестиком.', true); return; } const lesson = g.lesson; endGuide(); await go('learning', lesson.id); mountPractice($('#view'), lesson); });
+    $('[data-guide-practice]', panel)?.addEventListener('click', async () => { if ($('dialog[open]')) { toast('Сначала закройте рабочую карточку крестиком.', true); return; } const lesson = g.lesson; endGuide(); await go('learning', lesson.id); });
     $('[data-guide-next]', panel).onclick = async () => {
       if (!g.target || !g.target.isConnected) return;
       try {
@@ -173,6 +189,10 @@
   }
   window.learningPageChanged = function () {
     addTargets();
+    const readonlyNote = $('[data-readonly-notice]');
+    if (readonlyNote) readonlyNote.textContent = S.page === 'learning'
+      ? 'Рабочие данные доступны только для просмотра. В уроках учебные изменения разрешены.'
+      : 'Только смотреть: звонки и изменения работают под своим логином.';
     if (S.page !== 'learning') practice = null;
     if (guide) showGuide(true);
   };
@@ -183,6 +203,6 @@
   addEventListener('keydown', e => {
     if (e.key !== 'Escape') return;
     if (guide) endGuide();
-    if (practice) { const id = practice.lesson.id; practice = null; go('learning', id); }
+    if (practice) { practice = null; go('learning'); }
   });
 }());
