@@ -36,6 +36,8 @@
   }
   function value(s, x) { var r = refs(s); return Object.prototype.hasOwnProperty.call(r, x) ? r[x] : x; }
   function interpolate(t, s) { return String(t).replace(/\{\{(\w+)\}\}/g, function (_, k) { return String(value(s, k)); }); }
+  function interpolateDisplay(t,s){var r=refs(s);return String(t).replace(/\{\{(\w+)\}\}/g,function(_,k){var v=r[k];if(k==='timezone')return root.CRMText?root.CRMText.zone(v):v;return root.CRMText?root.CRMText.datesInText(v===undefined?k:v):String(v===undefined?k:v);});}
+  function sameNote(a,b){var ad=String(a).match(/\b\d{4}-\d{2}-\d{2}\b/g)||[],bd=String(b).match(/\b\d{4}-\d{2}-\d{2}\b/g)||[];if(ad.length&&(ad.length!==bd.length||ad.some(function(d,i){return d!==bd[i];})))return false;return same(root.CRMText?root.CRMText.datesInText(a):a,root.CRMText?root.CRMText.datesInText(b):b);}
   function allowed(lesson, ctx) { return !!ctx && !!lesson && ['manager', 'director'].indexOf(ctx.role) >= 0 && ctx.role === lesson.role && (!lesson.module || ctx.modules.indexOf(lesson.module) >= 0); }
   function start(lesson, ctx, clock, id, seed) {
     if (!allowed(lesson, ctx) || lesson.kind !== 'practice') throw new Error('Этот практический урок недоступен.');
@@ -56,7 +58,7 @@
     if (!s) throw new Error('Сохранённая попытка повреждена или относится к другому входу. Начните заново.');
     if (!action || typeof action.type !== 'string') throw new Error('Некорректное действие.');
     var st = lesson.steps[s.step], e = st && st.expected || {}, r = refs(s), error = '', task, row;
-    function bad(message) { s.feedback = message; s.revision++; return {state: s, ok: false, advanced: false, feedback: message}; }
+    function bad(message) { if(root.CRMText){message=root.CRMText.datesInText(message);message=message.split(s.clock.timezone).join(root.CRMText.zone(s.clock.timezone));}s.feedback = message; s.revision++; return {state: s, ok: false, advanced: false, feedback: message}; }
     function expected(k) { return value(s, e[k]); }
     if (s.completed) return bad('Урок уже пройден. Для новой ситуации выберите «Пройти заново».');
     if (action.type === 'draft') { if (text(action.key).length > 30 || text(action.value).length > 2000) return bad('Слишком длинное поле.'); s.ui.draft[action.key] = text(action.value); s.revision++; return {state: s, ok: true, advanced: false, feedback: ''}; }
@@ -124,12 +126,12 @@
     case 'save_note':
       row = find(s.data.deals, action.deal);
       if (!row || s.ui.selectedDeal !== expected('deal') || action.deal !== expected('deal')) error = 'Заметка должна относиться к выбранной сделке УЧ-001.';
-      else if (!same(action.note, expected('note'))) error = 'Запишите следующий шаг полностью: «' + r.expectedNote + '».';
+      else if (!sameNote(action.note, expected('note'))) error = 'Запишите следующий шаг полностью: «' + r.expectedNote + '».';
       else { row.history.push({kind: 'note', text: text(action.note), at: s.clock.today}); s.ui.form = null; }
       break;
     case 'verify_history':
       row = find(s.data.deals, r.targetDeal);
-      if (!row || row.history.filter(function (h) { return h.kind === 'note' && same(h.text, r.expectedNote); }).length !== 1 || s.ui.selectedDeal !== r.targetDeal) error = 'Откройте историю нужной сделки и проверьте сохранённую заметку.';
+      if (!row || row.history.filter(function (h) { return h.kind === 'note' && sameNote(h.text, r.expectedNote); }).length !== 1 || s.ui.selectedDeal !== r.targetDeal) error = 'Откройте историю нужной сделки и проверьте сохранённую заметку.';
       break;
     case 'prepare_contract':
       if (ctx.modules.indexOf('contracts') < 0) error = 'Модуль «Договоры» отключён.';
@@ -184,7 +186,7 @@
     s.feedback = s.completed ? 'Урок пройден. Результат проверен на учебных данных.' : 'Верно. ' + lesson.steps[s.step].title;
     return {state: s, ok: true, advanced: true, feedback: s.feedback};
   }
-  var api = {VERSION: VERSION, fixtures: fixtures, copy: copy, find: find, day: day, refs: refs, interpolate: interpolate, allowed: allowed, start: start, restore: restore, apply: apply};
+  var api = {VERSION: VERSION, fixtures: fixtures, copy: copy, find: find, day: day, refs: refs, interpolate: interpolate, interpolateDisplay:interpolateDisplay, allowed: allowed, start: start, restore: restore, apply: apply};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.AveronLearningEngine = api;
 }(this));

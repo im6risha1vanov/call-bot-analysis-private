@@ -128,7 +128,7 @@ async function clientLink(btn, name) {
 }
 
 // ---------- колл-центр в базе (компания без Google Таблицы) ----------
-const CC_BUTTONS = [['no_answer', 'Не дозвонился', ''], ['callback', 'Перезвон', ''], ['interested', 'Заинтересован', 'primary'], ['not_relevant', 'Неактуально', '']];
+const CC_BUTTONS = [['no_answer', 'Не взял трубку', ''], ['callback', 'Перезвонить', ''], ['interested', 'Заинтересован', 'primary'], ['not_relevant', 'Неактуально', '']];
 
 // Прозвон: кому звонить сейчас. Сначала перезвоны, потом новые номера, потом недозвоны прошлых дней.
 async function ccWork(view) {

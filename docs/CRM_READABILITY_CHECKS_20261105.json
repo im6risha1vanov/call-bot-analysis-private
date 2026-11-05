@@ -1,0 +1,276 @@
+{
+  "snapshot_utc": "2026-11-05T12:46:07.577760+00:00",
+  "branch": "feat/crm-readable-copy-20261105",
+  "baseline": "a042710",
+  "production_changed": false,
+  "services_restarted": false,
+  "python": {
+    "passed": 48,
+    "failed": 0,
+    "skipped": 0
+  },
+  "javascript": {
+    "local_api_model": 17,
+    "native_learning_controllers": 13,
+    "floating_drag_media_feedback": 18,
+    "readability_working_and_learning": 9,
+    "changed_files_syntax_checked": 23,
+    "failed": 0
+  },
+  "ui_coverage": [
+    {
+      "role": "manager",
+      "page": "queue",
+      "mode": "working UI with fictional API",
+      "help": true,
+      "table": false,
+      "empty": false
+    },
+    {
+      "role": "manager",
+      "page": "callbacks",
+      "mode": "working UI with fictional API",
+      "help": true,
+      "table": false,
+      "empty": false
+    },
+    {
+      "role": "manager",
+      "page": "deals",
+      "mode": "working UI with fictional API",
+      "help": true,
+      "table": true,
+      "empty": false
+    },
+    {
+      "role": "manager",
+      "page": "calls",
+      "mode": "working UI with fictional API",
+      "help": true,
+      "table": true,
+      "empty": false
+    },
+    {
+      "role": "manager",
+      "page": "me",
+      "mode": "working UI with fictional API",
+      "help": true,
+      "table": false,
+      "empty": true
+    },
+    {
+      "role": "manager",
+      "page": "callcenter",
+      "mode": "working UI with fictional API",
+      "help": true,
+      "table": false,
+      "empty": true
+    },
+    {
+      "role": "manager",
+      "page": "sources",
+      "mode": "working UI with fictional API",
+      "help": true,
+      "table": false,
+      "empty": true
+    },
+    {
+      "role": "manager",
+      "page": "reports",
+      "mode": "working UI with fictional API",
+      "help": true,
+      "table": false,
+      "empty": false
+    },
+    {
+      "role": "manager",
+      "page": "learning",
+      "mode": "working UI with fictional API",
+      "help": true,
+      "table": false,
+      "empty": false
+    },
+    {
+      "role": "director",
+      "page": "summary",
+      "mode": "working UI with fictional API",
+      "help": true,
+      "table": true,
+      "empty": true
+    },
+    {
+      "role": "director",
+      "page": "calls",
+      "mode": "working UI with fictional API",
+      "help": true,
+      "table": true,
+      "empty": false
+    },
+    {
+      "role": "director",
+      "page": "callbacks",
+      "mode": "working UI with fictional API",
+      "help": true,
+      "table": false,
+      "empty": false
+    },
+    {
+      "role": "director",
+      "page": "deals",
+      "mode": "working UI with fictional API",
+      "help": true,
+      "table": true,
+      "empty": false
+    },
+    {
+      "role": "director",
+      "page": "staff",
+      "mode": "working UI with fictional API",
+      "help": true,
+      "table": true,
+      "empty": false
+    },
+    {
+      "role": "director",
+      "page": "callcenter",
+      "mode": "working UI with fictional API",
+      "help": true,
+      "table": false,
+      "empty": true
+    },
+    {
+      "role": "director",
+      "page": "sources",
+      "mode": "working UI with fictional API",
+      "help": true,
+      "table": false,
+      "empty": true
+    },
+    {
+      "role": "director",
+      "page": "reports",
+      "mode": "working UI with fictional API",
+      "help": true,
+      "table": false,
+      "empty": false
+    },
+    {
+      "role": "director",
+      "page": "auto",
+      "mode": "working UI with fictional API",
+      "help": true,
+      "table": false,
+      "empty": true
+    },
+    {
+      "role": "director",
+      "page": "robot",
+      "mode": "working UI with fictional API",
+      "help": true,
+      "table": false,
+      "empty": true
+    },
+    {
+      "role": "director",
+      "page": "settings",
+      "mode": "working UI with fictional API",
+      "help": true,
+      "table": false,
+      "empty": false
+    },
+    {
+      "role": "director",
+      "page": "learning",
+      "mode": "working UI with fictional API",
+      "help": true,
+      "table": false,
+      "empty": false
+    }
+  ],
+  "coverage_method": "Native CRM controllers + explicit DOM adapter; synthetic in-memory APIs; not a browser.",
+  "contrast_light_theme": [
+    {
+      "text": "heat",
+      "background": "heat-soft",
+      "before": 2.72,
+      "after": 5.09
+    },
+    {
+      "text": "good",
+      "background": "good-soft",
+      "before": 3.7,
+      "after": 5.54
+    },
+    {
+      "text": "warn",
+      "background": "warn-soft",
+      "before": 3.11,
+      "after": 5.56
+    },
+    {
+      "text": "bad",
+      "background": "bad-soft",
+      "before": 4.25,
+      "after": 5.3
+    },
+    {
+      "text": "accent",
+      "background": "accent-soft",
+      "before": 4.39,
+      "after": 4.95
+    }
+  ],
+  "theme_checks": [
+    "light",
+    "dark",
+    "auto-light",
+    "auto-dark"
+  ],
+  "contrast_method": "CSS variable luminance calculation, >=4.5 for tested text pairs; not rendered pixels",
+  "data_preservation": {
+    "create_callback_date": "2026-11-06",
+    "create_callback_time": "15:00",
+    "move_date": "2026-11-07",
+    "move_time": "11:30",
+    "single_task_and_original_due_preserved": true,
+    "backend_files_byte_identical_to_baseline": true,
+    "wrong_year_note_rejected": true,
+    "user_note_text_not_rewritten": true
+  },
+  "media": {
+    "original_gifs_identical": 37,
+    "original_posters_identical": 37,
+    "manifest_and_generator_identical": true,
+    "pause_drag_success_functions_identical": true,
+    "success_css_animation_identical": true
+  },
+  "browser": {
+    "status": "NOT RUN",
+    "exit_code": 2,
+    "reason": "Playwright/Chromium not installed",
+    "screenshots": [],
+    "script": "scripts/check_crm_readability_browser.cjs",
+    "before_source": "/tmp/averon-crm-readability-before-20261105",
+    "remaining": [
+      "actual desktop/mobile layout",
+      "native dropdowns",
+      "hover and keyboard behaviour in an actual browser",
+      "physical mobile keyboard",
+      "screenshots before/after"
+    ]
+  },
+  "backup": {
+    "path": "/tmp/averon-crm-readability-before-20261105.tar.gz",
+    "mode": "600"
+  },
+  "live_data_queries": false,
+  "paid_calls": false,
+  "migrations": false,
+  "secret_scan": {
+    "working_files": 469,
+    "history_blobs": 1566,
+    "working_hits": 0,
+    "history_hits": 0,
+    "method": "heuristic credential patterns; no values printed"
+  }
+}

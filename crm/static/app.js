@@ -49,17 +49,19 @@ function ddmm(iso) { if (!iso) return ''; const [, m, d] = iso.slice(0, 10).spli
 const WD = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
 const MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
 function dayLong(iso) { const d = new Date(iso + 'T12:00:00Z'); return `${WD[d.getUTCDay()]}, ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`; }
+function timeCaption(){const w=window.AveronLearningWorkspace?.classroom;const zone=w?.current()?.clock.timezone||w?.context.clock.timezone||S.me?.timezone;return zone?'Время указано '+CRMText.zone(zone)+'.':'Дата и время — по часовому поясу компании.';}
 function when(at) { // '2026-10-17T14:05' -> 'сегодня 14:05' / 'вчера 14:05' / '17.10 14:05'
   if (!at) return '';
   const today = isoToday(), day = at.slice(0, 10), t = at.slice(11, 16);
+  if(S.me?.learning)return CRMText.date(day,{year:true})+(t?' '+t:'');
   if (day === today) return `сегодня ${t}`;
   if (day === addDays(today, -1)) return `вчера ${t}`;
-  return `${ddmm(day)} ${t}`;
+  return `${CRMText.date(day)} ${t}`;
 }
 const fmtWhen = v => v ? new Date(v).toLocaleString('ru-RU', {day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Moscow'}) : '—';
 function dueText(item) {
   const today = isoToday();
-  let d = item.due_date === today ? 'сегодня' : item.due_date === addDays(today, 1) ? 'завтра' : ddmm(item.due_date);
+  let d = CRMText.date(item.due_date,{today,relative:!S.me?.learning});
   if (item.due_time) d += ' ' + item.due_time;
   if (item.estimate) d += ' (примерно)';
   return d;
@@ -79,7 +81,7 @@ const store = {
 async function api(path, opts = {}) {
   if (location.pathname === '/learning/workspace') {
     if (!window.AveronLearningWorkspace) throw new Error('Учебная учётка не загрузилась. Войдите заново через «Обучение».');
-    return AveronLearningWorkspace.request(path, opts);
+    try{return await AveronLearningWorkspace.request(path,opts);}catch(error){throw new Error(CRMText.error(error,CRMText.operation(path,opts.method)));}
   }
   const init = {method: opts.method || 'GET', credentials: 'same-origin', headers: {}};
   if (opts.body !== undefined) {
@@ -88,10 +90,10 @@ async function api(path, opts = {}) {
   }
   if (init.method !== 'GET') init.headers['X-CRM'] = '1';
   let r;
-  try { r = await fetch(path, init); } catch (e) { throw new Error('Нет связи с сервером. Проверьте интернет.'); }
+  try { r = await fetch(path, init); } catch (e) { throw new Error('Нет связи с сервером. Проверьте подключение к интернету и повторите действие.'); }
   const data = await r.json().catch(() => ({}));
-  if (r.status === 401) { showLogin(data.error); throw new Error(data.error || 'Нужно войти.'); }
-  if (!r.ok) throw new Error(data.error || 'Ошибка сервера.');
+  if (r.status === 401) { showLogin(); throw new Error('Время входа истекло. Войдите в CRM снова.'); }
+  if (!r.ok) throw new Error(CRMText.error(data.error,r.status===403?'Недостаточно прав. Обратитесь к руководителю.':CRMText.operation(path,init.method)));
   return data;
 }
 const qs = obj => { const p = new URLSearchParams(); Object.entries(obj).forEach(([k, v]) => { if (v !== '' && v != null) p.set(k, v); }); const s = p.toString(); return s ? '?' + s : ''; };
@@ -132,7 +134,7 @@ function toast(text, err = false) {
   const el = document.createElement('div');
   el.className = 'toast' + (err ? ' err' : '');
   el.setAttribute('role', 'status');
-  el.innerHTML = (err ? '' : TICK) + `<span>${esc(text)}</span>`;
+  el.innerHTML = (err ? '' : TICK) + `<span>${esc(err?CRMText.error(text):text)}</span>`;
   document.body.appendChild(el);
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.remove(), err ? 6000 : 3200);
@@ -152,7 +154,7 @@ document.addEventListener('click', e => {
   pop.style.top = (r.bottom + scrollY + 8) + 'px';
 }, true);
 const emptyCard = (text, i = 0) => `<div class="card empty blk" data-css="--i:${i}">${text}</div>`;
-const errCard = msg => `<div class="page"><div class="card empty blk">${esc(msg)}</div></div>`;
+const errCard = msg => `<div class="page"><div class="card empty blk" role="alert" data-ui-error>${esc(CRMText.error(msg,'Не удалось загрузить раздел. Обновите вкладку или попробуйте позже.'))}</div></div>`;
 function moreBlock(title, hint, inner, i = 0, open = false) {
   return `<details class="more blk" data-css="--i:${i}"${open ? ' open' : ''}><summary>${svg('chev')}<span>${esc(title)}${hint ? ` <span class="hint">${esc(hint)}</span>` : ''}</span></summary><div class="more-in">${inner}</div></details>`;
 }
@@ -285,9 +287,9 @@ function trapTab(box, e) {
   if (e.key !== 'Tab') return;
   // checkVisibility отсекает и кнопки внутри свёрнутого <details>, у них offsetParent не пустой
   const shown = el => (el.checkVisibility ? el.checkVisibility() : el.offsetParent !== null);
-  const extra = window.learningFocusScope?.(box);
-  const inScope = el => box.contains(el) || !!extra?.contains(el);
-  const items = [...$$(FOCUSABLE, box), ...(extra ? $$(FOCUSABLE, extra) : [])].filter(el => shown(el) || el === document.activeElement);
+  const extras=[window.learningFocusScope?.(box),$('#page-help')].filter(el=>el?.isConnected);
+  const inScope = el => box.contains(el) || extras.some(extra=>extra.contains(el));
+  const items = [...$$(FOCUSABLE, box), ...extras.flatMap(extra=>$$(FOCUSABLE, extra))].filter(el => shown(el) || el === document.activeElement);
   if (!items.length) return;
   const first = items[0], last = items[items.length - 1];
   if (!inScope(document.activeElement)) { e.preventDefault(); first.focus(); }
@@ -419,6 +421,7 @@ const menu = () => {
 };
 
 function showLogin() {
+  window.closePageHelp?.();
   root.innerHTML = `<form class="login panel" autocomplete="on">
     <div class="logo"><i></i>Averon <b>CRM</b></div>
     <h1>Вход в CRM</h1>
@@ -502,7 +505,7 @@ function setCount(page, n) {
 function setHead({title = '', sub = '', filters = '', back = null, actions = ''} = {}) {
   const top = $('#top');
   top.innerHTML = `<div class="title-row">${back ? `<button class="back" type="button" aria-label="Назад">${svg('back')}</button>` : ''}
-    <h1>${esc(title || PAGES[S.page]?.name || '')}</h1>${sub ? `<span class="sub-t">${sub}</span>` : ''}<span class="sp"></span>${actions}</div>
+    <h1>${esc(title || PAGES[S.page]?.name || '')}</h1>${sub ? `<span class="sub-t">${sub}</span>` : ''}<span class="sp"></span>${actions}${['manager','director'].includes(S.me?.role)?'<button class="ghost small" type="button" data-page-help aria-controls="page-help" aria-expanded="false">Справка</button>':''}</div>
     <div class="bar-f">${filters}</div>`;
   if (back) $('.back', top).onclick = back;
   return top;
@@ -539,6 +542,7 @@ async function go(target, arg = null, opts = {}) {
   try {
     await VIEWS[page](view, a);
     if (seq === navSeq && window.learningPageChanged) learningPageChanged();
+    if(seq===navSeq&&window.pageHelpChanged)pageHelpChanged();
   } catch (e) {
     if (seq === navSeq) view.innerHTML = errCard(e.message);
   }

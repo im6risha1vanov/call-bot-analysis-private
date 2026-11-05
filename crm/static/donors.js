@@ -19,7 +19,7 @@
     box.innerHTML = `<div class="grid2">
       <section class="card blk"><div class="card-h"><h2>Новый поиск</h2><span class="hint">сегодня ${rub(d.limit.spent_rub)} из ${rub(d.limit.day_rub)}</span></div>
         <p class="hint" data-css="margin:0 0 10px">Агент сам составит план, пройдёт по выдаче Яндекса и сайтам конкурентов, найдёт номера людей и проверит их. Прогон идёт на сервере 20–60 минут, страницу можно закрыть.</p>
-        ${notReady.length ? `<p class="bad-text">Не подключено: ${esc(notReady.join(' и '))}. Ключи ставит администратор в .env сервера.</p>` : ''}
+        ${notReady.length ? `<p class="bad-text">Не подключено: ${esc(notReady.join(' и '))}. Обратитесь к администратору, чтобы подключить поиск.</p>` : ''}
         <label class="field" data-css="margin-top:10px">Ниша клиента<input data-d="niche" maxlength="200" placeholder="например: кухни на заказ, банкротство физлиц"></label>
         <label class="field" data-css="margin-top:10px">География<input data-d="city" maxlength="200" placeholder="Вся Россия, или город, или несколько через запятую"></label>
         <label class="field" data-css="margin-top:10px">Что продаёт клиент (необязательно)<input data-d="offer" maxlength="500"></label>
@@ -31,7 +31,7 @@
       <section class="card blk" data-css="--i:1"><div class="card-h"><h2>Прогоны</h2><span class="hint">${d.runs.length || ''}</span></div>
         ${d.runs.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Ниша</th><th>Статус</th><th>Номера</th><th class="hide-m">Кто</th></tr></thead><tbody>
         ${d.runs.map(r => `<tr class="click" data-run="${r.id}"><td>${esc(r.niche)}<div class="s">${esc(r.city || 'вся Россия')} · ${fmtWhen(r.created_at)}</div></td>
-          <td>${chip(STATUS[r.status] || [r.status, ''])}${r.status === 'running' ? `<div class="s">${esc(r.stage)}</div>` : ''}</td>
+          <td>${chip(STATUS[r.status] || ['Статус не указан', ''])}${r.status === 'running' ? `<div class="s">${esc(r.stage)}</div>` : ''}</td>
           <td class="num">${r.good != null ? `${r.good} из ${r.target}` : '—'}</td><td class="hide-m">${esc(r.author || '')}</td></tr>`).join('')}
         </tbody></table></div>` : '<div class="empty">Прогонов пока нет.</div>'}
         ${d.can_settings ? `<details class="more" data-css="margin-top:14px"><summary>${svg('chev')}<span>Сообщение продавцам на Авито <span class="hint">понадобится на этапе Авито</span></span></summary>
@@ -109,7 +109,7 @@
         ${phones.map(p => `<tr><td class="num nw">${esc(p.number)}${p.live ? '<div class="s">живой человек</div>' : ''}${p.operator ? `<div class="s">${esc(p.operator)}</div>` : ''}</td>
           <td>${esc(p.who || '—')}<div class="s">${esc(p.type)}${p.city ? ' · ' + esc(p.city) : ''}</div></td>
           <td class="hide-m">${esc(p.company)}${p.site ? `<div class="s">${esc(p.site)}</div>` : ''}</td><td class="s">${esc(p.why.join('; '))}</td></tr>`).join('')}
-        </tbody></table></div></section>` : going ? '' : emptyCard('Номеров не нашлось.' + (run.error ? ' ' + esc(run.error) : ''), 1)}
+        </tbody></table></div></section>` : going ? '' : emptyCard('Номеров не нашлось.' + (run.error ? ' ' + esc(CRMText.error(run.error,'Поиск завершился с ошибкой. Попробуйте ещё раз или обратитесь к администратору.')) : ''), 1)}
       ${plan ? moreBlock('План поиска', `сегментов ${(plan.segments || []).length}`, `<p><b>Кого ищет клиент:</b> ${esc(plan.buyer || '')}</p>
         ${(plan.segments || []).map(s => `<p><b>${esc(s.name)}</b> <span class="chip">${esc(s.type)}</span><br><span class="hint">Звонят: ${esc(s.who_calls)}. Где искать: ${esc(s.where)}</span></p>`).join('')}
         ${(plan.avoid || []).length ? `<p><b>Чего избегаем:</b> ${esc(plan.avoid.join('; '))}</p>` : ''}${plan.note ? `<p class="hint">${esc(plan.note)}</p>` : ''}`, 2) : ''}

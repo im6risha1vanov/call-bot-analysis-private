@@ -25,7 +25,7 @@ VIEWS.auto = async view => {
     <section class="card blk" data-css="--i:3"><div class="card-h"><h2>Подключения</h2><span class="sp"></span>
       ${ro ? '' : '<button class="btn small" type="button" data-au-tg>Подключить Telegram</button><button class="btn small" type="button" data-au-sheet>Подключить Google-таблицу</button>'}</div>
       ${AU.d.accounts.length ? `<div class="list">${AU.d.accounts.map(a => `<div class="item"><div class="main-l"><div class="t">${esc(a.title)}</div>
-        ${a.status === 'pending' ? '<div class="hint">ждём, когда в чате нажмут «Старт»</div>' : a.status === 'broken' ? `<div class="hint bad-text">${esc(a.error || 'не работает')}</div>` : ''}</div>
+        ${a.status === 'pending' ? '<div class="hint">ждём, когда в чате нажмут «Старт»</div>' : a.status === 'broken' ? `<div class="hint bad-text">${esc(CRMText.error(a.error,'Подключение не работает. Переподключите аккаунт.'))}</div>` : ''}</div>
         <span class="chip ${a.status === 'ready' ? 'good' : a.status === 'broken' ? 'bad' : 'warn'}">${a.status === 'ready' ? 'работает' : a.status === 'broken' ? 'сломано' : 'ждём'}</span>
         ${ro ? '' : `<button class="x" type="button" data-acc-del="${a.id}" aria-label="Удалить подключение" data-css="width:28px;height:28px">${svg('x', '')}</button>`}</div>`).join('')}</div>`
         : '<div class="empty">Подключите чат Telegram или Google-таблицу, чтобы сценарии могли туда писать.</div>'}
@@ -123,7 +123,7 @@ function bindAuto(view) {
 
 // ---------- пробный запуск и журнал ----------
 const auStep = s => `<div class="au-step"><span class="chip ${s.ok ? 'good' : 'bad'}">${s.ok ? 'готово' : 'ошибка'}</span>
-  <div><b>${esc(auCat().actions[s.type]?.title || s.type)}</b>${s.error ? `<div class="hint bad-text">${esc(s.error)}</div>` : ''}
+  <div><b>${esc(auCat().actions[s.type]?.title || s.type)}</b>${s.error ? `<div class="hint bad-text">${esc(CRMText.error(s.error,'Не удалось выполнить действие. Проверьте настройки сценария.'))}</div>` : ''}
   ${s.preview ? `<pre class="au-pre">${esc(typeof s.preview === 'string' ? s.preview : JSON.stringify(s.preview, null, 2))}</pre>` : ''}</div></div>`;
 
 async function auTest(btn, id, after) {

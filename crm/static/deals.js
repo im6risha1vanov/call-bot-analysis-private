@@ -262,14 +262,14 @@ function contractScripts() {
   // Библиотеки весят ~200 КБ, поэтому грузим их только при открытии генератора.
   contractJs = contractJs || CONTRACT_JS.reduce((p, name) => p.then(() => new Promise((ok, fail) => {
     const el = document.createElement('script');
-    el.src = '/static/contracts/' + name + (name === 'generator.js' ? '?v=20261104c' : '');
+    el.src = '/static/contracts/' + name + (name === 'generator.js' ? '?v=20261105a' : '');
     el.onload = ok;
     el.onerror = () => { contractJs = null; fail(new Error('Генератор договоров не загрузился. Обновите страницу.')); };
     document.head.appendChild(el);
   })), Promise.resolve());
   return contractJs;
 }
-const contractTitle = c => `${c.type_title}${c.num ? ' № ' + c.num : c.base_num ? ' к № ' + c.base_num : ''}${c.date ? ' от ' + ddmm(c.date) + '.' + c.date.slice(0, 4) : ''}${c.amount ? ' · ' + rub(c.amount) : ''}`;
+const contractTitle = c => `${c.type_title}${c.num ? ' № ' + c.num : c.base_num ? ' к № ' + c.base_num : ''}${c.date ? ' от ' + CRMText.date(c.date,{year:true}) : ''}${c.amount ? ' · ' + rub(c.amount) : ''}`;
 
 async function contractsView(view) {
   const deal = S.contractDeal || (S.me.learning ? window.AveronLearningWorkspace?.classroom?.restoreContractDeal() : null) || null;
@@ -286,7 +286,7 @@ async function contractsView(view) {
       ${S.me.readonly ? '' : `<button class="btn primary" type="button" data-new${opened ? ' hidden' : ''}>Новый договор</button>`}</div>
     ${d.items.length ? `<div class="tbl-wrap"><table class="tbl anim"><thead><tr><th class="n">№</th><th>Договор</th><th>Клиент</th><th class="hide-m">ИНН</th><th class="n">Сумма</th><th class="hide-m">Оформил</th></tr></thead><tbody>
       ${d.items.map((c, r) => `<tr${c.phone ? ` class="click" data-deal="${esc(c.phone)}"` : ''} data-css="--r:${Math.min(r, 30)}"><td class="n">${c.num ?? '—'}</td>
-        <td>${esc(c.type_title)}${c.base_num ? ` к № ${esc(c.base_num)}` : ''}<div class="s">${c.date ? esc(ddmm(c.date) + '.' + c.date.slice(0, 4)) : ''}${c.tariff ? ' · ' + esc(c.tariff) : ''}</div></td>
+        <td>${esc(c.type_title)}${c.base_num ? ` к № ${esc(c.base_num)}` : ''}<div class="s">${c.date ? esc(CRMText.date(c.date,{year:true})) : ''}${c.tariff ? ' · ' + esc(c.tariff) : ''}</div></td>
         <td>${esc(c.company || '')}${c.phone ? '<div class="s">сделка →</div>' : ''}</td><td class="hide-m num">${esc(c.inn || '')}</td>
         <td class="n">${c.amount ? rub(c.amount) : ''}</td><td class="hide-m">${esc(c.by || '')}<div class="s">${esc(when(c.created_at))}</div></td></tr>`).join('')}
     </tbody></table></div>` : '<div class="empty">Договоров пока нет. Оформленный здесь договор попадёт в журнал с номером.</div>'}`;

@@ -19,7 +19,7 @@ const rbPost = (path, body = {}) => api('/api/robot/cab' + path, {method: 'POST'
 const rbRO = () => RB.st.readonly ? ' disabled' : '';
 const rbSave = () => { try { if (window.AveronLearningWorkspace) store.set('crm-robot', {tab: RB.tab, owner: RB.owner}); else localStorage.setItem('crm-robot', JSON.stringify({tab: RB.tab, owner: RB.owner})); } catch (e) { /* без хранилища */ } };
 const money = v => v == null ? '—' : `${Number(v).toLocaleString('ru-RU', {maximumFractionDigits: 2})} ₽`;
-const opName = id => (RB.st.operators || []).find(o => o.id === id)?.name || id;
+const opName = id => (RB.st.operators || []).find(o => o.id === id)?.name || 'Оператор не указан';
 
 VIEWS.robot = async (view, arg) => {
   if (arg && RB_TABS.some(t => t[0] === arg)) RB.tab = arg;
@@ -239,7 +239,7 @@ RB_VIEW.campaigns = async el => {
   }));
 };
 
-const tzName = tz => (RB.st.timezones.find(([k]) => k === tz) || [tz, tz])[1];
+const tzName = tz => (RB.st.timezones.find(([k]) => k === tz) || [tz, CRMText.zone(tz)])[1];
 
 async function campaignForm(c) {
   const contacts = await rbGet('/contacts');
@@ -283,7 +283,7 @@ async function campaignForm(c) {
     const {items} = await rbGet(`/campaigns/${c.id}/targets`);
     $('#cf-list', box).innerHTML = items.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Номер</th><th>Имя</th><th class="n">Попыток</th><th>Итог</th></tr></thead><tbody>
       ${items.map(t => `<tr><td>${esc(phone(t.phone))}</td><td>${esc(t.name)}</td><td class="n">${t.attempts}</td>
-        <td>${t.done ? esc(t.outcome || 'готово') : t.next_at ? 'повтор ' + fmtWhen(t.next_at) : 'ждёт звонка'}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">Номеров нет.</div>';
+        <td>${t.done ? esc(CRMText.label(t.outcome,RB.st.outcomes,'Завершён')) : t.next_at ? 'повтор ' + fmtWhen(t.next_at) : 'ждёт звонка'}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">Номеров нет.</div>';
   });
   for (const [sel, action, ask] of [['#cf-finish', 'finish', 'Завершить кампанию? Робот больше не будет по ней звонить.'], ['#cf-del', 'delete', 'Удалить кампанию вместе со списком номеров? Звонки останутся во вкладке «Звонки».']]) {
     $(sel, box)?.addEventListener('click', async () => {
@@ -471,7 +471,7 @@ RB_VIEW.settings = async el => {
     const a = auto[key] || {};
     return `<div class="item"><div class="main-l"><div class="t">${title}</div>
         <div class="s wrap-s">${a.note ? esc(a.note) + (a.at ? ' · обновлено ' + fmtWhen(a.at) : '') : 'ещё не считалось'}</div>
-        ${a.error ? `<div class="s bad-text wrap-s">Не обновилось${a.tried ? ' ' + fmtWhen(a.tried) : ''}: ${esc(a.error)}</div>` : ''}</div>
+        ${a.error ? `<div class="s bad-text wrap-s">Не обновилось${a.tried ? ' ' + fmtWhen(a.tried) : ''}: ${esc(CRMText.error(a.error,'Не удалось обновить данные. Попробуйте позже.'))}</div>` : ''}</div>
       <div class="r"><b class="num">${a.value == null ? '—' : money(a.value)}</b><div class="s">${unit}</div></div></div>`;
   };
   const pt = econ.parts;

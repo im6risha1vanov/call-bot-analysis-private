@@ -28,12 +28,13 @@ function workCard(el, item, onDone, opts = {}) {
   const canDial = S.me.can_dial;
   const inDrawer = !!opts.drawer;
   const ro = S.me.readonly;
-  const src = item.source ? `<span class="chip">${esc(SOURCE_NAME[item.source] || item.source)}</span>` : '';
+  const src = item.source ? `<span class="chip">${esc(CRMText.label(item.source,SOURCE_NAME,'Другой источник'))}</span>` : '';
   el.innerHTML = `<div class="${inDrawer ? '' : 'card blk '}work" data-learning-target="queue-card" data-css="--i:1">
     ${itemChip(item) || src || opts.extra ? `<div class="who">${itemChip(item)}${src}<span class="sp"></span>${opts.extra || ''}</div>` : ''}
     ${inDrawer ? '' : `<div class="phone"><a href="tel:+${esc(item.number)}">${esc(phone(item.number))}</a></div>
     ${item.title ? `<div class="title">${esc(item.title)}</div>` : ''}`}
     ${item.note ? `<div class="note">${esc(item.note)}</div>` : ''}
+    <p class="hint time-caption">${esc(timeCaption())}</p>
     <div class="actions">
       <button class="btn primary big" type="button" data-act="dial" ${canDial ? '' : 'disabled'}>${svg('phone', '')}Позвонить</button>
       <button class="btn" type="button" data-act="copy">Скопировать номер</button>
@@ -81,7 +82,7 @@ function workCard(el, item, onDone, opts = {}) {
         ring.textContent = 'Сейчас зазвонит ваш Talker. Снимите трубку, и Mango наберёт клиента. После разговора отметьте итог ниже.';
       }
     } catch (e) {
-      ring.className = 'ringing err'; ring.textContent = e.message;
+      ring.className = 'ringing err'; ring.textContent = CRMText.error(e,'Не удалось начать звонок. Проверьте телефон и попробуйте ещё раз.');
     } finally {
       b.classList.remove('busy');
       setTimeout(() => { b.disabled = false; }, 8000);
@@ -111,7 +112,7 @@ function workCard(el, item, onDone, opts = {}) {
   async function saveOutcome() {
     if (!chosen || S.busy) return;
     const dueDate = field('date').value || null;
-    if (S.me.needs_date.includes(chosen) && !dueDate) { toast('Выберите дату', true); return; }
+    if (S.me.needs_date.includes(chosen) && !dueDate) { toast(chosen==='callback'?'Укажите дату перезвона в поле «Дата».':'Укажите дату встречи в поле «Дата».', true); return; }
     S.busy = true;
     busy($('[data-act="save"]', el), true);
     try {
@@ -162,7 +163,7 @@ document.addEventListener('click', e => {
   a.addEventListener('click', ev => ev.stopPropagation());
   a.addEventListener('error', async () => {
     let text = 'Запись не загрузилась.';
-    try { const r = await fetch(a.src, {credentials: 'same-origin'}); text = (await r.json()).error || text; } catch (err) { /* остаётся общий текст */ }
+    try { const r = await fetch(a.src, {credentials: 'same-origin'}); text = CRMText.error((await r.json()).error,text); } catch (err) { /* остаётся общий текст */ }
     const m = document.createElement('div'); m.className = 'hint'; m.textContent = text; a.replaceWith(m);
   });
   b.replaceWith(a);
@@ -181,8 +182,8 @@ async function loadHistory(number, box, ext) {
     events.push({at: c.at || '', html: `<div class="h ${cls}"><div class="hd">${head}</div>${text ? `<div class="bd">${esc(text)}</div>` : ''}${listenBtn(c)}</div>`});
   }
   for (const o of card.outcomes) {
-    const due = o.due_date ? ` · на ${ddmm(o.due_date)}${o.due_time ? ' ' + o.due_time : ''}` : '';
-    events.push({at: o.at || '', html: `<div class="h mark"><div class="hd">${when(o.at)} · отметка в CRM · ${esc(o.who || '')}</div><div class="bd"><b>${esc(o.label)}</b>${esc(due)}${o.comment ? '\n' + esc(o.comment) : ''}</div></div>`});
+    const due = o.due_date ? ` · на ${CRMText.date(o.due_date)}${o.due_time ? ' ' + o.due_time : ''}` : '';
+    events.push({at: o.at || '', html: `<div class="h mark"><div class="hd">${when(o.at)} · отметка в CRM · ${esc(o.who || '')}</div><div class="bd"><b>${esc(CRMText.label(o.outcome,S.me.outcomes,'Итог не указан'))}</b>${esc(due)}${o.comment ? '\n' + esc(o.comment) : ''}</div></div>`});
   }
   events.sort((a, b) => b.at.localeCompare(a.at));
   const tasks = card.tasks.map(t => `<div class="h hot"><div class="hd">Открытый ${esc(t.label.toLowerCase())} · ${esc(dueText(t))} · ${esc(t.who || '')}</div>${t.note ? `<div class="bd">«${esc(t.note)}»</div>` : ''}</div>`).join('');

@@ -7,7 +7,7 @@
   try {
     const packet = JSON.parse(document.getElementById('learning-workspace-context').textContent);
     classroom = new AveronClassroom.Classroom(packet, sessionStorage);
-  } catch (e) { failure = 'Учебная учётка не открылась: ' + e.message; }
+  } catch (e) { failure = 'Не удалось открыть учебную учётку. Вернитесь в «Обучение» и войдите заново.'; }
   const request = async (path, opts) => {
     if (failure) throw new Error(failure);
     return classroom.request(path, opts);

@@ -26,7 +26,7 @@
     return `<header class="rvm-head"><div>
         <span class="rvm-chip ${mark[0]}">${esc(mark[1])}</span>
         <h2>${esc(r.manager || 'Менеджер')} · ${esc(phone(r.phone))}</h2>
-        <div class="rvm-mut">${esc(r.at || '')}${r.seconds ? ' · ' + dur(r.seconds) : ''} · звонок ${r.id}</div></div>
+        <div class="rvm-mut">${esc(/^\d{4}-/.test(r.at||'')?CRMText.date(r.at,{year:true})+(String(r.at).slice(11,16)?' '+String(r.at).slice(11,16):''):r.at||'Дата не указана')}${r.seconds ? ' · ' + dur(r.seconds) : ''}</div></div>
         <button class="rvm-x" aria-label="Закрыть">×</button>
         ${r.rec ? '<audio class="rvm-audio" controls preload="metadata" src="/api/recording/' + r.id + '"></audio>'
           : '<div class="rvm-mut rvm-audio">Записи этого звонка в Mango нет, таймкоды только для ориентира.</div>'}</header>
@@ -49,10 +49,10 @@
       const r = await fetch('/api/review/' + encodeURIComponent(id) + '/train', {method: 'POST', credentials: 'same-origin',
         headers: {'Content-Type': 'application/json', 'X-CRM': '1'}, body: '{}'});
       const d = await r.json().catch(() => ({}));
-      if (!r.ok || !d.link) throw new Error(d.error || 'Не получилось создать тренировку.');
+      if (!r.ok || !d.link) throw new Error(CRMText.error(d.error,'Не удалось создать тренировку. Попробуйте ещё раз.'));
       out.innerHTML = `Тренажёр повторит этот момент: клиент тот же, попробуй довести до шага. <a href="${esc(d.link)}" target="_blank" rel="noopener">Открыть тренажёр в Telegram</a>`;
       window.open(d.link, '_blank', 'noopener');
-    } catch (e) { out.textContent = e.message; btn.disabled = false; }
+    } catch (e) { out.textContent = CRMText.error(e,'Не удалось создать тренировку. Попробуйте ещё раз.'); btn.disabled = false; }
   }
 
   async function open(id) {
@@ -86,9 +86,9 @@
     try {
       const res = await fetch('/api/review/' + encodeURIComponent(id), {credentials: 'same-origin'});
       r = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(r.error || 'Разбор не открылся.');
+      if (!res.ok) throw new Error(CRMText.error(r.error,'Не удалось открыть разбор. Закройте окно и попробуйте ещё раз.'));
     } catch (e) {
-      box.innerHTML = `<header class="rvm-head"><div>${esc(e.message)}</div><button class="rvm-x" aria-label="Закрыть">×</button></header>`;
+      box.innerHTML = `<header class="rvm-head"><div>${esc(CRMText.error(e,"Не удалось открыть разбор. Закройте окно и попробуйте ещё раз."))}</div><button class="rvm-x" aria-label="Закрыть">×</button></header>`;
       return;
     }
     if (!box.isConnected) return;

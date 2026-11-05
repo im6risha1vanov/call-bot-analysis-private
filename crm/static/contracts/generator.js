@@ -4,6 +4,7 @@
 // Логика без интерфейса (числа прописью, падежи, разбор карточки) — logic.js, без изменений.
 (function () {
   'use strict';
+  function uiError(value,fallback){return window.CRMText?CRMText.error(value,fallback):fallback;}
   var TYPES = {
     ops: { title: 'ОПС', desc: 'Сублицензия, определение посетителей сайта', file: 'Договор_ОПС' },
     gck: { title: 'ГЦК', desc: 'Сублицензия CRM, генерация целевых клиентов', file: 'Договор_ГЦК' },
@@ -228,9 +229,9 @@
           if (r.signer && !signerGenTouched) $('signerGen').value = L.fioGenitive($('signer').value);
           $('parseHint').textContent = (filled.length ? 'По ИНН заполнено полей: ' + filled.length + '. Банк и р/с добавьте из карточки клиента.' : 'По ИНН всё уже заполнено.') + (r.warning ? ' ' + r.warning : '');
           $('parseHint').classList.toggle('dg-err', !!r.warning);
-        } else $('parseHint').textContent = quiet ? '' : (res && res.error) || 'Не нашлось по ИНН.';
+        } else $('parseHint').textContent = quiet ? '' : uiError(res&&res.error,'По этому ИНН реквизиты не найдены. Проверьте ИНН или заполните поля вручную.');
         update();
-      }).catch(function (e) { $('parseHint').textContent = 'Поиск по ИНН не сработал: ' + e.message; });
+      }).catch(function (e) { $('parseHint').textContent = uiError(e,'Не удалось найти реквизиты. Проверьте ИНН или заполните поля вручную.'); });
     }
     // ИНН берём из поля «ИНН», а если там пусто, то из вставленной карточки
     $('innBtn').onclick = function () {
@@ -276,11 +277,11 @@
         api('/api/contracts/register', {method:'POST',body:{type:f.type,date:f.date,client:L.clientName(f),inn:f.inn,sum:f.sum,deal:deal ? deal.phone : ''}}).then(function (res) {
           $('result').innerHTML = '<section class="dg-note dg-ok"><h3>Учебный договор ' + esc(res.num) + '</h3><p>Клиент: ' + esc(L.clientName(f)) + '. ИНН: ' + esc(f.inn) + '.</p><p>Связан со сделкой «' + esc(deal.title) + '». Не отправлен. Не для подписания.</p><p>Найдите эту запись в журнале ниже и откройте связанную сделку.</p></section>';
           if (opts.onDone) opts.onDone();
-        }).catch(function (e) { $('result').textContent = e.message; }).finally(function () { $('genBtn').disabled = false; });
+        }).catch(function (e) { $('result').textContent = uiError(e,'Не удалось подготовить договор. Проверьте реквизиты и попробуйте ещё раз.'); }).finally(function () { $('genBtn').disabled = false; });
         return;
       }
       // Сначала проверяем, что шаблон собирается, и только потом занимаем номер в журнале.
-      try { render(f); } catch (e) { $('result').innerHTML = '<div class="dg-note dg-err">Не удалось собрать договор: ' + esc(e.message) + '</div>'; return; }
+      try { render(f); } catch (e) { $('result').innerHTML = '<div class="dg-note dg-err">Не удалось собрать договор: ' + esc(uiError(e,'Проверьте реквизиты и попробуйте ещё раз.')) + '</div>'; return; }
       $('genBtn').disabled = true; $('result').innerHTML = '';
       api('/api/contracts/register', { method: 'POST', body: {
         type: f.type, date: f.date, client: L.clientName(f), inn: f.inn, sum: f.sum === '' || f.sum === undefined ? '' : f.sum,
@@ -291,13 +292,13 @@
           download(render(f), fileName(f));
           $('result').innerHTML = '<div class="dg-note dg-ok">Готово: ' + esc(fileName(f)) + '<br>' + (f.type !== 'ds' ? 'Номер договора ' + esc(f.num) + ' записан в журнал.' : 'Записано в журнал.') + '</div>';
         } catch (e) {
-          $('result').innerHTML = '<div class="dg-note dg-err">Не удалось собрать договор: ' + esc(e.message) + '</div>';
+          $('result').innerHTML = '<div class="dg-note dg-err">Не удалось собрать договор: ' + esc(uiError(e,'Проверьте реквизиты и попробуйте ещё раз.')) + '</div>';
         }
         $('genBtn').disabled = false;
         loadNextNum();
         if (opts.onDone) opts.onDone();
       }).catch(function (e) {
-        $('result').innerHTML = '<div class="dg-note dg-err">Не получилось записать в журнал: ' + esc(e.message) + '</div>'; $('genBtn').disabled = false;
+        $('result').innerHTML = '<div class="dg-note dg-err">Не получилось записать в журнал: ' + esc(uiError(e,'Проверьте реквизиты и попробуйте ещё раз.')) + '</div>'; $('genBtn').disabled = false;
       });
     };
 

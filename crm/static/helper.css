@@ -26,7 +26,7 @@
 .gpt-m.me{align-self:flex-end;background:var(--accent-soft);white-space:pre-wrap}
 .gpt-m.ai{align-self:flex-start;background:var(--surface-2)}
 .gpt-m .row{display:flex;gap:6px;margin-top:8px}
-.gpt-go{display:inline-flex;align-items:center;margin:2px 2px 0 0;padding:3px 10px;border-radius:999px;border:1px solid var(--accent);background:var(--surface);color:var(--accent);font-size:12.5px;font-weight:600;transition:background .15s}
+.gpt-go{display:inline-flex;align-items:center;margin:2px 2px 0 0;padding:3px 10px;border-radius:999px;border:1px solid var(--accent);background:var(--surface);color:var(--accent-text);font-size:12.5px;font-weight:600;transition:background .15s}
 .gpt-go:hover{background:var(--accent-soft)}
 .gpt-dots{display:inline-flex;gap:4px;padding:4px 0}
 .gpt-dots i{width:6px;height:6px;border-radius:50%;background:var(--muted);animation:gpt-dot 1s infinite ease-in-out}
@@ -43,7 +43,7 @@
 .gpt-send:active{transform:scale(.94)}
 .gpt-send svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
 .gpt-note{margin:0;padding:0 16px 10px;font-size:11px;color:var(--muted)}
-.linkish{border:0;background:none;padding:0;color:var(--accent);font:inherit;font-weight:600;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.linkish{border:0;background:none;padding:0;color:var(--accent-text);font:inherit;font-weight:600;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
 /* Экскурсия: затемнение с «дыркой» над блоком, дырка плавно переезжает от шага к шагу */
 .tour{position:fixed;inset:0;z-index:60}
 .tour-hole{position:fixed;border-radius:14px;box-shadow:0 0 0 200vmax color-mix(in oklab, var(--scrim) 72%, transparent), 0 0 0 3px var(--accent);
@@ -74,3 +74,15 @@
   .gpt-h{padding-left:max(16px, env(safe-area-inset-left, 0px));padding-right:max(12px, env(safe-area-inset-right, 0px))}
 }
 @media (prefers-reduced-motion: reduce){.gpt,.gpt-m,.tour-hole,.tour-hole::after,.tour-card.in{animation:none}.tour-hole,.tour-card{transition:none}.gpt-dots i{animation:none;opacity:.6}}
+
+/* Static tab help is independent of GPT and lesson progress. */
+.page-help{position:fixed;right:12px;top:12px;bottom:12px;width:min(390px,calc(100vw - 24px));display:flex;flex-direction:column;background:var(--surface);color:var(--fg);border:1px solid var(--accent);border-radius:14px;box-shadow:var(--shadow-lg);z-index:240}
+.page-help-head{display:flex;gap:10px;align-items:flex-start;padding:14px 16px;border-bottom:1px solid var(--line)}
+.page-help-head h2{font-size:16px;line-height:1.4;margin:0;flex:1;min-width:0;overflow-wrap:anywhere;color:var(--fg)}
+.page-help-body{padding:14px 16px;overflow:auto;min-height:0;overscroll-behavior:contain}
+.page-help-body section+section{margin-top:18px}.page-help h3{font-size:14px;margin:0 0 6px;color:var(--fg)}
+.page-help p{font-size:14px;line-height:1.55;margin:0;color:var(--fg);overflow-wrap:anywhere}.page-help p.hint{font-size:13px;margin-top:18px;color:var(--muted)}
+.page-help :focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+@media(max-width:600px){.page-help{right:8px;top:8px;bottom:8px;width:calc(100vw - 16px)}.page-help-head{padding:12px}.page-help-body{padding:12px}.page-help .ghost{min-height:40px;min-width:40px}}
+
+.gpt,.gpt-m.ai,.gpt-m.me{color:var(--fg)}

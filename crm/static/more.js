@@ -29,7 +29,7 @@ async function leadsView(box) {
         `<button type="button" data-f="${k}" aria-pressed="${S.leadFilter === k}">${esc(data.labels[k])}<span class="c">${data.counts[k]}</span></button>`).join('')}</div>
       ${data.items.length ? `<div class="tbl-wrap"><table class="tbl anim"><thead><tr><th>Номер</th><th>Клиент</th><th class="hide-m">Источник</th><th>Статус</th><th></th></tr></thead><tbody>
       ${data.items.map((l, r) => `<tr class="click" data-id="${l.id}" data-css="--r:${Math.min(r, 30)}"><td class="num nw">${esc(phone(l.number))}</td><td>${esc(l.title || '')}${l.note ? `<div class="s">${esc(l.note)}</div>` : ''}</td>
-        <td class="hide-m">${esc(l.source)}</td><td><span class="chip ${chipCls(l.status)}">${esc(l.label)}${l.status === 'no_answer' ? ' · ' + l.attempts : ''}</span></td>
+        <td class="hide-m">${esc(l.source)}</td><td><span class="chip ${chipCls(l.status)}">${esc(CRMText.label(l.status,{...S.me.outcomes,new:'Новый'},'Статус не указан'))}${l.status === 'no_answer' ? ' · ' + l.attempts : ''}</span></td>
         <td>${ro ? '' : `<button class="x" type="button" data-del="${l.id}" aria-label="Удалить номер" data-css="width:28px;height:28px">${svg('x', '')}</button>`}</td></tr>`).join('')}
       </tbody></table></div>${data.items.length >= 500 ? '<p class="hint">Показаны последние 500.</p>' : ''}` : '<div class="empty">Здесь пока пусто. Вставьте номера в форму.</div>'}</section>
     ${ro ? '' : `<section class="card blk" data-css="--i:1"><div class="card-h"><h2>Добавить номера</h2></div>
@@ -71,7 +71,7 @@ async function leadsView(box) {
 // ---------- отчёты и вопросы ----------
 S.repFilter = 'all';
 const reportHtml = (r, i) => `<article class="card report click" tabindex="0"${r.id ? ` data-learning-report="${esc(r.id)}"` : ''} data-css="--i:${i}">
-  <div class="rep-head"><b>${esc(r.title)}</b>${r.who ? `<span>${esc(r.who)}</span>` : ''}<span class="hint">${fmtWhen(r.at)}</span>${r.note ? `<span class="chip">${esc(r.note)}</span>` : ''}</div>
+  <div class="rep-head"><b>${esc(CRMText.datesInText(r.title))}</b>${r.who ? `<span>${esc(r.who)}</span>` : ''}<span class="hint">${fmtWhen(r.at)}</span>${r.note ? `<span class="chip">${esc(r.note)}</span>` : ''}</div>
   <div class="rep-body">${r.html}</div>
   ${r.calls.length ? `<div class="rep-calls">${r.calls.map(c => `<button class="btn small" type="button" data-review="${c.id}">${esc(c.label)}</button>`).join('')}</div>` : ''}</article>`;
 
@@ -223,7 +223,7 @@ async function promptsView(view) {
   const rowTone = i => i.error || (i.before_ok && !i.after_ok) ? 'bad' : (!i.before_ok && i.after_ok ? 'good' : 'warn');
   const checkHtml = c => {
     if (!c) return '';
-    if (c.problem) return `<div class="card report open pm-check"><div class="pm-verdict bad"><b>Проверка не получилась:</b> ${esc(c.problem)}</div></div>`;
+    if (c.problem) return `<div class="card report open pm-check"><div class="pm-verdict bad"><b>Проверка не получилась:</b> ${esc(CRMText.error(c.problem,'Не удалось проверить изменения. Попробуйте ещё раз.'))}</div></div>`;
     const rows = c.items.filter(i => i.changed.length);
     const shift = c.success_after - c.success_before;
     const tile = (tone, n, label) => `<div class="${tone}"><b>${n}</b><span>${label}</span></div>`;
@@ -234,7 +234,7 @@ async function promptsView(view) {
       ${rows.length ? `<div class="pm-legend"><span class="bad">результат пропал или сбой</span><span class="good">результат появился</span><span class="warn">поменялись тип, шанс или категория</span></div>
       <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Звонок</th><th>Что поменялось</th><th>Было</th><th>Стало</th><th></th></tr></thead><tbody>
         ${rows.map(i => `<tr class="pm-row ${rowTone(i)}"><td class="nw"><div class="t">${esc(i.manager)}</div><div class="s">${esc(i.date)}</div></td><td>${esc(i.changed.join(', '))}</td>
-          <td class="wrap was">${esc(i.before)}</td><td class="wrap now">${esc(i.after)}${i.error ? `<div class="s">сбой: ${esc(i.error)}</div>` : ''}</td>
+          <td class="wrap was">${esc(i.before)}</td><td class="wrap now">${esc(i.after)}${i.error ? `<div class="s">сбой: ${esc(CRMText.error(i.error,'Не удалось сравнить этот разговор. Повторите проверку позже.'))}</div>` : ''}</td>
           <td><button class="btn small" type="button" data-review="${i.call_id}">Разбор</button></td></tr>`).join('')}</tbody></table></div>` : ''}
       <p class="hint">Оба текста прогнаны сейчас на одних и тех же звонках. Модель отвечает не всегда одинаково, поэтому пара изменений бывает и без правки.</p></div></div>`;
   };

@@ -19,10 +19,10 @@ function bindManager(scope, onChange) {
 S.calls = {result: '', kind: '', q: ''};
 
 function callRow(c, r) {
-  const [cls, label] = CALL_CHIP[c.result] || ['', ''];
+  const [cls, label] = CALL_CHIP[c.result] || ['', 'Итог не указан'];
   const chip = c.result === 'none' && !c.reviewed ? '<span class="chip">Без разбора</span>' : `<span class="chip ${cls}">${label}</span>`;
   return `<tr class="click" tabindex="0" data-id="${c.id}" data-css="--r:${r % 50}">
-    <td class="nw">${esc(when(c.at))}<div class="s">${c.incoming ? 'входящий' : 'исходящий'}${c.kind ? ' · ' + esc(c.kind) : ''}</div></td>
+    <td class="nw">${esc(when(c.at))}<div class="s">${c.incoming ? 'входящий' : 'исходящий'}${c.kind ? ' · ' + esc(CRMText.label(c.kind,null,'Другой тип')) : ''}</div></td>
     ${isDir() ? `<td class="hide-m nw">${esc(c.manager || '—')}</td>` : ''}
     <td><div class="num t">${esc(phone(c.number) || '—')}</div>${c.company ? `<div class="s">${esc(c.company)}</div>` : ''}</td>
     <td class="n hide-m">${c.seconds ? dur(c.seconds) : '—'}</td>
@@ -110,7 +110,7 @@ function cbRow(t, today) {
   const days = late ? Math.round((new Date(today) - new Date(t.due_date)) / 864e5) : 0;
   const ro = S.me.readonly;
   return `<div class="cb blk" data-id="${t.id}" data-css="--i:${Math.min(t._i, 12)}">
-    <div class="when"><b>${esc(t.due_date === today ? 'сегодня' : t.due_date === addDays(today, 1) ? 'завтра' : ddmm(t.due_date))}${t.due_time ? ' ' + esc(t.due_time) : ''}</b>
+    <div class="when"><b>${esc(CRMText.date(t.due_date,{today,relative:!S.me.learning}))}${t.due_time ? ' ' + esc(t.due_time) : ''}</b>
       <span>${late ? `просрочен ${days} ${plural(days, 'день', 'дня', 'дней')}` : t.estimate ? 'дата примерная' : esc(dayLong(t.due_date).split(',')[0])}</span></div>
     <div class="what"><div class="t"><span class="num">${esc(phone(t.number) || '—')}</span>${t.title ? `<span>${esc(t.title)}</span>` : ''}
       <span class="chip ${t.label === 'Встреча' ? 'acc' : ''}">${esc(t.label)}</span></div>
@@ -142,7 +142,7 @@ VIEWS.callbacks = async view => {
   }
   const groups = [['late', 'Просрочено', t => t.due_date < today], ['today', 'Сегодня', t => t.due_date === today], ['next', 'Дальше', t => t.due_date > today]];
   let n = 0;
-  view.innerHTML = `<div class="page"><section class="card blk" data-learning-target="callback-list">${groups.map(([k, name, test]) => {
+  view.innerHTML = `<div class="page"><p class="hint time-caption">${esc(timeCaption())}</p><section class="card blk" data-learning-target="callback-list">${groups.map(([k, name, test]) => {
     const list = items.filter(test);
     return list.length ? `<div class="group${k === 'late' ? ' late' : ''}" data-g="${k}">${name}<span class="count">${list.length}</span></div>
       <div class="list">${list.map(t => cbRow({...t, _i: n++}, today)).join('')}</div>` : '';

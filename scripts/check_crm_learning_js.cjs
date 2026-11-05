@@ -5,7 +5,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const root = path.resolve(__dirname, '..');
 const context = vm.createContext({});
-for (const name of ['engine.js', 'progress.js']) {
+for (const name of ['../presentation.js', 'engine.js', 'progress.js']) {
   vm.runInContext(fs.readFileSync(path.join(root, 'crm/static/learning', name), 'utf8'), context, {filename: name});
 }
 context.TEST_CATALOG = JSON.parse(fs.readFileSync(path.join(root, 'crm/learning_lessons.json'), 'utf8'));

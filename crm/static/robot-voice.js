@@ -122,7 +122,7 @@ async function robotVoiceView(view) {
     out.pronounce = $('#rb-pron', view).value;
     return out;
   };
-  const st = (text, err) => { const el = $('#rb-st', view); el.textContent = text; el.className = err ? 'hint bad-text' : 'hint'; };
+  const st = (text, err) => { const el = $('#rb-st', view); el.textContent = err?CRMText.error(text,'Не удалось выполнить действие. Попробуйте ещё раз.'):text; el.className = err ? 'hint bad-text' : 'hint'; };
   $('#rb-listen', view).addEventListener('click', async () => {
     const s = collect(), btn = $('#rb-listen', view);
     if (!s.voice_id) return st('Выберите голос или впишите voice_id.', true);
@@ -175,7 +175,7 @@ async function robotVoiceView(view) {
       $('#rb-vmore', view)?.remove();
       box.insertAdjacentHTML('beforeend', (rows || (more ? '' : '<div class="empty">Ничего не нашлось.</div>')) + (r.more ? '<button class="btn small" type="button" id="rb-vmore">Ещё</button>' : ''));
       $('#rb-vmore', view)?.addEventListener('click', () => findVoices(true));
-    } catch (e) { box.innerHTML = `<div class="muted bad-text">${esc(e.message)}</div>`; }
+    } catch (e) { box.innerHTML = `<div class="muted bad-text">${esc(CRMText.error(e,'Не удалось открыть образец. Попробуйте ещё раз.'))}</div>`; }
   };
   $('#rb-vfind', view).addEventListener('click', () => findVoices(false));
   $('#rb-vq', view).addEventListener('keydown', e => { if (e.key === 'Enter') findVoices(false); });
@@ -213,7 +213,7 @@ async function robotVoiceView(view) {
       if (!r.ok) throw new Error(data.error || 'Клон не получился.');
       useVoice(data.voice_id, name, data.voices);
       out.textContent = `Клон «${name}» готов и выбран. Послушайте и сохраните.`;
-    } catch (err) { out.textContent = err.message; }
+    } catch (err) { out.textContent = CRMText.error(err,'Не удалось подготовить голос. Проверьте данные и попробуйте ещё раз.'); }
     busy(btn, false);
   });
   const dialNow = async number => {
@@ -222,7 +222,7 @@ async function robotVoiceView(view) {
     try {
       const r = await api('/api/robot/call', {method: 'POST', body: {phone: number, operator: $('#rb-op', view).value}});
       out.textContent = `Робот звонит на ${phone(r.number)}. Итог появится на вкладке «Звонки» после разговора.`;
-    } catch (e) { out.textContent = e.message; }
+    } catch (e) { out.textContent = CRMText.error(e,'Не удалось подготовить голос. Попробуйте ещё раз.'); }
   };
   $('#rb-call', view).addEventListener('click', async () => {
     const n = $('#rb-phone', view).value;

@@ -97,7 +97,7 @@
   function viewport(){const v=window.visualViewport;return {left:v?.offsetLeft||0,top:v?.offsetTop||0,width:v?.width||innerWidth,height:v?.height||window.innerHeight||768};}
   function usable(n){const r=n.getBoundingClientRect();return n.isConnected&&!n.closest('.hidden')&&(!n.checkVisibility||n.checkVisibility())&&r.width>0&&r.height>0;}
   function obstaclesFor(card){
-    const nodes=$$('input,select,textarea,button,a[href],[contenteditable="true"],.banner,.gpt.open');
+    const nodes=$$('input,select,textarea,button,a[href],[contenteditable="true"],.banner,.gpt.open,.page-help');
     const result=nodes.filter(n=>!card.contains(n)&&!n.closest('.learn-resume')&&n!==anchor&&!anchor?.contains(n)&&usable(n)).map(n=>n.getBoundingClientRect());
     const focused=document.activeElement;
     // Native select option lists are not DOM children: reserve their opening area.
@@ -256,8 +256,8 @@
       const viaMore=anchor?.matches('.more,[data-sheet]')&&step?.action==='visit_page';
       const destination=step&&W.programme.tabs.find(t=>t.page===step.expected.page)?.title||'Обучение';
       const raw=done?'Урок пройден. Выберите следующую вкладку в программе.':viaMore?'Откройте «Ещё», затем «'+destination+'».':(step.hint||step.title);
-      const explain=done?'Можно повторить отдельный урок с чистой учебной ситуацией.':AveronLearningEngine.interpolate(step.explain||'',a);
-      const text=AveronLearningEngine.interpolate(raw,a);
+      const explain=done?'Можно повторить отдельный урок с чистой учебной ситуацией.':AveronLearningEngine.interpolateDisplay(step.explain||'',a);
+      const text=AveronLearningEngine.interpolateDisplay(raw,a);
       panel.innerHTML=`<header class="learn-head"><div class="learn-handle" data-learn-drag tabindex="0" role="button" aria-label="Переместить подсказку: перетащите заголовок или используйте стрелки. Enter возвращает к элементу."><b id="learn-heading" tabindex="-1" data-learn-heading>${esc(title)}</b><span class="learn-step">${success?'Выполнено':done?'Урок пройден':`Шаг ${index-tab.start+1} из ${count}`}</span><span class="learn-move-note">Перетащите за заголовок</span></div><button class="learn-close" type="button" aria-label="Приостановить урок" data-learn-close>×</button></header><div class="learn-body">${success?`<div class="learn-success" role="status" aria-live="polite" data-learning-success><svg viewBox="0 0 52 52" aria-hidden="true"><circle cx="26" cy="26" r="23"/><path d="m14 26 8 8 16-17"/></svg><b>${success.to===success.tab.end?'Урок пройден':'Выполнено'}</b><p>${esc(successText(step))}</p><small>Сейчас появится следующая подсказка…</small></div>`:`<p class="learn-instruction">${esc(text)}</p><p class="learn-explanation">${esc(explain)}</p>${!done&&tab.purpose?`<p class="learn-purpose"><b>Когда пригодится.</b> ${esc(tab.purpose)}</p>`:''}${!done?exampleMarkup(step):''}<p class="learn-status" role="status" data-learn-feedback></p>${!anchor&&!done?`<p class="learn-missing" data-missing-target>${waiting?'Ожидаю появления элемента…':'Элемент не найден. Откройте нужную вкладку или вернитесь к программе.'}</p>`:''}` }</div><footer class="learn-actions"><button class="ghost" type="button" data-learn-catalog>К программе</button>${anchor?'<button class="ghost" type="button" data-learn-focus aria-label="Перейти к выделенному элементу">К элементу</button>':''}</footer>`;
       bindExample();
       $('[data-learn-close]',panel).onclick=close;
@@ -267,7 +267,7 @@
       $('[data-learn-focus]',panel)?.addEventListener('click',()=>{resetPosition();anchor?.scrollIntoView({block:'center',behavior:reduce?'auto':'smooth'});if(anchor?.matches('input,select,textarea,button'))anchor.focus({preventScroll:true});queuePosition();});
     }
     const feedback=$('[data-learn-feedback]',panel);
-    const message=a?.feedback&&!a.feedback.startsWith('Верно.')&&!a.completed?a.feedback:'';
+    const message=a?.feedback&&!a.feedback.startsWith('Верно.')&&!a.completed?CRMText.error(a.feedback,'Проверьте выбранную запись и поля задания.'):'';
     if(feedback&&feedback.textContent!==message)feedback.textContent=message;
     const next=anchor?[anchor]:[];
     for(const n of highlights)if(!next.includes(n))n.classList.remove('learn-highlight');
@@ -285,7 +285,7 @@
         if(selected==='102')W.observe('set_manager',{manager:'boris'});
       }
       if(step.action==='verify_outcome'&&$('[data-learning-target="client-history"]')?.textContent.includes('Не взял трубку')){verification=checkKey;W.observe('verify_outcome');}
-      if(step.action==='verify_history'&&$('.rvm-body')?.textContent.includes(AveronLearningEngine.refs(a).expectedNote)){verification=checkKey;W.observe('verify_history');}
+      if(step.action==='verify_history'&&CRMText.datesInText($('.rvm-body')?.textContent).includes(CRMText.datesInText(AveronLearningEngine.refs(a).expectedNote))){verification=checkKey;W.observe('verify_history');}
       if(step.action==='verify_task'&&S.page==='callbacks'&&$('[data-learning-target="callback-list"]')){verification=checkKey;W.observe('verify_task');}
       if(step.action==='open_section'&&step.expected.section==='contracts'&&S.page==='deals'&&S.arg==='contracts'&&$('[data-learning-target="contract-journal"]'))W.observe('open_section',{section:'contracts'});
     }
@@ -327,6 +327,7 @@
     document.addEventListener('keydown',event=>{if(event.key==='Escape'&&panel?.contains(event.target)){event.stopImmediatePropagation();event.preventDefault();close();}},true);
     addEventListener('scroll',queuePosition,true);addEventListener('resize',queuePosition);
     window.visualViewport?.addEventListener('resize',queuePosition);window.visualViewport?.addEventListener('scroll',queuePosition);
+    document.addEventListener('crm-help-changed',schedule);
     document.addEventListener('focusin',queuePosition,true);document.addEventListener('focusout',queuePosition,true);
     new MutationObserver(records=>{
       const clean=classes=>String(classes||'').split(/\s+/).filter(c=>c!=='learn-highlight').sort().join(' ');

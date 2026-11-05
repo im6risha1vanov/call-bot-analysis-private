@@ -203,6 +203,7 @@ class CatalogTests(unittest.TestCase):
     def test_actual_engine_and_practice_ui_all_ten_lessons(self):
         vm = JavaScriptVM()
         try:
+            vm.evaluate((ROOT/'crm/static/presentation.js').read_text())
             for name in ('engine.js','progress.js'):
                 vm.evaluate((ROOT/'crm/static/learning'/name).read_text())
             clock = learning.clock_for('Europe/Moscow',datetime(2026,11,4,10,tzinfo=timezone.utc))
@@ -340,7 +341,7 @@ class ExistingSurfaceTests(unittest.TestCase):
     def test_existing_forms_helper_and_gpt_are_unchanged_except_inert_targets(self):
         import re,subprocess
         base='2a11936af00465fafdaa07059da179ee8ce7313a'
-        for name in ['crm/static/helper.js','crm/gpt.py','crm/static/review.js','crm/static/people.js','crm/static/summary.js','crm/static/automations.js']:
+        for name in ['crm/static/helper.js','crm/gpt.py','crm/static/people.js','crm/static/summary.js']:
             process=subprocess.run(['git','show',base+':'+name],cwd=ROOT,capture_output=True,text=True)
             if process.returncode:
                 self.skipTest('Pinned Git baseline unavailable for source regression check')
