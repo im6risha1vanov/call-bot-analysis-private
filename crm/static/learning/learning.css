@@ -84,11 +84,11 @@
 .learn-example img{display:block;width:100%;height:auto;object-fit:contain;background:#0e1513}
 .learn-example .ghost{font-size:12px;padding:4px 8px;min-height:32px}
 .learn-example .learn-example-note{font-size:12px;line-height:1.45;margin:0;padding:6px 8px;color:var(--fg);overflow-wrap:anywhere}
-.learn-success{display:flex;align-items:center;flex-direction:column;text-align:center;padding:12px 0;gap:8px}
-.learn-success svg{width:52px;height:52px;fill:none;stroke:var(--accent);stroke-width:3;stroke-linecap:round;stroke-linejoin:round;animation:learn-check-pop .3s ease-out both}
+.learn-success{display:grid;grid-template-columns:30px minmax(0,1fr);align-items:center;padding:8px 0;gap:3px 8px}
+.learn-success svg{grid-row:1/4;width:28px;height:28px;fill:none;stroke:var(--accent);stroke-width:3;stroke-linecap:round;stroke-linejoin:round;animation:learn-check-pop .3s ease-out both}
 .learn-success path{stroke-dasharray:48;stroke-dashoffset:48;animation:learn-check-draw .4s .1s ease-out forwards}
-.learn-success b{font-size:17px;color:var(--accent)}
-.learn-success p{font-size:13px;line-height:1.4;margin:0}.learn-success small{font-size:11px;color:var(--muted)}
+.learn-success b{font-size:15px;color:var(--accent)}
+.learn-success p{grid-column:2;font-size:13px;line-height:1.4;margin:0}.learn-success small{grid-column:2;font-size:11px;color:var(--muted)}
 @keyframes learn-check-pop{from{opacity:0;transform:scale(.75)}to{opacity:1;transform:scale(1)}}
 @keyframes learn-check-draw{to{stroke-dashoffset:0}}
 @media(prefers-reduced-motion:reduce){.learn-success svg,.learn-success path{animation:none;stroke-dashoffset:0}}

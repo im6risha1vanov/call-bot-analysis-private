@@ -47,7 +47,7 @@ async function main(){const cases=[],coverage=[],test=async(name,fn)=>{try{await
   assert.equal(expected(ui).st.action,'save_outcome');assert.equal(expected(ui).a.outcome,'callback');
   assert(ui.document.querySelector('.learn-step').textContent.includes('Шаг 4'));
   const image=ui.document.querySelector('[data-example-image]');assert(image.closest('[data-example]').dataset.example==='save_outcome_callback');assert.equal(image.getAttribute('height'),'360');
-  assert(ui.document.querySelector('.learn-example-note').textContent.includes('из задания'));
+  assert(ui.document.querySelector('.learn-example-note').textContent.includes('свои допустимые'));
   const at=state(ui).step;await click(ui,'[data-example-toggle]');await click(ui,'[data-example-toggle]');assert.equal(state(ui).step,at);assert(!state(ui).createdTask);
   await click(ui,'[data-out="callback"]');for(const field of ['date','time','comment'])assert(ui.document.querySelector('[data-f="'+field+'"]'));
   assert.equal(ui.document.querySelector('[data-f="comment"]').value,'');assert.equal(ui.network.length,0);
@@ -84,9 +84,9 @@ async function main(){const cases=[],coverage=[],test=async(name,fn)=>{try{await
   await ui.run('go("deals","contracts")');await settle();await click(ui,'[data-page-help]');assert.deepEqual(ui.document.querySelectorAll('[data-help-example]').map(n=>n.dataset.helpExample),['compose','prepare_contract','select_document']);assert(ui.document.querySelector('.page-help').textContent.includes('учебном журнале'));
   assert.equal(backend.events.length,0);assert.equal(backend.failures.length,0);assert.equal(ui.errors.length,0);
  });
- await test('friendly-note-and-legacy-note-have-same-meaning-without-rewriting-user-input',async()=>{
-  const ui=await open();await start(ui);await until(ui,()=>expected(ui).st.action==='save_note');assert(!/\d{4}-\d{2}-\d{2}/.test(ui.document.querySelector('.learn-instruction').textContent));
-  await click(ui,'[data-ev="note"]');const note=T.datesInText(expected(ui).a.note),before=state(ui).step;await fill(ui,'[data-v="note"]',expected(ui).a.note.replace('2026-','2027-'));await click(ui,'.rvm [data-save]');assert.equal(state(ui).step,before);assert.equal(state(ui).data.deals[0].history.length,1);await fill(ui,'[data-v="note"]',note);await click(ui,'.rvm [data-save]');assert.equal(state(ui).data.deals[0].history.at(-1).text,note);await complete(ui);assert(ui.model.courseDone());
+ await test('guided-note-is-free-text-and-keeps-what-the-user-entered',async()=>{
+  const ui=await open();await start(ui);await until(ui,()=>expected(ui).st.action==='save_note');
+  await click(ui,'[data-ev="note"]');const note='Уточнить подходящий объём в следующем разговоре';const before=state(ui).step;await fill(ui,'[data-v="note"]',note);await click(ui,'.rvm [data-save]');assert(state(ui).step>before);assert.equal(state(ui).data.deals[0].history.at(-1).text,note);await complete(ui);assert(ui.model.courseDone());
  });
  console.log(JSON.stringify({mode:'pure presentation + actual native CRM controllers with fictional APIs; not browser',cases,coverage},null,2));if(cases.some(c=>c.result==='FAILED'))process.exitCode=1;
 }

@@ -130,6 +130,7 @@ const TICK = '<svg viewBox="0 0 24 24" aria-hidden="true"><path class="tick" d="
 // ---------- маленькие детали ----------
 let toastTimer = null;
 function toast(text, err = false) {
+  if(!err&&window.learningShowsSuccess?.())return;
   $('.toast')?.remove();
   const el = document.createElement('div');
   el.className = 'toast' + (err ? ' err' : '');
@@ -498,7 +499,7 @@ function moreSheet() {
 function setCount(page, n) {
   S.counts = S.counts || {};
   S.counts[page] = n || '';
-  $$(`[data-count="${page}"]`).forEach(el => { el.textContent = n ? String(n) : ''; });
+  $$(`[data-count="${page}"]`).forEach(el => { const value=n?String(n):'';if(el.textContent!==value)el.textContent=value; });
 }
 
 // Шапка страницы: заголовок, «назад», фильтры. Страница вызывает её сама, когда знает, что показать.
@@ -623,10 +624,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   refreshCounts();
   if (!S.me.learning && window.gptFirstVisit && hasModule('gpt')) gptFirstVisit();
   // Раз в минуту обновляем счётчики, а очередь менеджера, если он ничего не заполняет.
-  setInterval(() => {
+  setInterval(async () => {
     if (document.hidden) return;
-    refreshCounts();
-    if (S.page === 'queue' && !S.busy && !S.dial && !drawerOpen() && !$('.outform:not(.hidden)') && !$('.rvm')) reload();
+    await refreshCounts();
+    if (S.page === 'queue') await refreshQueueInBackground();
   }, 60000);
 });
 const saveFilters = () => store.set('crm-f', S.f);

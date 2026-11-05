@@ -170,9 +170,16 @@ document.addEventListener('click', e => {
   a.play().catch(() => { /* браузер мог запретить автозапуск: плеер остаётся с кнопкой */ });
 }, true);
 
-async function loadHistory(number, box, ext) {
+function viewSnapshot(value){
+  return JSON.stringify(value,(_key,record)=>record&&typeof record==='object'&&!Array.isArray(record)?Object.fromEntries(Object.keys(record).sort().map(key=>[key,record[key]])):record);
+}
+const historySnapshots=new WeakMap(),historyRequests=new WeakMap();
+async function loadHistory(number, box, ext, {quiet=false}={}) {
+  const request={};historyRequests.set(box,request);
   let card;
-  try { card = await api('/api/card' + qs({number, ext: S.me.role === 'director' ? ext : ''})); } catch (e) { box.innerHTML = `<div class="hint">${esc(e.message)}</div>`; return; }
+  try { card = await api('/api/card' + qs({number, ext: S.me.role === 'director' ? ext : ''})); } catch (e) { if(!quiet&&box.isConnected&&historyRequests.get(box)===request)box.innerHTML = `<div class="hint">${esc(e.message)}</div>`; return false; }
+  if(!box.isConnected||historyRequests.get(box)!==request)return false;
+  const snapshot=viewSnapshot([number,ext,card]);if(historySnapshots.get(box)===snapshot)return false;
   const events = [];
   for (const c of card.calls) {
     const rv = c.review;
@@ -188,6 +195,8 @@ async function loadHistory(number, box, ext) {
   events.sort((a, b) => b.at.localeCompare(a.at));
   const tasks = card.tasks.map(t => `<div class="h hot"><div class="hd">Открытый ${esc(t.label.toLowerCase())} · ${esc(dueText(t))} · ${esc(t.who || '')}</div>${t.note ? `<div class="bd">«${esc(t.note)}»</div>` : ''}</div>`).join('');
   box.innerHTML = tasks + (events.map(e => e.html).join('') || (tasks ? '' : '<div class="hint">С этим номером ещё не говорили.</div>'));
+  historySnapshots.set(box,snapshot);
+  return true;
 }
 
 // В окне подробного разбора — кнопка «Позвонить»: открывает карточку номера.
@@ -206,12 +215,33 @@ document.addEventListener('crm-review', e => {
 });
 
 // ---------- очередь менеджера ----------
-VIEWS.queue = async (view, arg) => {
+let queueRefreshState=null,queueRefreshBusy=false;
+function canRefreshQueue(state){
+  return state&&state===queueRefreshState&&state.view.isConnected&&S.page==='queue'&&S.arg===state.arg&&!S.busy&&!S.dial&&!drawerOpen()&&!$('.outform:not(.hidden)')&&!$('.rvm')&&!window.AveronLearningWorkspace?.classroom?.presentationBusy;
+}
+async function refreshQueueInBackground(){
+  const state=queueRefreshState;if(queueRefreshBusy||!canRefreshQueue(state))return false;
+  queueRefreshBusy=true;
+  try{
+    const q=await api('/api/queue'+qs({ext:state.ext}));
+    if(!canRefreshQueue(state))return false;
+    if(viewSnapshot(q)===state.snapshot){
+      const box=$('.hist',state.view);return box&&S.qnum?await loadHistory(S.qnum,box,state.ext,{quiet:true}):false;
+    }
+    await VIEWS.queue(state.view,state.arg,{data:q});
+    window.learningPageChanged?.();window.pageHelpChanged?.();return true;
+  }catch(error){return false;/* Keep the visible data and the current exercise on a transient refresh failure. */}
+  finally{queueRefreshBusy=false;}
+}
+VIEWS.queue = async (view, arg, refresh={}) => {
+  queueRefreshState=null;
   const director = S.me.role === 'director';
   const ext = director ? (arg || S.f.ext || S.me.team[0]?.ext) : null;
   const person = director ? S.me.team.find(p => p.ext === ext) : null;
   setHead({title: director ? `Очередь · ${person?.name || 'доб. ' + ext}` : 'Очередь', back: director ? () => go('staff', ext) : null});
-  const q = await loading(view, api('/api/queue' + qs({ext})), 'cards');
+  const q = refresh.data||await loading(view, api('/api/queue' + qs({ext})), 'cards');
+  if(!view.isConnected)return;
+  queueRefreshState={view,arg,ext,snapshot:viewSnapshot(q)};
   S.today = q.today || S.today;
   if (!director) setCount('queue', q.items.length);
   if (!q.items.length) {

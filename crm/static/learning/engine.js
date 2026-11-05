@@ -53,10 +53,16 @@
     for (var i = 0; i < saved.events.length; i++) if (saved.events[i].type !== lesson.steps[i].action) return null;
     return copy(saved);
   }
+  function validDate(date,today) {
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(String(date||''))||date<today)return false;
+    try{return day(date,0)===date;}catch(e){return false;}
+  }
+  function validTime(time) {return /^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/.test(String(time||''));}
   function apply(lesson, ctx, old, action) {
     var s = restore(old, lesson, ctx);
     if (!s) throw new Error('Сохранённая попытка повреждена или относится к другому входу. Начните заново.');
     if (!action || typeof action.type !== 'string') throw new Error('Некорректное действие.');
+    var flexible=lesson.inputMode==='guided';
     var st = lesson.steps[s.step], e = st && st.expected || {}, r = refs(s), error = '', task, row;
     function bad(message) { if(root.CRMText){message=root.CRMText.datesInText(message);message=message.split(s.clock.timezone).join(root.CRMText.zone(s.clock.timezone));}s.feedback = message; s.revision++; return {state: s, ok: false, advanced: false, feedback: message}; }
     function expected(k) { return value(s, e[k]); }
@@ -91,8 +97,9 @@
     case 'save_outcome':
       if (s.ui.selectedClient !== expected('client') || action.client !== expected('client')) error = 'Сохраните итог в карточке УЧ-001, а не другого клиента.';
       else if (action.outcome !== expected('outcome')) error = expected('outcome') === 'no_answer' ? 'Клиент не ответил: выберите «Не взял трубку». «Отказ» означает, что он отказался от предложения.' : 'Для договорённости нужен итог «Перезвонить».';
-      else if (e.due_date && (action.due_date !== expected('due_date') || action.due_time !== expected('due_time'))) error = 'Дата или время не совпадают с договорённостью. В CRM: ' + r.callbackDate + ' ' + r.callbackTime + ' (' + r.timezone + ').';
-      else if (e.comment && text(action.comment).length < 4) error = 'Добавьте комментарий о том, что нужно обсудить предложение.';
+      else if(flexible&&action.outcome==='callback'&&(!validDate(action.due_date,s.clock.today)||!validTime(action.due_time)))error='Укажите допустимые дату и время перезвона. Значения можно выбрать самостоятельно.';
+      else if (!flexible && e.due_date && (action.due_date !== expected('due_date') || action.due_time !== expected('due_time'))) error = 'Дата или время не совпадают с договорённостью. В CRM: ' + r.callbackDate + ' ' + r.callbackTime + ' (' + r.timezone + ').';
+      else if (e.comment && text(action.comment).length < (flexible?1:4)) error = flexible?'Добавьте свой комментарий о цели перезвона.':'Добавьте комментарий о том, что нужно обсудить предложение.';
       if (!error) {
         s.data.outcomes.push({id: 'outcome-' + (s.data.outcomes.length+1), client: action.client, outcome: action.outcome, comment: text(action.comment), due_date: action.due_date || null, due_time: action.due_time || null});
         if (action.outcome === 'callback') { s.createdTask = 'task-created'; s.data.tasks.push({id: s.createdTask, client: action.client, manager: r.targetManager, due_date: action.due_date, due_time: action.due_time, original_date: action.due_date, original_time: action.due_time, note: text(action.comment)}); }
@@ -110,13 +117,15 @@
     case 'move_task':
       task = find(s.data.tasks, action.task);
       if (!task || action.task !== expected('task') || s.ui.selectedTask !== task.id) error = 'Перенесите уже созданную задачу, не создавайте новую.';
-      else if (action.due_date !== expected('due_date') || action.due_time !== expected('due_time')) error = 'Новое время в CRM: ' + r.moveDate + ' ' + r.moveTime + '. Исходная дата больше не подходит.';
+      else if(flexible&&(!validDate(action.due_date,s.clock.today)||!validTime(action.due_time)))error='Укажите допустимые новую дату и время.';
+      else if(flexible&&action.due_date===task.due_date&&action.due_time===task.due_time)error='Выберите другой срок, чтобы увидеть, как переносится эта же задача.';
+      else if (!flexible&&(action.due_date !== expected('due_date') || action.due_time !== expected('due_time'))) error = 'Новое время в CRM: ' + r.moveDate + ' ' + r.moveTime + '. Исходная дата больше не подходит.';
       else { task.due_date = action.due_date; task.due_time = action.due_time; s.ui.form = null; }
       break;
     case 'verify_task':
       task = find(s.data.tasks, s.createdTask);
       var count = s.data.tasks.filter(function (t) { return t.client === r.targetClient && t.manager === r.targetManager; }).length;
-      if (!task || task.original_date !== r.callbackDate || task.original_time !== r.callbackTime || task.due_date !== r.moveDate || task.due_time !== r.moveTime || !task.note || count !== 1) error = 'Должна остаться одна задача: первоначальный срок, новый срок и комментарий.';
+      if (!task || (!flexible&&(task.original_date !== r.callbackDate || task.original_time !== r.callbackTime || task.due_date !== r.moveDate || task.due_time !== r.moveTime)) || (flexible&&(!validDate(task.due_date,s.clock.today)||!validTime(task.due_time)||(task.due_date===task.original_date&&task.due_time===task.original_time))) || !task.note || count !== 1) error = 'Должна остаться одна задача: первоначальный срок, новый срок и комментарий.';
       break;
     case 'select_deal':
       row = find(s.data.deals, action.deal);
@@ -126,17 +135,19 @@
     case 'save_note':
       row = find(s.data.deals, action.deal);
       if (!row || s.ui.selectedDeal !== expected('deal') || action.deal !== expected('deal')) error = 'Заметка должна относиться к выбранной сделке УЧ-001.';
-      else if (!sameNote(action.note, expected('note'))) error = 'Запишите следующий шаг полностью: «' + r.expectedNote + '».';
-      else { row.history.push({kind: 'note', text: text(action.note), at: s.clock.today}); s.ui.form = null; }
+      else if(flexible&&!text(action.note))error='Добавьте свою заметку о следующем шаге.';
+      else if (!flexible&&!sameNote(action.note, expected('note'))) error = 'Запишите следующий шаг полностью: «' + r.expectedNote + '».';
+      else { row.history.push({kind: 'note', text: text(action.note), at: s.clock.today}); s.savedNote=text(action.note);s.ui.form = null; }
       break;
     case 'verify_history':
       row = find(s.data.deals, r.targetDeal);
-      if (!row || row.history.filter(function (h) { return h.kind === 'note' && sameNote(h.text, r.expectedNote); }).length !== 1 || s.ui.selectedDeal !== r.targetDeal) error = 'Откройте историю нужной сделки и проверьте сохранённую заметку.';
+      if (!row || row.history.filter(function (h) { return h.kind === 'note' && sameNote(h.text, flexible?(s.savedNote||r.expectedNote):r.expectedNote); }).length !== 1 || s.ui.selectedDeal !== r.targetDeal) error = 'Откройте историю нужной сделки и проверьте сохранённую заметку.';
       break;
     case 'prepare_contract':
       if (ctx.modules.indexOf('contracts') < 0) error = 'Модуль «Договоры» отключён.';
       else if (s.ui.selectedDeal !== expected('deal') || action.deal !== expected('deal')) error = 'Начните создание договора из нужной сделки.';
-      else if (!same(action.company, expected('company')) || action.inn !== expected('inn') || action.confirmed !== true) error = 'Сверьте учебные реквизиты: «Учебный Кедр», ИНН 0000000000, и подтвердите проверку.';
+      else if(flexible&&(!text(action.company)||!/^\d{10}(?:\d{2})?$/.test(String(action.inn||''))||action.confirmed!==true))error='Укажите название и учебный ИНН из 10 или 12 цифр, затем отметьте проверку реквизитов.';
+      else if (!flexible&&(!same(action.company, expected('company')) || action.inn !== expected('inn') || action.confirmed !== true)) error = 'Сверьте учебные реквизиты: «Учебный Кедр», ИНН 0000000000, и подтвердите проверку.';
       else { s.createdDocument = 'document-created'; s.data.documents.push({id: s.createdDocument, number: 'УЧ-' + s.id.slice(-6), deal: action.deal, company: action.company, inn: action.inn, training: true, sent: false}); s.ui.form = null; }
       break;
     case 'select_document':

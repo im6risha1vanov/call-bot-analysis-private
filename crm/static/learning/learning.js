@@ -123,7 +123,7 @@
     if(!example||!/^[a-z_]+$/.test(key))return '';
     const fieldExample=Array.isArray(example.fields)&&example.fields.length>0;
     const still=matchMedia('(prefers-reduced-motion: reduce)').matches;
-    return `<figure class="learn-example" data-example="${key}"><figcaption>Пример на учебных данных</figcaption><img width="${Number(example.width)||480}" height="${Number(example.height)||280}" src="/static/learning/examples/${key}.${still?'png':'gif'}" alt="${esc(example.alt)}" data-example-image data-playing="${!still}"><button class="ghost" type="button" data-example-toggle aria-pressed="${!still}">${still?'Включить пример':'Приостановить пример'}</button>${fieldExample?'<p class="learn-example-note">В примере — вымышленные значения. Дату, время и остальные данные берите из задания выше.</p>':''}</figure>`;
+    return `<figure class="learn-example" data-example="${key}"><figcaption>Пример на учебных данных</figcaption><img width="${Number(example.width)||480}" height="${Number(example.height)||280}" src="/static/learning/examples/${key}.${still?'png':'gif'}" alt="${esc(example.alt)}" data-example-image data-playing="${!still}"><button class="ghost" type="button" data-example-toggle aria-pressed="${!still}">${still?'Включить пример':'Приостановить пример'}</button>${fieldExample?'<p class="learn-example-note">Пример показывает порядок действий. Можно вводить свои допустимые учебные значения.</p>':''}</figure>`;
   }
   function bindExample(){
     $('[data-example-toggle]',panel)?.addEventListener('click',event=>{
@@ -139,7 +139,8 @@
   function showSuccess(event){
     if(event.step.action.startsWith('verify_')||event.step.action==='open_section')return;
     endSuccess();const tab=lesson().tabs.find(t=>event.from>=t.start&&event.from<t.end);
-    success={...event,tab};W.presentationBusy=true;
+    const rect=panel?.getBoundingClientRect();success={...event,tab,position:rect?{left:rect.left,top:rect.top}:null};W.presentationBusy=true;
+    $('.toast')?.remove();
     successTimer=setTimeout(()=>{endSuccess();signature='';schedule();},1200);
   }
   function successText(step){
@@ -188,6 +189,13 @@
   function position(){
     const card=panel||resume;if(!card?.isConnected)return;
     const v=viewport();
+    if(success?.position&&card===panel){
+      card.style.maxHeight=Math.max(44,v.height-20)+'px';card.style.width=Math.min(300,Math.max(1,v.width-20))+'px';
+      const r=card.getBoundingClientRect(),pinned=manualPosition||success.position;card.hidden=false;
+      card.style.left=Math.max(v.left+10,Math.min(pinned.left,v.left+v.width-r.width-10))+'px';
+      card.style.top=Math.max(v.top+10,Math.min(pinned.top,v.top+v.height-r.height-10))+'px';
+      return;
+    }
     card.hidden=false;card.style.visibility='hidden';card.dataset.compact='false';
     card.style.width=Math.min(panel?300:290,Math.max(1,v.width-20))+'px';
     card.style.maxHeight=Math.max(44,v.height-20)+'px';
@@ -252,17 +260,17 @@
       if(!anchor&&!done&&!success)waitTimer=setTimeout(schedule,1400);
     }
     const waiting=!anchor&&!done&&!success&&Date.now()-waitingSince<1400;
-    const sig=[l.id,a.id,index,done,!!success,!!anchor,anchor?.dataset.go||anchor?.className,waiting,S.page,S.arg].join(':');
+    const viaMore=anchor?.matches('.more,[data-sheet]')&&step?.action==='visit_page';
+    const sig=[l.id,a.id,index,done,!!viaMore,S.page,S.arg].join(':');
     if(sig!==signature){
       signature=sig;
       const tab=success?.tab||W.tab(),title=tab.label,count=tab.end-tab.start;
       panel.dataset.learnStep=String(index);panel.dataset.mode='practice';
-      const viaMore=anchor?.matches('.more,[data-sheet]')&&step?.action==='visit_page';
       const destination=step&&W.programme.tabs.find(t=>t.page===step.expected.page)?.title||'Обучение';
       const raw=done?'Урок пройден. Выберите следующую вкладку в программе.':viaMore?'Откройте «Ещё», затем «'+destination+'».':(step.hint||step.title);
       const explain=done?'Можно повторить отдельный урок с чистой учебной ситуацией.':AveronLearningEngine.interpolateDisplay(step.explain||'',a);
       const text=AveronLearningEngine.interpolateDisplay(raw,a);
-      panel.innerHTML=`<header class="learn-head"><div class="learn-handle" data-learn-drag tabindex="0" role="button" aria-label="Переместить подсказку: перетащите заголовок или используйте стрелки. Enter возвращает к элементу."><b id="learn-heading" tabindex="-1" data-learn-heading>${esc(title)}</b><span class="learn-step">${success?'Выполнено':done?'Урок пройден':`Шаг ${index-tab.start+1} из ${count}`}</span><span class="learn-move-note">Перетащите за заголовок</span></div><button class="learn-close" type="button" aria-label="Приостановить урок" data-learn-close>×</button></header><div class="learn-body">${success?`<div class="learn-success" role="status" aria-live="polite" data-learning-success><svg viewBox="0 0 52 52" aria-hidden="true"><circle cx="26" cy="26" r="23"/><path d="m14 26 8 8 16-17"/></svg><b>${success.to===success.tab.end?'Урок пройден':'Выполнено'}</b><p>${esc(successText(step))}</p><small>Сейчас появится следующая подсказка…</small></div>`:`<p class="learn-instruction">${esc(text)}</p><p class="learn-explanation">${esc(explain)}</p>${!done&&tab.purpose?`<p class="learn-purpose"><b>Когда пригодится.</b> ${esc(tab.purpose)}</p>`:''}${!done?exampleMarkup(step):''}<p class="learn-status" role="status" data-learn-feedback></p>${!anchor&&!done?`<p class="learn-missing" data-missing-target>${waiting?'Ожидаю появления элемента…':'Элемент не найден. Откройте нужную вкладку или вернитесь к программе.'}</p>`:''}` }</div><footer class="learn-actions"><button class="ghost" type="button" data-learn-catalog>К программе</button>${anchor?'<button class="ghost" type="button" data-learn-focus aria-label="Перейти к выделенному элементу">К элементу</button>':''}</footer>`;
+      panel.innerHTML=`<header class="learn-head"><div class="learn-handle" data-learn-drag tabindex="0" role="button" aria-label="Переместить подсказку: перетащите заголовок или используйте стрелки. Enter возвращает к элементу."><b id="learn-heading" tabindex="-1" data-learn-heading>${esc(title)}</b><span class="learn-step">${success?'Выполнено':done?'Урок пройден':`Шаг ${index-tab.start+1} из ${count}`}</span><span class="learn-move-note">Перетащите за заголовок</span></div><button class="learn-close" type="button" aria-label="Приостановить урок" data-learn-close>×</button></header><div class="learn-body"><p class="learn-instruction">${esc(text)}</p><p class="learn-explanation">${esc(explain)}</p>${!done&&tab.purpose?`<p class="learn-purpose"><b>Когда пригодится.</b> ${esc(tab.purpose)}</p>`:''}${!done?exampleMarkup(step):''}<p class="learn-status" role="status" data-learn-feedback></p></div><footer class="learn-actions"><button class="ghost" type="button" data-learn-catalog>К программе</button><button class="ghost" type="button" data-learn-focus aria-label="Перейти к выделенному элементу">К элементу</button></footer>`;
       bindExample();
       $('[data-learn-close]',panel).onclick=close;
       $('[data-learn-catalog]',panel).onclick=()=>{
@@ -270,6 +278,22 @@
       };
       $('[data-learn-focus]',panel)?.addEventListener('click',()=>{resetPosition();anchor?.scrollIntoView({block:'center',behavior:reduce?'auto':'smooth'});if(anchor?.matches('input,select,textarea,button'))anchor.focus({preventScroll:true});queuePosition();});
     }
+    const focusButton=$('[data-learn-focus]',panel),inactive=!anchor;if(focusButton.disabled!==inactive)focusButton.disabled=inactive;
+    // Add the acknowledgement INSIDE this card. Keep its image, controls and DOM identity.
+    let acknowledgement=$('[data-learning-success]',panel);
+    if(success&&!acknowledgement){
+      acknowledgement=document.createElement('div');acknowledgement.className='learn-success';
+      acknowledgement.setAttribute('data-learning-success','');acknowledgement.setAttribute('role','status');acknowledgement.setAttribute('aria-live','polite');
+      acknowledgement.innerHTML=`<svg viewBox="0 0 52 52" aria-hidden="true"><circle cx="26" cy="26" r="23"/><path d="m14 26 8 8 16-17"/></svg><b>${success.to===success.tab.end?'Урок пройден':'Выполнено'}</b><p>${esc(successText(step))}</p><small>Сейчас появится следующая подсказка…</small>`;
+      const body=$('.learn-body',panel);body.insertBefore(acknowledgement,body.firstChild);body.scrollTop=0;
+    }else if(!success)acknowledgement?.remove();
+    if(success&&$('.learn-step',panel).textContent!=='Выполнено')$('.learn-step',panel).textContent='Выполнено';
+    let missing=$('[data-missing-target]',panel);
+    if(!anchor&&!done&&!success){
+      if(!missing){missing=document.createElement('p');missing.className='learn-missing';missing.setAttribute('data-missing-target','');$('.learn-body',panel).appendChild(missing);}
+      const message=waiting?'Ожидаю появления элемента…':'Элемент не найден. Откройте нужную вкладку или вернитесь к программе.';
+      if(missing.textContent!==message)missing.textContent=message;
+    }else missing?.remove();
     const feedback=$('[data-learn-feedback]',panel);
     const message=a?.feedback&&!a.feedback.startsWith('Верно.')&&!a.completed?CRMText.error(a.feedback,'Проверьте выбранную запись и поля задания.'):'';
     if(feedback&&feedback.textContent!==message)feedback.textContent=message;
@@ -289,7 +313,7 @@
         if(selected==='102')W.observe('set_manager',{manager:'boris'});
       }
       if(step.action==='verify_outcome'&&$('[data-learning-target="client-history"]')?.textContent.includes('Не взял трубку')){verification=checkKey;W.observe('verify_outcome');}
-      if(step.action==='verify_history'&&CRMText.datesInText($('.rvm-body')?.textContent).includes(CRMText.datesInText(AveronLearningEngine.refs(a).expectedNote))){verification=checkKey;W.observe('verify_history');}
+      if(step.action==='verify_history'&&CRMText.datesInText($('.rvm-body')?.textContent).includes(CRMText.datesInText((a.savedNote||AveronLearningEngine.refs(a).expectedNote)))){verification=checkKey;W.observe('verify_history');}
       if(step.action==='verify_task'&&S.page==='callbacks'&&$('[data-learning-target="callback-list"]')){verification=checkKey;W.observe('verify_task');}
       if(step.action==='open_section'&&step.expected.section==='contracts'&&S.page==='deals'&&S.arg==='contracts'&&$('[data-learning-target="contract-journal"]'))W.observe('open_section',{section:'contracts'});
     }
@@ -349,6 +373,7 @@
       else if(node.value!==drafts[key])node.value=drafts[key];
     }
   }
+  window.learningShowsSuccess=()=>!!success&&!!panel?.isConnected;
   window.learningFocusScope=box=>W&&box?.isConnected?(panel||resume):null;
   window.learningPageChanged=()=>{
     if(!W)return;

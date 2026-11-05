@@ -1,7 +1,7 @@
 /* Static help for the current tab. No GPT, navigation, forms or learning state writes. */
 (function(){
   'use strict';
-  let opened=false,panel=null,opener=null;
+  let opened=false,panel=null,opener=null,signature='';
   const sections={
     queue:[['Очередь клиентов','Откройте нужный номер в списке. В карточке видны название компании, комментарий и история обращений. Перед звонком проверьте, что выбрали нужного клиента.'],['Итог звонка','«Не взял трубку» означает недозвон и сохраняется сразу. «Отказ» используйте после ответа клиента с отказом. Для «Перезвонить» укажите дату, время и комментарий, затем нажмите кнопку сохранения.'],['Если очередь пуста','Проверьте, не ожидают ли номера следующей попытки или назначенного срока. Новые номера добавляются в разделе «Источники», если он доступен вашей компании.']],
     callbacks:[['Список договорённостей','Задачи разделены на «Просрочено», «Сегодня» и «Дальше». В строке видны клиент, срок и комментарий. Директор может выбрать менеджера в фильтре.'],['Перенести ту же задачу','Нажмите «Перенести», выберите новую дату и время, затем «Сохранить». Так меняется срок существующей задачи, без создания дубля.'],['Открыть контекст','«Позвонить» в строке сначала открывает карточку клиента с историей. Сам звонок запускается отдельной кнопкой в карточке. «Выполнено» закрывает задачу; не используйте эту кнопку только ради просмотра.']],
@@ -46,7 +46,7 @@
   function exampleMarkup(key,title){
     if(!/^[a-z_]+$/.test(key))return '';
     const still=matchMedia('(prefers-reduced-motion: reduce)').matches;
-    return `<figure class="page-help-example" data-help-example="${key}"><figcaption>${esc(title)}</figcaption><img width="480" height="360" loading="lazy" src="/static/learning/examples/${key}.${still?'png':'gif'}" alt="${esc(title)}: пример на вымышленных данных" data-help-example-image data-playing="${!still}"><button class="ghost small" type="button" data-help-example-toggle aria-label="${still?'Включить':'Приостановить'} пример: ${esc(title)}" aria-pressed="${!still}">${still?'Включить пример':'Приостановить пример'}</button><p class="page-help-example-note">Учебные данные. Дату, время и реквизиты берите из своей задачи.</p>${key==='prepare_contract'?'<p class="page-help-example-note">Показан учебный режим: документ остаётся в учебном журнале.</p>':''}</figure>`;
+    return `<figure class="page-help-example" data-help-example="${key}"><figcaption>${esc(title)}</figcaption><img width="480" height="360" loading="lazy" src="/static/learning/examples/${key}.${still?'png':'gif'}" alt="${esc(title)}: пример на вымышленных данных" data-help-example-image data-playing="${!still}"><button class="ghost small" type="button" data-help-example-toggle aria-label="${still?'Включить':'Приостановить'} пример: ${esc(title)}" aria-pressed="${!still}">${still?'Включить пример':'Приостановить пример'}</button><p class="page-help-example-note">В примере — вымышленные значения. Повторять их необязательно.</p>${key==='prepare_contract'?'<p class="page-help-example-note">Показан учебный режим: документ остаётся в учебном журнале.</p>':''}</figure>`;
   }
   function bindExamples(){
     $$('[data-help-example-toggle]',panel).forEach(button=>button.addEventListener('click',()=>{
@@ -61,11 +61,12 @@
   function draw(){
     if(!panel)return;
     const title=S.page==='deals'&&S.arg==='contracts'?'Договоры':PAGES[S.page]?.name||'Текущая вкладка';
-    panel.innerHTML=`<header class="page-help-head"><h2 tabindex="-1" data-help-heading>Справка: ${esc(title)}</h2><button class="ghost small" type="button" data-page-help-close aria-label="Закрыть справку">×</button></header><div class="page-help-body">${content().map(([h,t],index)=>`<section><h3>${esc(h)}</h3><p>${esc(t)}</p>${examplesFor(index).map(([key,title])=>exampleMarkup(key,title)).join('')}</section>`).join('')}<p class="hint">Справка объясняет вкладку. Обучение предлагает практические действия на учебных примерах.</p></div>`;
+    const markup=`<header class="page-help-head"><h2 tabindex="-1" data-help-heading>Справка: ${esc(title)}</h2><button class="ghost small" type="button" data-page-help-close aria-label="Закрыть справку">×</button></header><div class="page-help-body">${content().map(([h,t],index)=>`<section><h3>${esc(h)}</h3><p>${esc(t)}</p>${examplesFor(index).map(([key,title])=>exampleMarkup(key,title)).join('')}</section>`).join('')}<p class="hint">Справка объясняет вкладку. Обучение предлагает практические действия на учебных примерах.</p></div>`;
+    if(signature===markup)return;signature=markup;panel.innerHTML=markup;
     $('[data-page-help-close]',panel).onclick=close;
     bindExamples();
   }
-  function close(){opened=false;panel?.remove();panel=null;$$('[data-page-help]').forEach(b=>b.setAttribute('aria-expanded','false'));if(opener?.isConnected)opener.focus({preventScroll:true});document.dispatchEvent(new CustomEvent('crm-help-changed'));}
+  function close(){signature='';opened=false;panel?.remove();panel=null;$$('[data-page-help]').forEach(b=>b.setAttribute('aria-expanded','false'));if(opener?.isConnected)opener.focus({preventScroll:true});document.dispatchEvent(new CustomEvent('crm-help-changed'));}
   function open(button){
     if(!['manager','director'].includes(S.me?.role))return;
     if(opened){close();return;}opened=true;opener=button;

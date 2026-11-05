@@ -1,0 +1,63 @@
+{
+  "snapshot_utc": "2026-11-05T16:00:13.005427+00:00",
+  "branch": "feat/crm-learning-smooth-guidance-20261105",
+  "baseline": "16465f0",
+  "production_changed": false,
+  "services_restarted": false,
+  "python": {
+    "passed": 51,
+    "failed": 0,
+    "skipped": 0
+  },
+  "javascript": {
+    "passed": 71,
+    "failed": 0,
+    "suites": {
+      "learning_workspace_test.cjs": 17,
+      "learning_tabs_ui_test.cjs": 13,
+      "learning_floating_test.cjs": 18,
+      "readability_ui_test.cjs": 15,
+      "learning_smooth_test.cjs": 8
+    },
+    "method": "real controllers with local or fictional API and explicit DOM adapter; not a browser"
+  },
+  "checks": [
+    "same hint DOM and GIF during acknowledgement",
+    "no extra success toast during guided action",
+    "drag while acknowledging and 1200ms delay",
+    "duplicate saves blocked",
+    "free valid dates/time/comment/note/company/INN",
+    "invalid required fields and wrong record rejected",
+    "full manager/director programmes and replay",
+    "help GIFs and independent pause",
+    "quiet 60000ms timer with unchanged response and reordered JSON keys",
+    "history-only update without replacing work card",
+    "queue change preserves main and selected customer",
+    "form opened during in-flight request retained",
+    "overlapping refresh, stale navigation and network failure",
+    "learning background reads do not advance a step",
+    "no production API fallback and unchanged server authorization"
+  ],
+  "unchanged_media": {
+    "gif": 41,
+    "png": 41,
+    "byte_comparison_baseline": "f19a0eb"
+  },
+  "syntax": {
+    "javascript_files": 10,
+    "python_files": 2,
+    "git_diff_check": true
+  },
+  "browser": {
+    "status": "NOT RUN",
+    "reason": "Chromium/Playwright unavailable; no real visual or screenshot claim"
+  },
+  "backup": "/tmp/averon-crm-guidance-before-20261105.tar.gz",
+  "secret_scan": {
+    "working_tree_files": 484,
+    "working_tree_pattern_hits": 0,
+    "history_blobs": 1708,
+    "history_pattern_hits": 0,
+    "note": "heuristic patterns only; no secret values printed"
+  }
+}

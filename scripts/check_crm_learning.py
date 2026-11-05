@@ -49,7 +49,7 @@ def main():
     if not node:
         print('Parent/iframe checks require Node. Set CRM_LEARNING_NODE to its executable.', file=sys.stderr)
         return 2
-    for filename in ('learning_workspace_test.cjs', 'learning_tabs_ui_test.cjs', 'learning_floating_test.cjs', 'readability_ui_test.cjs'):
+    for filename in ('learning_workspace_test.cjs', 'learning_tabs_ui_test.cjs', 'learning_floating_test.cjs', 'readability_ui_test.cjs', 'learning_smooth_test.cjs'):
         check = subprocess.run([node, 'tests/js/' + filename],
                                cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=60)
         if check.returncode:

@@ -23,7 +23,7 @@
       steps.push({action:'visit_page',title:'Откройте «'+(next?.title||'Обучение')+'».',hint:compose?'В карточке нажмите «Составить договор».':'Откройте «'+(next?.title||'Обучение')+'».',explain:(!t.steps.length?t.description: t.id==='summary'?'Перед переходом посмотрите «Разговоров с результатом»: это цифра Бориса за 7 дней.':t.id==='reports'?'Прочитайте открытый отчёт: рекомендации связаны с выбранным периодом.':t.id==='settings'?'Здесь управляют учётными записями. Для знакомства не создавайте доступ и не меняйте пароль.':'Действие выполнено. '+(next?'Продолжим в следующей вкладке.':'Вернитесь к программе — теперь можно выбирать отдельные уроки.')),expected:{page,...(arg?{arg}:{})},screen:{selector:compose?'[data-contract]':'#nav [data-go="'+page+'"]'}});
       t.end=steps.length;
     });
-    return {id:'programme_'+context.role,role:context.role,kind:'practice',version:'tabs-1:'+tabs.map(t=>t.id).join(','),available:true,title:'Обучение по вкладкам',result:'Обучение пройдено. Теперь доступны отдельные уроки по вкладкам.',guide:[{page:tabs[0].page,arg:tabs[0].arg||null}],tabs,steps};
+    return {id:'programme_'+context.role,role:context.role,kind:'practice',inputMode:'guided',version:'tabs-1:'+tabs.map(t=>t.id).join(','),available:true,title:'Обучение по вкладкам',result:'Обучение пройдено. Теперь доступны отдельные уроки по вкладкам.',guide:[{page:tabs[0].page,arg:tabs[0].arg||null}],tabs,steps};
   }
   class Classroom {
     constructor(context, storage) {
@@ -241,7 +241,7 @@
       if(p==='/api/queue')return {today:(s?.clock||ctx.clock).today,later:0,items:[db.clients[1],db.clients[0],db.clients[2]].map((c,i)=>({kind:'lead',id:i+1,number:number(c.id),title:c.company+' · '+c.code,note:'Вымышленный клиент. Звонить не требуется.',status:'new',attempts:0}))};
       if(p==='/api/card'){
         const c=this.client(q.get('number'));if(!c)throw new Error('Нужна учебная карточка.');
-        if(c.id==='client-1')this.observe('select_client',{client:c.id});
+        if(!this.inProgramme()&&c.id==='client-1')this.observe('select_client',{client:c.id});
         const outcomes=db.outcomes.filter(o=>o.client===c.id).map(o=>({...o,label:labels[o.outcome],at:ctx.clock.today+'T12:05:00+03:00',who:this.name(ctx.role==='manager'?'anna':'boris')}));
         return {calls:db.calls.filter(v=>v.client===c.id&&this.owned(v.manager)).map(v=>({...this.call(v),who:this.name(v.manager),review:{manager_text:v.conclusion}})),outcomes,tasks:db.tasks.filter(t=>t.client===c.id&&this.owned(t.manager)).map(t=>this.task(t))};
       }

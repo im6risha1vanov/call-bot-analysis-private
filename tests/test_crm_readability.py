@@ -50,13 +50,14 @@ class ReadabilityTests(unittest.TestCase):
     def test_pause_drag_and_success_animation_implementations_unchanged(self):
         before=git_file('crm/static/learning/learning.js').decode()
         after=(ROOT/'crm/static/learning/learning.js').read_text()
-        names=[('bindExample','endSuccess'),('endSuccess','showSuccess'),('showSuccess','successText'),('successText','stepPositionKey'),('beginDrag','dragMove'),('dragMove','finishDrag'),('finishDrag','moveWithKeys'),('moveWithKeys','queuePosition')]
+        names=[('bindExample','endSuccess'),('endSuccess','showSuccess'),('successText','stepPositionKey'),('beginDrag','dragMove'),('dragMove','finishDrag'),('finishDrag','moveWithKeys'),('moveWithKeys','queuePosition')]
         for name,next_name in names:
             def part(text):return text.split('  function '+name+'(',1)[1].split('  function '+next_name+'(',1)[0]
             self.assertEqual(part(before),part(after),name)
         css_before=git_file('crm/static/learning/learning.css').decode()
         css_after=(ROOT/'crm/static/learning/learning.css').read_text()
-        self.assertEqual(css_before.split('.learn-success{',1)[1],css_after.split('.learn-success{',1)[1])
+        for animation in ('learn-check-pop','learn-check-draw'):
+            self.assertEqual(css_before.split('@keyframes '+animation,1)[1].split('\n',1)[0],css_after.split('@keyframes '+animation,1)[1].split('\n',1)[0])
 
     def test_server_time_storage_permissions_and_provider_code_unchanged(self):
         for name in ['crm/web.py','crm/store.py','crm/company.py','crm/learning.py','crm/gpt.py','crm/robot_runner.py','crm/robot_store.py','crm/automations.py']:
