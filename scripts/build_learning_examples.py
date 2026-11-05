@@ -1,18 +1,17 @@
-"""Build small illustrative GIFs from fictional UI labels, never record live CRM.
+"""Build animated CRM fragments with a normal pointer and typed fictional data.
 
-Requires system ffmpeg with drawtext and DejaVu Sans. No DB/.env/network/models.
-Creates GIF/poster pairs and a manifest. These are schematic examples of the
-current controls and results, not screenshots or recordings of the real app.
+Requires system ffmpeg and libcairo. No DB/.env/network/models.
+Creates GIF/poster pairs and a manifest. These drawings follow current controls and form layouts; they are not browser recordings.
 """
 from __future__ import annotations
 import json
 from pathlib import Path
 import shutil
 import subprocess
-import tempfile
+from learning_example_renderer import W,H,render
 
 ROOT=Path(__file__).resolve().parents[1]
-FONT='/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
+
 # Key, actual control, before, after. No real accounts, numbers or conversations.
 EXAMPLES=[
  ('select_client','Учебный Кедр · УЧ-001','Очередь: выберите клиента','Открыта карточка УЧ-001'),
@@ -45,33 +44,55 @@ for key,title in TABS.items():EXAMPLES.append(('visit_'+key,title,'Выбери�
 EXAMPLES.append(('visit_access','Доступы','Настройки: выберите вкладку','Открыт список учётных записей'))
 
 
+EXAMPLES.extend([
+ ('set_manager_summary','Борис Учебный','В переключателе выберите менеджера','Показатели Бориса Учебного'),
+ ('set_period_summary','7 дней','Выберите период сводки','Показатели сводки за 7 дней'),
+ ('select_report_weekly','Сводка за неделю','Выберите отчёт нужного периода','Открыта недельная сводка'),
+ ('select_call_staff','Учебный разбор','Откройте пример из карточки сотрудника','Открыт подтверждающий разбор')])
+DETAILS={
+ 'save_outcome_callback':{'seconds':14,'poster_time':9.3,'source':['crm/static/work.js:workCard','crm/static/work.js:saveOutcome'],
+  'sequence':['Перезвонить','Дата','Время','Комментарий','Сохранить','История клиента'],
+  'fields':[{'selector':'[data-f="date"]','label':'Дата','value':'06.11.2026','api_value':'2026-11-06','start':2.7,'end':4.1},
+            {'selector':'[data-f="time"]','label':'Время','value':'15:00','start':4.8,'end':5.7},
+            {'selector':'[data-f="comment"]','label':'Комментарий','value':'Обсудить предложение','start':6.2,'end':8.8}]},
+ 'move_task':{'seconds':8.5,'poster_time':5.5,'source':['crm/static/calls.js:callbackMove'],'sequence':['Перенести','Новая дата','Время','Сохранить'],
+  'fields':[{'selector':'.move input[type="date"]','label':'Новая дата','value':'07.11.2026','api_value':'2026-11-07','start':1.5,'end':2.8},
+            {'selector':'.move input[type="time"]','label':'Время','value':'11:30','start':3.5,'end':4.7}]},
+ 'save_note':{'seconds':8.5,'poster_time':5.5,'source':['crm/static/deals.js:dealForm'],'sequence':['Заметка','Сохранить','История'],
+  'fields':[{'selector':'[data-v="note"]','label':'Заметка','value':'Обсудить предложение 6 ноября в 15:00','start':1.3,'end':5.2}]},
+ 'prepare_contract':{'seconds':8.5,'poster_time':5.2,'source':['crm/static/contracts/generator.js:mount'],'sequence':['Наименование','ИНН','Реквизиты учебного клиента сверены','Сформировать учебный договор','Журнал договоров'],
+  'fields':[{'selector':'#dg-name','label':'Наименование','value':'Учебный Кедр','start':.7,'end':2},
+            {'selector':'#dg-inn','label':'ИНН','value':'0000000000','start':2.6,'end':3.8}]}}
+
+
 def build():
  ffmpeg=shutil.which('ffmpeg')
- if not ffmpeg or not Path(FONT).is_file():raise SystemExit('Need system ffmpeg + DejaVuSans (no installation attempted).')
+ if not ffmpeg:raise SystemExit('System ffmpeg required; no dependencies are installed by this script.')
  dest=ROOT/'crm/static/learning/examples';dest.mkdir(exist_ok=True)
  manifest={}
- with tempfile.TemporaryDirectory(prefix='averon-learning-frames-') as tmp:
-  for key,button,before,after in EXAMPLES:
-   texts=['Учебный пример',before,button,after,'Нажатие → результат','Вымышленные данные','↖']
-   paths=[]
-   for i,text in enumerate(texts):
-    path=Path(tmp)/f'{key}-{i}.txt';path.write_text(text,encoding='utf-8');paths.append(path)
-   def text(i,x,y,size=17,color='13201c',enable=None):
-    tail=f":enable='{enable}'" if enable else ''
-    return f"drawtext=fontfile={FONT}:textfile={paths[i]}:expansion=none:x='{x}':y='{y}':fontsize={size}:fontcolor=0x{color}"+tail
-   filters=['drawbox=x=8:y=8:w=464:h=264:color=0xdde3de:t=1',text(0,24,20,15,'5d6b66'),text(1,24,57,18),
-    'drawbox=x=24:y=99:w=432:h=52:color=0xeef1ee:t=fill',text(2,40,115,19),
-    "drawbox=x=24:y=99:w=432:h=52:color=0x0d7a63:t=3:enable='between(t,1,2)'",
-    text(6,"360-80*min(t,1)","200-60*min(t,1)",24,'0d7a63','lt(t,2)'),
-    "drawbox=x=24:y=166:w=432:h=58:color=0xd9efe8:t=fill:enable='gte(t,2)'",text(3,36,187,17,'0d7a63','gte(t,2)'),text(4,24,239,13,'5d6b66'),text(5,290,239,12,'5d6b66')]
-   graph=','.join(filters)
-   command=[ffmpeg,'-hide_banner','-loglevel','error','-y','-filter_threads','1','-f','lavfi','-i','color=c=0xffffff:s=480x280:r=8:d=4.25','-filter_complex_threads','1','-filter_complex',graph+',split[s0][s1];[s0]palettegen=max_colors=64:stats_mode=full[p];[s1][p]paletteuse=dither=none','-loop','0',str(dest/f'{key}.gif')]
-   subprocess.run(command,check=True,capture_output=True,timeout=30)
-   # The exact same first frame is the reduced-motion/paused poster.
-   subprocess.run([ffmpeg,'-hide_banner','-loglevel','error','-y','-threads','1','-i',str(dest/f'{key}.gif'),'-frames:v','1',str(dest/f'{key}.png')],check=True,capture_output=True,timeout=30)
-   manifest[key]={'alt':before+'. '+button+' → '+after+'. Схематический пример на вымышленных данных.','button':button,'result':after,'seconds':4.25,'gif':key+'.gif','poster':key+'.png'}
+ for key,button,before,after in EXAMPLES:
+  detail=DETAILS.get(key,{});seconds=detail.get('seconds',4.25);fps=8
+  command=[ffmpeg,'-hide_banner','-loglevel','error','-y','-filter_complex_threads','1','-f','rawvideo','-pixel_format','bgra','-video_size',f'{W}x{H}','-framerate',str(fps),'-i','pipe:0','-filter_complex','split[s0][s1];[s0]palettegen=max_colors=128:stats_mode=full[p];[s1][p]paletteuse=dither=none','-loop','0',str(dest/f'{key}.gif')]
+  process=subprocess.Popen(command,stdin=subprocess.PIPE,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+  try:
+   for number in range(round(seconds*fps)):
+    frame=render(key,number/fps,button)
+    try:process.stdin.write(frame.bytes())
+    finally:frame.close_surface()
+   process.stdin.close()
+   if process.wait(timeout=60):raise RuntimeError(process.stderr.read().decode())
+  except BaseException:
+   process.kill();process.wait();raise
+  finally:process.stderr.close()
+  poster=render(key,detail.get('poster_time',0),button)
+  try:poster.png(dest/f'{key}.png')
+  finally:poster.close_surface()
+  manifest[key]={'alt':before+'. '+button+' → '+after+'. Схематический пример по форме CRM, вымышленные данные.',
+    'button':button,'result':after,'seconds':seconds,'gif':key+'.gif','poster':key+'.png','width':W,'height':H,
+    'cursor':'white-arrow-black-outline','layout':'crm-fragment','revision':'forms-20261105',
+    **({'fields':detail['fields'],'sequence':detail['sequence'],'source':detail['source'],'poster_time':detail['poster_time']} if detail else {})}
  (ROOT/'crm/learning_examples.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n')
- print(json.dumps({'examples':len(manifest),'bytes':sum(p.stat().st_size for p in dest.iterdir()),'source':'fictional diagrams; not browser recordings'}))
+ print(json.dumps({'examples':len(manifest),'bytes':sum(p.stat().st_size for p in dest.iterdir()),'source':'drawings of current CRM fragments, fictional data; not browser recordings'}))
 
 
 if __name__=='__main__':build()

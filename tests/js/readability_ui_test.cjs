@@ -42,6 +42,22 @@ async function main(){const cases=[],coverage=[],test=async(name,fn)=>{try{await
  await test('help-and-native-modal-share-keyboard-focus-without-grading',async()=>{
   const ui=await open();await start(ui);await until(ui,()=>expected(ui).st.action==='select_deal');await click(ui,'[data-page-help]');await perform(ui);const at=state(ui).step,last=ui.document.querySelector('[data-page-help-close]'),first=ui.document.querySelector('.rvm-x');last.focus();const e=last.dispatch('keydown',{key:'Tab'});assert(e.defaultPrevented);assert.equal(ui.document.activeElement,first);assert.equal(state(ui).step,at);await click(ui,'[data-page-help-close]');assert.equal(state(ui).step,at);assert.equal(ui.network.length,0);
  });
+ await test('fourth-step-example-demonstrates-the-real-callback-fields-without-filling-them',async()=>{
+  const ui=await open();await start(ui);await perform(ui);await perform(ui);
+  assert.equal(expected(ui).st.action,'save_outcome');assert.equal(expected(ui).a.outcome,'callback');
+  assert(ui.document.querySelector('.learn-step').textContent.includes('Шаг 4'));
+  const image=ui.document.querySelector('[data-example-image]');assert(image.closest('[data-example]').dataset.example==='save_outcome_callback');assert.equal(image.getAttribute('height'),'360');
+  assert(ui.document.querySelector('.learn-example-note').textContent.includes('из задания'));
+  const at=state(ui).step;await click(ui,'[data-example-toggle]');await click(ui,'[data-example-toggle]');assert.equal(state(ui).step,at);assert(!state(ui).createdTask);
+  await click(ui,'[data-out="callback"]');for(const field of ['date','time','comment'])assert(ui.document.querySelector('[data-f="'+field+'"]'));
+  assert.equal(ui.document.querySelector('[data-f="comment"]').value,'');assert.equal(ui.network.length,0);
+ });
+ await test('director-examples-distinguish-weekly-report-and-employee-card',async()=>{
+  const ui=await open('director');await start(ui);assert.equal(ui.document.querySelector('[data-example]').dataset.example,'set_period_summary');await perform(ui);assert.equal(ui.document.querySelector('[data-example]').dataset.example,'set_manager_summary');await until(ui,()=>expected(ui).st.action==='select_report');
+  assert.equal(ui.document.querySelector('[data-example]').dataset.example,'select_report_weekly');await perform(ui);
+  await until(ui,()=>expected(ui).st.action==='select_call'&&expected(ui).st.expected.person);
+  assert.equal(ui.document.querySelector('[data-example]').dataset.example,'select_call_staff');assert.equal(ui.network.length,0);
+ });
  await test('friendly-note-and-legacy-note-have-same-meaning-without-rewriting-user-input',async()=>{
   const ui=await open();await start(ui);await until(ui,()=>expected(ui).st.action==='save_note');assert(!/\d{4}-\d{2}-\d{2}/.test(ui.document.querySelector('.learn-instruction').textContent));
   await click(ui,'[data-ev="note"]');const note=T.datesInText(expected(ui).a.note),before=state(ui).step;await fill(ui,'[data-v="note"]',expected(ui).a.note.replace('2026-','2027-'));await click(ui,'.rvm [data-save]');assert.equal(state(ui).step,before);assert.equal(state(ui).data.deals[0].history.length,1);await fill(ui,'[data-v="note"]',note);await click(ui,'.rvm [data-save]');assert.equal(state(ui).data.deals[0].history.at(-1).text,note);await complete(ui);assert(ui.model.courseDone());

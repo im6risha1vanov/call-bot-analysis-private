@@ -1,5 +1,5 @@
 """Display-only regression checks. No database, providers or real customer records."""
-import hashlib
+import json
 import re
 import subprocess
 import unittest
@@ -36,16 +36,21 @@ class ReadabilityTests(unittest.TestCase):
                 low,high=sorted([luminance(resolve(fg)),luminance(resolve(bg))])
                 self.assertGreaterEqual((high+.05)/(low+.05),4.5,(mode,fg,bg))
 
-    def test_all_original_gif_posters_and_manifest_are_byte_identical(self):
-        files=subprocess.check_output(['git','ls-tree','-r','--name-only',BASE,'crm/static/learning/examples'],cwd=ROOT,text=True).splitlines()
-        self.assertEqual(len(files),74)
-        for name in files+['crm/learning_examples.json','scripts/build_learning_examples.py']:
-            self.assertEqual(hashlib.sha256((ROOT/name).read_bytes()).digest(),hashlib.sha256(git_file(name)).digest(),name)
+    def test_original_example_coverage_preserved_after_requested_form_rework(self):
+        # The follow-up explicitly changes GIF content; previous immutability no longer applies.
+        before=json.loads(git_file('crm/learning_examples.json'))
+        after=json.loads((ROOT/'crm/learning_examples.json').read_text())
+        self.assertEqual(set(after)-set(before),{'select_call_staff','select_report_weekly','set_manager_summary','set_period_summary'})
+        self.assertTrue(set(before).issubset(after))
+        for key,item in after.items():
+            self.assertEqual(item['cursor'],'white-arrow-black-outline',key)
+            self.assertEqual((item['width'],item['height']),(480,360))
+            self.assertEqual(item['layout'],'crm-fragment')
 
     def test_pause_drag_and_success_animation_implementations_unchanged(self):
         before=git_file('crm/static/learning/learning.js').decode()
         after=(ROOT/'crm/static/learning/learning.js').read_text()
-        names=[('exampleKey','exampleMarkup'),('exampleMarkup','bindExample'),('bindExample','endSuccess'),('endSuccess','showSuccess'),('showSuccess','successText'),('successText','stepPositionKey'),('beginDrag','dragMove'),('dragMove','finishDrag'),('finishDrag','moveWithKeys'),('moveWithKeys','queuePosition')]
+        names=[('bindExample','endSuccess'),('endSuccess','showSuccess'),('showSuccess','successText'),('successText','stepPositionKey'),('beginDrag','dragMove'),('dragMove','finishDrag'),('finishDrag','moveWithKeys'),('moveWithKeys','queuePosition')]
         for name,next_name in names:
             def part(text):return text.split('  function '+name+'(',1)[1].split('  function '+next_name+'(',1)[0]
             self.assertEqual(part(before),part(after),name)

@@ -102,7 +102,7 @@ class CatalogTests(unittest.TestCase):
     def test_illustrative_gifs_and_posters_decode_without_external_services(self):
         import shutil,subprocess,struct
         examples=json.loads((ROOT/'crm/learning_examples.json').read_text())
-        self.assertEqual(len(examples),37)
+        self.assertEqual(len(examples),41)
         ffmpeg=shutil.which('ffmpeg')
         self.assertIsNotNone(ffmpeg, 'Need local ffmpeg to decode actual media; do not mark this check passed without it.')
         for key,item in examples.items():
@@ -112,12 +112,44 @@ class CatalogTests(unittest.TestCase):
                 self.assertGreater(len(content),100)
                 if name=='gif':
                     self.assertIn(content[:6],(b'GIF87a',b'GIF89a'))
-                    self.assertEqual(struct.unpack('<HH',content[6:10]),(480,280))
+                    self.assertEqual(struct.unpack('<HH',content[6:10]),(item['width'],item['height']))
                 else:
                     self.assertEqual(content[:8],b'\x89PNG\r\n\x1a\n')
                 decoded=subprocess.run([ffmpeg,'-hide_banner','-loglevel','error','-threads','1','-i',str(path),'-f','null','-'],capture_output=True,timeout=10)
                 self.assertEqual(decoded.returncode,0,key+' '+name+' failed to decode')
             self.assertIn('Схематический',item['alt'])
+
+    def test_form_example_fields_match_current_controls(self):
+        examples=json.loads((ROOT/'crm/learning_examples.json').read_text())
+        for key in ('save_outcome_callback','move_task','save_note','prepare_contract'):
+            item=examples[key]
+            self.assertGreaterEqual(item['seconds'],8)
+            self.assertGreater(item['poster_time'],max(f['end'] for f in item['fields']))
+            source='\n'.join((ROOT/path.split(':')[0]).read_text() for path in item['source'])
+            for field in item['fields']:
+                selector=field['selector']
+                if selector.startswith('#'):
+                    self.assertIn(selector[1:],source)
+                elif 'data-' in selector:
+                    self.assertIn(selector[1:-1],source)
+                else:
+                    self.assertIn('type="'+('date' if 'date' in selector else 'time')+'"',source)
+            self.assertIn(item['sequence'][-2],source)
+        callback=examples['save_outcome_callback']
+        self.assertEqual([f['label'] for f in callback['fields']],['Дата','Время','Комментарий'])
+        self.assertEqual(callback['fields'][2]['value'],'Обсудить предложение')
+        self.assertEqual(callback['sequence'][0],'Перезвонить')
+        self.assertEqual(callback['sequence'][-2],'Сохранить')
+
+    def test_callback_gif_contains_different_typing_and_saved_frames(self):
+        import subprocess,hashlib
+        path=ROOT/'crm/static/learning/examples/save_outcome_callback.gif'
+        frames=[]
+        for second in (2.5,4.25,6,9.25,11):
+            decoded=subprocess.run(['ffmpeg','-hide_banner','-loglevel','error','-threads','1','-ss',str(second),'-i',str(path),'-frames:v','1','-f','rawvideo','-pix_fmt','rgb24','-'],capture_output=True,timeout=10,check=True)
+            self.assertEqual(len(decoded.stdout),480*360*3)
+            frames.append(hashlib.sha256(decoded.stdout).hexdigest())
+        self.assertEqual(len(set(frames)),5,'Empty, date, time, comment and saved result must differ')
 
     def test_no_duplicate_highlight_attributes(self):
         import re

@@ -110,16 +110,20 @@
     return result;
   }
   function exampleKey(step){
+    if(['set_manager','set_period'].includes(step.action)&&step.screen.page==='summary')return step.action+'_summary';
     if(step.action==='save_outcome')return 'save_outcome_'+step.expected.outcome;
     if(step.action==='select_task'&&step.expected.open_context)return 'select_task_context';
+    if(step.action==='select_report'&&step.expected.report==='weeklyReport')return 'select_report_weekly';
+    if(step.action==='select_call'&&step.expected.person)return 'select_call_staff';
     if(step.action==='visit_page')return step.screen.selector==='[data-contract]'?'compose':'visit_'+(step.expected.arg==='access'?'access':step.expected.page);
     return step.action;
   }
   function exampleMarkup(step){
     const key=exampleKey(step),example=W.context.examples?.[key];
     if(!example||!/^[a-z_]+$/.test(key))return '';
+    const fieldExample=Array.isArray(example.fields)&&example.fields.length>0;
     const still=matchMedia('(prefers-reduced-motion: reduce)').matches;
-    return `<figure class="learn-example" data-example="${key}"><figcaption>Пример на учебных данных</figcaption><img width="480" height="280" src="/static/learning/examples/${key}.${still?'png':'gif'}" alt="${esc(example.alt)}" data-example-image data-playing="${!still}"><button class="ghost" type="button" data-example-toggle aria-pressed="${!still}">${still?'Включить пример':'Приостановить пример'}</button></figure>`;
+    return `<figure class="learn-example" data-example="${key}"><figcaption>Пример на учебных данных</figcaption><img width="${Number(example.width)||480}" height="${Number(example.height)||280}" src="/static/learning/examples/${key}.${still?'png':'gif'}" alt="${esc(example.alt)}" data-example-image data-playing="${!still}"><button class="ghost" type="button" data-example-toggle aria-pressed="${!still}">${still?'Включить пример':'Приостановить пример'}</button>${fieldExample?'<p class="learn-example-note">В примере — вымышленные значения. Дату, время и остальные данные берите из задания выше.</p>':''}</figure>`;
   }
   function bindExample(){
     $('[data-example-toggle]',panel)?.addEventListener('click',event=>{

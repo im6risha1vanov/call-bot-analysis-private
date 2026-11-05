@@ -1,0 +1,75 @@
+{
+  "snapshot_utc": "2026-11-05T14:22:04.506973+00:00",
+  "branch": "feat/crm-training-form-examples-20261105",
+  "baseline": "8ec6b44",
+  "production_changed": false,
+  "services_restarted": false,
+  "python": {
+    "passed": 50,
+    "failed": 0,
+    "skipped": 0
+  },
+  "javascript": {
+    "passed": 59,
+    "suites": {
+      "learning_workspace_test.cjs": 17,
+      "learning_tabs_ui_test.cjs": 13,
+      "learning_floating_test.cjs": 18,
+      "readability_ui_test.cjs": 11
+    },
+    "failed": 0,
+    "mode": "actual controllers with fictional data and explicit DOM adapter; not a browser"
+  },
+  "media": {
+    "gif": 41,
+    "png": 41,
+    "decoded_all": true,
+    "dimensions": [
+      480,
+      360
+    ],
+    "cursor": "white arrow with black outline",
+    "forms_reviewed_as_images": [
+      "callback outcome and fields",
+      "callback saved history",
+      "move task",
+      "save note",
+      "prepare contract"
+    ],
+    "callback_frames_at_seconds": [
+      2.5,
+      4.25,
+      6,
+      9.25,
+      11
+    ],
+    "different_decoded_frames": 5,
+    "source": "Cairo drawings based on current CRM source, not browser recordings"
+  },
+  "unchanged": [
+    "lesson content and validation",
+    "learning isolation",
+    "production form controllers",
+    "provider and DB code",
+    "pause function",
+    "success animation and timer",
+    "drag behaviour"
+  ],
+  "syntax": {
+    "python": 4,
+    "javascript": 2,
+    "git_diff_check": true
+  },
+  "browser": {
+    "status": "NOT RUN",
+    "exit_code": 2,
+    "reason": "Playwright/Chromium unavailable",
+    "screenshots_created": false
+  },
+  "backup": "/tmp/averon-crm-examples-before-20261105.tar.gz",
+  "secret_scan": {
+    "working_tree_pattern_hits": 0,
+    "history_pattern_hits": 0,
+    "limitations": "heuristic patterns only"
+  }
+}
