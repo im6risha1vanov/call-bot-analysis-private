@@ -86,3 +86,10 @@
 @media(max-width:600px){.page-help{right:8px;top:8px;bottom:8px;width:calc(100vw - 16px)}.page-help-head{padding:12px}.page-help-body{padding:12px}.page-help .ghost{min-height:40px;min-width:40px}}
 
 .gpt,.gpt-m.ai,.gpt-m.me{color:var(--fg)}
+
+/* Help embeds the same local GIFs as lessons, with independent playback controls. */
+.page-help-example{margin:12px 0 0;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--surface-2);min-width:0}
+.page-help-example figcaption{padding:8px;font-size:13px;line-height:1.4;font-weight:600;color:var(--fg);overflow-wrap:anywhere}
+.page-help-example img{display:block;width:100%;height:auto;object-fit:contain;background:#0e1513}
+.page-help-example .ghost{margin:4px 8px;white-space:normal;max-width:calc(100% - 16px);min-height:36px}
+.page-help-example p.page-help-example-note{padding:4px 8px 8px;font-size:12px;line-height:1.45;color:var(--fg)}

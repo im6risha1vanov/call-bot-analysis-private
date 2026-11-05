@@ -78,6 +78,18 @@ class ReadabilityTests(unittest.TestCase):
         self.assertIn('.page-help{position:fixed',help_css)
         self.assertIn('background:var(--surface);color:var(--fg)',help_css)
 
+    def test_help_reuses_existing_media_without_changes(self):
+        import hashlib
+        for name in ['crm/learning_examples.json','scripts/build_learning_examples.py','scripts/learning_example_renderer.py']:
+            before=subprocess.check_output(['git','show','f19a0eb:'+name],cwd=ROOT)
+            self.assertEqual((ROOT/name).read_bytes(),before,name)
+        examples=json.loads((ROOT/'crm/learning_examples.json').read_text())
+        for item in examples.values():
+            for kind in ('gif','poster'):
+                name='crm/static/learning/examples/'+item[kind]
+                before=subprocess.check_output(['git','show','f19a0eb:'+name],cwd=ROOT)
+                self.assertEqual(hashlib.sha256((ROOT/name).read_bytes()).digest(),hashlib.sha256(before).digest(),name)
+
     def test_help_uses_no_gpt_calls_navigation_or_lesson_state_writes(self):
         script=(ROOT/'crm/static/help.js').read_text()
         for text in ['api(', 'fetch(', 'gptAsk(', 'go(', 'W.action(', 'W.pause(', 'state.attempts', 'sessionStorage', 'localStorage']:

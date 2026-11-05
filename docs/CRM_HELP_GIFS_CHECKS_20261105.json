@@ -1,0 +1,26 @@
+{
+  "snapshot_utc": "2026-11-05T15:27:43.969192+00:00",
+  "baseline": "f19a0eb",
+  "branch": "feat/crm-help-examples-20261105",
+  "production_changed": false,
+  "services_restarted": false,
+  "python_passed": 51,
+  "javascript_suites": {
+    "model": 17,
+    "native_controllers": 13,
+    "floating": 18,
+    "readability_and_help": 15
+  },
+  "media_unchanged": true,
+  "tested": [
+    "both roles in working UI with fictional API",
+    "per-tab GIF keys and role-specific reports",
+    "independent playback",
+    "reduced motion poster",
+    "lesson GIF node unchanged",
+    "progress and drafts unchanged",
+    "modal keyboard focus loop",
+    "no API calls from help"
+  ],
+  "browser": "NOT RUN: Playwright/Chromium unavailable"
+}

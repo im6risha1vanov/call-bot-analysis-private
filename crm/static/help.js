@@ -23,11 +23,47 @@
     if(S.page==='deals'&&S.arg==='contracts')return [['Подготовить договор','Начните из нужной сделки кнопкой «Составить договор». Сверьте реквизиты, тип документа и дату.'],['Журнал документов','Создание, скачивание и отправка клиенту — разные действия. Проверьте связь записи журнала с нужной сделкой. В учебном режиме создаётся только вымышленный локальный документ.']];
     return sections[S.page]||[['Текущий раздел','Выберите нужную запись или фильтр. Если раздел недоступен или данных нет, обратитесь к руководителю и уточните права или период.']];
   }
+  // References to existing local lesson media; no copies, requests or lesson state.
+  function examplesFor(section){
+    const director=S.me.role==='director';
+    const groups={
+      queue:[[['select_client','Открыть нужного клиента']],[['save_outcome_no_answer','Сохранить недозвон'],['save_outcome_callback','Назначить перезвон']]],
+      callbacks:[[],[['move_task','Перенести перезвон']],[['select_task_context','Открыть историю клиента']]],
+      deals:[[['select_deal','Открыть сделку']],[['save_note','Записать следующий шаг']],[['filter_deals','Найти зависшие сделки']]],
+      contracts:[[['compose','Начать договор из сделки'],['prepare_contract','Заполнить учебные реквизиты']],[['select_document','Найти документ в журнале']]],
+      calls:[[...(director?[['set_manager','Выбрать менеджера']]:[]),['set_period','Выбрать период']],[['select_call','Открыть разбор разговора']]],
+      summary:[[['set_period_summary','Выбрать период сводки'],['set_manager_summary','Выбрать сотрудника']]],
+      staff:[[['select_person','Открыть карточку сотрудника']],[['select_call_staff','Прочитать пример разговора']]],
+      reports:[[[director?'select_report_weekly':'select_report',director?'Открыть недельную сводку':'Открыть личный итог']]],
+      settings:[[['visit_access','Открыть вкладку доступов']]],
+      auto:[[['visit_auto','Открыть автоматизации']]],
+      robot:[[['visit_robot','Открыть раздел робота']]],
+      learning:[[['visit_learning','Открыть программу']],[['save_outcome_callback','Пример заполнения учебной формы']]]
+    };
+    const key=S.page==='deals'&&S.arg==='contracts'?'contracts':S.page;
+    return groups[key]?.[section]||[];
+  }
+  function exampleMarkup(key,title){
+    if(!/^[a-z_]+$/.test(key))return '';
+    const still=matchMedia('(prefers-reduced-motion: reduce)').matches;
+    return `<figure class="page-help-example" data-help-example="${key}"><figcaption>${esc(title)}</figcaption><img width="480" height="360" loading="lazy" src="/static/learning/examples/${key}.${still?'png':'gif'}" alt="${esc(title)}: пример на вымышленных данных" data-help-example-image data-playing="${!still}"><button class="ghost small" type="button" data-help-example-toggle aria-label="${still?'Включить':'Приостановить'} пример: ${esc(title)}" aria-pressed="${!still}">${still?'Включить пример':'Приостановить пример'}</button><p class="page-help-example-note">Учебные данные. Дату, время и реквизиты берите из своей задачи.</p>${key==='prepare_contract'?'<p class="page-help-example-note">Показан учебный режим: документ остаётся в учебном журнале.</p>':''}</figure>`;
+  }
+  function bindExamples(){
+    $$('[data-help-example-toggle]',panel).forEach(button=>button.addEventListener('click',()=>{
+      const figure=button.closest('[data-help-example]'),image=$('[data-help-example-image]',figure),key=figure.dataset.helpExample;
+      if(!image||!/^[a-z_]+$/.test(key))return;
+      const play=image.dataset.playing!=='true';
+      image.src='/static/learning/examples/'+key+(play?'.gif':'.png');image.dataset.playing=String(play);
+      button.textContent=play?'Приостановить пример':'Включить пример';button.setAttribute('aria-pressed',String(play));
+      button.setAttribute('aria-label',(play?'Приостановить':'Включить')+' пример: '+$('figcaption',figure).textContent);
+    }));
+  }
   function draw(){
     if(!panel)return;
     const title=S.page==='deals'&&S.arg==='contracts'?'Договоры':PAGES[S.page]?.name||'Текущая вкладка';
-    panel.innerHTML=`<header class="page-help-head"><h2 tabindex="-1" data-help-heading>Справка: ${esc(title)}</h2><button class="ghost small" type="button" data-page-help-close aria-label="Закрыть справку">×</button></header><div class="page-help-body">${content().map(([h,t])=>`<section><h3>${esc(h)}</h3><p>${esc(t)}</p></section>`).join('')}<p class="hint">Справка объясняет вкладку. Обучение предлагает практические действия на учебных примерах.</p></div>`;
+    panel.innerHTML=`<header class="page-help-head"><h2 tabindex="-1" data-help-heading>Справка: ${esc(title)}</h2><button class="ghost small" type="button" data-page-help-close aria-label="Закрыть справку">×</button></header><div class="page-help-body">${content().map(([h,t],index)=>`<section><h3>${esc(h)}</h3><p>${esc(t)}</p>${examplesFor(index).map(([key,title])=>exampleMarkup(key,title)).join('')}</section>`).join('')}<p class="hint">Справка объясняет вкладку. Обучение предлагает практические действия на учебных примерах.</p></div>`;
     $('[data-page-help-close]',panel).onclick=close;
+    bindExamples();
   }
   function close(){opened=false;panel?.remove();panel=null;$$('[data-page-help]').forEach(b=>b.setAttribute('aria-expanded','false'));if(opener?.isConnected)opener.focus({preventScroll:true});document.dispatchEvent(new CustomEvent('crm-help-changed'));}
   function open(button){

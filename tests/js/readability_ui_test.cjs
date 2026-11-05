@@ -40,7 +40,7 @@ async function main(){const cases=[],coverage=[],test=async(name,fn)=>{try{await
   assert.equal(backend.events.length,0);assert.equal(backend.failures.length,0,JSON.stringify(backend.failures));assert.equal(ui.errors.length,0,ui.errors.join(';'));
  });
  await test('help-and-native-modal-share-keyboard-focus-without-grading',async()=>{
-  const ui=await open();await start(ui);await until(ui,()=>expected(ui).st.action==='select_deal');await click(ui,'[data-page-help]');await perform(ui);const at=state(ui).step,last=ui.document.querySelector('[data-page-help-close]'),first=ui.document.querySelector('.rvm-x');last.focus();const e=last.dispatch('keydown',{key:'Tab'});assert(e.defaultPrevented);assert.equal(ui.document.activeElement,first);assert.equal(state(ui).step,at);await click(ui,'[data-page-help-close]');assert.equal(state(ui).step,at);assert.equal(ui.network.length,0);
+  const ui=await open();await start(ui);await until(ui,()=>expected(ui).st.action==='select_deal');await click(ui,'[data-page-help]');await perform(ui);const at=state(ui).step,last=ui.document.querySelectorAll('.page-help button').at(-1),first=ui.document.querySelector('.rvm-x');last.focus();const e=last.dispatch('keydown',{key:'Tab'});assert(e.defaultPrevented);assert.equal(ui.document.activeElement,first);assert.equal(state(ui).step,at);await click(ui,'[data-page-help-close]');assert.equal(state(ui).step,at);assert.equal(ui.network.length,0);
  });
  await test('fourth-step-example-demonstrates-the-real-callback-fields-without-filling-them',async()=>{
   const ui=await open();await start(ui);await perform(ui);await perform(ui);
@@ -57,6 +57,32 @@ async function main(){const cases=[],coverage=[],test=async(name,fn)=>{try{await
   assert.equal(ui.document.querySelector('[data-example]').dataset.example,'select_report_weekly');await perform(ui);
   await until(ui,()=>expected(ui).st.action==='select_call'&&expected(ui).st.expected.person);
   assert.equal(ui.document.querySelector('[data-example]').dataset.example,'select_call_staff');assert.equal(ui.network.length,0);
+ });
+ for(const role of ['manager','director'])await test(role+'-help-media-is-scoped-independent-and-keeps-lesson-drafts',async()=>{
+  const ui=await open(role);await start(ui);
+  if(role==='manager'){await perform(ui);await perform(ui);await click(ui,'[data-out="callback"]');await fill(ui,'[data-f="comment"]','Сохранить мой черновик');}
+  const before=JSON.stringify(ui.model.state),image=ui.document.querySelector('[data-example-image]'),source=image.src;
+  ui.globals.matchMedia=()=>({matches:false});await click(ui,'[data-page-help]');
+  const figures=ui.document.querySelectorAll('[data-help-example]');assert(figures.length>=2);
+  const first=figures[0],second=figures[1],selector='[data-help-example="'+first.dataset.helpExample+'"]';
+  const otherSource=second.querySelector('[data-help-example-image]').src,helpImage=first.querySelector('[data-help-example-image]');assert(helpImage.src.endsWith('.gif'));
+  await click(ui,selector+' [data-help-example-toggle]');assert(helpImage.src.endsWith('.png'));assert.equal(first.querySelector('button').getAttribute('aria-pressed'),'false');assert.equal(second.querySelector('img').src,otherSource);
+  await click(ui,selector+' [data-help-example-toggle]');assert(helpImage.src.endsWith('.gif'));
+  assert.equal(ui.document.querySelector('[data-example-image]'),image);assert.equal(image.src,source);assert.equal(JSON.stringify(ui.model.state),before);
+  await click(ui,'[data-page-help-close]');assert.equal(JSON.stringify(ui.model.state),before);if(role==='manager')assert.equal(ui.document.querySelector('[data-f="comment"]').value,'Сохранить мой черновик');assert.equal(ui.network.length,0);
+ });
+ for(const role of ['manager','director'])await test(role+'-help-examples-follow-tab-role-and-reduced-motion-in-working-ui',async()=>{
+  const backend=working(role),ui=await open(role,'help-media',new Storage(),undefined,role==='manager'?'#queue':'#summary',false,{backend});
+  const examples=JSON.parse(read('crm/learning_examples.json'));
+  const expectedKeys={queue:['select_client','save_outcome_no_answer','save_outcome_callback'],callbacks:['move_task','select_task_context'],deals:['select_deal','save_note','filter_deals'],calls:role==='director'?['set_manager','set_period','select_call']:['set_period','select_call'],reports:[role==='director'?'select_report_weekly':'select_report'],summary:['set_period_summary','set_manager_summary'],staff:['select_person','select_call_staff'],settings:['visit_access'],auto:['visit_auto'],robot:['visit_robot'],learning:['visit_learning','save_outcome_callback']};
+  for(const page of Object.keys(expectedKeys).filter(page=>role==='director'||!['summary','staff','settings','auto','robot'].includes(page))){
+   await ui.run('go('+JSON.stringify(page)+')');await settle();const count=ui.network.length;await click(ui,'[data-page-help]');
+   const figures=ui.document.querySelectorAll('[data-help-example]');assert.deepEqual(figures.map(n=>n.dataset.helpExample),expectedKeys[page],page);
+   for(const figure of figures){const key=figure.dataset.helpExample;assert(examples[key],key);const image=figure.querySelector('img');assert.equal(image.src,'/static/learning/examples/'+examples[key].poster);assert.equal(image.getAttribute('loading'),'lazy');assert.equal(figure.querySelector('button').getAttribute('type'),'button');}
+   assert.equal(ui.network.length,count);await click(ui,'[data-page-help-close]');
+  }
+  await ui.run('go("deals","contracts")');await settle();await click(ui,'[data-page-help]');assert.deepEqual(ui.document.querySelectorAll('[data-help-example]').map(n=>n.dataset.helpExample),['compose','prepare_contract','select_document']);assert(ui.document.querySelector('.page-help').textContent.includes('учебном журнале'));
+  assert.equal(backend.events.length,0);assert.equal(backend.failures.length,0);assert.equal(ui.errors.length,0);
  });
  await test('friendly-note-and-legacy-note-have-same-meaning-without-rewriting-user-input',async()=>{
   const ui=await open();await start(ui);await until(ui,()=>expected(ui).st.action==='save_note');assert(!/\d{4}-\d{2}-\d{2}/.test(ui.document.querySelector('.learn-instruction').textContent));
