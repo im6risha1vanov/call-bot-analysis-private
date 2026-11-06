@@ -74,7 +74,7 @@ function heights(el) { $$('[data-h]', el).forEach(x => { x.style.height = x.data
 const initials = name => String(name || '?').trim().split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase() || '?';
 const store = {
   get(k, d) { if (window.AveronLearningWorkspace) return AveronLearningWorkspace.classroom?.pref(k) ?? d; try { return JSON.parse(localStorage.getItem(k) || 'null') ?? d; } catch (e) { return d; } },
-  set(k, v) { if (window.AveronLearningWorkspace) return AveronLearningWorkspace.classroom?.pref(k, v, true); try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* без хранилища */ } },
+  set(k, v) { if(S.me?.learning_mode)return;if (window.AveronLearningWorkspace) return AveronLearningWorkspace.classroom?.pref(k, v, true); try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* без хранилища */ } },
 };
 
 // ---------- сервер ----------
@@ -422,7 +422,7 @@ const menu = () => {
 };
 
 function showLogin() {
-  window.closePageHelp?.();
+  window.closePageHelp?.();window.CRMGuideGuard?.setMode(false);
   root.innerHTML = `<form class="login panel" autocomplete="on">
     <div class="logo"><i></i>Averon <b>CRM</b></div>
     <h1>Вход в CRM</h1>
@@ -462,7 +462,7 @@ function shell() {
         ${exitLink()}${switchBtn()}</div></div>
     </aside>
     <div class="main">
-      ${S.me.learning ? '<div class="banner"><b>Учебная учётка</b><span>Все записи вымышленные. Изменения сохраняются в браузере до нового входа.</span><a href="/learning/exit">Выйти</a></div>' : S.me.support && !S.me.test ? `<div class="banner"><b>Вы вошли как ${esc(S.me.name || '')} · ${esc(ROLE_NAME[S.me.role] || '')} · «${esc(S.me.company || '')}»</b><span>Всё, что делаете, идёт от имени этой учётки.</span>${switchBtn().replace('class="ghost"', 'class="linkish"')}<a href="/support-exit">Вернуться к себе</a></div>`
+      ${S.me.learning_mode?'<div class="banner" data-guide-banner><b>Режим обучения</b><span>Ваши реальные данные доступны для просмотра. Звонки, отправки и изменения отключены.</span><button class="ghost small" type="button" data-guide-resume>Показать подсказки</button><button class="ghost small" type="button" data-guide-disable>Выключить режим обучения</button></div>':S.me.learning ? '<div class="banner"><b>Учебная учётка</b><span>Все записи вымышленные. Изменения сохраняются в браузере до нового входа.</span><a href="/learning/exit">Выйти</a></div>' : S.me.support && !S.me.test ? `<div class="banner"><b>Вы вошли как ${esc(S.me.name || '')} · ${esc(ROLE_NAME[S.me.role] || '')} · «${esc(S.me.company || '')}»</b><span>Всё, что делаете, идёт от имени этой учётки.</span>${switchBtn().replace('class="ghost"', 'class="linkish"')}<a href="/support-exit">Вернуться к себе</a></div>`
         : S.me.support ? `<div class="banner"><b>Просмотр компании «${esc(S.me.company || '')}»</b><span>Глазами директора, только смотреть.</span><a href="/support-exit">Вернуться к себе</a></div>`
         : S.me.test ? `<div class="banner"><b>Просмотр · ${esc(ROLE_NAME[S.me.role] || '')}</b><span data-readonly-notice>Только смотреть: звонки и изменения работают под своим логином.</span><a href="/test-exit">Сменить вход</a></div>` : ''}
       <header class="top"><div class="top-in" id="top"></div></header>

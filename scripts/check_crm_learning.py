@@ -37,7 +37,7 @@ def main():
             stack.enter_context(patch.object(obj,name,AsyncMock(side_effect=AssertionError('Unexpected external/DB operation'))))
         stack.enter_context(patch.object(requests.Session,'request',side_effect=AssertionError('Unexpected provider request')))
         suite = unittest.defaultTestLoader.loadTestsFromNames([
-            'tests.test_crm_learning', 'tests.test_crm_readability', 'tests.test_crm.PureTests', 'tests.test_gpt.PureTests',
+            'tests.test_crm_learning', 'tests.test_crm_readability', 'tests.test_crm_tour', 'tests.test_crm.PureTests', 'tests.test_gpt.PureTests',
             'tests.test_automations.PureTests', 'tests.test_automations.AgentTests'])
         result = unittest.TextTestRunner(verbosity=2).run(suite)
     if hasattr(signal, 'SIGALRM'): signal.alarm(0)
@@ -49,7 +49,7 @@ def main():
     if not node:
         print('Parent/iframe checks require Node. Set CRM_LEARNING_NODE to its executable.', file=sys.stderr)
         return 2
-    for filename in ('learning_workspace_test.cjs', 'learning_tabs_ui_test.cjs', 'learning_floating_test.cjs', 'readability_ui_test.cjs', 'learning_smooth_test.cjs'):
+    for filename in ('learning_workspace_test.cjs', 'learning_tabs_ui_test.cjs', 'learning_floating_test.cjs', 'readability_ui_test.cjs', 'learning_smooth_test.cjs', 'learning_tour_test.cjs'):
         check = subprocess.run([node, 'tests/js/' + filename],
                                cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=60)
         if check.returncode:

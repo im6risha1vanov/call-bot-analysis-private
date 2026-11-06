@@ -1,0 +1,3472 @@
+{
+  "manager": {
+    "/api/me": {
+      "name": "Анна Учебная",
+      "company": "Учебная компания",
+      "role": "manager",
+      "ext": "101",
+      "test": false,
+      "learning": false,
+      "readonly": false,
+      "modules": [
+        "contracts",
+        "automations",
+        "robot",
+        "gpt",
+        "sources",
+        "callcenter"
+      ],
+      "can_dial": false,
+      "privileged": false,
+      "team": [
+        {
+          "ext": "101",
+          "name": "Анна Учебная"
+        },
+        {
+          "ext": "102",
+          "name": "Борис Учебный"
+        }
+      ],
+      "outcomes": {
+        "no_answer": "Не взял трубку",
+        "callback": "Перезвонить",
+        "not_interested": "Отказ",
+        "meeting": "Назначил встречу",
+        "proposal": "Отправил КП",
+        "interested": "Интерес, думает",
+        "bad_number": "Неверный номер"
+      },
+      "needs_date": [
+        "callback",
+        "meeting"
+      ],
+      "lead_status": {},
+      "platform": false,
+      "switcher": false,
+      "callcenter_mode": "db",
+      "timezone": "Europe/Moscow"
+    },
+    "/api/queue": {
+      "today": "2026-11-04",
+      "later": 0,
+      "items": [
+        {
+          "kind": "lead",
+          "id": 1,
+          "number": "00000000002",
+          "title": "Учебный Кедр · другой клиент · УЧ-002",
+          "note": "Вымышленный клиент. Звонить не требуется.",
+          "status": "new",
+          "attempts": 0
+        },
+        {
+          "kind": "lead",
+          "id": 2,
+          "number": "00000000001",
+          "title": "Учебный Кедр · УЧ-001",
+          "note": "Вымышленный клиент. Звонить не требуется.",
+          "status": "new",
+          "attempts": 0
+        },
+        {
+          "kind": "lead",
+          "id": 3,
+          "number": "00000000003",
+          "title": "Учебный Лён · УЧ-003",
+          "note": "Вымышленный клиент. Звонить не требуется.",
+          "status": "new",
+          "attempts": 0
+        }
+      ]
+    },
+    "/api/reports": {
+      "items": [
+        {
+          "id": "report-personal",
+          "kind": "day_manager",
+          "title": "Итог дня менеджера · 2026-11-03 — 2026-11-03",
+          "from": "2026-11-03",
+          "to": "2026-11-03",
+          "manager": "anna",
+          "text": "Отправка предложения согласована. В следующем звонке согласуйте дату продолжения.",
+          "calls": [
+            {
+              "id": "call-1",
+              "label": "Учебный разбор"
+            }
+          ],
+          "who": "Анна Учебная",
+          "at": "2026-11-03T18:00:00+03:00",
+          "note": "Учебный пример",
+          "html": "<p>Отправка предложения согласована. В следующем звонке согласуйте дату продолжения.</p>"
+        },
+        {
+          "id": "report-other",
+          "kind": "weekly",
+          "title": "Сводка за неделю · 2026-10-21 — 2026-10-27",
+          "from": "2026-10-21",
+          "to": "2026-10-27",
+          "manager": "anna",
+          "text": "Другой период и сотрудник.",
+          "calls": [
+            {
+              "id": "call-2",
+              "label": "Учебный разбор"
+            }
+          ],
+          "who": "Анна Учебная",
+          "at": "2026-10-27T18:00:00+03:00",
+          "note": "Учебный пример",
+          "html": "<p>Другой период и сотрудник.</p>"
+        }
+      ]
+    },
+    "/api/deals": {
+      "stages": [
+        {
+          "name": "Контакт",
+          "reasons": [],
+          "reached": 2,
+          "lost": 0
+        },
+        {
+          "name": "Telegram или почта",
+          "reasons": [],
+          "reached": 1,
+          "lost": 0
+        },
+        {
+          "name": "Договор",
+          "reasons": [],
+          "reached": 1,
+          "lost": 0
+        }
+      ],
+      "reasons": {},
+      "can_pay": false,
+      "managers": [
+        {
+          "ext": "101",
+          "name": "Анна Учебная"
+        },
+        {
+          "ext": "102",
+          "name": "Борис Учебный"
+        }
+      ],
+      "deals": [
+        {
+          "id": "deal-1",
+          "client": "client-1",
+          "company": "Учебный Кедр",
+          "manager": "Анна Учебная",
+          "stage": "messenger",
+          "stageName": "Telegram или почта",
+          "stalled": true,
+          "inn": "0000000000",
+          "history": [
+            {
+              "kind": "materials",
+              "text": "Отправлены материалы",
+              "at": "2026-10-25"
+            }
+          ],
+          "next_step": null,
+          "phone": "00000000001",
+          "number": "00000000001",
+          "ext": "101",
+          "stage_no": 2,
+          "stage_name": "Telegram или почта",
+          "status": "active",
+          "stalled_days": 10,
+          "last_at": "2026-10-25T12:00:00+03:00",
+          "waiting": null,
+          "advice": "",
+          "missing": [],
+          "can_pay": false,
+          "reasons": {},
+          "contracts": [],
+          "timeline": [
+            {
+              "type": "event",
+              "at": "2026-10-25T12:00:00+03:00",
+              "title": "Отправлены материалы",
+              "text": "Отправлены материалы"
+            }
+          ]
+        },
+        {
+          "id": "deal-2",
+          "client": "client-2",
+          "company": "Учебный Кедр · другая сделка",
+          "manager": "Анна Учебная",
+          "stage": "contract",
+          "stageName": "Договор",
+          "stalled": true,
+          "inn": "0000000001",
+          "history": [
+            {
+              "kind": "contract_sent",
+              "text": "Договор отправлен",
+              "at": "2026-10-27"
+            }
+          ],
+          "next_step": "Связаться в пятницу",
+          "phone": "00000000002",
+          "number": "00000000002",
+          "ext": "101",
+          "stage_no": 3,
+          "stage_name": "Договор",
+          "status": "active",
+          "stalled_days": 10,
+          "last_at": "2026-10-27T12:00:00+03:00",
+          "waiting": null,
+          "advice": "",
+          "missing": [],
+          "can_pay": false,
+          "reasons": {},
+          "contracts": [],
+          "timeline": [
+            {
+              "type": "event",
+              "at": "2026-10-27T12:00:00+03:00",
+              "title": "Отправлены материалы",
+              "text": "Договор отправлен"
+            }
+          ]
+        }
+      ],
+      "funnel": {
+        "stages": [
+          {
+            "name": "Контакт",
+            "reasons": [],
+            "reached": 2,
+            "lost": 0
+          },
+          {
+            "name": "Telegram или почта",
+            "reasons": [],
+            "reached": 1,
+            "lost": 0
+          },
+          {
+            "name": "Договор",
+            "reasons": [],
+            "reached": 1,
+            "lost": 0
+          }
+        ],
+        "paid": 0,
+        "paid_sum": 0
+      },
+      "unlinked": [],
+      "unlinked_chats": []
+    },
+    "/api/contracts": {
+      "items": []
+    },
+    "/api/contracts/config": {
+      "ourEmail": "training@example.invalid",
+      "dsTariffs": [],
+      "innLookup": false,
+      "templates": {}
+    },
+    "/api/contracts/next-number": {
+      "num": "УЧ-1"
+    },
+    "/api/robot/cab/campaigns": {
+      "items": []
+    },
+    "/api/gpt": {
+      "items": [],
+      "models": []
+    },
+    "/api/card?number=00000000001": {
+      "calls": [
+        {
+          "id": "call-1",
+          "manager": "Анна Учебная",
+          "client": "client-1",
+          "company": "Учебный Кедр",
+          "at": "2026-11-03T12:00:00+03:00",
+          "seconds": 185,
+          "conclusion": "Клиент согласился получить предложение, но дата следующего разговора не согласована.",
+          "answer": "callback_missing",
+          "transcript": [
+            "Менеджер: Пришлю описание предложения.",
+            "Клиент: Да, пришлите, посмотрю.",
+            "Менеджер: Спасибо, хорошего дня."
+          ],
+          "number": "00000000001",
+          "phone": "00000000001",
+          "ext": "101",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "lost",
+          "text": "Клиент согласился получить предложение, но дата следующего разговора не согласована.",
+          "who": "Анна Учебная",
+          "review": {
+            "manager_text": "Клиент согласился получить предложение, но дата следующего разговора не согласована."
+          }
+        }
+      ],
+      "outcomes": [],
+      "tasks": []
+    },
+    "/api/deals/00000000001": {
+      "id": "deal-1",
+      "client": "client-1",
+      "company": "Учебный Кедр",
+      "manager": "Анна Учебная",
+      "stage": "messenger",
+      "stageName": "Telegram или почта",
+      "stalled": true,
+      "inn": "0000000000",
+      "history": [
+        {
+          "kind": "materials",
+          "text": "Отправлены материалы",
+          "at": "2026-10-25"
+        }
+      ],
+      "next_step": null,
+      "phone": "00000000001",
+      "number": "00000000001",
+      "ext": "101",
+      "stage_no": 2,
+      "stage_name": "Telegram или почта",
+      "status": "active",
+      "stalled_days": 10,
+      "last_at": "2026-10-25T12:00:00+03:00",
+      "waiting": null,
+      "advice": "",
+      "missing": [],
+      "can_pay": false,
+      "reasons": {},
+      "contracts": [],
+      "timeline": [
+        {
+          "type": "event",
+          "at": "2026-10-25T12:00:00+03:00",
+          "title": "Отправлены материалы",
+          "text": "Отправлены материалы"
+        }
+      ]
+    },
+    "/api/card?number=00000000002": {
+      "calls": [
+        {
+          "id": "call-2",
+          "manager": "Анна Учебная",
+          "client": "client-2",
+          "company": "Учебный Кедр · другой клиент",
+          "at": "2026-11-03T12:00:00+03:00",
+          "seconds": 192,
+          "conclusion": "Встреча согласована на конкретное время.",
+          "answer": "meeting_agreed",
+          "transcript": [
+            "Клиент: Подтверждаю встречу в четверг в десять."
+          ],
+          "number": "00000000002",
+          "phone": "00000000002",
+          "ext": "101",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "result",
+          "text": "Встреча согласована на конкретное время.",
+          "who": "Анна Учебная",
+          "review": {
+            "manager_text": "Встреча согласована на конкретное время."
+          }
+        }
+      ],
+      "outcomes": [],
+      "tasks": [
+        {
+          "id": "task-anna",
+          "client": "client-2",
+          "manager": "Анна Учебная",
+          "due_date": "2026-11-01",
+          "due_time": "12:00",
+          "original_date": "2026-11-01",
+          "original_time": "12:00",
+          "note": "Другой менеджер.",
+          "context": "other",
+          "number": "00000000002",
+          "title": "Учебный Кедр · другой клиент",
+          "ext": "101",
+          "label": "Перезвон",
+          "source": "crm",
+          "who": "Анна Учебная",
+          "late": true
+        }
+      ]
+    },
+    "/api/deals/00000000002": {
+      "id": "deal-2",
+      "client": "client-2",
+      "company": "Учебный Кедр · другая сделка",
+      "manager": "Анна Учебная",
+      "stage": "contract",
+      "stageName": "Договор",
+      "stalled": true,
+      "inn": "0000000001",
+      "history": [
+        {
+          "kind": "contract_sent",
+          "text": "Договор отправлен",
+          "at": "2026-10-27"
+        }
+      ],
+      "next_step": "Связаться в пятницу",
+      "phone": "00000000002",
+      "number": "00000000002",
+      "ext": "101",
+      "stage_no": 3,
+      "stage_name": "Договор",
+      "status": "active",
+      "stalled_days": 10,
+      "last_at": "2026-10-27T12:00:00+03:00",
+      "waiting": null,
+      "advice": "",
+      "missing": [],
+      "can_pay": false,
+      "reasons": {},
+      "contracts": [],
+      "timeline": [
+        {
+          "type": "event",
+          "at": "2026-10-27T12:00:00+03:00",
+          "title": "Отправлены материалы",
+          "text": "Договор отправлен"
+        }
+      ]
+    },
+    "/api/card?number=00000000003": {
+      "calls": [
+        {
+          "id": "call-3",
+          "manager": "Анна Учебная",
+          "client": "client-3",
+          "company": "Учебный Лён",
+          "at": "2026-10-23T12:00:00+03:00",
+          "seconds": 75,
+          "conclusion": "Клиент отказался от предложения.",
+          "answer": "refusal",
+          "transcript": [
+            "Клиент: Спасибо, предложение не нужно."
+          ],
+          "number": "00000000003",
+          "phone": "00000000003",
+          "ext": "101",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "lost",
+          "text": "Клиент отказался от предложения.",
+          "who": "Анна Учебная",
+          "review": {
+            "manager_text": "Клиент отказался от предложения."
+          }
+        }
+      ],
+      "outcomes": [],
+      "tasks": []
+    },
+    "/api/person?person=101": {
+      "ext": "101",
+      "name": "Анна Учебная",
+      "role_title": "Менеджер",
+      "manager": true,
+      "kitchen": false,
+      "access": null,
+      "dials": {
+        "week": {
+          "dials": 80
+        },
+        "prev": {
+          "dials": 60
+        },
+        "month": {
+          "dials": 180
+        }
+      },
+      "periods": {
+        "week": {
+          "talks": 17,
+          "success": 4,
+          "hot": 2
+        },
+        "prev": {
+          "talks": 10,
+          "success": 2
+        }
+      },
+      "memory": [],
+      "memory_on": false,
+      "mistakes": [
+        {
+          "label": "Дата продолжения не согласована",
+          "month": 4,
+          "examples": [
+            {
+              "id": "call-1",
+              "at": "2026-11-01"
+            }
+          ]
+        }
+      ],
+      "positives": []
+    },
+    "/api/review/call-1": {
+      "id": "call-1",
+      "manager": "Анна Учебная",
+      "client": "client-1",
+      "company": "Учебный Кедр",
+      "at": "2026-11-03",
+      "seconds": 185,
+      "conclusion": "Клиент согласился получить предложение, но дата следующего разговора не согласована.",
+      "answer": "callback_missing",
+      "transcript": [
+        {
+          "at": null,
+          "timecode": "",
+          "who": "Менеджер",
+          "text": "Пришлю описание предложения."
+        },
+        {
+          "at": null,
+          "timecode": "",
+          "who": "Клиент",
+          "text": "Да, пришлите, посмотрю."
+        },
+        {
+          "at": null,
+          "timecode": "",
+          "who": "Менеджер",
+          "text": "Спасибо, хорошего дня."
+        }
+      ],
+      "number": "00000000001",
+      "phone": "00000000001",
+      "ext": "101",
+      "incoming": false,
+      "reviewed": true,
+      "rec": false,
+      "kind": "Исходящий",
+      "result": "lost",
+      "text": "Клиент согласился получить предложение, но дата следующего разговора не согласована.",
+      "success": false,
+      "outcomes": [],
+      "chance": "normal",
+      "misses": [],
+      "evidence": [],
+      "positives": [],
+      "facts": [],
+      "next_step": "",
+      "summary": "Клиент согласился получить предложение, но дата следующего разговора не согласована.",
+      "details": "Учебный пример. Дата следующего разговора не согласована.",
+      "can_train": false
+    },
+    "/api/review/call-2": {
+      "id": "call-2",
+      "manager": "Анна Учебная",
+      "client": "client-2",
+      "company": "Учебный Кедр · другой клиент",
+      "at": "2026-11-03",
+      "seconds": 192,
+      "conclusion": "Встреча согласована на конкретное время.",
+      "answer": "meeting_agreed",
+      "transcript": [
+        {
+          "at": null,
+          "timecode": "",
+          "who": "Менеджер",
+          "text": "Подтверждаю встречу в четверг в десять."
+        }
+      ],
+      "number": "00000000002",
+      "phone": "00000000002",
+      "ext": "101",
+      "incoming": false,
+      "reviewed": true,
+      "rec": false,
+      "kind": "Исходящий",
+      "result": "result",
+      "text": "Встреча согласована на конкретное время.",
+      "success": true,
+      "outcomes": [
+        "Встреча"
+      ],
+      "chance": "normal",
+      "misses": [],
+      "evidence": [],
+      "positives": [],
+      "facts": [],
+      "next_step": "",
+      "summary": "Встреча согласована на конкретное время.",
+      "details": "Учебный пример. Дата следующего разговора не согласована.",
+      "can_train": false
+    },
+    "/api/review/call-3": {
+      "id": "call-3",
+      "manager": "Анна Учебная",
+      "client": "client-3",
+      "company": "Учебный Лён",
+      "at": "2026-10-23",
+      "seconds": 75,
+      "conclusion": "Клиент отказался от предложения.",
+      "answer": "refusal",
+      "transcript": [
+        {
+          "at": null,
+          "timecode": "",
+          "who": "Менеджер",
+          "text": "Спасибо, предложение не нужно."
+        }
+      ],
+      "number": "00000000003",
+      "phone": "00000000003",
+      "ext": "101",
+      "incoming": false,
+      "reviewed": true,
+      "rec": false,
+      "kind": "Исходящий",
+      "result": "lost",
+      "text": "Клиент отказался от предложения.",
+      "success": false,
+      "outcomes": [],
+      "chance": "normal",
+      "misses": [],
+      "evidence": [],
+      "positives": [],
+      "facts": [],
+      "next_step": "",
+      "summary": "Клиент отказался от предложения.",
+      "details": "Учебный пример. Дата следующего разговора не согласована.",
+      "can_train": false
+    },
+    "/api/callbacks": {
+      "today": "2026-11-04",
+      "items": [
+        {
+          "id": "task-anna",
+          "client": "client-2",
+          "manager": "Анна Учебная",
+          "due_date": "2026-11-01",
+          "due_time": "12:00",
+          "original_date": "2026-11-01",
+          "original_time": "12:00",
+          "note": "Другой менеджер.",
+          "context": "other",
+          "number": "00000000002",
+          "title": "Учебный Кедр · другой клиент",
+          "ext": "101",
+          "label": "Перезвон",
+          "source": "crm",
+          "who": "Анна Учебная",
+          "late": true
+        }
+      ]
+    },
+    "/api/journal?period=today": {
+      "items": [],
+      "more": false,
+      "offset": 0,
+      "results": {
+        "result": "Результат",
+        "lost": "Потерян, шанс был"
+      },
+      "kinds": {},
+      "today": "2026-11-04"
+    },
+    "/api/journal?period=7": {
+      "items": [
+        {
+          "id": "call-1",
+          "manager": "Анна Учебная",
+          "client": "client-1",
+          "company": "Учебный Кедр",
+          "at": "2026-11-03T12:00:00+03:00",
+          "seconds": 185,
+          "conclusion": "Клиент согласился получить предложение, но дата следующего разговора не согласована.",
+          "answer": "callback_missing",
+          "transcript": [
+            "Менеджер: Пришлю описание предложения.",
+            "Клиент: Да, пришлите, посмотрю.",
+            "Менеджер: Спасибо, хорошего дня."
+          ],
+          "number": "00000000001",
+          "phone": "00000000001",
+          "ext": "101",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "lost",
+          "text": "Клиент согласился получить предложение, но дата следующего разговора не согласована."
+        },
+        {
+          "id": "call-2",
+          "manager": "Анна Учебная",
+          "client": "client-2",
+          "company": "Учебный Кедр · другой клиент",
+          "at": "2026-11-03T12:00:00+03:00",
+          "seconds": 192,
+          "conclusion": "Встреча согласована на конкретное время.",
+          "answer": "meeting_agreed",
+          "transcript": [
+            "Клиент: Подтверждаю встречу в четверг в десять."
+          ],
+          "number": "00000000002",
+          "phone": "00000000002",
+          "ext": "101",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "result",
+          "text": "Встреча согласована на конкретное время."
+        }
+      ],
+      "more": false,
+      "offset": 2,
+      "results": {
+        "result": "Результат",
+        "lost": "Потерян, шанс был"
+      },
+      "kinds": {},
+      "today": "2026-11-04"
+    },
+    "/api/journal?period=30": {
+      "items": [
+        {
+          "id": "call-1",
+          "manager": "Анна Учебная",
+          "client": "client-1",
+          "company": "Учебный Кедр",
+          "at": "2026-11-03T12:00:00+03:00",
+          "seconds": 185,
+          "conclusion": "Клиент согласился получить предложение, но дата следующего разговора не согласована.",
+          "answer": "callback_missing",
+          "transcript": [
+            "Менеджер: Пришлю описание предложения.",
+            "Клиент: Да, пришлите, посмотрю.",
+            "Менеджер: Спасибо, хорошего дня."
+          ],
+          "number": "00000000001",
+          "phone": "00000000001",
+          "ext": "101",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "lost",
+          "text": "Клиент согласился получить предложение, но дата следующего разговора не согласована."
+        },
+        {
+          "id": "call-2",
+          "manager": "Анна Учебная",
+          "client": "client-2",
+          "company": "Учебный Кедр · другой клиент",
+          "at": "2026-11-03T12:00:00+03:00",
+          "seconds": 192,
+          "conclusion": "Встреча согласована на конкретное время.",
+          "answer": "meeting_agreed",
+          "transcript": [
+            "Клиент: Подтверждаю встречу в четверг в десять."
+          ],
+          "number": "00000000002",
+          "phone": "00000000002",
+          "ext": "101",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "result",
+          "text": "Встреча согласована на конкретное время."
+        },
+        {
+          "id": "call-3",
+          "manager": "Анна Учебная",
+          "client": "client-3",
+          "company": "Учебный Лён",
+          "at": "2026-10-23T12:00:00+03:00",
+          "seconds": 75,
+          "conclusion": "Клиент отказался от предложения.",
+          "answer": "refusal",
+          "transcript": [
+            "Клиент: Спасибо, предложение не нужно."
+          ],
+          "number": "00000000003",
+          "phone": "00000000003",
+          "ext": "101",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "lost",
+          "text": "Клиент отказался от предложения."
+        }
+      ],
+      "more": false,
+      "offset": 3,
+      "results": {
+        "result": "Результат",
+        "lost": "Потерян, шанс был"
+      },
+      "kinds": {},
+      "today": "2026-11-04"
+    },
+    "/api/journal?period=month": {
+      "items": [
+        {
+          "id": "call-1",
+          "manager": "Анна Учебная",
+          "client": "client-1",
+          "company": "Учебный Кедр",
+          "at": "2026-11-03T12:00:00+03:00",
+          "seconds": 185,
+          "conclusion": "Клиент согласился получить предложение, но дата следующего разговора не согласована.",
+          "answer": "callback_missing",
+          "transcript": [
+            "Менеджер: Пришлю описание предложения.",
+            "Клиент: Да, пришлите, посмотрю.",
+            "Менеджер: Спасибо, хорошего дня."
+          ],
+          "number": "00000000001",
+          "phone": "00000000001",
+          "ext": "101",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "lost",
+          "text": "Клиент согласился получить предложение, но дата следующего разговора не согласована."
+        },
+        {
+          "id": "call-2",
+          "manager": "Анна Учебная",
+          "client": "client-2",
+          "company": "Учебный Кедр · другой клиент",
+          "at": "2026-11-03T12:00:00+03:00",
+          "seconds": 192,
+          "conclusion": "Встреча согласована на конкретное время.",
+          "answer": "meeting_agreed",
+          "transcript": [
+            "Клиент: Подтверждаю встречу в четверг в десять."
+          ],
+          "number": "00000000002",
+          "phone": "00000000002",
+          "ext": "101",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "result",
+          "text": "Встреча согласована на конкретное время."
+        },
+        {
+          "id": "call-3",
+          "manager": "Анна Учебная",
+          "client": "client-3",
+          "company": "Учебный Лён",
+          "at": "2026-10-23T12:00:00+03:00",
+          "seconds": 75,
+          "conclusion": "Клиент отказался от предложения.",
+          "answer": "refusal",
+          "transcript": [
+            "Клиент: Спасибо, предложение не нужно."
+          ],
+          "number": "00000000003",
+          "phone": "00000000003",
+          "ext": "101",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "lost",
+          "text": "Клиент отказался от предложения."
+        }
+      ],
+      "more": false,
+      "offset": 3,
+      "results": {
+        "result": "Результат",
+        "lost": "Потерян, шанс был"
+      },
+      "kinds": {},
+      "today": "2026-11-04"
+    },
+    "/api/callbacks?ext=101": {
+      "today": "2026-11-04",
+      "items": [
+        {
+          "id": "task-anna",
+          "client": "client-2",
+          "manager": "Анна Учебная",
+          "due_date": "2026-11-01",
+          "due_time": "12:00",
+          "original_date": "2026-11-01",
+          "original_time": "12:00",
+          "note": "Другой менеджер.",
+          "context": "other",
+          "number": "00000000002",
+          "title": "Учебный Кедр · другой клиент",
+          "ext": "101",
+          "label": "Перезвон",
+          "source": "crm",
+          "who": "Анна Учебная",
+          "late": true
+        }
+      ]
+    },
+    "/api/journal?period=today&ext=101": {
+      "items": [],
+      "more": false,
+      "offset": 0,
+      "results": {
+        "result": "Результат",
+        "lost": "Потерян, шанс был"
+      },
+      "kinds": {},
+      "today": "2026-11-04"
+    },
+    "/api/journal?period=7&ext=101": {
+      "items": [
+        {
+          "id": "call-1",
+          "manager": "Анна Учебная",
+          "client": "client-1",
+          "company": "Учебный Кедр",
+          "at": "2026-11-03T12:00:00+03:00",
+          "seconds": 185,
+          "conclusion": "Клиент согласился получить предложение, но дата следующего разговора не согласована.",
+          "answer": "callback_missing",
+          "transcript": [
+            "Менеджер: Пришлю описание предложения.",
+            "Клиент: Да, пришлите, посмотрю.",
+            "Менеджер: Спасибо, хорошего дня."
+          ],
+          "number": "00000000001",
+          "phone": "00000000001",
+          "ext": "101",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "lost",
+          "text": "Клиент согласился получить предложение, но дата следующего разговора не согласована."
+        },
+        {
+          "id": "call-2",
+          "manager": "Анна Учебная",
+          "client": "client-2",
+          "company": "Учебный Кедр · другой клиент",
+          "at": "2026-11-03T12:00:00+03:00",
+          "seconds": 192,
+          "conclusion": "Встреча согласована на конкретное время.",
+          "answer": "meeting_agreed",
+          "transcript": [
+            "Клиент: Подтверждаю встречу в четверг в десять."
+          ],
+          "number": "00000000002",
+          "phone": "00000000002",
+          "ext": "101",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "result",
+          "text": "Встреча согласована на конкретное время."
+        }
+      ],
+      "more": false,
+      "offset": 2,
+      "results": {
+        "result": "Результат",
+        "lost": "Потерян, шанс был"
+      },
+      "kinds": {},
+      "today": "2026-11-04"
+    },
+    "/api/journal?period=30&ext=101": {
+      "items": [
+        {
+          "id": "call-1",
+          "manager": "Анна Учебная",
+          "client": "client-1",
+          "company": "Учебный Кедр",
+          "at": "2026-11-03T12:00:00+03:00",
+          "seconds": 185,
+          "conclusion": "Клиент согласился получить предложение, но дата следующего разговора не согласована.",
+          "answer": "callback_missing",
+          "transcript": [
+            "Менеджер: Пришлю описание предложения.",
+            "Клиент: Да, пришлите, посмотрю.",
+            "Менеджер: Спасибо, хорошего дня."
+          ],
+          "number": "00000000001",
+          "phone": "00000000001",
+          "ext": "101",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "lost",
+          "text": "Клиент согласился получить предложение, но дата следующего разговора не согласована."
+        },
+        {
+          "id": "call-2",
+          "manager": "Анна Учебная",
+          "client": "client-2",
+          "company": "Учебный Кедр · другой клиент",
+          "at": "2026-11-03T12:00:00+03:00",
+          "seconds": 192,
+          "conclusion": "Встреча согласована на конкретное время.",
+          "answer": "meeting_agreed",
+          "transcript": [
+            "Клиент: Подтверждаю встречу в четверг в десять."
+          ],
+          "number": "00000000002",
+          "phone": "00000000002",
+          "ext": "101",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "result",
+          "text": "Встреча согласована на конкретное время."
+        },
+        {
+          "id": "call-3",
+          "manager": "Анна Учебная",
+          "client": "client-3",
+          "company": "Учебный Лён",
+          "at": "2026-10-23T12:00:00+03:00",
+          "seconds": 75,
+          "conclusion": "Клиент отказался от предложения.",
+          "answer": "refusal",
+          "transcript": [
+            "Клиент: Спасибо, предложение не нужно."
+          ],
+          "number": "00000000003",
+          "phone": "00000000003",
+          "ext": "101",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "lost",
+          "text": "Клиент отказался от предложения."
+        }
+      ],
+      "more": false,
+      "offset": 3,
+      "results": {
+        "result": "Результат",
+        "lost": "Потерян, шанс был"
+      },
+      "kinds": {},
+      "today": "2026-11-04"
+    },
+    "/api/journal?period=month&ext=101": {
+      "items": [
+        {
+          "id": "call-1",
+          "manager": "Анна Учебная",
+          "client": "client-1",
+          "company": "Учебный Кедр",
+          "at": "2026-11-03T12:00:00+03:00",
+          "seconds": 185,
+          "conclusion": "Клиент согласился получить предложение, но дата следующего разговора не согласована.",
+          "answer": "callback_missing",
+          "transcript": [
+            "Менеджер: Пришлю описание предложения.",
+            "Клиент: Да, пришлите, посмотрю.",
+            "Менеджер: Спасибо, хорошего дня."
+          ],
+          "number": "00000000001",
+          "phone": "00000000001",
+          "ext": "101",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "lost",
+          "text": "Клиент согласился получить предложение, но дата следующего разговора не согласована."
+        },
+        {
+          "id": "call-2",
+          "manager": "Анна Учебная",
+          "client": "client-2",
+          "company": "Учебный Кедр · другой клиент",
+          "at": "2026-11-03T12:00:00+03:00",
+          "seconds": 192,
+          "conclusion": "Встреча согласована на конкретное время.",
+          "answer": "meeting_agreed",
+          "transcript": [
+            "Клиент: Подтверждаю встречу в четверг в десять."
+          ],
+          "number": "00000000002",
+          "phone": "00000000002",
+          "ext": "101",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "result",
+          "text": "Встреча согласована на конкретное время."
+        },
+        {
+          "id": "call-3",
+          "manager": "Анна Учебная",
+          "client": "client-3",
+          "company": "Учебный Лён",
+          "at": "2026-10-23T12:00:00+03:00",
+          "seconds": 75,
+          "conclusion": "Клиент отказался от предложения.",
+          "answer": "refusal",
+          "transcript": [
+            "Клиент: Спасибо, предложение не нужно."
+          ],
+          "number": "00000000003",
+          "phone": "00000000003",
+          "ext": "101",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "lost",
+          "text": "Клиент отказался от предложения."
+        }
+      ],
+      "more": false,
+      "offset": 3,
+      "results": {
+        "result": "Результат",
+        "lost": "Потерян, шанс был"
+      },
+      "kinds": {},
+      "today": "2026-11-04"
+    },
+    "/api/callbacks?ext=102": {
+      "today": "2026-11-04",
+      "items": []
+    },
+    "/api/journal?period=today&ext=102": {
+      "items": [],
+      "more": false,
+      "offset": 0,
+      "results": {
+        "result": "Результат",
+        "lost": "Потерян, шанс был"
+      },
+      "kinds": {},
+      "today": "2026-11-04"
+    },
+    "/api/journal?period=7&ext=102": {
+      "items": [],
+      "more": false,
+      "offset": 0,
+      "results": {
+        "result": "Результат",
+        "lost": "Потерян, шанс был"
+      },
+      "kinds": {},
+      "today": "2026-11-04"
+    },
+    "/api/journal?period=30&ext=102": {
+      "items": [],
+      "more": false,
+      "offset": 0,
+      "results": {
+        "result": "Результат",
+        "lost": "Потерян, шанс был"
+      },
+      "kinds": {},
+      "today": "2026-11-04"
+    },
+    "/api/journal?period=month&ext=102": {
+      "items": [],
+      "more": false,
+      "offset": 0,
+      "results": {
+        "result": "Результат",
+        "lost": "Потерян, шанс был"
+      },
+      "kinds": {},
+      "today": "2026-11-04"
+    }
+  },
+  "director": {
+    "/api/me": {
+      "name": "Учебный директор",
+      "company": "Учебная компания",
+      "role": "director",
+      "ext": "",
+      "test": false,
+      "learning": false,
+      "readonly": false,
+      "modules": [
+        "contracts",
+        "automations",
+        "robot",
+        "gpt",
+        "sources",
+        "callcenter"
+      ],
+      "can_dial": false,
+      "privileged": true,
+      "team": [
+        {
+          "ext": "101",
+          "name": "Анна Учебная"
+        },
+        {
+          "ext": "102",
+          "name": "Борис Учебный"
+        }
+      ],
+      "outcomes": {
+        "no_answer": "Не взял трубку",
+        "callback": "Перезвонить",
+        "not_interested": "Отказ",
+        "meeting": "Назначил встречу",
+        "proposal": "Отправил КП",
+        "interested": "Интерес, думает",
+        "bad_number": "Неверный номер"
+      },
+      "needs_date": [
+        "callback",
+        "meeting"
+      ],
+      "lead_status": {},
+      "platform": false,
+      "switcher": false,
+      "callcenter_mode": "db",
+      "timezone": "Europe/Moscow"
+    },
+    "/api/queue": {
+      "today": "2026-11-04",
+      "later": 0,
+      "items": [
+        {
+          "kind": "lead",
+          "id": 1,
+          "number": "00000000002",
+          "title": "Учебный Кедр · другой клиент · УЧ-002",
+          "note": "Вымышленный клиент. Звонить не требуется.",
+          "status": "new",
+          "attempts": 0
+        },
+        {
+          "kind": "lead",
+          "id": 2,
+          "number": "00000000001",
+          "title": "Учебный Кедр · УЧ-001",
+          "note": "Вымышленный клиент. Звонить не требуется.",
+          "status": "new",
+          "attempts": 0
+        },
+        {
+          "kind": "lead",
+          "id": 3,
+          "number": "00000000003",
+          "title": "Учебный Лён · УЧ-003",
+          "note": "Вымышленный клиент. Звонить не требуется.",
+          "status": "new",
+          "attempts": 0
+        }
+      ]
+    },
+    "/api/reports": {
+      "items": [
+        {
+          "id": "report-personal",
+          "kind": "day_manager",
+          "title": "Итог дня менеджера · 2026-11-03 — 2026-11-03",
+          "from": "2026-11-03",
+          "to": "2026-11-03",
+          "manager": "boris",
+          "text": "Отправка предложения согласована. В следующем звонке согласуйте дату продолжения.",
+          "calls": [
+            {
+              "id": "call-1",
+              "label": "Учебный разбор"
+            }
+          ],
+          "who": "Борис Учебный",
+          "at": "2026-11-03T18:00:00+03:00",
+          "note": "Учебный пример",
+          "html": "<p>Отправка предложения согласована. В следующем звонке согласуйте дату продолжения.</p>"
+        },
+        {
+          "id": "report-weekly",
+          "kind": "weekly",
+          "title": "Сводка за неделю · 2026-10-26 — 2026-11-01",
+          "from": "2026-10-26",
+          "to": "2026-11-01",
+          "manager": "boris",
+          "text": "Борису стоит обсудить согласование следующего разговора.",
+          "calls": [
+            {
+              "id": "call-weekly",
+              "label": "Учебный разбор"
+            }
+          ],
+          "who": "Борис Учебный",
+          "at": "2026-11-01T18:00:00+03:00",
+          "note": "Учебный пример",
+          "html": "<p>Борису стоит обсудить согласование следующего разговора.</p>"
+        },
+        {
+          "id": "report-other",
+          "kind": "weekly",
+          "title": "Сводка за неделю · 2026-10-21 — 2026-10-27",
+          "from": "2026-10-21",
+          "to": "2026-10-27",
+          "manager": "anna",
+          "text": "Другой период и сотрудник.",
+          "calls": [
+            {
+              "id": "call-2",
+              "label": "Учебный разбор"
+            }
+          ],
+          "who": "Анна Учебная",
+          "at": "2026-10-27T18:00:00+03:00",
+          "note": "Учебный пример",
+          "html": "<p>Другой период и сотрудник.</p>"
+        }
+      ]
+    },
+    "/api/deals": {
+      "stages": [
+        {
+          "name": "Контакт",
+          "reasons": [],
+          "reached": 2,
+          "lost": 0
+        },
+        {
+          "name": "Telegram или почта",
+          "reasons": [],
+          "reached": 1,
+          "lost": 0
+        },
+        {
+          "name": "Договор",
+          "reasons": [],
+          "reached": 1,
+          "lost": 0
+        }
+      ],
+      "reasons": {},
+      "can_pay": false,
+      "managers": [
+        {
+          "ext": "101",
+          "name": "Анна Учебная"
+        },
+        {
+          "ext": "102",
+          "name": "Борис Учебный"
+        }
+      ],
+      "deals": [
+        {
+          "id": "deal-1",
+          "client": "client-1",
+          "company": "Учебный Кедр",
+          "manager": "Борис Учебный",
+          "stage": "messenger",
+          "stageName": "Telegram или почта",
+          "stalled": true,
+          "inn": "0000000000",
+          "history": [
+            {
+              "kind": "materials",
+              "text": "Отправлены материалы",
+              "at": "2026-10-25"
+            }
+          ],
+          "next_step": null,
+          "phone": "00000000001",
+          "number": "00000000001",
+          "ext": "102",
+          "stage_no": 2,
+          "stage_name": "Telegram или почта",
+          "status": "active",
+          "stalled_days": 10,
+          "last_at": "2026-10-25T12:00:00+03:00",
+          "waiting": null,
+          "advice": "",
+          "missing": [],
+          "can_pay": false,
+          "reasons": {},
+          "contracts": [],
+          "timeline": [
+            {
+              "type": "event",
+              "at": "2026-10-25T12:00:00+03:00",
+              "title": "Отправлены материалы",
+              "text": "Отправлены материалы"
+            }
+          ]
+        },
+        {
+          "id": "deal-2",
+          "client": "client-2",
+          "company": "Учебный Кедр · другая сделка",
+          "manager": "Анна Учебная",
+          "stage": "contract",
+          "stageName": "Договор",
+          "stalled": true,
+          "inn": "0000000001",
+          "history": [
+            {
+              "kind": "contract_sent",
+              "text": "Договор отправлен",
+              "at": "2026-10-27"
+            }
+          ],
+          "next_step": "Связаться в пятницу",
+          "phone": "00000000002",
+          "number": "00000000002",
+          "ext": "101",
+          "stage_no": 3,
+          "stage_name": "Договор",
+          "status": "active",
+          "stalled_days": 10,
+          "last_at": "2026-10-27T12:00:00+03:00",
+          "waiting": null,
+          "advice": "",
+          "missing": [],
+          "can_pay": false,
+          "reasons": {},
+          "contracts": [],
+          "timeline": [
+            {
+              "type": "event",
+              "at": "2026-10-27T12:00:00+03:00",
+              "title": "Отправлены материалы",
+              "text": "Договор отправлен"
+            }
+          ]
+        }
+      ],
+      "funnel": {
+        "stages": [
+          {
+            "name": "Контакт",
+            "reasons": [],
+            "reached": 2,
+            "lost": 0
+          },
+          {
+            "name": "Telegram или почта",
+            "reasons": [],
+            "reached": 1,
+            "lost": 0
+          },
+          {
+            "name": "Договор",
+            "reasons": [],
+            "reached": 1,
+            "lost": 0
+          }
+        ],
+        "paid": 0,
+        "paid_sum": 0
+      },
+      "unlinked": [],
+      "unlinked_chats": []
+    },
+    "/api/contracts": {
+      "items": []
+    },
+    "/api/contracts/config": {
+      "ourEmail": "training@example.invalid",
+      "dsTariffs": [],
+      "innLookup": false,
+      "templates": {}
+    },
+    "/api/contracts/next-number": {
+      "num": "УЧ-1"
+    },
+    "/api/staff": {
+      "items": [
+        {
+          "ext": "101",
+          "name": "Анна Учебная",
+          "role": "manager",
+          "role_title": "Менеджер",
+          "linked": false,
+          "crm_links": 0,
+          "kitchen": false
+        },
+        {
+          "ext": "102",
+          "name": "Борис Учебный",
+          "role": "manager",
+          "role_title": "Менеджер",
+          "linked": false,
+          "crm_links": 0,
+          "kitchen": false
+        }
+      ]
+    },
+    "/api/access": {
+      "invites": [],
+      "directors": []
+    },
+    "/api/prompts": {
+      "kinds": [
+        {
+          "kind": "review",
+          "title": "Разбор звонков"
+        }
+      ]
+    },
+    "/api/automations": {
+      "automations": [],
+      "accounts": [],
+      "usage": {
+        "runs": 0,
+        "active": 0
+      },
+      "catalog": {
+        "templates": [],
+        "labels": {},
+        "email_ready": false
+      }
+    },
+    "/api/robot/cab": {
+      "home": true,
+      "role": "director",
+      "owner": "",
+      "owners": [],
+      "enabled": true,
+      "readonly": true,
+      "operators": [],
+      "can_edit": false
+    },
+    "/api/robot/cab/campaigns": {
+      "items": []
+    },
+    "/api/gpt": {
+      "items": [],
+      "models": []
+    },
+    "/api/card?number=00000000001": {
+      "calls": [
+        {
+          "id": "call-1",
+          "manager": "Борис Учебный",
+          "client": "client-1",
+          "company": "Учебный Кедр",
+          "at": "2026-11-03T12:00:00+03:00",
+          "seconds": 185,
+          "conclusion": "Клиент согласился получить предложение, но дата следующего разговора не согласована.",
+          "answer": "callback_missing",
+          "transcript": [
+            "Менеджер: Пришлю описание предложения.",
+            "Клиент: Да, пришлите, посмотрю.",
+            "Менеджер: Спасибо, хорошего дня."
+          ],
+          "number": "00000000001",
+          "phone": "00000000001",
+          "ext": "102",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "lost",
+          "text": "Клиент согласился получить предложение, но дата следующего разговора не согласована.",
+          "who": "Борис Учебный",
+          "review": {
+            "manager_text": "Клиент согласился получить предложение, но дата следующего разговора не согласована."
+          }
+        },
+        {
+          "id": "call-weekly",
+          "manager": "Борис Учебный",
+          "client": "client-1",
+          "company": "Учебный Кедр",
+          "at": "2026-11-01T12:00:00+03:00",
+          "seconds": 185,
+          "conclusion": "Клиент согласился получить предложение, но дата следующего разговора не согласована.",
+          "answer": "callback_missing",
+          "transcript": [
+            "Менеджер: Пришлю описание предложения.",
+            "Клиент: Да, пришлите, посмотрю.",
+            "Менеджер: Спасибо, хорошего дня."
+          ],
+          "number": "00000000001",
+          "phone": "00000000001",
+          "ext": "102",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "lost",
+          "text": "Клиент согласился получить предложение, но дата следующего разговора не согласована.",
+          "who": "Борис Учебный",
+          "review": {
+            "manager_text": "Клиент согласился получить предложение, но дата следующего разговора не согласована."
+          }
+        }
+      ],
+      "outcomes": [],
+      "tasks": [
+        {
+          "id": "task-overdue",
+          "client": "client-1",
+          "manager": "Борис Учебный",
+          "due_date": "2026-11-02",
+          "due_time": "10:00",
+          "original_date": "2026-11-02",
+          "original_time": "10:00",
+          "note": "Клиент ждёт обсуждения предложения.",
+          "context": "proposal_waits",
+          "call": "call-1",
+          "number": "00000000001",
+          "title": "Учебный Кедр",
+          "ext": "102",
+          "label": "Перезвон",
+          "source": "crm",
+          "who": "Борис Учебный",
+          "late": true
+        }
+      ]
+    },
+    "/api/deals/00000000001": {
+      "id": "deal-1",
+      "client": "client-1",
+      "company": "Учебный Кедр",
+      "manager": "Борис Учебный",
+      "stage": "messenger",
+      "stageName": "Telegram или почта",
+      "stalled": true,
+      "inn": "0000000000",
+      "history": [
+        {
+          "kind": "materials",
+          "text": "Отправлены материалы",
+          "at": "2026-10-25"
+        }
+      ],
+      "next_step": null,
+      "phone": "00000000001",
+      "number": "00000000001",
+      "ext": "102",
+      "stage_no": 2,
+      "stage_name": "Telegram или почта",
+      "status": "active",
+      "stalled_days": 10,
+      "last_at": "2026-10-25T12:00:00+03:00",
+      "waiting": null,
+      "advice": "",
+      "missing": [],
+      "can_pay": false,
+      "reasons": {},
+      "contracts": [],
+      "timeline": [
+        {
+          "type": "event",
+          "at": "2026-10-25T12:00:00+03:00",
+          "title": "Отправлены материалы",
+          "text": "Отправлены материалы"
+        }
+      ]
+    },
+    "/api/card?number=00000000002": {
+      "calls": [
+        {
+          "id": "call-2",
+          "manager": "Анна Учебная",
+          "client": "client-2",
+          "company": "Учебный Кедр · другой клиент",
+          "at": "2026-11-03T12:00:00+03:00",
+          "seconds": 192,
+          "conclusion": "Встреча согласована на конкретное время.",
+          "answer": "meeting_agreed",
+          "transcript": [
+            "Клиент: Подтверждаю встречу в четверг в десять."
+          ],
+          "number": "00000000002",
+          "phone": "00000000002",
+          "ext": "101",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "result",
+          "text": "Встреча согласована на конкретное время.",
+          "who": "Анна Учебная",
+          "review": {
+            "manager_text": "Встреча согласована на конкретное время."
+          }
+        }
+      ],
+      "outcomes": [],
+      "tasks": [
+        {
+          "id": "task-anna",
+          "client": "client-2",
+          "manager": "Анна Учебная",
+          "due_date": "2026-11-01",
+          "due_time": "12:00",
+          "original_date": "2026-11-01",
+          "original_time": "12:00",
+          "note": "Другой менеджер.",
+          "context": "other",
+          "number": "00000000002",
+          "title": "Учебный Кедр · другой клиент",
+          "ext": "101",
+          "label": "Перезвон",
+          "source": "crm",
+          "who": "Анна Учебная",
+          "late": true
+        }
+      ]
+    },
+    "/api/deals/00000000002": {
+      "id": "deal-2",
+      "client": "client-2",
+      "company": "Учебный Кедр · другая сделка",
+      "manager": "Анна Учебная",
+      "stage": "contract",
+      "stageName": "Договор",
+      "stalled": true,
+      "inn": "0000000001",
+      "history": [
+        {
+          "kind": "contract_sent",
+          "text": "Договор отправлен",
+          "at": "2026-10-27"
+        }
+      ],
+      "next_step": "Связаться в пятницу",
+      "phone": "00000000002",
+      "number": "00000000002",
+      "ext": "101",
+      "stage_no": 3,
+      "stage_name": "Договор",
+      "status": "active",
+      "stalled_days": 10,
+      "last_at": "2026-10-27T12:00:00+03:00",
+      "waiting": null,
+      "advice": "",
+      "missing": [],
+      "can_pay": false,
+      "reasons": {},
+      "contracts": [],
+      "timeline": [
+        {
+          "type": "event",
+          "at": "2026-10-27T12:00:00+03:00",
+          "title": "Отправлены материалы",
+          "text": "Договор отправлен"
+        }
+      ]
+    },
+    "/api/card?number=00000000003": {
+      "calls": [
+        {
+          "id": "call-3",
+          "manager": "Борис Учебный",
+          "client": "client-3",
+          "company": "Учебный Лён",
+          "at": "2026-10-23T12:00:00+03:00",
+          "seconds": 75,
+          "conclusion": "Клиент отказался от предложения.",
+          "answer": "refusal",
+          "transcript": [
+            "Клиент: Спасибо, предложение не нужно."
+          ],
+          "number": "00000000003",
+          "phone": "00000000003",
+          "ext": "102",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "lost",
+          "text": "Клиент отказался от предложения.",
+          "who": "Борис Учебный",
+          "review": {
+            "manager_text": "Клиент отказался от предложения."
+          }
+        }
+      ],
+      "outcomes": [],
+      "tasks": [
+        {
+          "id": "task-today",
+          "client": "client-3",
+          "manager": "Борис Учебный",
+          "due_date": "2026-11-04",
+          "due_time": "16:00",
+          "original_date": "2026-11-04",
+          "original_time": "16:00",
+          "note": "Уточнить удобное время.",
+          "context": "today",
+          "number": "00000000003",
+          "title": "Учебный Лён",
+          "ext": "102",
+          "label": "Перезвон",
+          "source": "crm",
+          "who": "Борис Учебный",
+          "late": false
+        }
+      ]
+    },
+    "/api/person?person=101": {
+      "ext": "101",
+      "name": "Анна Учебная",
+      "role_title": "Менеджер",
+      "manager": true,
+      "kitchen": false,
+      "access": null,
+      "dials": {
+        "week": {
+          "dials": 80
+        },
+        "prev": {
+          "dials": 60
+        },
+        "month": {
+          "dials": 180
+        }
+      },
+      "periods": {
+        "week": {
+          "talks": 17,
+          "success": 4,
+          "hot": 2
+        },
+        "prev": {
+          "talks": 10,
+          "success": 2
+        }
+      },
+      "memory": [],
+      "memory_on": false,
+      "mistakes": [
+        {
+          "label": "Дата продолжения не согласована",
+          "month": 4,
+          "examples": [
+            {
+              "id": "call-1",
+              "at": "2026-11-01"
+            }
+          ]
+        }
+      ],
+      "positives": []
+    },
+    "/api/person?person=102": {
+      "ext": "102",
+      "name": "Борис Учебный",
+      "role_title": "Менеджер",
+      "manager": true,
+      "kitchen": false,
+      "access": null,
+      "dials": {
+        "week": {
+          "dials": 80
+        },
+        "prev": {
+          "dials": 60
+        },
+        "month": {
+          "dials": 180
+        }
+      },
+      "periods": {
+        "week": {
+          "talks": 17,
+          "success": 4,
+          "hot": 2
+        },
+        "prev": {
+          "talks": 10,
+          "success": 2
+        }
+      },
+      "memory": [],
+      "memory_on": false,
+      "mistakes": [
+        {
+          "label": "Дата продолжения не согласована",
+          "month": 4,
+          "examples": [
+            {
+              "id": "call-1",
+              "at": "2026-11-01"
+            }
+          ]
+        }
+      ],
+      "positives": []
+    },
+    "/api/review/call-1": {
+      "id": "call-1",
+      "manager": "Борис Учебный",
+      "client": "client-1",
+      "company": "Учебный Кедр",
+      "at": "2026-11-03",
+      "seconds": 185,
+      "conclusion": "Клиент согласился получить предложение, но дата следующего разговора не согласована.",
+      "answer": "callback_missing",
+      "transcript": [
+        {
+          "at": null,
+          "timecode": "",
+          "who": "Менеджер",
+          "text": "Пришлю описание предложения."
+        },
+        {
+          "at": null,
+          "timecode": "",
+          "who": "Клиент",
+          "text": "Да, пришлите, посмотрю."
+        },
+        {
+          "at": null,
+          "timecode": "",
+          "who": "Менеджер",
+          "text": "Спасибо, хорошего дня."
+        }
+      ],
+      "number": "00000000001",
+      "phone": "00000000001",
+      "ext": "102",
+      "incoming": false,
+      "reviewed": true,
+      "rec": false,
+      "kind": "Исходящий",
+      "result": "lost",
+      "text": "Клиент согласился получить предложение, но дата следующего разговора не согласована.",
+      "success": false,
+      "outcomes": [],
+      "chance": "normal",
+      "misses": [],
+      "evidence": [],
+      "positives": [],
+      "facts": [],
+      "next_step": "",
+      "summary": "Клиент согласился получить предложение, но дата следующего разговора не согласована.",
+      "details": "Учебный пример. Дата следующего разговора не согласована.",
+      "can_train": false
+    },
+    "/api/review/call-2": {
+      "id": "call-2",
+      "manager": "Анна Учебная",
+      "client": "client-2",
+      "company": "Учебный Кедр · другой клиент",
+      "at": "2026-11-03",
+      "seconds": 192,
+      "conclusion": "Встреча согласована на конкретное время.",
+      "answer": "meeting_agreed",
+      "transcript": [
+        {
+          "at": null,
+          "timecode": "",
+          "who": "Менеджер",
+          "text": "Подтверждаю встречу в четверг в десять."
+        }
+      ],
+      "number": "00000000002",
+      "phone": "00000000002",
+      "ext": "101",
+      "incoming": false,
+      "reviewed": true,
+      "rec": false,
+      "kind": "Исходящий",
+      "result": "result",
+      "text": "Встреча согласована на конкретное время.",
+      "success": true,
+      "outcomes": [
+        "Встреча"
+      ],
+      "chance": "normal",
+      "misses": [],
+      "evidence": [],
+      "positives": [],
+      "facts": [],
+      "next_step": "",
+      "summary": "Встреча согласована на конкретное время.",
+      "details": "Учебный пример. Дата следующего разговора не согласована.",
+      "can_train": false
+    },
+    "/api/review/call-3": {
+      "id": "call-3",
+      "manager": "Борис Учебный",
+      "client": "client-3",
+      "company": "Учебный Лён",
+      "at": "2026-10-23",
+      "seconds": 75,
+      "conclusion": "Клиент отказался от предложения.",
+      "answer": "refusal",
+      "transcript": [
+        {
+          "at": null,
+          "timecode": "",
+          "who": "Менеджер",
+          "text": "Спасибо, предложение не нужно."
+        }
+      ],
+      "number": "00000000003",
+      "phone": "00000000003",
+      "ext": "102",
+      "incoming": false,
+      "reviewed": true,
+      "rec": false,
+      "kind": "Исходящий",
+      "result": "lost",
+      "text": "Клиент отказался от предложения.",
+      "success": false,
+      "outcomes": [],
+      "chance": "normal",
+      "misses": [],
+      "evidence": [],
+      "positives": [],
+      "facts": [],
+      "next_step": "",
+      "summary": "Клиент отказался от предложения.",
+      "details": "Учебный пример. Дата следующего разговора не согласована.",
+      "can_train": false
+    },
+    "/api/review/call-weekly": {
+      "id": "call-weekly",
+      "manager": "Борис Учебный",
+      "client": "client-1",
+      "company": "Учебный Кедр",
+      "at": "2026-11-01",
+      "seconds": 185,
+      "conclusion": "Клиент согласился получить предложение, но дата следующего разговора не согласована.",
+      "answer": "callback_missing",
+      "transcript": [
+        {
+          "at": null,
+          "timecode": "",
+          "who": "Менеджер",
+          "text": "Пришлю описание предложения."
+        },
+        {
+          "at": null,
+          "timecode": "",
+          "who": "Клиент",
+          "text": "Да, пришлите, посмотрю."
+        },
+        {
+          "at": null,
+          "timecode": "",
+          "who": "Менеджер",
+          "text": "Спасибо, хорошего дня."
+        }
+      ],
+      "number": "00000000001",
+      "phone": "00000000001",
+      "ext": "102",
+      "incoming": false,
+      "reviewed": true,
+      "rec": false,
+      "kind": "Исходящий",
+      "result": "lost",
+      "text": "Клиент согласился получить предложение, но дата следующего разговора не согласована.",
+      "success": false,
+      "outcomes": [],
+      "chance": "normal",
+      "misses": [],
+      "evidence": [],
+      "positives": [],
+      "facts": [],
+      "next_step": "",
+      "summary": "Клиент согласился получить предложение, но дата следующего разговора не согласована.",
+      "details": "Учебный пример. Дата следующего разговора не согласована.",
+      "can_train": false
+    },
+    "/api/callbacks": {
+      "today": "2026-11-04",
+      "items": [
+        {
+          "id": "task-overdue",
+          "client": "client-1",
+          "manager": "Борис Учебный",
+          "due_date": "2026-11-02",
+          "due_time": "10:00",
+          "original_date": "2026-11-02",
+          "original_time": "10:00",
+          "note": "Клиент ждёт обсуждения предложения.",
+          "context": "proposal_waits",
+          "call": "call-1",
+          "number": "00000000001",
+          "title": "Учебный Кедр",
+          "ext": "102",
+          "label": "Перезвон",
+          "source": "crm",
+          "who": "Борис Учебный",
+          "late": true
+        },
+        {
+          "id": "task-today",
+          "client": "client-3",
+          "manager": "Борис Учебный",
+          "due_date": "2026-11-04",
+          "due_time": "16:00",
+          "original_date": "2026-11-04",
+          "original_time": "16:00",
+          "note": "Уточнить удобное время.",
+          "context": "today",
+          "number": "00000000003",
+          "title": "Учебный Лён",
+          "ext": "102",
+          "label": "Перезвон",
+          "source": "crm",
+          "who": "Борис Учебный",
+          "late": false
+        },
+        {
+          "id": "task-anna",
+          "client": "client-2",
+          "manager": "Анна Учебная",
+          "due_date": "2026-11-01",
+          "due_time": "12:00",
+          "original_date": "2026-11-01",
+          "original_time": "12:00",
+          "note": "Другой менеджер.",
+          "context": "other",
+          "number": "00000000002",
+          "title": "Учебный Кедр · другой клиент",
+          "ext": "101",
+          "label": "Перезвон",
+          "source": "crm",
+          "who": "Анна Учебная",
+          "late": true
+        }
+      ]
+    },
+    "/api/summary?period=today": {
+      "today": "2026-11-04",
+      "now": "12:00",
+      "period": "today",
+      "team": [
+        {
+          "ext": "101",
+          "name": "Анна Учебная"
+        },
+        {
+          "ext": "102",
+          "name": "Борис Учебный"
+        }
+      ],
+      "cur": {
+        "dials": 160,
+        "live": 67,
+        "result": 37,
+        "meet": 6,
+        "seconds": 4800,
+        "lost": 8
+      },
+      "prev": {
+        "dials": 0
+      },
+      "vs": "",
+      "hourly": false,
+      "series": [],
+      "heat": [],
+      "heat_days": 30,
+      "missed": [],
+      "managers": [
+        {
+          "ext": "101",
+          "name": "Анна Учебная",
+          "dials": 65,
+          "live": 30,
+          "result": 15,
+          "meet": 3,
+          "seconds": 2400,
+          "lost": 4,
+          "mistake": null
+        },
+        {
+          "ext": "102",
+          "name": "Борис Учебный",
+          "dials": 95,
+          "live": 37,
+          "result": 22,
+          "meet": 3,
+          "seconds": 2400,
+          "lost": 4,
+          "mistake": null
+        }
+      ],
+      "live_seconds": 10
+    },
+    "/api/journal?period=today": {
+      "items": [],
+      "more": false,
+      "offset": 0,
+      "results": {
+        "result": "Результат",
+        "lost": "Потерян, шанс был"
+      },
+      "kinds": {},
+      "today": "2026-11-04"
+    },
+    "/api/summary?period=7": {
+      "today": "2026-11-04",
+      "now": "12:00",
+      "period": "7",
+      "team": [
+        {
+          "ext": "101",
+          "name": "Анна Учебная"
+        },
+        {
+          "ext": "102",
+          "name": "Борис Учебный"
+        }
+      ],
+      "cur": {
+        "dials": 234,
+        "live": 105,
+        "result": 75,
+        "meet": 6,
+        "seconds": 4800,
+        "lost": 8
+      },
+      "prev": {
+        "dials": 0
+      },
+      "vs": "",
+      "hourly": false,
+      "series": [],
+      "heat": [],
+      "heat_days": 30,
+      "missed": [],
+      "managers": [
+        {
+          "ext": "101",
+          "name": "Анна Учебная",
+          "dials": 98,
+          "live": 49,
+          "result": 34,
+          "meet": 3,
+          "seconds": 2400,
+          "lost": 4,
+          "mistake": null
+        },
+        {
+          "ext": "102",
+          "name": "Борис Учебный",
+          "dials": 136,
+          "live": 56,
+          "result": 41,
+          "meet": 3,
+          "seconds": 2400,
+          "lost": 4,
+          "mistake": null
+        }
+      ],
+      "live_seconds": 10
+    },
+    "/api/journal?period=7": {
+      "items": [
+        {
+          "id": "call-1",
+          "manager": "Борис Учебный",
+          "client": "client-1",
+          "company": "Учебный Кедр",
+          "at": "2026-11-03T12:00:00+03:00",
+          "seconds": 185,
+          "conclusion": "Клиент согласился получить предложение, но дата следующего разговора не согласована.",
+          "answer": "callback_missing",
+          "transcript": [
+            "Менеджер: Пришлю описание предложения.",
+            "Клиент: Да, пришлите, посмотрю.",
+            "Менеджер: Спасибо, хорошего дня."
+          ],
+          "number": "00000000001",
+          "phone": "00000000001",
+          "ext": "102",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "lost",
+          "text": "Клиент согласился получить предложение, но дата следующего разговора не согласована."
+        },
+        {
+          "id": "call-weekly",
+          "manager": "Борис Учебный",
+          "client": "client-1",
+          "company": "Учебный Кедр",
+          "at": "2026-11-01T12:00:00+03:00",
+          "seconds": 185,
+          "conclusion": "Клиент согласился получить предложение, но дата следующего разговора не согласована.",
+          "answer": "callback_missing",
+          "transcript": [
+            "Менеджер: Пришлю описание предложения.",
+            "Клиент: Да, пришлите, посмотрю.",
+            "Менеджер: Спасибо, хорошего дня."
+          ],
+          "number": "00000000001",
+          "phone": "00000000001",
+          "ext": "102",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "lost",
+          "text": "Клиент согласился получить предложение, но дата следующего разговора не согласована."
+        },
+        {
+          "id": "call-2",
+          "manager": "Анна Учебная",
+          "client": "client-2",
+          "company": "Учебный Кедр · другой клиент",
+          "at": "2026-11-03T12:00:00+03:00",
+          "seconds": 192,
+          "conclusion": "Встреча согласована на конкретное время.",
+          "answer": "meeting_agreed",
+          "transcript": [
+            "Клиент: Подтверждаю встречу в четверг в десять."
+          ],
+          "number": "00000000002",
+          "phone": "00000000002",
+          "ext": "101",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "result",
+          "text": "Встреча согласована на конкретное время."
+        }
+      ],
+      "more": false,
+      "offset": 3,
+      "results": {
+        "result": "Результат",
+        "lost": "Потерян, шанс был"
+      },
+      "kinds": {},
+      "today": "2026-11-04"
+    },
+    "/api/summary?period=30": {
+      "today": "2026-11-04",
+      "now": "12:00",
+      "period": "30",
+      "team": [
+        {
+          "ext": "101",
+          "name": "Анна Учебная"
+        },
+        {
+          "ext": "102",
+          "name": "Борис Учебный"
+        }
+      ],
+      "cur": {
+        "dials": 308,
+        "live": 143,
+        "result": 113,
+        "meet": 6,
+        "seconds": 4800,
+        "lost": 8
+      },
+      "prev": {
+        "dials": 0
+      },
+      "vs": "",
+      "hourly": false,
+      "series": [],
+      "heat": [],
+      "heat_days": 30,
+      "missed": [],
+      "managers": [
+        {
+          "ext": "101",
+          "name": "Анна Учебная",
+          "dials": 131,
+          "live": 68,
+          "result": 53,
+          "meet": 3,
+          "seconds": 2400,
+          "lost": 4,
+          "mistake": null
+        },
+        {
+          "ext": "102",
+          "name": "Борис Учебный",
+          "dials": 177,
+          "live": 75,
+          "result": 60,
+          "meet": 3,
+          "seconds": 2400,
+          "lost": 4,
+          "mistake": null
+        }
+      ],
+      "live_seconds": 10
+    },
+    "/api/journal?period=30": {
+      "items": [
+        {
+          "id": "call-1",
+          "manager": "Борис Учебный",
+          "client": "client-1",
+          "company": "Учебный Кедр",
+          "at": "2026-11-03T12:00:00+03:00",
+          "seconds": 185,
+          "conclusion": "Клиент согласился получить предложение, но дата следующего разговора не согласована.",
+          "answer": "callback_missing",
+          "transcript": [
+            "Менеджер: Пришлю описание предложения.",
+            "Клиент: Да, пришлите, посмотрю.",
+            "Менеджер: Спасибо, хорошего дня."
+          ],
+          "number": "00000000001",
+          "phone": "00000000001",
+          "ext": "102",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "lost",
+          "text": "Клиент согласился получить предложение, но дата следующего разговора не согласована."
+        },
+        {
+          "id": "call-weekly",
+          "manager": "Борис Учебный",
+          "client": "client-1",
+          "company": "Учебный Кедр",
+          "at": "2026-11-01T12:00:00+03:00",
+          "seconds": 185,
+          "conclusion": "Клиент согласился получить предложение, но дата следующего разговора не согласована.",
+          "answer": "callback_missing",
+          "transcript": [
+            "Менеджер: Пришлю описание предложения.",
+            "Клиент: Да, пришлите, посмотрю.",
+            "Менеджер: Спасибо, хорошего дня."
+          ],
+          "number": "00000000001",
+          "phone": "00000000001",
+          "ext": "102",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "lost",
+          "text": "Клиент согласился получить предложение, но дата следующего разговора не согласована."
+        },
+        {
+          "id": "call-2",
+          "manager": "Анна Учебная",
+          "client": "client-2",
+          "company": "Учебный Кедр · другой клиент",
+          "at": "2026-11-03T12:00:00+03:00",
+          "seconds": 192,
+          "conclusion": "Встреча согласована на конкретное время.",
+          "answer": "meeting_agreed",
+          "transcript": [
+            "Клиент: Подтверждаю встречу в четверг в десять."
+          ],
+          "number": "00000000002",
+          "phone": "00000000002",
+          "ext": "101",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "result",
+          "text": "Встреча согласована на конкретное время."
+        },
+        {
+          "id": "call-3",
+          "manager": "Борис Учебный",
+          "client": "client-3",
+          "company": "Учебный Лён",
+          "at": "2026-10-23T12:00:00+03:00",
+          "seconds": 75,
+          "conclusion": "Клиент отказался от предложения.",
+          "answer": "refusal",
+          "transcript": [
+            "Клиент: Спасибо, предложение не нужно."
+          ],
+          "number": "00000000003",
+          "phone": "00000000003",
+          "ext": "102",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "lost",
+          "text": "Клиент отказался от предложения."
+        }
+      ],
+      "more": false,
+      "offset": 4,
+      "results": {
+        "result": "Результат",
+        "lost": "Потерян, шанс был"
+      },
+      "kinds": {},
+      "today": "2026-11-04"
+    },
+    "/api/summary?period=month": {
+      "today": "2026-11-04",
+      "now": "12:00",
+      "period": "month",
+      "team": [
+        {
+          "ext": "101",
+          "name": "Анна Учебная"
+        },
+        {
+          "ext": "102",
+          "name": "Борис Учебный"
+        }
+      ],
+      "cur": {
+        "dials": 382,
+        "live": 181,
+        "result": 151,
+        "meet": 6,
+        "seconds": 4800,
+        "lost": 8
+      },
+      "prev": {
+        "dials": 0
+      },
+      "vs": "",
+      "hourly": false,
+      "series": [],
+      "heat": [],
+      "heat_days": 30,
+      "missed": [],
+      "managers": [
+        {
+          "ext": "101",
+          "name": "Анна Учебная",
+          "dials": 164,
+          "live": 87,
+          "result": 72,
+          "meet": 3,
+          "seconds": 2400,
+          "lost": 4,
+          "mistake": null
+        },
+        {
+          "ext": "102",
+          "name": "Борис Учебный",
+          "dials": 218,
+          "live": 94,
+          "result": 79,
+          "meet": 3,
+          "seconds": 2400,
+          "lost": 4,
+          "mistake": null
+        }
+      ],
+      "live_seconds": 10
+    },
+    "/api/journal?period=month": {
+      "items": [
+        {
+          "id": "call-1",
+          "manager": "Борис Учебный",
+          "client": "client-1",
+          "company": "Учебный Кедр",
+          "at": "2026-11-03T12:00:00+03:00",
+          "seconds": 185,
+          "conclusion": "Клиент согласился получить предложение, но дата следующего разговора не согласована.",
+          "answer": "callback_missing",
+          "transcript": [
+            "Менеджер: Пришлю описание предложения.",
+            "Клиент: Да, пришлите, посмотрю.",
+            "Менеджер: Спасибо, хорошего дня."
+          ],
+          "number": "00000000001",
+          "phone": "00000000001",
+          "ext": "102",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "lost",
+          "text": "Клиент согласился получить предложение, но дата следующего разговора не согласована."
+        },
+        {
+          "id": "call-weekly",
+          "manager": "Борис Учебный",
+          "client": "client-1",
+          "company": "Учебный Кедр",
+          "at": "2026-11-01T12:00:00+03:00",
+          "seconds": 185,
+          "conclusion": "Клиент согласился получить предложение, но дата следующего разговора не согласована.",
+          "answer": "callback_missing",
+          "transcript": [
+            "Менеджер: Пришлю описание предложения.",
+            "Клиент: Да, пришлите, посмотрю.",
+            "Менеджер: Спасибо, хорошего дня."
+          ],
+          "number": "00000000001",
+          "phone": "00000000001",
+          "ext": "102",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "lost",
+          "text": "Клиент согласился получить предложение, но дата следующего разговора не согласована."
+        },
+        {
+          "id": "call-2",
+          "manager": "Анна Учебная",
+          "client": "client-2",
+          "company": "Учебный Кедр · другой клиент",
+          "at": "2026-11-03T12:00:00+03:00",
+          "seconds": 192,
+          "conclusion": "Встреча согласована на конкретное время.",
+          "answer": "meeting_agreed",
+          "transcript": [
+            "Клиент: Подтверждаю встречу в четверг в десять."
+          ],
+          "number": "00000000002",
+          "phone": "00000000002",
+          "ext": "101",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "result",
+          "text": "Встреча согласована на конкретное время."
+        },
+        {
+          "id": "call-3",
+          "manager": "Борис Учебный",
+          "client": "client-3",
+          "company": "Учебный Лён",
+          "at": "2026-10-23T12:00:00+03:00",
+          "seconds": 75,
+          "conclusion": "Клиент отказался от предложения.",
+          "answer": "refusal",
+          "transcript": [
+            "Клиент: Спасибо, предложение не нужно."
+          ],
+          "number": "00000000003",
+          "phone": "00000000003",
+          "ext": "102",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "lost",
+          "text": "Клиент отказался от предложения."
+        }
+      ],
+      "more": false,
+      "offset": 4,
+      "results": {
+        "result": "Результат",
+        "lost": "Потерян, шанс был"
+      },
+      "kinds": {},
+      "today": "2026-11-04"
+    },
+    "/api/callbacks?ext=101": {
+      "today": "2026-11-04",
+      "items": [
+        {
+          "id": "task-anna",
+          "client": "client-2",
+          "manager": "Анна Учебная",
+          "due_date": "2026-11-01",
+          "due_time": "12:00",
+          "original_date": "2026-11-01",
+          "original_time": "12:00",
+          "note": "Другой менеджер.",
+          "context": "other",
+          "number": "00000000002",
+          "title": "Учебный Кедр · другой клиент",
+          "ext": "101",
+          "label": "Перезвон",
+          "source": "crm",
+          "who": "Анна Учебная",
+          "late": true
+        }
+      ]
+    },
+    "/api/summary?period=today&ext=101": {
+      "today": "2026-11-04",
+      "now": "12:00",
+      "period": "today",
+      "team": [
+        {
+          "ext": "101",
+          "name": "Анна Учебная"
+        },
+        {
+          "ext": "102",
+          "name": "Борис Учебный"
+        }
+      ],
+      "cur": {
+        "dials": 65,
+        "live": 30,
+        "result": 15,
+        "meet": 3,
+        "seconds": 2400,
+        "lost": 4
+      },
+      "prev": {
+        "dials": 0
+      },
+      "vs": "",
+      "hourly": false,
+      "series": [],
+      "heat": [],
+      "heat_days": 30,
+      "missed": [],
+      "managers": [
+        {
+          "ext": "101",
+          "name": "Анна Учебная",
+          "dials": 65,
+          "live": 30,
+          "result": 15,
+          "meet": 3,
+          "seconds": 2400,
+          "lost": 4,
+          "mistake": null
+        }
+      ],
+      "live_seconds": 10
+    },
+    "/api/journal?period=today&ext=101": {
+      "items": [],
+      "more": false,
+      "offset": 0,
+      "results": {
+        "result": "Результат",
+        "lost": "Потерян, шанс был"
+      },
+      "kinds": {},
+      "today": "2026-11-04"
+    },
+    "/api/summary?period=7&ext=101": {
+      "today": "2026-11-04",
+      "now": "12:00",
+      "period": "7",
+      "team": [
+        {
+          "ext": "101",
+          "name": "Анна Учебная"
+        },
+        {
+          "ext": "102",
+          "name": "Борис Учебный"
+        }
+      ],
+      "cur": {
+        "dials": 98,
+        "live": 49,
+        "result": 34,
+        "meet": 3,
+        "seconds": 2400,
+        "lost": 4
+      },
+      "prev": {
+        "dials": 0
+      },
+      "vs": "",
+      "hourly": false,
+      "series": [],
+      "heat": [],
+      "heat_days": 30,
+      "missed": [],
+      "managers": [
+        {
+          "ext": "101",
+          "name": "Анна Учебная",
+          "dials": 98,
+          "live": 49,
+          "result": 34,
+          "meet": 3,
+          "seconds": 2400,
+          "lost": 4,
+          "mistake": null
+        }
+      ],
+      "live_seconds": 10
+    },
+    "/api/journal?period=7&ext=101": {
+      "items": [
+        {
+          "id": "call-2",
+          "manager": "Анна Учебная",
+          "client": "client-2",
+          "company": "Учебный Кедр · другой клиент",
+          "at": "2026-11-03T12:00:00+03:00",
+          "seconds": 192,
+          "conclusion": "Встреча согласована на конкретное время.",
+          "answer": "meeting_agreed",
+          "transcript": [
+            "Клиент: Подтверждаю встречу в четверг в десять."
+          ],
+          "number": "00000000002",
+          "phone": "00000000002",
+          "ext": "101",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "result",
+          "text": "Встреча согласована на конкретное время."
+        }
+      ],
+      "more": false,
+      "offset": 1,
+      "results": {
+        "result": "Результат",
+        "lost": "Потерян, шанс был"
+      },
+      "kinds": {},
+      "today": "2026-11-04"
+    },
+    "/api/summary?period=30&ext=101": {
+      "today": "2026-11-04",
+      "now": "12:00",
+      "period": "30",
+      "team": [
+        {
+          "ext": "101",
+          "name": "Анна Учебная"
+        },
+        {
+          "ext": "102",
+          "name": "Борис Учебный"
+        }
+      ],
+      "cur": {
+        "dials": 131,
+        "live": 68,
+        "result": 53,
+        "meet": 3,
+        "seconds": 2400,
+        "lost": 4
+      },
+      "prev": {
+        "dials": 0
+      },
+      "vs": "",
+      "hourly": false,
+      "series": [],
+      "heat": [],
+      "heat_days": 30,
+      "missed": [],
+      "managers": [
+        {
+          "ext": "101",
+          "name": "Анна Учебная",
+          "dials": 131,
+          "live": 68,
+          "result": 53,
+          "meet": 3,
+          "seconds": 2400,
+          "lost": 4,
+          "mistake": null
+        }
+      ],
+      "live_seconds": 10
+    },
+    "/api/journal?period=30&ext=101": {
+      "items": [
+        {
+          "id": "call-2",
+          "manager": "Анна Учебная",
+          "client": "client-2",
+          "company": "Учебный Кедр · другой клиент",
+          "at": "2026-11-03T12:00:00+03:00",
+          "seconds": 192,
+          "conclusion": "Встреча согласована на конкретное время.",
+          "answer": "meeting_agreed",
+          "transcript": [
+            "Клиент: Подтверждаю встречу в четверг в десять."
+          ],
+          "number": "00000000002",
+          "phone": "00000000002",
+          "ext": "101",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "result",
+          "text": "Встреча согласована на конкретное время."
+        }
+      ],
+      "more": false,
+      "offset": 1,
+      "results": {
+        "result": "Результат",
+        "lost": "Потерян, шанс был"
+      },
+      "kinds": {},
+      "today": "2026-11-04"
+    },
+    "/api/summary?period=month&ext=101": {
+      "today": "2026-11-04",
+      "now": "12:00",
+      "period": "month",
+      "team": [
+        {
+          "ext": "101",
+          "name": "Анна Учебная"
+        },
+        {
+          "ext": "102",
+          "name": "Борис Учебный"
+        }
+      ],
+      "cur": {
+        "dials": 164,
+        "live": 87,
+        "result": 72,
+        "meet": 3,
+        "seconds": 2400,
+        "lost": 4
+      },
+      "prev": {
+        "dials": 0
+      },
+      "vs": "",
+      "hourly": false,
+      "series": [],
+      "heat": [],
+      "heat_days": 30,
+      "missed": [],
+      "managers": [
+        {
+          "ext": "101",
+          "name": "Анна Учебная",
+          "dials": 164,
+          "live": 87,
+          "result": 72,
+          "meet": 3,
+          "seconds": 2400,
+          "lost": 4,
+          "mistake": null
+        }
+      ],
+      "live_seconds": 10
+    },
+    "/api/journal?period=month&ext=101": {
+      "items": [
+        {
+          "id": "call-2",
+          "manager": "Анна Учебная",
+          "client": "client-2",
+          "company": "Учебный Кедр · другой клиент",
+          "at": "2026-11-03T12:00:00+03:00",
+          "seconds": 192,
+          "conclusion": "Встреча согласована на конкретное время.",
+          "answer": "meeting_agreed",
+          "transcript": [
+            "Клиент: Подтверждаю встречу в четверг в десять."
+          ],
+          "number": "00000000002",
+          "phone": "00000000002",
+          "ext": "101",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "result",
+          "text": "Встреча согласована на конкретное время."
+        }
+      ],
+      "more": false,
+      "offset": 1,
+      "results": {
+        "result": "Результат",
+        "lost": "Потерян, шанс был"
+      },
+      "kinds": {},
+      "today": "2026-11-04"
+    },
+    "/api/callbacks?ext=102": {
+      "today": "2026-11-04",
+      "items": [
+        {
+          "id": "task-overdue",
+          "client": "client-1",
+          "manager": "Борис Учебный",
+          "due_date": "2026-11-02",
+          "due_time": "10:00",
+          "original_date": "2026-11-02",
+          "original_time": "10:00",
+          "note": "Клиент ждёт обсуждения предложения.",
+          "context": "proposal_waits",
+          "call": "call-1",
+          "number": "00000000001",
+          "title": "Учебный Кедр",
+          "ext": "102",
+          "label": "Перезвон",
+          "source": "crm",
+          "who": "Борис Учебный",
+          "late": true
+        },
+        {
+          "id": "task-today",
+          "client": "client-3",
+          "manager": "Борис Учебный",
+          "due_date": "2026-11-04",
+          "due_time": "16:00",
+          "original_date": "2026-11-04",
+          "original_time": "16:00",
+          "note": "Уточнить удобное время.",
+          "context": "today",
+          "number": "00000000003",
+          "title": "Учебный Лён",
+          "ext": "102",
+          "label": "Перезвон",
+          "source": "crm",
+          "who": "Борис Учебный",
+          "late": false
+        }
+      ]
+    },
+    "/api/summary?period=today&ext=102": {
+      "today": "2026-11-04",
+      "now": "12:00",
+      "period": "today",
+      "team": [
+        {
+          "ext": "101",
+          "name": "Анна Учебная"
+        },
+        {
+          "ext": "102",
+          "name": "Борис Учебный"
+        }
+      ],
+      "cur": {
+        "dials": 95,
+        "live": 37,
+        "result": 22,
+        "meet": 3,
+        "seconds": 2400,
+        "lost": 4
+      },
+      "prev": {
+        "dials": 0
+      },
+      "vs": "",
+      "hourly": false,
+      "series": [],
+      "heat": [],
+      "heat_days": 30,
+      "missed": [],
+      "managers": [
+        {
+          "ext": "102",
+          "name": "Борис Учебный",
+          "dials": 95,
+          "live": 37,
+          "result": 22,
+          "meet": 3,
+          "seconds": 2400,
+          "lost": 4,
+          "mistake": null
+        }
+      ],
+      "live_seconds": 10
+    },
+    "/api/journal?period=today&ext=102": {
+      "items": [],
+      "more": false,
+      "offset": 0,
+      "results": {
+        "result": "Результат",
+        "lost": "Потерян, шанс был"
+      },
+      "kinds": {},
+      "today": "2026-11-04"
+    },
+    "/api/summary?period=7&ext=102": {
+      "today": "2026-11-04",
+      "now": "12:00",
+      "period": "7",
+      "team": [
+        {
+          "ext": "101",
+          "name": "Анна Учебная"
+        },
+        {
+          "ext": "102",
+          "name": "Борис Учебный"
+        }
+      ],
+      "cur": {
+        "dials": 136,
+        "live": 56,
+        "result": 41,
+        "meet": 3,
+        "seconds": 2400,
+        "lost": 4
+      },
+      "prev": {
+        "dials": 0
+      },
+      "vs": "",
+      "hourly": false,
+      "series": [],
+      "heat": [],
+      "heat_days": 30,
+      "missed": [],
+      "managers": [
+        {
+          "ext": "102",
+          "name": "Борис Учебный",
+          "dials": 136,
+          "live": 56,
+          "result": 41,
+          "meet": 3,
+          "seconds": 2400,
+          "lost": 4,
+          "mistake": null
+        }
+      ],
+      "live_seconds": 10
+    },
+    "/api/journal?period=7&ext=102": {
+      "items": [
+        {
+          "id": "call-1",
+          "manager": "Борис Учебный",
+          "client": "client-1",
+          "company": "Учебный Кедр",
+          "at": "2026-11-03T12:00:00+03:00",
+          "seconds": 185,
+          "conclusion": "Клиент согласился получить предложение, но дата следующего разговора не согласована.",
+          "answer": "callback_missing",
+          "transcript": [
+            "Менеджер: Пришлю описание предложения.",
+            "Клиент: Да, пришлите, посмотрю.",
+            "Менеджер: Спасибо, хорошего дня."
+          ],
+          "number": "00000000001",
+          "phone": "00000000001",
+          "ext": "102",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "lost",
+          "text": "Клиент согласился получить предложение, но дата следующего разговора не согласована."
+        },
+        {
+          "id": "call-weekly",
+          "manager": "Борис Учебный",
+          "client": "client-1",
+          "company": "Учебный Кедр",
+          "at": "2026-11-01T12:00:00+03:00",
+          "seconds": 185,
+          "conclusion": "Клиент согласился получить предложение, но дата следующего разговора не согласована.",
+          "answer": "callback_missing",
+          "transcript": [
+            "Менеджер: Пришлю описание предложения.",
+            "Клиент: Да, пришлите, посмотрю.",
+            "Менеджер: Спасибо, хорошего дня."
+          ],
+          "number": "00000000001",
+          "phone": "00000000001",
+          "ext": "102",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "lost",
+          "text": "Клиент согласился получить предложение, но дата следующего разговора не согласована."
+        }
+      ],
+      "more": false,
+      "offset": 2,
+      "results": {
+        "result": "Результат",
+        "lost": "Потерян, шанс был"
+      },
+      "kinds": {},
+      "today": "2026-11-04"
+    },
+    "/api/summary?period=30&ext=102": {
+      "today": "2026-11-04",
+      "now": "12:00",
+      "period": "30",
+      "team": [
+        {
+          "ext": "101",
+          "name": "Анна Учебная"
+        },
+        {
+          "ext": "102",
+          "name": "Борис Учебный"
+        }
+      ],
+      "cur": {
+        "dials": 177,
+        "live": 75,
+        "result": 60,
+        "meet": 3,
+        "seconds": 2400,
+        "lost": 4
+      },
+      "prev": {
+        "dials": 0
+      },
+      "vs": "",
+      "hourly": false,
+      "series": [],
+      "heat": [],
+      "heat_days": 30,
+      "missed": [],
+      "managers": [
+        {
+          "ext": "102",
+          "name": "Борис Учебный",
+          "dials": 177,
+          "live": 75,
+          "result": 60,
+          "meet": 3,
+          "seconds": 2400,
+          "lost": 4,
+          "mistake": null
+        }
+      ],
+      "live_seconds": 10
+    },
+    "/api/journal?period=30&ext=102": {
+      "items": [
+        {
+          "id": "call-1",
+          "manager": "Борис Учебный",
+          "client": "client-1",
+          "company": "Учебный Кедр",
+          "at": "2026-11-03T12:00:00+03:00",
+          "seconds": 185,
+          "conclusion": "Клиент согласился получить предложение, но дата следующего разговора не согласована.",
+          "answer": "callback_missing",
+          "transcript": [
+            "Менеджер: Пришлю описание предложения.",
+            "Клиент: Да, пришлите, посмотрю.",
+            "Менеджер: Спасибо, хорошего дня."
+          ],
+          "number": "00000000001",
+          "phone": "00000000001",
+          "ext": "102",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "lost",
+          "text": "Клиент согласился получить предложение, но дата следующего разговора не согласована."
+        },
+        {
+          "id": "call-weekly",
+          "manager": "Борис Учебный",
+          "client": "client-1",
+          "company": "Учебный Кедр",
+          "at": "2026-11-01T12:00:00+03:00",
+          "seconds": 185,
+          "conclusion": "Клиент согласился получить предложение, но дата следующего разговора не согласована.",
+          "answer": "callback_missing",
+          "transcript": [
+            "Менеджер: Пришлю описание предложения.",
+            "Клиент: Да, пришлите, посмотрю.",
+            "Менеджер: Спасибо, хорошего дня."
+          ],
+          "number": "00000000001",
+          "phone": "00000000001",
+          "ext": "102",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "lost",
+          "text": "Клиент согласился получить предложение, но дата следующего разговора не согласована."
+        },
+        {
+          "id": "call-3",
+          "manager": "Борис Учебный",
+          "client": "client-3",
+          "company": "Учебный Лён",
+          "at": "2026-10-23T12:00:00+03:00",
+          "seconds": 75,
+          "conclusion": "Клиент отказался от предложения.",
+          "answer": "refusal",
+          "transcript": [
+            "Клиент: Спасибо, предложение не нужно."
+          ],
+          "number": "00000000003",
+          "phone": "00000000003",
+          "ext": "102",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "lost",
+          "text": "Клиент отказался от предложения."
+        }
+      ],
+      "more": false,
+      "offset": 3,
+      "results": {
+        "result": "Результат",
+        "lost": "Потерян, шанс был"
+      },
+      "kinds": {},
+      "today": "2026-11-04"
+    },
+    "/api/summary?period=month&ext=102": {
+      "today": "2026-11-04",
+      "now": "12:00",
+      "period": "month",
+      "team": [
+        {
+          "ext": "101",
+          "name": "Анна Учебная"
+        },
+        {
+          "ext": "102",
+          "name": "Борис Учебный"
+        }
+      ],
+      "cur": {
+        "dials": 218,
+        "live": 94,
+        "result": 79,
+        "meet": 3,
+        "seconds": 2400,
+        "lost": 4
+      },
+      "prev": {
+        "dials": 0
+      },
+      "vs": "",
+      "hourly": false,
+      "series": [],
+      "heat": [],
+      "heat_days": 30,
+      "missed": [],
+      "managers": [
+        {
+          "ext": "102",
+          "name": "Борис Учебный",
+          "dials": 218,
+          "live": 94,
+          "result": 79,
+          "meet": 3,
+          "seconds": 2400,
+          "lost": 4,
+          "mistake": null
+        }
+      ],
+      "live_seconds": 10
+    },
+    "/api/journal?period=month&ext=102": {
+      "items": [
+        {
+          "id": "call-1",
+          "manager": "Борис Учебный",
+          "client": "client-1",
+          "company": "Учебный Кедр",
+          "at": "2026-11-03T12:00:00+03:00",
+          "seconds": 185,
+          "conclusion": "Клиент согласился получить предложение, но дата следующего разговора не согласована.",
+          "answer": "callback_missing",
+          "transcript": [
+            "Менеджер: Пришлю описание предложения.",
+            "Клиент: Да, пришлите, посмотрю.",
+            "Менеджер: Спасибо, хорошего дня."
+          ],
+          "number": "00000000001",
+          "phone": "00000000001",
+          "ext": "102",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "lost",
+          "text": "Клиент согласился получить предложение, но дата следующего разговора не согласована."
+        },
+        {
+          "id": "call-weekly",
+          "manager": "Борис Учебный",
+          "client": "client-1",
+          "company": "Учебный Кедр",
+          "at": "2026-11-01T12:00:00+03:00",
+          "seconds": 185,
+          "conclusion": "Клиент согласился получить предложение, но дата следующего разговора не согласована.",
+          "answer": "callback_missing",
+          "transcript": [
+            "Менеджер: Пришлю описание предложения.",
+            "Клиент: Да, пришлите, посмотрю.",
+            "Менеджер: Спасибо, хорошего дня."
+          ],
+          "number": "00000000001",
+          "phone": "00000000001",
+          "ext": "102",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "lost",
+          "text": "Клиент согласился получить предложение, но дата следующего разговора не согласована."
+        },
+        {
+          "id": "call-3",
+          "manager": "Борис Учебный",
+          "client": "client-3",
+          "company": "Учебный Лён",
+          "at": "2026-10-23T12:00:00+03:00",
+          "seconds": 75,
+          "conclusion": "Клиент отказался от предложения.",
+          "answer": "refusal",
+          "transcript": [
+            "Клиент: Спасибо, предложение не нужно."
+          ],
+          "number": "00000000003",
+          "phone": "00000000003",
+          "ext": "102",
+          "incoming": false,
+          "reviewed": true,
+          "rec": false,
+          "kind": "Исходящий",
+          "result": "lost",
+          "text": "Клиент отказался от предложения."
+        }
+      ],
+      "more": false,
+      "offset": 3,
+      "results": {
+        "result": "Результат",
+        "lost": "Потерян, шанс был"
+      },
+      "kinds": {},
+      "today": "2026-11-04"
+    }
+  }
+}

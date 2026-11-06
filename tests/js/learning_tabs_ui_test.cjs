@@ -6,7 +6,7 @@ const {Document,settle}=require('./dom_adapter.cjs');
 const {Storage,packet,read,clock}=require('./learning_workspace_test.cjs');
 let nonce=0;
 async function open(role='manager',entry='same-entry',storage=new Storage(),modules,hash='#learning',learning=true,bench={}){
- const document=new Document(),location={pathname:learning?'/learning/workspace':'/',origin:'https://crm.invalid',href:'https://crm.invalid/learning/workspace',hash};
+ const document=new Document(),location={reload(){this.reloadCount=(this.reloadCount||0)+1;},pathname:learning?'/learning/workspace':'/',origin:'https://crm.invalid',href:'https://crm.invalid/learning/workspace',hash};
  const bootstrap=document.createElement('script');bootstrap.id='learning-workspace-context';bootstrap.textContent=JSON.stringify(packet(role,entry,'ui-account',modules));document.head.appendChild(bootstrap);document.body.innerHTML='<div id="root"></div>';
  const network=[],errors=[],intervals=[];const backend=learning?null:(bench.backend||require('./learning_workspace_test.cjs').model(role));if(backend&&!bench.backend)backend.start('m1');
  const globals={console,URL,URLSearchParams,Response,Uint32Array,JSON,Number,document,location,crypto:{getRandomValues(a){a[0]=++nonce;return a;}},sessionStorage:storage,localStorage:new Storage(),matchMedia:()=>({matches:true}),innerWidth:1300,innerHeight:800,
@@ -19,7 +19,9 @@ async function open(role='manager',entry='same-entry',storage=new Storage(),modu
  globals.window=globals;
  const context=vm.createContext(globals);
  const run=code=>vm.runInContext(code,context,{timeout:10000});
- for(const file of ['presentation.js','learning/engine.js','learning/workspace-model.js','learning/workspace.js','app.js','helper.js','help.js','work.js','summary.js','calls.js','deals.js','people.js','more.js','review.js','automations.js','robot.js','callcenter.js','sources-data.js','sources-logic.js','sources.js','donors.js','learning/progress.js','learning/placement.js','learning/learning.js'])run(read('crm/static/'+file));
+ const files=['presentation.js','learning/engine.js','learning/workspace-model.js','learning/workspace.js','app.js','helper.js','help.js','work.js','summary.js','calls.js','deals.js','people.js','more.js','review.js','automations.js','robot.js','callcenter.js','sources-data.js','sources-logic.js','sources.js','donors.js','learning/progress.js','learning/placement.js','learning/learning.js'];
+ if(bench.guide){for(const legacy of ['learning/engine.js','learning/workspace-model.js','learning/workspace.js','learning/progress.js'])files.splice(files.indexOf(legacy),1);files.splice(files.indexOf('work.js'),0,'webphone.js');files.splice(files.indexOf('app.js'),0,'learning/tour-guard.js');files.splice(files.indexOf('learning/learning.js'),0,'learning/guide.js');}
+ for(const file of files)run(read('crm/static/'+file));
  document.onScript=script=>{try{if(script.src.includes('logic.js'))run(read('crm/static/contracts/logic.js'));if(script.src.includes('generator.js'))run(read('crm/static/contracts/generator.js'));script.onload?.();}catch(e){errors.push(e.stack);script.onerror?.();}};
  for(const listener of document.listeners.DOMContentLoaded||[])await listener.fn();await settle();
  return {context,document,globals,storage,network,errors,intervals,run,model:globals.AveronLearningWorkspace?.classroom};

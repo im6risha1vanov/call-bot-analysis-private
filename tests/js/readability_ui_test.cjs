@@ -81,7 +81,7 @@ async function main(){const cases=[],coverage=[],test=async(name,fn)=>{try{await
    for(const figure of figures){const key=figure.dataset.helpExample;assert(examples[key],key);const image=figure.querySelector('img');assert.equal(image.src,'/static/learning/examples/'+examples[key].poster);assert.equal(image.getAttribute('loading'),'lazy');assert.equal(figure.querySelector('button').getAttribute('type'),'button');}
    assert.equal(ui.network.length,count);await click(ui,'[data-page-help-close]');
   }
-  await ui.run('go("deals","contracts")');await settle();await click(ui,'[data-page-help]');assert.deepEqual(ui.document.querySelectorAll('[data-help-example]').map(n=>n.dataset.helpExample),['compose','prepare_contract','select_document']);assert(ui.document.querySelector('.page-help').textContent.includes('учебном журнале'));
+  await ui.run('go("deals","contracts")');await settle();await click(ui,'[data-page-help]');assert.deepEqual(ui.document.querySelectorAll('[data-help-example]').map(n=>n.dataset.helpExample),['compose','select_document']);assert(ui.document.querySelector('.page-help').textContent.includes('документ не создаётся'));
   assert.equal(backend.events.length,0);assert.equal(backend.failures.length,0);assert.equal(ui.errors.length,0);
  });
  await test('guided-note-is-free-text-and-keeps-what-the-user-entered',async()=>{

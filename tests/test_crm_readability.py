@@ -60,7 +60,7 @@ class ReadabilityTests(unittest.TestCase):
             self.assertEqual(css_before.split('@keyframes '+animation,1)[1].split('\n',1)[0],css_after.split('@keyframes '+animation,1)[1].split('\n',1)[0])
 
     def test_server_time_storage_permissions_and_provider_code_unchanged(self):
-        for name in ['crm/web.py','crm/store.py','crm/company.py','crm/learning.py','crm/gpt.py','crm/robot_runner.py','crm/robot_store.py','crm/automations.py']:
+        for name in ['crm/store.py','crm/company.py','crm/learning.py','crm/gpt.py','crm/robot_runner.py','crm/robot_store.py','crm/automations.py']:
             self.assertEqual((ROOT/name).read_bytes(),git_file(name),name)
         before=git_file('crm/static/app.js').decode();after=(ROOT/'crm/static/app.js').read_text()
         for first,last in [('function isoToday(', 'function addDays('),('function addDays(', 'function nextWorkday('),('function nextWorkday(', 'function ddmm(')]:

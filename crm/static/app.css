@@ -661,3 +661,8 @@ audio.rec{display:block;width:100%;max-width:420px;height:36px;margin-top:6px}
 .time-caption{margin:4px 0 10px;line-height:1.5}
 .page,.card,.drawer,.rvm,.gpt{overflow-wrap:anywhere}
 @media(max-width:600px){.title-row{flex-wrap:wrap}.title-row [data-page-help]{margin-left:auto}.row .btn{white-space:normal}.field input,.field select,.field textarea{max-width:100%}}
+
+/* A compact, persistent safety indicator in ordinary-account orientation. */
+.banner[data-guide-banner]{flex-wrap:wrap;align-items:center}
+.banner[data-guide-banner] span{flex:1 1 240px;min-width:0;overflow-wrap:anywhere}
+.banner[data-guide-banner] button{white-space:normal;max-width:100%}

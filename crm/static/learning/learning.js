@@ -3,6 +3,7 @@
 (function () {
   'use strict';
   const W=window.AveronLearningWorkspace?.classroom, restoredInputs=new WeakSet();
+  if(!W&&window.AveronCRMGuide){window.AveronCRMGuide.install();return;}
   let context=null, panel=null, highlights=[], scheduled=false, signature='', verification='', restorePlanned=true;
   const lesson=()=>W?.lesson(W.state.active);
   const attempt=()=>W?.current();

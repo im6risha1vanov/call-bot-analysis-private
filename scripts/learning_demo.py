@@ -1,9 +1,8 @@
-"""Local fictional CRM bench. Never imports crm.web, reads .env or creates a DB pool.
+"""Loopback-only normal-account CRM guide bench with fixed fictional API responses.
 
-Run: python scripts/learning_demo.py --port 8098
-Open http://127.0.0.1:8098/demo/manager or /demo/director. It is a loopback-only
-stand, with no passwords and deliberately selectable synthetic roles. Never expose
-it via Caddy, public bind or production systemd. All POST/PUT/PATCH/DELETE rejected.
+No .env, production DB or providers. Operational writes always fail; only the
+learning-mode cookie can change. /guide/manager and /guide/director select fake
+roles for review, not production accounts. Never publish this demo via Caddy.
 """
 from __future__ import annotations
 import argparse
@@ -14,7 +13,9 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from aiohttp import web
-from crm import learning
+from crm import learning, tour
+import json
+from urllib.parse import urlsplit,parse_qsl
 
 STATIC = Path(__file__).resolve().parents[1] / 'crm/static'
 MODULES = ['contracts', 'automations', 'robot', 'gpt']
@@ -41,7 +42,11 @@ def ctx(request, lesson=None):
 
 @web.middleware
 async def isolated(request, handler):
-    if request.method not in {'GET', 'HEAD'}:
+    guide=request.cookies.get('crm_guide_demo')=='1'
+    if guide and tour.active(request) and not tour.permitted(request.method,request.path):
+        return web.json_response({'error':tour.MESSAGE},status=403)
+    if request.method not in {'GET', 'HEAD'} and not (guide and request.path=='/api/learning/mode' and request.method=='POST'):
+
         return web.json_response({'error': 'Учебный стенд: рабочие записи и внешние вызовы запрещены.'}, status=403)
     response = await handler(request)
     response.headers.setdefault('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
@@ -59,9 +64,53 @@ async def login(request):
     return response
 
 
+async def guide_login(request):
+    role=request.match_info['role']
+    if role not in {'manager','director','manager-base','director-base'}:raise web.HTTPNotFound()
+    response=web.HTTPFound('/#learning')
+    response.set_cookie('learning_demo',role,httponly=True,samesite='Strict')
+    response.set_cookie('crm_guide_demo','1',httponly=True,samesite='Strict')
+    response.del_cookie(tour.COOKIE,path='/')
+    return response
+
+
+async def guide_context(request):
+    who=identity(request)
+    return web.json_response(tour.context(who,{'id':who.company,'modules':who.modules}))
+
+
+async def guide_mode(request):
+    who=identity(request)
+    if request.cookies.get('crm_guide_demo')!='1' or who.role not in {'manager','director'} or request.headers.get('X-CRM')!='1':raise web.HTTPForbidden()
+    data=await request.json()
+    if type(data.get('enabled')) is not bool:raise web.HTTPBadRequest()
+    response=web.json_response({'enabled':data['enabled']})
+    if data['enabled']:response.set_cookie(tour.COOKIE,'on',httponly=True,samesite='Lax',path='/')
+    else:response.del_cookie(tour.COOKIE,path='/')
+    return response
+
+
+def guide_fixture(request,who):
+    rows=json.loads((Path(__file__).resolve().parents[1]/'tests/fixtures/crm_guide_demo.json').read_text())[who.role]
+    candidates=[]
+    for address,data in rows.items():
+        url=urlsplit(address)
+        if url.path!=request.path:continue
+        params=dict(parse_qsl(url.query))
+        if any(params.get(k)!=request.query.get(k) for k in ('number','person') if k in params or k in request.query):continue
+        score=sum(request.query.get(k)==v for k,v in params.items())
+        if any(request.query.get(k,'')!=params.get(k,'') for k in ('period','ext') if k in request.query or k in params):score-=10
+        candidates.append((score,data))
+    if not candidates:raise web.HTTPNotFound(reason='Данные этой панели не подключены к проверочному стенду.')
+    data=max(candidates,key=lambda pair:pair[0])[1]
+    if request.path=='/api/me':data={**data,'name':('Менеджер' if who.role=='manager' else 'Директор')+' · проверочный стенд','learning_mode':tour.active(request),'modules':who.modules,'learning':False,'test':False,'readonly':False,'can_dial':True,'webphone':False}
+    if request.path=='/api/contracts/config' and tour.active(request):data={**data,'innLookup':False}
+    return web.json_response(data)
+
+
 async def index(request):
     if not request.cookies.get('learning_demo'):
-        return web.Response(text='<h1>Учебный стенд AveronCRM</h1><p>Данные вымышленные, внешних вызовов нет.</p><a href="/demo/manager">Менеджер</a> · <a href="/demo/director">Директор</a> · <a href="/demo/director-base">Директор без модулей</a>', content_type='text/html')
+        return web.Response(text='<h1>Проверочный стенд AveronCRM</h1><p>Данные вымышленные, внешних вызовов нет.</p><a href="/demo/manager">Менеджер</a> · <a href="/demo/director">Директор</a> · <a href="/demo/director-base">Директор без модулей</a>', content_type='text/html')
     identity(request)
     return web.FileResponse(STATIC / 'index.html')
 
@@ -71,17 +120,13 @@ async def learning_context(request):
 
 
 async def enter(request):
-    ctx(request, request.query.get('lesson'))
-    response = web.HTTPFound('/learning/workspace#learning' + ('/' + request.query['lesson'] if request.query.get('lesson') else ''))
-    response.set_cookie(learning.ENTRY_COOKIE, secrets.token_urlsafe(24), httponly=True, samesite='Strict', path='/learning')
-    return response
+    ctx(request,request.query.get('lesson'))
+    return web.HTTPFound('/#learning')
 
 
 async def workspace(request):
-    data = ctx(request)
-    entry = request.cookies.get(learning.ENTRY_COOKIE)
-    if not entry: return web.HTTPFound('/learning/enter')
-    return learning.workspace_response(data, entry, request.cookies.get('learning_demo', ''))
+    ctx(request)
+    return web.HTTPFound('/#learning')
 
 
 async def exit_workspace(request):
@@ -92,15 +137,13 @@ async def exit_workspace(request):
 
 
 async def practice(request):
-    lesson = request.query.get('lesson')
-    if not lesson:
-        raise web.HTTPBadRequest(reason='Укажите урок')
-    ctx(request, lesson)
-    return learning.practice_response()
+    ctx(request,request.query.get('lesson'))
+    return web.HTTPFound('/#learning')
 
 
 async def fixture_api(request):
     who = identity(request)
+    if request.cookies.get('crm_guide_demo')=='1':return guide_fixture(request,who)
     route = request.match_info['tail']
     clock = learning.clock_for('Europe/Moscow')
     today = clock['today']
@@ -156,7 +199,10 @@ async def denied(request):
 def build():
     app = web.Application(middlewares=[isolated])
     app.router.add_get('/', index)
-    app.router.add_get('/demo/{role}', login)
+    app.router.add_get('/demo/{role}', guide_login)
+    app.router.add_get('/guide/{role}', guide_login)
+    app.router.add_get('/api/learning/guide', guide_context)
+    app.router.add_post('/api/learning/mode', guide_mode)
     app.router.add_get('/api/learning/context', learning_context)
     app.router.add_get('/learning/practice', practice)
     app.router.add_get('/learning/enter', enter)

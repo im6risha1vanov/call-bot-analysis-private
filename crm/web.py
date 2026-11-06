@@ -23,7 +23,7 @@ from aiohttp import web  # noqa: E402
 
 import mango_client  # noqa: E402
 from tools import Forbidden, home_client_id, is_privileged  # noqa: E402
-from . import learning
+from . import learning, tour
 from . import accounts, ask as asking, auth, automation_agent, automations, cabinet, callcenter_db, company, contracts, deals, donor_agent, gpt, journal, overview, people, platform, recording, reviews, sources, staff, store, training  # noqa: E402
 from . import prompts as prompt_mode, robot, webphone, robot_api, robot_prices, robot_runner, robot_store  # noqa: E402
 from review import store as review_store  # noqa: E402
@@ -46,7 +46,7 @@ HEADERS = {
 TEST_READONLY = 'Тестовый вход только для просмотра: звонки и отметки работают во входе самого менеджера.'
 VIEW_ONLY = 'Это вход только для просмотра. Менять, звонить и спрашивать можно под своим логином.'
 # Запросы, которые ничего не меняют и разрешены входу для просмотра; остальные POST ему закрыты.
-VIEW_ONLY_POSTS = {'/api/logout', '/api/test/login', '/api/login'}
+VIEW_ONLY_POSTS = {'/api/logout', '/api/test/login', '/api/login', '/api/learning/mode'}
 
 
 def fail(status: int, text: str) -> web.Response:
@@ -57,6 +57,10 @@ def fail(status: int, text: str) -> web.Response:
 async def guard(request: web.Request, handler):
     # Запросы с другого сайта не могут поставить свой заголовок без CORS, а CORS мы не разрешаем.
     # /hook/<token> — вебхук другой системы для автоматизаций: без cookie и заголовка, доступ по токену.
+    if request.path=='/static/learning/practice.html' and request.method in {'GET','HEAD'}:
+        return web.HTTPFound('/#learning')
+    if tour.active(request) and not tour.permitted(request.method,request.path):
+        response=fail(403,tour.MESSAGE);response.headers.update(HEADERS);response.headers['Cache-Control']='no-store';return response
     hook = request.path.startswith('/hook/')
     if request.method not in ('GET', 'HEAD') and request.headers.get('X-CRM') != '1' and not hook:
         return fail(403, 'Запрос отклонён.')
@@ -203,6 +207,7 @@ async def personal_page(request):
     response = web.HTTPFound('/')
     response.set_cookie(COOKIE, session, max_age=int(auth.PERSONAL_TTL.total_seconds()), httponly=True,
                         secure=SECURE_COOKIE, samesite='Lax', path='/')
+    response.del_cookie(tour.COOKIE,path='/')
     raise response
 
 
@@ -227,6 +232,7 @@ async def support_exit(request):
     else:
         response.del_cookie(COOKIE, path='/')
     response.del_cookie(BACK_COOKIE, path='/')
+    response.del_cookie(tour.COOKIE,path='/')
     raise response
 
 
@@ -234,6 +240,7 @@ async def logout_page(request):
     await auth.logout(request.app[POOL], request.cookies.get(COOKIE))
     response = web.HTTPFound('/')
     response.del_cookie(COOKIE, path='/')
+    response.del_cookie(tour.COOKIE,path='/')
     raise response
 
 
@@ -249,6 +256,7 @@ async def api_logout(request):
     await auth.logout(request.app[POOL], request.cookies.get(COOKIE))
     response = web.json_response({'ok': True})
     response.del_cookie(COOKIE, path='/')
+    response.del_cookie(tour.COOKIE,path='/')
     return response
 
 
@@ -258,7 +266,8 @@ async def api_me(request):
     firm = await company.info(pool, who.company)
     cc_mode = ('sheet' if firm['settings'].get('callcenter_sheet') else 'db') if 'callcenter' in firm['modules'] else None
     firm = {'company': firm['name'], 'modules': firm['modules'], 'support': who.support, 'callcenter_mode': cc_mode,
-            'platform': who.platform and not who.support and firm['home'], 'switcher': await can_switch(pool, who)}
+            'platform': who.platform and not who.support and firm['home'], 'switcher': await can_switch(pool, who),
+            'learning_mode':tour.active(request) and who.role in {'manager','director'}}
     if who.role == 'client':
         return web.json_response({'name': who.client_key, 'role': 'client', 'test': who.test, 'client': who.client_key,
                                   'privileged': False, 'can_dial': False, 'team': [], **firm,
@@ -276,7 +285,7 @@ async def api_me(request):
         or ('Директор' if who.role == 'director' else ''), 'role': who.role, 'test': who.test,
         'ext': a.extension if str(a.extension or '').isdigit() else None,
         'can_dial': can_dial, 'privileged': privileged, 'readonly': who.test,
-        'webphone': can_dial and await webphone.account(pool, a.client_id, a.extension) is not None,
+        'webphone': not tour.active(request) and can_dial and await webphone.account(pool, a.client_id, a.extension) is not None,
         'team': await store.team(pool, a.client_id) if privileged else [],
         'outcomes': store.OUTCOMES, 'needs_date': sorted(store.NEEDS_DATE), 'lead_status': store.LEAD_STATUS, **firm,
     })
@@ -310,6 +319,7 @@ async def api_test_login(request):
     response = web.json_response({'ok': True, 'go': '/'})
     response.set_cookie(COOKIE, session, max_age=int(auth.TEST_TTL.total_seconds()), httponly=True,
                         secure=SECURE_COOKIE, samesite='Lax', path='/')
+    response.del_cookie(tour.COOKIE,path='/')
     return response
 
 
@@ -548,6 +558,7 @@ async def api_login(request):
     response = web.json_response({'ok': True, 'role': role})
     response.set_cookie(COOKIE, session, max_age=int(auth.PERSONAL_TTL.total_seconds()), httponly=True,
                         secure=SECURE_COOKIE, samesite='Lax', path='/')
+    response.del_cookie(tour.COOKIE,path='/')
     return response
 
 
@@ -814,7 +825,9 @@ async def api_tgchat_link(request):
 # Генератор договоров (static/contracts/): пути — те, что ждёт страница генератора.
 async def api_contracts_config(request):
     who = await actor(request)
-    return web.json_response(contracts.config(await company.setting(request.app[POOL], who.client_id, 'contract_email')))
+    cfg=contracts.config(await company.setting(request.app[POOL], who.client_id, 'contract_email'))
+    if tour.active(request):cfg['innLookup']=False
+    return web.json_response(cfg)
 
 
 async def api_contracts_next(request):
@@ -1206,35 +1219,46 @@ async def api_learning_context(request):
     return web.json_response(await learning_context(request), headers={'Cache-Control': 'no-store'})
 
 
-async def learning_practice(request):
-    if not request.query.get('lesson'):
-        raise web.HTTPBadRequest(reason='Выберите урок в разделе «Обучение».')
-    await learning_context(request)
-    return learning.practice_response()
+async def api_learning_guide(request):
+    who=await viewer(request)
+    if who.role not in {'manager','director'} or who.actor is None:
+        raise web.HTTPForbidden(reason='Обучение доступно менеджеру и директору.')
+    firm=await company.info(request.app[POOL],who.company)
+    return web.json_response(tour.context(who,firm),headers={'Cache-Control':'no-store'})
 
 
-async def learning_enter(request):
-    import secrets
-    await learning_context(request)
-    lesson = request.query.get('lesson')
-    response = web.HTTPFound('/learning/workspace#learning' + ('/' + lesson if lesson else ''))
-    response.set_cookie(learning.ENTRY_COOKIE, secrets.token_urlsafe(24), httponly=True,
-                        samesite='Strict', secure=request.secure, path='/learning')
+async def api_learning_mode(request):
+    who=await viewer(request)
+    if who.role not in {'manager','director'} or who.actor is None:
+        raise web.HTTPForbidden(reason='Обучение доступно менеджеру и директору.')
+    data=await body(request)
+    if type(data.get('enabled')) is not bool:
+        raise web.HTTPBadRequest(reason='Укажите, включить или выключить режим обучения.')
+    response=web.json_response({'enabled':data['enabled']})
+    if data['enabled']:response.set_cookie(tour.COOKIE,'on',httponly=True,secure=SECURE_COOKIE,samesite='Lax',path='/')
+    else:response.del_cookie(tour.COOKIE,path='/')
     return response
 
 
+async def learning_practice(request):
+    await learning_context(request)
+    return web.HTTPFound('/#learning')
+
+
+async def learning_enter(request):
+    await learning_context(request)
+    return web.HTTPFound('/#learning')
+
+
 async def learning_workspace(request):
-    data = await learning_context(request)
-    entry = request.cookies.get(learning.ENTRY_COOKIE)
-    if not entry:
-        return web.HTTPFound('/learning/enter')
-    return learning.workspace_response(data, entry, request.cookies.get(COOKIE, ''))
+    await learning_context(request)
+    return web.HTTPFound('/#learning')
 
 
 async def learning_exit(request):
     await viewer(request)
-    response = web.HTTPFound('/#learning')
-    response.del_cookie(learning.ENTRY_COOKIE, path='/learning')
+    response=web.HTTPFound('/#learning');response.del_cookie(tour.COOKIE,path='/')
+    response.del_cookie(learning.ENTRY_COOKIE,path='/')
     return response
 
 
@@ -1253,6 +1277,8 @@ def build(pool) -> web.Application:
     app.router.add_post('/api/logout', api_logout)
     app.router.add_get('/api/me', api_me)
     app.router.add_get('/api/learning/context', api_learning_context)
+    app.router.add_get('/api/learning/guide', api_learning_guide)
+    app.router.add_post('/api/learning/mode', api_learning_mode)
     app.router.add_get('/learning/practice', learning_practice)
     app.router.add_get('/learning/enter', learning_enter)
     app.router.add_get('/learning/workspace', learning_workspace)

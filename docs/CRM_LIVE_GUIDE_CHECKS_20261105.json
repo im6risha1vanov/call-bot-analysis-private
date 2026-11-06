@@ -1,0 +1,78 @@
+{
+  "snapshot_utc": "2026-11-06T09:58:00.125064+00:00",
+  "branch": "feat/crm-live-guided-tour-20261105",
+  "baseline": "0ac0a55c29339b1f9f4a953b1b2624b31df7d50d",
+  "production_changed": false,
+  "services_restarted": false,
+  "python": {
+    "passed": 63,
+    "failed": 0,
+    "skipped": 0
+  },
+  "javascript": {
+    "passed": 81,
+    "suites": {
+      "learning_workspace_test.cjs": 17,
+      "learning_tabs_ui_test.cjs": 13,
+      "learning_floating_test.cjs": 18,
+      "readability_ui_test.cjs": 15,
+      "learning_smooth_test.cjs": 8,
+      "learning_tour_test.cjs": 10
+    },
+    "latest_tour_recheck": 10,
+    "mode": "actual native controllers, guarded fetch and explicit DOM adapter with fictional authorized APIs; not a browser"
+  },
+  "deployment_procedure": {
+    "passed": 11,
+    "real_service_touched": false,
+    "method": "temporary Git repositories/bundles with fake systemd/HTTP"
+  },
+  "semantics": {
+    "account": "ordinary authenticated manager/director",
+    "data": "normal authorized reads",
+    "teaching_records_created": false,
+    "progress_persisted": false,
+    "record_snapshots": false,
+    "only_mode_flag_cookie": true,
+    "webphone_and_paid_operations_blocked": true,
+    "permissions_expanded": false,
+    "ordinary_behaviour_after_exit": true
+  },
+  "checked": [
+    "full manager/director guidance",
+    "no working writes or browser storage during guidance",
+    "backend guard rejects forged writes before handler",
+    "unknown requests fail closed",
+    "ordinary roles/company/modules preserved",
+    "no new call, webphone connection, LLM or TTS request",
+    "mode cannot activate during browser call or pending write",
+    "same-card acknowledgement and retained GIF",
+    "help/GIF pause and background refresh",
+    "empty states and disabled modules",
+    "ordinary operation restored after mode exit",
+    "old classroom links redirect to ordinary learning",
+    "normal-account test bench with fixed fictional API"
+  ],
+  "syntax": {
+    "python_files": 9,
+    "javascript_files": 9,
+    "json_files_before_report": 2,
+    "diff_whitespace": true
+  },
+  "browser": {
+    "status": "NOT RUN",
+    "reason": "Playwright unavailable",
+    "screenshots_created": false,
+    "actual_Evgeniy_login_tested": false
+  },
+  "backup": "/tmp/averon-crm-before-live-guide-20261105.tar.gz",
+  "secret_scan": {
+    "working_tree_files": 498,
+    "working_tree_pattern_hits": 0,
+    "history_blobs": 1734,
+    "history_pattern_hits": 0,
+    "note": "heuristic patterns only; no secret values printed"
+  },
+  "migrations": false,
+  "new_dependencies": false
+}

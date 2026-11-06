@@ -262,8 +262,8 @@ class DemoRouterTests(unittest.IsolatedAsyncioTestCase):
             response = await self.request('GET','/api/learning/context',role)
             self.assertEqual(json.loads(response.text)['role'],role)
             response = await self.request('GET','/learning/practice?lesson='+lesson,role)
-            self.assertIsInstance(response,web.FileResponse)
-            self.assertIn("connect-src 'none'",response.headers['Content-Security-Policy'])
+            self.assertEqual(response.status,302)
+            self.assertEqual(response.headers['Location'],'/#learning')
 
     async def test_demo_declares_work_readonly_and_allows_local_practice(self):
         for role in ('manager', 'director'):
@@ -308,19 +308,14 @@ class ProductionHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.app = web.Application()
         self.app[production.POOL] = self.pool
 
-    async def test_real_guard_preserves_sandbox_policy_for_both_roles(self):
-        mod = self.production
+    async def test_old_practice_links_redirect_to_normal_learning_for_both_roles(self):
+        mod=self.production
         for role,lesson in [('manager','m2'),('director','d3')]:
-            req = make_mocked_request('GET','/learning/practice?lesson='+lesson,app=self.app)
-            with patch.object(mod,'viewer',AsyncMock(return_value=who(role))), \
-                 patch.object(mod.company,'info',AsyncMock(return_value={'id':1,'modules':['contracts']})), \
-                 patch.object(mod.store,'zone',AsyncMock(return_value=ZoneInfo('Europe/Moscow'))):
-                response = await mod.guard(req,mod.learning_practice)
-            self.assertEqual(response.headers['X-Frame-Options'],'SAMEORIGIN')
-            self.assertIn("connect-src 'none'",response.headers['Content-Security-Policy'])
-            self.assertIn('sandbox allow-scripts',response.headers['Content-Security-Policy'])
+            req=make_mocked_request('GET','/learning/practice?lesson='+lesson,app=self.app)
+            with patch.object(mod,'viewer',AsyncMock(return_value=who(role))),patch.object(mod.company,'info',AsyncMock(return_value={'id':1,'modules':['contracts']})),patch.object(mod.store,'zone',AsyncMock(return_value=ZoneInfo('Europe/Moscow'))):
+                response=await mod.guard(req,mod.learning_practice)
+            self.assertEqual(response.status,302);self.assertEqual(response.headers['Location'],'/#learning')
         self.pool.execute.assert_not_awaited()
-        self.pool.fetch.assert_not_awaited()
 
     async def test_real_handler_rechecks_role_before_firm_or_db_access(self):
         mod = self.production
@@ -330,21 +325,14 @@ class ProductionHandlerTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(web.HTTPForbidden): await mod.api_learning_context(req)
         info.assert_not_awaited()
 
-    async def test_real_workspace_html_auth_context_and_network_policy(self):
-        mod = self.production
-        for role in ('manager', 'director'):
-            req = make_mocked_request('GET', '/learning/workspace', app=self.app,
-                                      headers={'Cookie': learning.ENTRY_COOKIE + '=synthetic-entry; crm_session=synthetic-session'})
-            with patch.object(mod, 'viewer', AsyncMock(return_value=who(role))), \
-                 patch.object(mod.company, 'info', AsyncMock(return_value={'id': 1, 'modules': ['contracts']})), \
-                 patch.object(mod.store, 'zone', AsyncMock(return_value=ZoneInfo('Europe/Moscow'))):
-                response = await mod.guard(req, mod.learning_workspace)
-            self.assertEqual(response.status, 200)
-            self.assertIn("connect-src 'none'", response.headers['Content-Security-Policy'])
-            self.assertIn("form-action 'none'", response.headers['Content-Security-Policy'])
-            self.assertIn('learning-workspace-context', response.text)
-            self.assertNotIn('synthetic-session', response.text)
-            self.assertNotIn('synthetic-entry', response.text)
+    async def test_old_workspace_redirects_without_classroom_bootstrap(self):
+        mod=self.production
+        for role in ('manager','director'):
+            req=make_mocked_request('GET','/learning/workspace',app=self.app)
+            with patch.object(mod,'viewer',AsyncMock(return_value=who(role))),patch.object(mod.company,'info',AsyncMock(return_value={'id':1,'modules':[]})),patch.object(mod.store,'zone',AsyncMock(return_value=ZoneInfo('Europe/Moscow'))):
+                response=await mod.guard(req,mod.learning_workspace)
+            self.assertEqual(response.status,302);self.assertEqual(response.headers['Location'],'/#learning')
+            self.assertNotIn('learning-workspace-context',response.text)
         self.pool.execute.assert_not_awaited()
 
     async def test_workspace_entry_cookie_reset_and_client_denied(self):
@@ -354,9 +342,8 @@ class ProductionHandlerTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(mod, 'learning_context', AsyncMock(return_value=data)):
             first = await mod.learning_enter(req)
             second = await mod.learning_enter(req)
-        self.assertNotEqual(first.cookies[learning.ENTRY_COOKIE].value, second.cookies[learning.ENTRY_COOKIE].value)
-        self.assertTrue(first.cookies[learning.ENTRY_COOKIE]['httponly'])
-        self.assertEqual(first.cookies[learning.ENTRY_COOKIE]['path'], '/learning')
+        self.assertEqual(first.headers['Location'],'/#learning');self.assertEqual(second.headers['Location'],'/#learning')
+        self.assertNotIn(learning.ENTRY_COOKIE,first.cookies)
         with patch.object(mod, 'viewer', AsyncMock(return_value=who('client'))), \
              patch.object(mod.company, 'info', AsyncMock()) as info:
             with self.assertRaises(web.HTTPForbidden): await mod.learning_workspace(req)
@@ -366,7 +353,7 @@ class ProductionHandlerTests(unittest.IsolatedAsyncioTestCase):
         app = self.production.build(self.pool)
         learning_routes = [route for route in app.router.routes() if 'learning' in route.resource.canonical]
         self.assertTrue(learning_routes)
-        self.assertTrue(all(route.method in {'GET','HEAD'} for route in learning_routes))
+        self.assertTrue(all(route.method in {'GET','HEAD'} or (route.method=='POST' and route.resource.canonical=='/api/learning/mode') for route in learning_routes))
         self.pool.execute.assert_not_awaited()
 
 class ExistingSurfaceTests(unittest.TestCase):

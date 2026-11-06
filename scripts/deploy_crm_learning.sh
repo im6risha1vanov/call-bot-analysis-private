@@ -45,8 +45,10 @@ health_release() {
     actual=$(curl --noproxy '*' --fail --silent --show-error --connect-timeout 2 --max-time 5 "http://127.0.0.1:8095/static/$path" | sha256sum | cut -d' ' -f1) || return 1
     [[ "$actual" == "$expected" ]] || return 1
   done < "$DIR/health.tsv"
-  code=$(curl --noproxy '*' --silent --show-error --max-time 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:8095/api/learning/context) || return 1
-  [[ "$code" == 200 || "$code" == 401 || "$code" == 403 ]]
+  while read -r path; do
+    code=$(curl --noproxy '*' --silent --show-error --max-time 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:8095$path") || return 1
+    [[ "$code" == 200 || "$code" == 401 || "$code" == 403 ]] || return 1
+  done < "$DIR/routes.txt"
 }
 rollback_code() {
   [[ $(git rev-parse HEAD) == "$TARGET" ]] || { echo 'Rollback stopped: HEAD changed.' >&2; return 1; }

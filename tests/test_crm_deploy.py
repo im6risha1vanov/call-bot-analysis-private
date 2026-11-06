@@ -89,10 +89,20 @@ class DeploymentTests(unittest.TestCase):
   collision=self.app/'crm/learning.py';collision.write_text('untracked content');self.assertNotEqual(self.run_deploy().returncode,0);self.assertEqual(collision.read_text(),'untracked content');self.assertEqual(self.git('rev-parse','HEAD').strip(),self.base);self.assertEqual(self.restarts(),[])
  def test_bad_asset_rolls_back_without_reset(self):
   self.configure(bad_asset=True);result=self.run_deploy();self.assertNotEqual(result.returncode,0);self.assertEqual(self.git('diff',self.base,'HEAD'),'');self.assertNotEqual(self.git('rev-parse','HEAD').strip(),self.base);self.assertTrue(self.git('log','-1','--format=%s').startswith('Rollback CRM learning'));self.assertEqual(self.restarts(),[['restart','callbot-crm.service']]*2);self.assert_private_state()
+ def test_missing_api_route_rolls_back(self):
+  self.configure(bad_route=True);result=self.run_deploy();self.assertNotEqual(result.returncode,0);self.assertEqual(self.git('diff',self.base,'HEAD'),'');self.assertEqual(len(self.restarts()),2);self.assert_private_state()
  def test_failed_restart_rolls_back(self):
   self.configure(fail_restart=True);result=self.run_deploy();self.assertNotEqual(result.returncode,0);self.assertEqual(self.git('diff',self.base,'HEAD'),'');self.assertEqual(len(self.restarts()),2);self.assert_private_state()
  def test_manual_rollback_and_dirty_rollback_guard(self):
   self.assertEqual(self.run_deploy().returncode,0);path=self.app/'crm/static/app.js';path.write_text('new user edit');self.assertNotEqual(self.run_deploy('rollback').returncode,0);self.assertEqual(path.read_text(),'new user edit');self.git('restore','crm/static/app.js');result=self.run_deploy('rollback');self.assertEqual(result.returncode,0,result.stderr);self.assertEqual(self.git('diff',self.base,'HEAD'),'');self.assert_private_state()
+ def test_explicit_base_is_validated_and_used(self):
+  oldroot=packager.ROOT;packager.ROOT=self.source
+  try:
+   dest=self.base_dir/'explicit';packager.package(dest,base=self.base)
+   self.assertEqual(json.loads((dest/'release.json').read_text())['base'],self.base)
+   with self.assertRaises(ValueError):packager.package(self.base_dir/'bad-base',base='not-a-commit')
+   self.assertFalse((self.base_dir/'bad-base').exists())
+  finally:packager.ROOT=oldroot
  def test_tampered_package_is_rejected(self):
   (self.release/'health.tsv').write_text('tampered');self.assertNotEqual(self.run_deploy().returncode,0);self.assertEqual(self.git('rev-parse','HEAD').strip(),self.base);self.assertEqual(self.restarts(),[])
 if __name__=='__main__':unittest.main()
