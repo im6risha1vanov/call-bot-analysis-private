@@ -13,6 +13,7 @@ from datetime import date
 
 from . import company
 from .cabinet import CALLBACK, INTERESTED, NOT_RELEVANT
+from .csv_cells import as_text
 from .store import parse_leads
 
 NO_ANSWER = 'НДЗ'
@@ -204,5 +205,6 @@ async def export_csv(pool, client_id: int, name: str) -> str:
     """Лист клиента в CSV с колонками таблицы «Прозвон лидов»: открывается в Google Таблицах и Excel."""
     await cc_client(pool, client_id, name)
     buf = io.StringIO()
-    csv.writer(buf).writerows(await DbSource(pool, client_id).rows(name))
+    rows = await DbSource(pool, client_id).rows(name)
+    csv.writer(buf).writerows([as_text(cell) for cell in row] for row in rows)
     return '﻿' + buf.getvalue()

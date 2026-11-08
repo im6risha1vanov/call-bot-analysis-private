@@ -80,6 +80,7 @@ EMPLOYEE_SYNC_INTERVAL_SEC = 24 * 3600
 POLL_OVERLAP_MIN = 3
 INITIAL_LOOKBACK_MIN = 60
 MAX_LOOKBACK_DAYS = 25
+STATS_PAGE_SIZE = 2000
 STATS_RESULT_MAX_ATTEMPTS = 10
 STATS_RESULT_RETRY_SEC = 2
 
@@ -101,10 +102,21 @@ def _employee_leg(call: dict) -> dict | None:
 
 
 async def _fetch_calls_window(vpbx_api_key: str, salt: str, start: datetime, end: datetime) -> list[dict]:
+    calls = []
+    while True:
+        page = await _fetch_calls_page(vpbx_api_key, salt, start, end, len(calls))
+        if len(page) == STATS_PAGE_SIZE and page == calls[-STATS_PAGE_SIZE:]:
+            raise RuntimeError("Mango stats/calls/result вернул ту же страницу")
+        calls.extend(page)
+        if len(page) < STATS_PAGE_SIZE:
+            return calls
+
+
+async def _fetch_calls_page(vpbx_api_key: str, salt: str, start: datetime, end: datetime, offset: int) -> list[dict]:
     fmt = "%d.%m.%Y %H:%M:%S"
     req = await mango_client.call("stats/calls/request", vpbx_api_key, salt, {
         "start_date": start.strftime(fmt), "end_date": end.strftime(fmt),
-        "limit": "2000", "offset": "0",
+        "limit": str(STATS_PAGE_SIZE), "offset": str(offset),
     })
     key = req.get("key")
     if not key:
@@ -115,8 +127,8 @@ async def _fetch_calls_window(vpbx_api_key: str, salt: str, start: datetime, end
         status = res.get("status")
         if status == "complete":
             data = res.get("data") or []
-            payload = (data[0] if data else {}) if isinstance(data, list) else data
-            return payload.get("list", [])
+            groups = data if isinstance(data, list) else [data]
+            return [call for group in groups for call in group.get("list", [])]
         if status in ("error", "not-found", "cancel"):
             raise RuntimeError(f"stats/calls/result статус={status}: {res}")
         await asyncio.sleep(STATS_RESULT_RETRY_SEC)

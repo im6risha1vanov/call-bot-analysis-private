@@ -14,6 +14,7 @@ from automatic import jobs,ui
 from combined import evaluation,render
 from comparison import transport
 from comparison.store import decode
+from methodology import runtime
 from reports import detail_button
 from tools import Actor,Forbidden
 from queue_runner import RetryLater
@@ -34,6 +35,10 @@ class AutomaticMenuTests(unittest.TestCase):
 @unittest.skipUnless(os.environ.get('METHODOLOGY_TEST_DATABASE_URL'),'Requires isolated PostgreSQL')
 class AutomaticPostgresTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        shadow = {**runtime.settings(), 'mode': 'shadow'}
+        self.enterContext(patch.object(runtime, 'settings', return_value=shadow))
+        self.enterContext(patch.object(jobs, 'enabled', side_effect=runtime.shadow_enabled))
+        self.enterContext(patch.dict(os.environ, {'CALL_REVIEW_MODE': 'legacy'}))
         await fixtures.ComparisonTests.asyncSetUp(self)
         await self.pool.execute('TRUNCATE astra_daily_spend')
         root=Path(__file__).resolve().parents[1]
@@ -66,6 +71,11 @@ class AutomaticPostgresTests(unittest.IsolatedAsyncioTestCase):
 
     async def task(self):
         return await self.pool.fetchrow("SELECT * FROM tasks WHERE type='automatic_combined_call' AND input->>'call_id'=$1",str(self.call_id))
+
+    async def analysis_task(self):
+        return await self.pool.fetchrow(
+            "INSERT INTO tasks(type,client_id,input) VALUES('analyze_call',1,$1::jsonb) RETURNING *",
+            json.dumps({'call_id': self.call_id}))
 
     async def fake(self,prompt,user,settings):
         self.requests.append((prompt,user,settings))
@@ -205,16 +215,21 @@ class AutomaticPostgresTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_original_pipeline_unchanged_message_routes_and_two_jobs(self):
         import handlers.analyze_call as original
-        call=await self.pool.fetchrow('SELECT * FROM calls WHERE id=$1',self.call_id)
         expected={'result':'Как раньше','good':[{'text':'Ясный вход'}],'weak':[]}
         fakebot=SimpleNamespace(send_message=AsyncMock())
-        score=AsyncMock(return_value=({'call_cut_short':False},80,'❌',[],5))
+        scores = fixtures.legacy_score()
+        failed = {'no_early_pitch', 'decision_influence', 'talk_share'}
+        for key, criterion in scores['criteria'].items():
+            criterion['passed'] = key not in failed
+        scores['signals'] = {'third_parties': [{'followed_up': False}]}
+        score=AsyncMock(return_value=(scores,80,'❌',[],5))
+        task = await self.analysis_task()
         with patch.object(original,'decrypt',return_value='synthetic'),patch.object(original.mango_client,'fetch_recording',AsyncMock(return_value=b'fake')),patch.object(original,'transcribe_bytes',AsyncMock(return_value=(TRANSCRIPT,90))),patch.object(original,'score_call',score),patch.object(original,'short_report_call',AsyncMock(return_value=(expected,2))),patch.object(original,'_bot',fakebot):
-            await original.analyze_call(self.pool,{'id':999,'input':json.dumps({'call_id':self.call_id})})
+            await original.analyze_call(self.pool,task)
         score.assert_awaited_once()
         fakebot.send_message.assert_not_awaited()
         self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM call_report_runs'),1)
-        types=await self.pool.fetch('SELECT type FROM tasks ORDER BY type')
+        types=await self.pool.fetch('SELECT type FROM tasks WHERE id<>$1 ORDER BY type', task['id'])
         self.assertEqual([r['type'] for r in types],['automatic_combined_call','evaluate_course','publish_call_report'])
         saved=await self.pool.fetchrow('SELECT * FROM astra_analysis WHERE call_id=$1',self.call_id)
         self.assertEqual(saved['score'],80);self.assertEqual(saved['level'],'❌')
@@ -240,17 +255,17 @@ class AutomaticPostgresTests(unittest.IsolatedAsyncioTestCase):
         fakebot=SimpleNamespace(send_message=AsyncMock())
         expected={'result':'Как раньше','good':[],'weak':[]}
         fake_score=AsyncMock(return_value=({'call_cut_short':False},80,'❌',[],5))
-        task={'id':999,'input':json.dumps({'call_id':self.call_id})}
+        task=await self.analysis_task()
         with patch.object(original,'decrypt',return_value='synthetic'),patch.object(original.mango_client,'fetch_recording',AsyncMock(return_value=b'fake')),patch.object(original,'transcribe_bytes',AsyncMock(return_value=(TRANSCRIPT,90))),patch.object(original,'score_call',fake_score),patch.object(original,'short_report_call',AsyncMock(return_value=(expected,2))),patch.object(original,'_bot',fakebot),patch.object(jobs,'enqueue',AsyncMock(side_effect=RuntimeError('synthetic sidecar DB failure'))):
             with self.assertRaises(RetryLater):await original.analyze_call(self.pool,task)
         self.assertEqual(fakebot.send_message.await_count,0)
         self.assertEqual(await self.pool.fetchval('SELECT status FROM astra_analysis WHERE call_id=$1',self.call_id),'analyzed')
-        self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM tasks'),1)
+        self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM tasks WHERE id<>$1', task['id']),1)
         with patch.object(original,'score_call',AsyncMock()) as paid,patch.object(original.mango_client,'fetch_recording',AsyncMock()) as download,patch.object(original,'_bot',fakebot):
             self.assertTrue((await original.analyze_call(self.pool,task))['cached'])
         paid.assert_not_awaited();download.assert_not_awaited()
         self.assertEqual(fakebot.send_message.await_count,0)
-        self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM tasks'),3)
+        self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM tasks WHERE id<>$1', task['id']),3)
         self.assertEqual(float(await self.pool.fetchval('SELECT sum(spent_units) FROM astra_daily_spend')),7)
 
     async def test_original_queue_progresses_during_combined_request(self):
@@ -262,21 +277,28 @@ class AutomaticPostgresTests(unittest.IsolatedAsyncioTestCase):
         async def slow(*args):
             entered.set();await release.wait();return await self.fake(*args)
         queue._REGISTRY['legacy_auto_test']=AsyncMock(return_value={'ok':True})
+        sidecar = None
         try:
             with patch.object(transport,'request',slow):
                 sidecar=asyncio.create_task(queue.run_once(self.pool,['automatic_combined_call']))
-                await entered.wait()
-                self.assertTrue(await queue.run_once(self.pool,['legacy_auto_test']))
+                await asyncio.wait_for(entered.wait(), timeout=10)
+                self.assertTrue(await asyncio.wait_for(queue.run_once(self.pool,['legacy_auto_test']), timeout=10))
                 self.assertEqual(await self.pool.fetchval('SELECT status FROM tasks WHERE id=$1',legacy_id),'done')
-                self.assertFalse(sidecar.done());release.set();await sidecar
+                self.assertFalse(sidecar.done());release.set()
+                await asyncio.wait_for(sidecar, timeout=10)
         finally:
-            release.set();queue._REGISTRY.pop('legacy_auto_test')
+            release.set()
+            if sidecar is not None and not sidecar.done():
+                sidecar.cancel()
+                await asyncio.gather(sidecar, return_exceptions=True)
+            queue._REGISTRY.pop('legacy_auto_test')
 
     async def test_no_verdict_no_message_and_no_combined_job(self):
         import handlers.analyze_call as original
         fakebot=SimpleNamespace(send_message=AsyncMock())
+        task = await self.analysis_task()
         with patch.object(original,'decrypt',return_value='synthetic'),patch.object(original.mango_client,'fetch_recording',AsyncMock(return_value=b'fake')),patch.object(original,'transcribe_bytes',AsyncMock(return_value=(TRANSCRIPT,90))),patch.object(original,'score_call',AsyncMock(return_value=({'call_cut_short':True},None,None,[],5))),patch.object(original,'short_report_call',AsyncMock(return_value=({},2))),patch.object(original,'_bot',fakebot):
-            await original.analyze_call(self.pool,{'id':999,'input':json.dumps({'call_id':self.call_id})})
+            await original.analyze_call(self.pool,task)
         fakebot.send_message.assert_not_awaited()
         self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM automatic_call_reports'),0)
 
@@ -295,11 +317,11 @@ class AutomaticPostgresTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('Разбор по методике курса',send.await_args.args[1]);self.assertIsNone(send.await_args.kwargs['parse_mode'])
         import demo_bot
         cq=cq.model_copy(update={'data':f'detail:astra:{self.call_id}'}).as_(telegram)
-        with patch.object(demo_bot,'PG_POOL',self.pool),patch.object(demo_bot,'review_call',AsyncMock(return_value=(fixtures.review(),2))) as review,patch.object(CallbackQuery,'answer',AsyncMock()) as ack,patch.object(Message,'edit_reply_markup',AsyncMock()) as edit,patch.object(Bot,'send_message',AsyncMock()) as send:
+        with patch.object(demo_bot,'PG_POOL',self.pool),patch.object(demo_bot,'review_call',AsyncMock(return_value=(fixtures.review(),2))) as review,patch.object(CallbackQuery,'answer',AsyncMock()) as ack,patch.object(Message,'edit_reply_markup',AsyncMock()) as edit,patch.object(Bot,'send_message',AsyncMock(return_value=SimpleNamespace(message_id=1))) as send:
             await demo_bot.detail_callback(cq)
         ack.assert_awaited_once();review.assert_not_awaited()
-        self.assertTrue(send.await_count >= 1)
-        self.assertIn('Расширенный обзор',send.await_args_list[0].args[1])
+        self.assertGreaterEqual(send.await_count, 2)
         self.assertIn('В старой кнопке нет номера запуска',send.await_args_list[0].args[1])
+        self.assertIn('Расширенный разбор',send.await_args_list[1].args[1])
         self.assertEqual(send.await_args.kwargs['reply_markup'].inline_keyboard[0][0].text,'К краткому разбору')
         await telegram.session.close()

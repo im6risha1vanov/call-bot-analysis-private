@@ -1,4 +1,5 @@
 """CRM: тестовые входы по ролям, очередь, итоги, звонок через Mango, кабинет клиента. Данные вымышленные."""
+import asyncio
 import copy
 import json
 import os
@@ -133,7 +134,8 @@ class DBCase(unittest.IsolatedAsyncioTestCase):
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS assigned_by_telegram_user_id BIGINT;""")
         for name in ('008_call_reviews.sql', '009_callback_tasks.sql', '012_prompt_versions.sql', '031_company_prompts.sql', '013_employee_invites.sql',
                      '014_crm.sql', '015_crm_roles.sql', '016_crm_access.sql', '017_crm_reports.sql', '018_crm_questions.sql',
-                     '019_crm_staff.sql', '020_robot.sql', '021_manager_memory.sql', '022_presentations.sql', '024_deals.sql', '025_contracts.sql', '026_presentation_client.sql', '027_sources.sql', '028_crm_logins.sql', '032_platform.sql', '033_callcenter.sql', '034_donor_agent.sql', '035_donor_rub.sql'):
+                     '019_crm_staff.sql', '020_robot.sql', '021_manager_memory.sql', '022_presentations.sql', '024_deals.sql', '025_contracts.sql', '026_presentation_client.sql', '027_sources.sql', '028_crm_logins.sql', '032_platform.sql', '033_callcenter.sql', '034_donor_agent.sql', '035_donor_rub.sql',
+                     '040_crm_outcome_callback.sql'):
             await self.pool.execute((root / 'migrations' / name).read_text())
         await self.pool.execute('TRUNCATE clients, crm_login_tokens, crm_sessions, crm_docs, crm_invites, crm_reports, crm_questions, '
                                 'employee_invites, manager_memory, deal_events, contracts, source_selections, donor_runs, donor_spend, prompt_active, prompt_versions, prompt_drafts, astra_daily_spend, robot_options CASCADE')
@@ -176,6 +178,53 @@ class StoreTests(DBCase):
             await store.outcome(self.pool, MANAGER, 1, '101', '79991234567', 'no_answer')
         q = await store.queue(self.pool, 1, '101', now=later + timedelta(hours=5))
         self.assertEqual([i['number'] for i in q['items']], ['79160001122'])
+
+    async def test_same_dial_no_answer_replay_does_not_spend_attempts(self):
+        number = '79990009001'
+        await store.add_leads(self.pool, 1, '101', number, None)
+        dial_id = await self.pool.fetchval(
+            """INSERT INTO crm_dials(client_id,extension,number,command_id,result)
+               VALUES(1,'101',$1,'synthetic-replay',1000) RETURNING id""", number)
+
+        async def no_answer(dial_id):
+            return await store.outcome(self.pool, MANAGER, 1, '101', number, 'no_answer', dial_id=dial_id)
+
+        results = await asyncio.gather(no_answer(dial_id), no_answer(dial_id), no_answer(dial_id))
+        self.assertEqual(results, [{'task_id': None}] * 3)
+        self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM crm_outcomes WHERE dial_id=$1', dial_id), 1)
+        self.assertEqual(await self.pool.fetchval('SELECT attempts FROM crm_leads WHERE number=$1', number), 1)
+
+        await store.outcome(self.pool, MANAGER, 1, '101', number, 'proposal', dial_id=dial_id)
+        await no_answer(dial_id)
+        self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM crm_outcomes WHERE dial_id=$1', dial_id), 3)
+
+        await no_answer(None)
+        await no_answer(None)
+        self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM crm_outcomes WHERE dial_id IS NULL'), 2)
+
+    async def test_callback_outcome_replay_preserves_task_and_finished_status(self):
+        number = '79990009001'
+        dial_id = await self.pool.fetchval(
+            """INSERT INTO crm_dials(client_id,extension,number,command_id,result)
+               VALUES(1,'101',$1,'synthetic-callback-replay',1000) RETURNING id""", number)
+        tomorrow = self.today() + timedelta(days=1)
+
+        async def save():
+            return await store.outcome(self.pool, MANAGER, 1, '101', number, 'callback',
+                                       'Синтетическая запись', tomorrow, time(10, 30), dial_id)
+
+        first, replay = await asyncio.gather(save(), save())
+        self.assertEqual(first, replay)
+        task_id = first['task_id']
+        self.assertIsNotNone(task_id)
+        await self.pool.execute("UPDATE callback_tasks SET status='done' WHERE id=$1", task_id)
+        self.assertEqual(await save(), first)
+        self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM crm_outcomes WHERE dial_id=$1', dial_id), 1)
+        self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM callback_tasks WHERE client_number=$1', number), 1)
+        self.assertEqual(await self.pool.fetchval('SELECT status FROM callback_tasks WHERE id=$1', task_id), 'done')
+
+        await store.outcome(self.pool, MANAGER, 1, '101', '79990009002', 'no_answer', dial_id=dial_id)
+        self.assertIsNone(await self.pool.fetchval("SELECT dial_id FROM crm_outcomes WHERE number='79990009002'"))
 
     async def test_callback_outcome_creates_task_and_survives_review(self):
         await store.add_leads(self.pool, 1, '101', '79990001122; Пётр; ООО Ромашка', None)
@@ -400,6 +449,7 @@ class WebTests(DBCase):
 
     async def asyncSetUp(self):
         await super().asyncSetUp()
+        self.enterContext(patch.dict(os.environ, {'CRM_DEMO_INSTANCE': '1'}))
         from aiohttp.test_utils import TestClient, TestServer
         from crm import web
         web.SECURE_COOKIE = False
@@ -583,6 +633,54 @@ class WebTests(DBCase):
         # сайт закрыли: /t/open больше не открывается
         self.assertEqual((await self.http.get('/t/open')).status, 404)
 
+    async def test_normal_instance_rejects_demo_links_and_existing_demo_sessions(self):
+        headers = {'X-CRM': '1'}
+        with patch.dict(os.environ, {'CRM_PUBLIC': '1', 'CRM_TEST_KEY': TEST_KEY}):
+            result = await self.http.post('/api/test/login', json={'key': 'open', 'role': 'director'}, headers=headers)
+            self.assertEqual(result.status, 200)
+            self.assertEqual((await self.http.get('/api/staff')).status, 200)
+
+            with patch.dict(os.environ, {'CRM_DEMO_INSTANCE': '0'}):
+                self.assertEqual((await self.http.get('/api/staff')).status, 401)
+                self.assertEqual((await self.http.get('/', allow_redirects=False)).status, 200)
+                for key in ('open', TEST_KEY):
+                    self.assertEqual((await self.http.get('/t/' + key)).status, 404)
+                    result = await self.http.get('/api/test/options', params={'key': key})
+                    self.assertEqual(result.status, 404)
+                    result = await self.http.post('/api/test/login', json={'key': key, 'role': 'director'}, headers=headers)
+                    self.assertEqual(result.status, 404)
+
+                self.http.session.cookie_jar.clear()
+                await self.director()
+                self.assertEqual((await self.http.get('/api/staff')).status, 200)
+
+    async def test_demo_does_not_receive_inbound_webhook_credentials(self):
+        root = Path(__file__).resolve().parents[1]
+        await self.pool.execute((root / 'migrations/030_automations.sql').read_text())
+        token = 'synthetic-webhook-regression'
+        spec = {'trigger': {'type': 'webhook.in'}, 'actions': []}
+        await self.pool.execute(
+            """INSERT INTO automations(client_id,name,enabled,spec,hook_token)
+               VALUES(1,'Тестовый сценарий',true,$1,$2)""",
+            json.dumps(spec), token)
+
+        with patch.dict(os.environ, {'CRM_PUBLIC': '1'}):
+            r = await self.http.post('/api/test/login', json={'key': 'open', 'role': 'director'},
+                                     headers={'X-CRM': '1'})
+            self.assertEqual(r.status, 200)
+            r = await self.http.get('/api/automations')
+            self.assertEqual(r.status, 200)
+            demo = (await r.json())['automations'][0]
+            self.assertFalse('hook' in demo, 'Demo response contains an inbound webhook capability')
+
+        await self.http.get('/test-exit')
+        await self.director()
+        r = await self.http.get('/api/automations')
+        self.assertEqual(r.status, 200)
+        live = (await r.json())['automations'][0]
+        self.assertEqual(live['hook'], f'/hook/{token}')
+        self.assertEqual(demo, {key: value for key, value in live.items() if key != 'hook'})
+
     async def test_director_docs(self):
         with patch.dict(os.environ, {'CRM_TEST_KEY': TEST_KEY}):
             await self.director()
@@ -676,6 +774,10 @@ class WebTests(DBCase):
             await self.director()
             r = await self.http.post('/api/access', json={'role': 'manager', 'person_ext': '101', 'ext': '102'}, headers=h)
             self.assertEqual(r.status, 200)
+            issued = await r.json()
+            self.assertEqual(issued['login'], 'pervyi')
+            self.assertRegex(issued['password'], r'^[a-z2-9]{4}-[a-z2-9]{4}-[a-z2-9]{4}$')
+            self.assertTrue(all('password' not in i for i in issued['invites']))
             r = await self.http.post('/api/access', json={'role': 'client', 'client': 'Кухни', 'login': 'kukhni', 'password': 'kitchen-2026'},
                                      headers=h)
             self.assertEqual(r.status, 200)
@@ -687,14 +789,15 @@ class WebTests(DBCase):
             listed = (await (await self.http.get('/api/access')).json())['invites']
             self.assertEqual([(i['role'], i['name'], i['login']) for i in listed], [('client', 'Кухни', 'kukhni'), ('manager', 'Первый', 'pervyi')])
             manager = next(i for i in listed if i['role'] == 'manager')
-            self.assertRegex(manager['password'], r'^[a-z2-9]{4}-[a-z2-9]{4}-[a-z2-9]{4}$')  # директор видит пароль
-            self.assertNotIn(manager['password'], str(await self.pool.fetch('SELECT * FROM crm_invites')))  # в базе его нет открытым
+            self.assertTrue(all('password' not in i for i in listed))
+            self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM crm_invites WHERE password_enc IS NOT NULL'), 0)
+            self.assertNotIn(issued['password'], str(await self.pool.fetch('SELECT * FROM crm_invites')))
             await self.http.get('/test-exit')
 
             # менеджер входит по логину и паролю: свой добавочный, звонить можно
             r = await self.http.post('/api/login', json={'login': 'pervyi', 'password': 'wrong-pass'}, headers=h)
             self.assertEqual((r.status, (await r.json())['error']), (400, 'Неверный логин или пароль.'))
-            r = await self.http.post('/api/login', json={'login': ' Pervyi ', 'password': manager['password']}, headers=h)
+            r = await self.http.post('/api/login', json={'login': ' Pervyi ', 'password': issued['password']}, headers=h)
             self.assertEqual(r.status, 200)
             self.assertIn('SameSite=Lax', r.headers['Set-Cookie'])
             me = await (await self.http.get('/api/me')).json()
@@ -707,6 +810,8 @@ class WebTests(DBCase):
             # директор меняет пароль: старый вход закрывается, новый пароль подходит
             got = await auth.account_change(self.pool, 1, manager['id'], login='luzin', password='new-secret-1')
             self.assertEqual((got['login'], got['password']), ('luzin', 'new-secret-1'))
+            self.assertTrue(all('password' not in i for i in await auth.invites(self.pool, 1)))
+            self.assertNotIn('password', await auth.account_change(self.pool, 1, manager['id']))
             self.assertEqual((await self.http.get('/api/me')).status, 401)
             r = await self.http.post('/api/login', json={'login': 'pervyi', 'password': 'new-secret-1'}, headers=h)
             self.assertEqual(r.status, 400)
@@ -1479,3 +1584,25 @@ class WebTests(DBCase):
         r = await self.http.get('/api/queue?ext=999')
         self.assertEqual(r.status, 403)
 
+    async def test_access_never_returns_stored_passwords(self):
+        from crypto_util import encrypt
+
+        password = await auth.account_create(self.pool, 1, 'manager', 'security.test', extension='101')
+        await self.pool.execute('UPDATE crm_invites SET password_enc=$1 WHERE login=$2',
+                                encrypt(password), 'security.test')
+
+        with patch.dict(os.environ, {'CRM_PUBLIC': '1'}):
+            r = await self.http.post('/api/test/login', json={'key': 'open', 'role': 'director'},
+                                     headers={'X-CRM': '1'})
+            self.assertEqual(r.status, 200)
+            r = await self.http.get('/api/access')
+            self.assertEqual(r.status, 200)
+            listed = (await r.json())['invites']
+            self.assertEqual([i['login'] for i in listed], ['security.test'])
+            self.assertFalse('password' in listed[0], 'Password was returned in a listing')
+
+        root = Path(__file__).resolve().parents[1]
+        await self.pool.execute((root / 'migrations/036_crm_clear_recoverable_passwords.sql').read_text())
+        self.assertIsNone(await self.pool.fetchval('SELECT password_enc FROM crm_invites WHERE login=$1', 'security.test'))
+        _, role = await auth.password_login(self.pool, 'security.test', password)
+        self.assertEqual(role, 'manager')

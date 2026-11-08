@@ -503,6 +503,26 @@ def layout(table: Table, sheet_id: int, grid_rows: int, grid_cols: int, old_rule
     return requests
 
 
+def replace_values(table: Table, sheet_id: int, grid_rows: int, grid_cols: int) -> dict:
+    def cell(value):
+        if value is None or value == '':
+            return {}
+        if isinstance(value, str):
+            kind = 'stringValue'
+        elif isinstance(value, bool):
+            kind = 'boolValue'
+        else:
+            kind = 'numberValue'
+        return {'userEnteredValue': {kind: value}}
+
+    # Google Sheets clears the unused portion of this range in the same operation.
+    return {'updateCells': {
+        'range': {'sheetId': sheet_id, 'endRowIndex': grid_rows, 'endColumnIndex': grid_cols},
+        'rows': [{'values': [cell(value) for value in row]} for row in table.rows],
+        'fields': 'userEnteredValue',
+    }}
+
+
 async def write(tables: list[Table], *, http=None, access_token=None) -> None:
     spreadsheet = os.environ['GOOGLE_SHEET_ID']
     access_token = access_token or await asyncio.to_thread(token)
@@ -549,11 +569,8 @@ async def write(tables: list[Table], *, http=None, access_token=None) -> None:
                                                  'startColumnIndex': 0, 'endColumnIndex': cols}}}
                      for sheet_id, rows, cols, _ in grid.values()])
         for table in tables:
-            response = await client.post(API + spreadsheet + f"/values/'{table.title}':clear", headers=headers, json={})
-            response.raise_for_status()
-            response = await client.put(API + spreadsheet + f"/values/'{table.title}'!A1", headers=headers,
-                                        params={'valueInputOption': 'RAW'}, json={'values': table.rows})
-            response.raise_for_status()
+            sheet_id, rows, cols, _ = grid[table.title]
+            await batch([replace_values(table, sheet_id, rows, cols)])
         await batch([request for table in tables for request in layout(table, *grid[table.title])])
 
 

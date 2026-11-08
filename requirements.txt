@@ -1,9 +1,14 @@
 aiogram>=3.7,<4
+aiohttp>=3.14.4,<4
 httpx>=0.27,<1
 python-dotenv>=1.0,<2
 asyncpg>=0.29,<1
-cryptography>=42,<44
+cryptography>=50,<51
 anthropic==1.4.0
 google-auth>=2.30,<3
 requests>=2.31,<3
 telethon>=1.36,<2
+# Security minimums for transitive dependencies used by HTTP and Google authentication.
+certifi>=2026.10.18
+multidict>=6.9.1
+pyasn1>=0.6.5

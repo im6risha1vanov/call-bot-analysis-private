@@ -129,7 +129,8 @@ class RendererTests(unittest.TestCase):
 class UnifiedPostgresTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         await automatic_tests.AutomaticPostgresTests.asyncSetUp(self)
-        await self.pool.execute("UPDATE astra_analysis SET short_report=$2::jsonb,level='❌' WHERE call_id=$1", self.call_id,
+        await self.pool.execute("UPDATE astra_analysis SET short_report=$2::jsonb,level='❌',updated_at=now(),"
+                                "immediate_sent_manager=false WHERE call_id=$1", self.call_id,
                                 json.dumps({'result': 'Согласовано КП', 'good': [], 'weak': []}))
         self.bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=42)),
                                    send_document=AsyncMock(return_value=SimpleNamespace(message_id=43)))
@@ -234,7 +235,8 @@ class UnifiedPostgresTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(await store.overview(self.pool, actor, row['id']))
 
     async def test_wait_uses_saved_auxiliary_and_timeout_delivers_only_once(self):
-        rid = await self.capture()
+        with patch('methodology.runtime.shadow_enabled', return_value=True):
+            rid = await self.capture()
         with self.assertRaises(RetryLater): await store.prepare(self.pool, rid)
         await self.pool.execute("UPDATE call_report_runs SET created_at=now()-interval '31 minutes' WHERE id=$1", rid)
         row = await store.prepare(self.pool, rid)
@@ -258,12 +260,17 @@ class UnifiedPostgresTests(unittest.IsolatedAsyncioTestCase):
         from handlers.evaluate_course import evaluate_course
         from handlers.publish_call_report import publish_call_report
         from automatic import jobs as automatic_jobs
+        from methodology import runtime as course_runtime
         from methodology import transport as course_transport
+        from unified.analysis_policy import enqueue
         from tests.test_methodology import response
         from tests.test_combined import combined_response
         before = await self.pool.fetchrow('SELECT * FROM astra_analysis WHERE call_id=$1', self.call_id)
-        task = {'id': 777, 'client_id': 1, 'input': json.dumps({'call_id': self.call_id})}
-        with patch.object(original, '_bot', self.bot), patch.object(original, 'score_call', AsyncMock()) as primary_paid:
+        with patch.object(course_runtime, 'settings', return_value={**course_runtime.settings(), 'mode': 'shadow'}), \
+                patch.object(automatic_jobs, 'enabled', return_value=True), \
+                patch.object(original, '_bot', self.bot), patch.object(original, 'score_call', AsyncMock()) as primary_paid:
+            await enqueue(self.pool, 1, self.call_id, 'synthetic-pipeline')
+            task = await self.pool.fetchrow("SELECT * FROM tasks WHERE type='analyze_call' AND dedup_key='synthetic-pipeline'")
             await original.analyze_call(self.pool, task)
             primary_paid.assert_not_awaited(); self.bot.send_message.assert_not_awaited()
             publishing = await self.pool.fetchrow("SELECT * FROM tasks WHERE type='publish_call_report'")
@@ -309,7 +316,7 @@ class UnifiedPostgresTests(unittest.IsolatedAsyncioTestCase):
     async def test_release_migrates_all_additive_tables_atomically_and_idempotently(self):
         from scripts import release_manager
         root = Path(__file__).resolve().parents[1]
-        files = sorted(str(p.relative_to(root)) for p in (root / 'migrations').glob('*.sql'))
+        files = sorted(p.relative_to(root).as_posix() for p in (root / 'migrations').glob('*.sql'))
         def saved_file(args, **kwargs): return (root / args[2].split(':', 1)[1]).read_bytes()
         before = await self.pool.fetch('SELECT * FROM astra_analysis ORDER BY call_id')
         with patch.object(release_manager, 'PROJECT', root), patch('dotenv.dotenv_values', return_value={'DATABASE_URL': os.environ['METHODOLOGY_TEST_DATABASE_URL']}), patch.object(release_manager, 'command', return_value='\n'.join(files)), patch.object(release_manager.subprocess, 'check_output', side_effect=saved_file):

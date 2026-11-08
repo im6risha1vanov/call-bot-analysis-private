@@ -30,11 +30,20 @@ class PolicyTests(unittest.TestCase):
    for tab in tabs:
     for step in tab['steps']:
      self.assertNotIn('expected',step);self.assertIn(step.get('example'),examples);self.assertNotIn('Борис',step['text']);self.assertNotIn('УЧ-001',step['text'])
- def test_operational_handlers_unchanged(self):
+ def test_operational_handlers_remain_isolated_from_learning(self):
   import subprocess
-  before=ast.parse(subprocess.check_output(['git','show','0ac0a55:crm/web.py'],cwd=ROOT,text=True));after=ast.parse((ROOT/'crm/web.py').read_text())
-  old={n.name:ast.dump(n) for n in before.body if isinstance(n,ast.AsyncFunctionDef)};new={n.name:ast.dump(n) for n in after.body if isinstance(n,ast.AsyncFunctionDef)}
-  for name in ['api_dial','api_outcome','api_task_change','api_deal_event','api_contracts_register','api_training_assign','api_robot_call']:self.assertEqual(old[name],new[name],name)
+  before = ast.parse(subprocess.check_output(['git', 'show', '0ac0a55:crm/web.py'], cwd=ROOT, text=True))
+  after = ast.parse((ROOT / 'crm/web.py').read_text())
+  old = {node.name: node for node in before.body if isinstance(node, ast.AsyncFunctionDef)}
+  new = {node.name: node for node in after.body if isinstance(node, ast.AsyncFunctionDef)}
+  # Manual robot calls now use the database connection to enforce the stop list.
+  call = next(node for node in ast.walk(old['api_robot_call']) if isinstance(node, ast.Call)
+              and isinstance(node.func, ast.Attribute) and node.func.attr == 'call'
+              and isinstance(node.func.value, ast.Name) and node.func.value.id == 'robot')
+  call.args.append(ast.parse('request.app[POOL]', mode='eval').body)
+  for name in ('api_dial', 'api_outcome', 'api_task_change', 'api_deal_event', 'api_contracts_register',
+               'api_training_assign', 'api_robot_call'):
+   self.assertEqual(ast.dump(old[name]), ast.dump(new[name]), name)
 class ServerTests(unittest.IsolatedAsyncioTestCase):
  async def asyncSetUp(self):
   env=patch.dict(os.environ,{'BOT_TOKEN':'123456:synthetic-test-token','TRAIN_BOT_TOKEN':'123456:synthetic-test-token','CVC_API_KEY':'synthetic-test-key','ANTHROPIC_API_KEY':'synthetic-test-key'},clear=True);dotenv=patch('dotenv.load_dotenv',return_value=False);env.start();dotenv.start();self.addCleanup(env.stop);self.addCleanup(dotenv.stop)

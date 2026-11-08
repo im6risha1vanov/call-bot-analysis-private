@@ -14,7 +14,7 @@ import httpx
 os.environ.setdefault('BOT_TOKEN', '1:test')
 os.environ.setdefault('CVC_API_KEY', 'test')
 
-from review import kitchen
+from review import kitchen, sheets
 
 DSN = os.environ.get('METHODOLOGY_TEST_DATABASE_URL')
 TALK = '[00:01 Спикер 0] Добрый день, кухни на заказ.\n[00:04 Спикер 1] Да, думаем в этом месяце.'
@@ -130,6 +130,56 @@ class SheetTests(unittest.TestCase):
 
 
 class WriteTests(unittest.IsolatedAsyncioTestCase):
+    async def test_sheet_refresh_preserves_previous_values_when_write_fails(self):
+        targets = ((sheets.write, 'GOOGLE_SHEET_ID', sheets.CALLS_SHEET),
+                   (kitchen.write, 'KITCHEN_SHEET_ID', kitchen.CALLS_TAB))
+        for write, env_key, title in targets:
+            with self.subTest(title=title):
+                table = sheets.Table(title, [100, 100, 100])
+                table.add(['=1+1', 2, False])
+                previous = [['previous report'], ['old extra row']]
+                values = previous
+                fail_write = True
+
+                def handler(request):
+                    nonlocal values
+                    if request.method == 'GET':
+                        return httpx.Response(200, json={'sheets': [{'properties': {
+                            'sheetId': 7, 'title': title, 'gridProperties': {'rowCount': 40, 'columnCount': 8}
+                        }}]})
+                    if request.url.path.endswith(':clear'):
+                        values = []
+                    if request.method == 'PUT':
+                        return httpx.Response(503)
+                    body = json.loads(request.content) if request.content else {}
+                    for item in body.get('requests', []):
+                        update = item.get('updateCells')
+                        if not update:
+                            continue
+                        self.assertEqual(update['range'], {
+                            'sheetId': 7, 'endRowIndex': 40, 'endColumnIndex': 8
+                        })
+                        self.assertEqual(update['fields'], 'userEnteredValue')
+                        self.assertEqual(update['rows'], [{'values': [
+                            {'userEnteredValue': {'stringValue': '=1+1'}},
+                            {'userEnteredValue': {'numberValue': 2}},
+                            {'userEnteredValue': {'boolValue': False}},
+                        ]}])
+                        if fail_write:
+                            return httpx.Response(503)
+                        values = table.rows
+                    return httpx.Response(200, json={})
+
+                with patch.dict(os.environ, {env_key: 'synthetic-sheet'}):
+                    with self.assertRaises(httpx.HTTPStatusError):
+                        await write([table], http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+                                    access_token='synthetic')
+                    self.assertEqual(values, previous)
+                    fail_write = False
+                    await write([table], http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+                                access_token='synthetic')
+                    self.assertEqual(values, table.rows)
+
     async def test_creates_own_tabs_and_never_touches_human_ones(self):
         seen, next_id = [], iter(range(100, 110))
 
@@ -221,7 +271,7 @@ class KitchenStoreTests(unittest.IsolatedAsyncioTestCase):
         async with self.pool.acquire() as conn:
             await kitchen.record(conn, talked, kitchen.decide(dict(READY), TALK), 3.0)
         await kitchen.record_missed(self.pool)
-        puts = {}
+        titles, updates = {}, {}
 
         def handler(request):
             if request.method == 'GET' and '/values/' in request.url.path:
@@ -229,18 +279,26 @@ class KitchenStoreTests(unittest.IsolatedAsyncioTestCase):
             if request.method == 'GET':
                 return httpx.Response(200, json=SHEETS)
             body = json.loads(request.content) if request.content else {}
-            if request.method == 'PUT':
-                puts[request.url.path.split('/values/')[1]] = body['values']
-            if 'addSheet' in str(body):
-                return httpx.Response(200, json={'replies': [{'addSheet': {'properties': {'sheetId': 50 + len(puts)}}}]})
+            for item in body.get('requests', []):
+                if 'addSheet' in item:
+                    sheet_id = 50 + len(titles)
+                    titles[sheet_id] = item['addSheet']['properties']['title']
+                    return httpx.Response(200, json={'replies': [{'addSheet': {'properties': {'sheetId': sheet_id}}}]})
+                if 'updateCells' in item:
+                    update = item['updateCells']
+                    title = titles[update['range']['sheetId']]
+                    updates[title] = [
+                        [next(iter(cell.get('userEnteredValue', {}).values()), '') for cell in row['values']]
+                        for row in update['rows']
+                    ]
             return httpx.Response(200, json={})
 
         factory = lambda **kw: httpx.AsyncClient(transport=httpx.MockTransport(handler))
         self.assertEqual(await kitchen.sync(self.pool, http_factory=factory, access_token='t'), 2)
-        row = puts["'Ольга · Звонки'!A1"][2]
+        row = updates['Ольга · Звонки'][2]
         self.assertEqual(row[:4], ['+79990001122', '1801', 'B3_кухонная гарнитура', '30.09.2026'])
         self.assertEqual(row[6:10], ['НДЗ', 'Заинтересованный', '', 160])
-        self.assertEqual(set(puts), {"'Ольга · Звонки'!A1", "'Ольга · Сводка'!A1", "'Ольга · По дням'!A1"})
+        self.assertEqual(set(updates), {'Ольга · Звонки', 'Ольга · Сводка', 'Ольга · По дням'})
         self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM lead_attempts WHERE written_at IS NULL'), 0)
         self.assertIsNotNone(missed)
 

@@ -3,7 +3,7 @@
 # Робот (распознавание, модель, голос) остаётся на этом сервере, на VPS только Asterisk.
 # Связь через постоянный SSH-туннель отсюда на VPS (юнит callbot-voice-relay):
 #   здесь 127.0.0.1:8088 -> ARI Asterisk на VPS (робот заказывает звонки как раньше),
-#   на VPS 127.0.0.1:9092 -> AudioSocket робота здесь (звук звонка идёт сюда).
+#   на VPS 127.0.0.1:9092 -> AudioSocket робота здесь (с pacer туннель слушает 9094).
 # Код робота не меняется.
 #
 # Запуск на этом сервере: bash scripts/voice_relay_setup.sh IP_VPS
@@ -16,6 +16,12 @@ ENV=/opt/callbot-astra/.env
 HERE=$(cd "$(dirname "$0")" && pwd)
 KEY=/root/.ssh/voice_relay
 SSH=(ssh -i "$KEY" -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ServerAliveInterval=30 "root@$VPS")
+RELAY_UNIT=/etc/systemd/system/callbot-voice-relay.service
+REMOTE_AUDIO_PORT=9092
+# voice_test.sh pacer оставляет 9092 за pacer и переносит туннель на 9094.
+if [[ -f "$RELAY_UNIT" && $(grep -F -- '-R 127.0.0.1:9094:127.0.0.1:9092 ' "$RELAY_UNIT") == *" root@$VPS" ]]; then
+  REMOTE_AUDIO_PORT=9094
+fi
 
 [ -f "$KEY" ] || ssh-keygen -q -t ed25519 -N "" -C voice-relay -f "$KEY"
 if ! "${SSH[@]}" true 2>/dev/null; then
@@ -33,14 +39,14 @@ grep -E '^(MANGO_SIP_LOGIN|MANGO_SIP_DOMAIN|MANGO_SIP_PASSWORD|VOICE_ARI_PASSWOR
   | "${SSH[@]}" 'umask 077; mkdir -p /etc/callbot-voice; cat > /etc/callbot-voice/env'
 "${SSH[@]}" 'VOICE_ENV=/etc/callbot-voice/env bash -s' < "$HERE/voice_sip_setup.sh"
 
-cat > /etc/systemd/system/callbot-voice-relay.service <<UNIT
+cat > "$RELAY_UNIT" <<UNIT
 [Unit]
 Description=voicebot: SSH tunnel to Asterisk on $VPS
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=/usr/bin/ssh -N -i $KEY -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -L 127.0.0.1:8088:127.0.0.1:8088 -R 127.0.0.1:9092:127.0.0.1:9092 root@$VPS
+ExecStart=/usr/bin/ssh -N -i $KEY -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -L 127.0.0.1:8088:127.0.0.1:8088 -R 127.0.0.1:$REMOTE_AUDIO_PORT:127.0.0.1:9092 root@$VPS
 Restart=always
 RestartSec=5
 

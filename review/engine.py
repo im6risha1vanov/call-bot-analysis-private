@@ -93,10 +93,11 @@ def validate(data: dict, transcript: str) -> dict:
     # Результат засчитывается только с подтверждающей репликой: иначе это
     # предположение модели, а пропустить провал хуже, чем придраться.
     confirmed = {e.get('outcome') for e in evidence}
-    outcome = [o for o in data.get('outcome') or [] if o in OUTCOMES and o in confirmed]
+    claimed = data.get('outcome') or []
+    outcome = [o for o in claimed if o in OUTCOMES and o in confirmed]
     # Готовый текст модели годится, только если его выводы прошли проверку;
     # иначе сообщение собирается из проверенных полей (render.manager_message).
-    unverified = bool(data.get('outcome')) and not outcome
+    unverified = len(outcome) != len(claimed)
     data.update(outcome=outcome, outcome_evidence=evidence, success=bool(outcome), reviewed=True)
     if outcome:
         data.update(chance=None, key_moment=None)
@@ -113,6 +114,8 @@ def validate(data: dict, transcript: str) -> dict:
     data['positives'] = [p for p in data.get('positives') or [] if isinstance(p, dict)
                          and (not p.get('quote') or quote_ok(p, data, lines))][:2]
     data['text_unverified'] = unverified
+    if unverified:
+        data['rop_line'] = None
     return data
 
 

@@ -67,7 +67,7 @@ class DBTests(unittest.IsolatedAsyncioTestCase):
         if not await self.pool.fetchval("SELECT to_regclass('clients') IS NOT NULL"):
             await self.pool.execute((root / 'tests/bootstrap.sql').read_text())
         await self.pool.execute('ALTER TABLE calls ADD COLUMN IF NOT EXISTS client_number TEXT')
-        for name in ('008_call_reviews.sql', '022_presentations.sql', '023_tg_chats.sql'):
+        for name in ('008_call_reviews.sql', '022_presentations.sql', '023_tg_chats.sql', '026_presentation_client.sql'):
             await self.pool.execute((root / 'migrations' / name).read_text())
         await self.pool.execute('TRUNCATE clients, tg_messages, astra_daily_spend CASCADE')
         await self.pool.execute("INSERT INTO clients VALUES(1,'Europe/Moscow',true)")

@@ -26,6 +26,9 @@ DSN = os.environ.get('METHODOLOGY_TEST_DATABASE_URL')
 @unittest.skipUnless(DSN, 'Requires a new isolated test database')
 class PostgreSQLTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        from methodology import runtime
+        settings = {**runtime.settings(), 'mode': 'shadow', 'training_enabled': True}
+        self.enterContext(patch.object(runtime, 'settings', return_value=settings))
         self.pool = await asyncpg.create_pool(DSN, min_size=1, max_size=5)
         name = await self.pool.fetchval('SELECT current_database()')
         self.assertTrue(name.startswith('callbot_methodology_test_'), 'Refusing any non-test database')
@@ -218,12 +221,15 @@ class PostgreSQLTests(unittest.IsolatedAsyncioTestCase):
         fake=SimpleNamespace(messages=SimpleNamespace(create=AsyncMock(side_effect=reply)))
         with patch.object(old.claude,'with_options',return_value=fake):
             first=asyncio.create_task(training.turn(self.pool,session,'Здравствуйте, я по ГЦК.'))
-            await entered.wait()
-            second=await training.turn(self.pool,session,'Ещё ответ')
-            stop=await training.turn(self.pool,session,stop=True)
-            self.assertIn('обрабатывается',second.note)
-            self.assertIn('обрабатывается',stop.note)
-            release.set(); await first
+            try:
+                await asyncio.wait_for(entered.wait(), timeout=5)
+                second=await training.turn(self.pool,session,'Ещё ответ')
+                stop=await training.turn(self.pool,session,stop=True)
+                self.assertIn('обрабатывается',second.note)
+                self.assertIn('обрабатывается',stop.note)
+            finally:
+                release.set()
+                await first
         self.assertEqual(fake.messages.create.await_count,1)
         row=await self.pool.fetchrow('SELECT * FROM training_sessions WHERE id=$1',session['id'])
         self.assertEqual(sum(t['role']=='manager' for t in json.loads(row['transcript'])),1)
@@ -277,10 +283,13 @@ class PostgreSQLTests(unittest.IsolatedAsyncioTestCase):
         fake=AsyncMock(side_effect=reply)
         with patch.object(transport,'request',fake):
             first=asyncio.create_task(self.handler(self.pool,self.task))
-            await entered.wait()
-            second=await self.handler(self.pool,self.task)
-            self.assertTrue(second['needs_review'])
-            release.set();await first
+            try:
+                await asyncio.wait_for(entered.wait(), timeout=5)
+                second=await self.handler(self.pool,self.task)
+                self.assertTrue(second['needs_review'])
+            finally:
+                release.set()
+                await first
         self.assertEqual(fake.await_count,1)
 
     async def test_repeat_changes_circumstances_and_fourth_session_is_allowed(self):
@@ -387,11 +396,14 @@ class PostgreSQLTests(unittest.IsolatedAsyncioTestCase):
         try:
             with patch.object(transport,'request',AsyncMock(side_effect=reply)):
                 course=asyncio.create_task(queue.run_once(self.pool,['evaluate_course']))
-                await entered.wait()
-                self.assertTrue(await queue.run_once(self.pool,['legacy_test']))
-                self.assertEqual(await self.pool.fetchval('SELECT status FROM tasks WHERE id=$1',legacy_id),'done')
-                self.assertFalse(course.done())
-                release.set();await course
+                try:
+                    await asyncio.wait_for(entered.wait(), timeout=5)
+                    self.assertTrue(await queue.run_once(self.pool,['legacy_test']))
+                    self.assertEqual(await self.pool.fetchval('SELECT status FROM tasks WHERE id=$1',legacy_id),'done')
+                    self.assertFalse(course.done())
+                finally:
+                    release.set()
+                    await course
         finally:
             queue._REGISTRY.pop('legacy_test')
 

@@ -33,7 +33,7 @@ def install(router,pool_getter):
             await message.answer('Не удалось открыть разбор. Результат сохранён; повторите /combined_analysis.')
 
     # cb:d:<id>:<n>; перезвоны (review/ui.py) тоже начинаются с cb:, но у них три части.
-    @router.callback_query(F.data.regexp(r'^cb:d:\d+:\d+$'))
+    @router.callback_query(F.data.regexp(r'^cb:[^:]*:[^:]*:[^:]*$'))
     async def callback(cq):
         await cq.answer()
         pool=pool_getter()

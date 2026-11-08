@@ -87,7 +87,8 @@ class ComparisonTests(unittest.IsolatedAsyncioTestCase):
 
     async def add_call(self,extension,when,*,status='analyzed',transcript=TRANSCRIPT,client=1,cut=False):
         cid=await self.pool.fetchval('INSERT INTO calls(client_id,extension,transcript,status,call_started_at,client_number) VALUES($1,$2,$3,$4,$5,$6) RETURNING id',client,extension,transcript,status,datetime.fromisoformat(when),'79990001122')
-        await self.pool.execute("INSERT INTO astra_analysis(call_id,score,level,analysis) VALUES($1,87,'✅',$2::jsonb)",cid,json.dumps({'call_cut_short':cut}))
+        await self.pool.execute("INSERT INTO astra_analysis(call_id,score,level,analysis,status) VALUES($1,87,'✅',$2::jsonb,'analyzed')",
+                                cid,json.dumps({'call_cut_short':cut}))
         return cid
 
     async def fake(self,prompt,user,params):

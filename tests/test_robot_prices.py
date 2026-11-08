@@ -3,6 +3,7 @@ import json
 import os
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from tests.test_crm import DBCase
@@ -247,10 +248,10 @@ class RefreshTest(DBCase):
                 return httpx.Response(200, json={'iamToken': 't1.iam'})
             seen.append(request.headers['authorization'])
             return httpx.Response(200, json={'skus': SKUS})
-        with tempfile.NamedTemporaryFile('w', suffix='.json') as f:
-            json.dump(key, f)
-            f.flush()
-            with patch.dict(os.environ, {'YANDEX_SA_KEY_FILE': f.name, 'YANDEX_GPT_API_KEY': 'y'}):
+        with tempfile.TemporaryDirectory() as directory:
+            key_file = Path(directory) / 'test-key.json'
+            key_file.write_text(json.dumps(key), encoding='utf-8')
+            with patch.dict(os.environ, {'YANDEX_SA_KEY_FILE': str(key_file), 'YANDEX_GPT_API_KEY': 'y'}):
                 async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as http:
                     self.assertEqual(len(await rp.yandex_skus(http)), len(SKUS))
         self.assertEqual(seen, [('aje1', 'aje2', rp.IAM_TOKENS), 'Bearer t1.iam'])

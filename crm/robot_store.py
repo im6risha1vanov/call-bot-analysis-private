@@ -26,6 +26,7 @@ from xml.etree import ElementTree
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from tools import Forbidden
+from .csv_cells import as_text
 from .dial import normalize
 from . import robot
 from .robot import OUTCOMES
@@ -303,29 +304,55 @@ async def delete_operator(pool, owner: str, op_id: str) -> None:
 PHONE_HEAD = ('тел', 'phone', 'номер')
 NAME_HEAD = ('имя', 'фио', 'name', 'клиент')
 NOTE_HEAD = ('комм', 'замет', 'note', 'comment', 'примеч')
+MAX_XLSX_XML = 8 * 1024 * 1024
+MAX_XLSX_CELLS = 1_000_000
+MAX_XLSX_COLUMN = 16_384
+
+
+class ExcelTreeBuilder(ElementTree.TreeBuilder):
+    def doctype(self, name, public_id, system_id):
+        raise ValueError('Файл Excel содержит неподдерживаемое объявление DTD.')
 
 
 def xlsx_rows(data: bytes) -> list[list[str]]:
     """Первый лист .xlsx без сторонних библиотек: общие строки и значения ячеек по порядку столбцов."""
     ns = {'m': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
     try:
-        book = zipfile.ZipFile(io.BytesIO(data))
+        with zipfile.ZipFile(io.BytesIO(data)) as book:
+            names = book.namelist()
+            sheets = sorted(n for n in names if re.fullmatch(r'xl/worksheets/sheet\d+\.xml', n))
+            sheet = sheets[0]
+            strings = 'xl/sharedStrings.xml'
+            parts = [sheet]
+            if strings in names:
+                parts.append(strings)
+            if sum(book.getinfo(name).file_size for name in parts) > MAX_XLSX_XML:
+                raise ValueError('Лист Excel слишком большой после распаковки.')
+            roots = {
+                name: ElementTree.fromstring(book.read(name), parser=ElementTree.XMLParser(target=ExcelTreeBuilder()))
+                for name in parts
+            }
         shared = []
-        if 'xl/sharedStrings.xml' in book.namelist():
-            for si in ElementTree.fromstring(book.read('xl/sharedStrings.xml')).findall('m:si', ns):
+        if strings in roots:
+            for si in roots[strings].findall('m:si', ns):
                 shared.append(''.join(t.text or '' for t in si.iter('{%s}t' % ns['m'])))
-        sheets = sorted(n for n in book.namelist() if re.fullmatch(r'xl/worksheets/sheet\d+\.xml', n))
-        root = ElementTree.fromstring(book.read(sheets[0]))
+        root = roots[sheet]
     except (zipfile.BadZipFile, KeyError, IndexError, ElementTree.ParseError):
         raise ValueError('Не получилось прочитать файл Excel. Сохраните его как .xlsx или .csv.')
     rows = []
+    cells_total = 0
     for row in root.iter('{%s}row' % ns['m']):
         cells = {}
         for c in row.findall('m:c', ns):
             ref = re.match(r'[A-Z]+', c.get('r', 'A'))
+            letters = ref[0] if ref else 'A'
+            if len(letters) > 3:
+                raise ValueError('Недопустимый столбец в файле Excel.')
             col = 0
-            for ch in ref.group(0) if ref else 'A':
+            for ch in letters:
                 col = col * 26 + ord(ch) - 64
+            if col > MAX_XLSX_COLUMN:
+                raise ValueError('Недопустимый столбец в файле Excel.')
             v = c.find('m:v', ns)
             if c.get('t') == 's' and v is not None:
                 value = shared[int(v.text)] if v.text and v.text.isdigit() and int(v.text) < len(shared) else ''
@@ -336,10 +363,15 @@ def xlsx_rows(data: bytes) -> list[list[str]]:
                 if re.fullmatch(r'\d+\.0', value):
                     value = value[:-2]
                 elif re.fullmatch(r'\d(\.\d+)?E\+\d+', value):  # номер, сохранённый числом
-                    value = str(int(float(value)))
+                    number = float(value)
+                    value = str(int(number)) if math.isfinite(number) else ''
             cells[col - 1] = value
         if cells:
-            rows.append([cells.get(i, '') for i in range(max(cells) + 1)])
+            width = max(cells) + 1
+            cells_total += width
+            if cells_total > MAX_XLSX_CELLS:
+                raise ValueError('В листе Excel слишком много ячеек.')
+            rows.append([cells.get(i, '') for i in range(width)])
     return rows
 
 
@@ -629,9 +661,12 @@ async def targets(pool, owner: str, campaign_id: int) -> list[dict]:
         campaign_id, owner)
     # номер внесли в стоп-лист после запуска: робот его пропустит на следующем шаге, показываем это сразу
     return [{'phone': r['phone'], 'name': r['name'], 'attempts': r['attempts'], 'done': r['done'] or r['stopped'],
-             'outcome': {**OUTCOMES, 'stop': 'В стоп-листе', 'error': 'Робот не смог позвонить'}.get(
+             'dispatching': r['outcome'] == 'dispatching',
+             'outcome': {**OUTCOMES, 'stop': 'В стоп-листе', 'error': 'Робот не смог позвонить',
+                         'uncertain': 'Вызов не подтверждён. Проверьте журнал звонков.'}.get(
                  r['outcome'] or ('stop' if r['stopped'] and not r['done'] else ''), r['outcome'] or ''),
-             'next_at': r['next_at'].isoformat(timespec='minutes') if r['next_at'] and not (r['done'] or r['stopped']) else None} for r in rows]
+             'next_at': r['next_at'].isoformat(timespec='minutes') if r['next_at'] and not (
+                 r['done'] or r['stopped'] or r['outcome'] == 'dispatching') else None} for r in rows]
 
 
 def in_window(c, now: datetime) -> bool:
@@ -697,7 +732,8 @@ def calls_csv(items: list[dict]) -> str:
     w = csv.writer(out, delimiter=';')
     w.writerow(['Дата', 'Телефон', 'Кампания', 'Статус', 'Длительность, с', 'Комментарий', 'Стоимость, ₽'])
     for c in items:
-        w.writerow([c['at'].replace('T', ' '), c['phone'], c['campaign'], c['outcome'], c['seconds'], c['comment'], c['cost']])
+        row = [c['at'].replace('T', ' '), c['phone'], c['campaign'], c['outcome'], c['seconds'], c['comment'], c['cost']]
+        w.writerow([as_text(cell) for cell in row])
     return '﻿' + out.getvalue()  # BOM: Excel открывает кириллицу без кракозябр
 
 

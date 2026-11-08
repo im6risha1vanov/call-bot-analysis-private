@@ -86,9 +86,10 @@ class StoreTests(unittest.IsolatedAsyncioTestCase):
         if not await self.pool.fetchval("SELECT to_regclass('clients') IS NOT NULL"):
             await self.pool.execute((root / 'tests/bootstrap.sql').read_text())
         await self.pool.execute("ALTER TABLE calls ADD COLUMN IF NOT EXISTS duration_seconds INTEGER DEFAULT 90; ALTER TABLE calls ADD COLUMN IF NOT EXISTS client_number TEXT; ALTER TABLE employees ADD COLUMN IF NOT EXISTS id BIGSERIAL")
-        for name in ('008_call_reviews.sql', '009_callback_tasks.sql', '011_review_copies.sql', '012_prompt_versions.sql', '031_company_prompts.sql'):
+        for name in ('008_call_reviews.sql', '009_callback_tasks.sql', '011_review_copies.sql', '012_prompt_versions.sql',
+                     '031_company_prompts.sql', '039_review_delivery.sql'):
             await self.pool.execute((root / 'migrations' / name).read_text())
-        await self.pool.execute('TRUNCATE clients, prompt_active, prompt_versions, prompt_drafts CASCADE')
+        await self.pool.execute('TRUNCATE clients, prompt_active, prompt_versions, prompt_drafts, astra_daily_spend CASCADE')
         await self.pool.execute("INSERT INTO clients VALUES(1,'Europe/Moscow',true)")
         await self.pool.execute("INSERT INTO employees VALUES(1,'101',123,'manager','Первый'),(1,'',900,'owner','Григорий'),(1,'head2',901,'head','Евгений')")
         self.bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=1)),
@@ -193,9 +194,10 @@ class StoreTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(engine, 'run', AsyncMock(side_effect=RuntimeError('Astra 500: сбой'))):
             call_id = await self.add_call(WON, CALLBACK)
             self.assertEqual(await store.deliver_now(self.pool, self.bot, call_id), {'copy': [901]})
-        notice, standard = [c.args[1] for c in self.bot.send_message.await_args_list]
-        self.assertIn('не сработал', notice)
-        self.assertIn('Astra 500', notice)
+        self.assertEqual(self.bot.send_message.await_count, 1)
+        standard = self.bot.send_message.await_args.args[1]
+        self.assertIn('не сработал', standard)
+        self.assertIn('Astra 500', standard)
         self.assertIn('Клиент согласился на созвон', standard)
 
     async def test_digests_one_answer_per_text_and_fallback(self):

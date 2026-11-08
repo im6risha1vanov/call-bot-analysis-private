@@ -207,7 +207,8 @@ class TenantIsolationTests(DBCase):
     async def test_second_company_sees_nothing_of_the_first(self):
         mango = patch('mango_client.fetch_recording', AsyncMock(return_value=(SECRET.encode(), 'audio/mpeg')))
         callback = patch('mango_client.callback', AsyncMock(return_value={'result': 1000}))
-        with mango, callback, patch.dict(os.environ, {'CRM_TEST_KEY': TEST_KEY, 'PROMPT_EDITORS': '902'}):
+        with mango, callback, patch.dict(os.environ, {'CRM_DEMO_INSTANCE': '1', 'CRM_TEST_KEY': TEST_KEY,
+                                                     'PROMPT_EDITORS': '902'}):
             leaks, self.statuses = [], []
             for who in ('director', 'manager', 'client'):
                 await self.enter(who)
@@ -530,6 +531,35 @@ class CallcenterDbTests(DBCase):
 @unittest.skipUnless(DSN, 'METHODOLOGY_TEST_DATABASE_URL не задан')
 class SwitchAccountTests(PlatformTests):
     """«Сменить учётку»: наша учётка platform входит в любую учётку без пароля и возвращается к себе."""
+
+    async def test_revoking_platform_account_rejects_both_delegated_sessions(self):
+        await self.login('grisha', 'grisha-pass-1')
+        origin = self.http.session.cookie_jar.filter_cookies(self.http.make_url('/'))['crm_session'].value
+        response = await self.http.post('/api/platform/companies', json={'name': 'Тестовый отдел', 'login': 'test-team'},
+                                        headers=self.H)
+        self.assertEqual(response.status, 200)
+        company_id = (await response.json())['id']
+        response = await self.http.post(f'/api/platform/companies/{company_id}/enter', json={}, headers=self.H)
+        self.assertEqual(response.status, 200)
+        support = self.http.session.cookie_jar.filter_cookies(self.http.make_url('/'))['crm_session'].value
+        target = await self.pool.fetchval("SELECT id FROM crm_invites WHERE login='test-team'")
+        self.http.session.cookie_jar.clear()
+        response = await self.http.post(f'/api/platform/accounts/{target}/switch', json={}, headers=self.H,
+                                        cookies={'crm_session': origin})
+        self.assertEqual(response.status, 200)
+        switched = self.http.session.cookie_jar.filter_cookies(self.http.make_url('/'))['crm_session'].value
+
+        self.http.session.cookie_jar.clear()
+        for token in (support, switched):
+            self.assertEqual((await self.http.get('/api/me', cookies={'crm_session': token})).status, 200)
+
+        sponsor = await self.pool.fetchval("SELECT id FROM crm_invites WHERE login='grisha'")
+        await auth.invite_revoke(self.pool, 1, sponsor)
+        self.http.session.cookie_jar.clear()
+        for kind, token in (('personal', origin), ('support', support), ('switched', switched)):
+            with self.subTest(session=kind):
+                response = await self.http.get('/api/me', cookies={'crm_session': token})
+                self.assertEqual(response.status, 401)
 
     async def test_switch_between_accounts_and_back(self):
         await self.login('boss', 'boss-pass-12')

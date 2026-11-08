@@ -377,11 +377,7 @@ async def write(tables: list[sheets.Table], *, http=None, access_token=None) -> 
                 grow.append({'unmergeCells': {'range': {'sheetId': sheet_id, 'startRowIndex': 0, 'endRowIndex': grid_rows,
                                                         'startColumnIndex': 0, 'endColumnIndex': grid_cols}}})
                 await batch(grow, sheet_id)
-            response = await client.post(sheets.API + spreadsheet + f"/values/'{title}':clear", headers=headers, json={})
-            response.raise_for_status()
-            response = await client.put(sheets.API + spreadsheet + f"/values/'{title}'!A1", headers=headers,
-                                        params={'valueInputOption': 'RAW'}, json={'values': table.rows})
-            response.raise_for_status()
+            await batch([sheets.replace_values(table, sheet_id, grid_rows, grid_cols)], sheet_id)
             await batch(sheets.layout(table, sheet_id, grid_rows, grid_cols, rules), sheet_id)
 
 

@@ -125,8 +125,10 @@ async def tasks(pool, client_id: int, ext: str) -> dict:
 
 async def change_task(pool, actor, client_id: int, ext: str, task_id: int, action: str,
                       due_date: date | None = None, due_time: time | None = None) -> None:
-    task = await pool.fetchrow('SELECT * FROM callback_tasks WHERE id=$1', task_id)
-    if task is None or task['client_id'] != client_id or task['extension'] != ext:
+    task = await pool.fetchrow(
+        'SELECT status, updated_at FROM callback_tasks WHERE id=$1 AND client_id=$2 AND extension=$3',
+        task_id, client_id, ext)
+    if task is None:
         raise Forbidden('Перезвон недоступен.')
     if task['status'] != 'open':
         raise ValueError('Перезвон уже закрыт.')
@@ -134,13 +136,20 @@ async def change_task(pool, actor, client_id: int, ext: str, task_id: int, actio
         tz = await zone(pool, client_id)
         if due_date is None or due_date < datetime.now(tz).date():
             raise ValueError('Выберите дату не раньше сегодняшней.')
-        await pool.execute(
+        changed = await pool.execute(
             """UPDATE callback_tasks SET due_date=$2, due_time=$3, date_is_estimate=false, retry_at=NULL,
-               reminded_at=NULL, updated_at=now() WHERE id=$1""", task_id, due_date, due_time)
+               reminded_at=NULL, updated_at=now()
+               WHERE id=$1 AND client_id=$4 AND extension=$5 AND status='open' AND updated_at=$6""",
+            task_id, due_date, due_time, client_id, ext, task['updated_at'])
     elif action in ('done', 'cancelled'):
-        await pool.execute('UPDATE callback_tasks SET status=$2, updated_at=now() WHERE id=$1', task_id, action)
+        changed = await pool.execute(
+            """UPDATE callback_tasks SET status=$2, updated_at=now()
+               WHERE id=$1 AND client_id=$3 AND extension=$4 AND status='open' AND updated_at=$5""",
+            task_id, action, client_id, ext, task['updated_at'])
     else:
         raise ValueError('Неизвестное действие.')
+    if changed != 'UPDATE 1':
+        raise ValueError('Перезвон уже закрыт или изменён. Обновите список.')
 
 
 def parse_leads(text: str) -> tuple[list[dict], list[str]]:
@@ -282,14 +291,21 @@ async def outcome(pool, actor, client_id: int, ext: str, number, kind: str, comm
     comment = (comment or '').strip()[:1000] or None
     async with pool.acquire() as conn, conn.transaction():
         if dial_id is not None and not await conn.fetchval(
-                'SELECT 1 FROM crm_dials WHERE id=$1 AND client_id=$2 AND extension=$3', dial_id, client_id, ext):
+                'SELECT 1 FROM crm_dials WHERE id=$1 AND client_id=$2 AND extension=$3 AND number=$4 FOR UPDATE',
+                dial_id, client_id, ext, target):
             dial_id = None
+        # Keep the last result of this dial when the browser repeats an identical save.
+        if dial_id is not None:
+            previous = await conn.fetchrow(
+                """SELECT outcome, comment, due_date, due_time, callback_task_id FROM crm_outcomes
+                   WHERE client_id=$1 AND number=$2 AND extension=$3 AND dial_id=$4
+                   ORDER BY id DESC LIMIT 1""", client_id, target, ext, dial_id)
+            if previous is not None and (
+                previous['outcome'], previous['comment'], previous['due_date'], previous['due_time']
+            ) == (kind, comment, due_date, due_time):
+                return {'task_id': previous['callback_task_id']}
         lead = await conn.fetchrow('SELECT * FROM crm_leads WHERE client_id=$1 AND extension=$2 AND number=$3 FOR UPDATE',
                                    client_id, ext, target)
-        await conn.execute(
-            """INSERT INTO crm_outcomes(client_id,extension,number,outcome,comment,due_date,due_time,dial_id,telegram_user_id)
-               VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)""",
-            client_id, ext, target, kind, comment, due_date, due_time, dial_id, actor.telegram_user_id)
         task_id = None
         if kind == 'no_answer':
             await conn.execute(
@@ -317,6 +333,11 @@ async def outcome(pool, actor, client_id: int, ext: str, number, kind: str, comm
             if lead:
                 await conn.execute(
                     'UPDATE crm_leads SET status=$2, attempts=0, next_at=NULL, updated_at=now() WHERE id=$1', lead['id'], kind)
+        await conn.execute(
+            """INSERT INTO crm_outcomes(client_id,extension,number,outcome,comment,due_date,due_time,dial_id,
+                                        telegram_user_id,callback_task_id)
+               VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)""",
+            client_id, ext, target, kind, comment, due_date, due_time, dial_id, actor.telegram_user_id, task_id)
     return {'task_id': task_id}
 
 

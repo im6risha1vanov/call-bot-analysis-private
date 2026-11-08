@@ -5,7 +5,10 @@ import json
 import logging
 import os
 import re
+from datetime import timedelta
 from zoneinfo import ZoneInfo
+
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 
 from tools import Forbidden, report_chat_ids
 from . import engine, render
@@ -118,66 +121,131 @@ async def copy_chat_ids(pool, client_id: int) -> list[int]:
     return list(dict.fromkeys(ids))
 
 
-async def deliver_now(pool, bot, call_id: int) -> dict:
-    """Сразу: менеджеру — потерянный шанс, РОПу — только горячий,
-    получателям из REVIEW_COPY_TO — полный текст каждого разбора с разговором.
-
-    Отметка ставится до отправки: при сбое между отправкой и записью лучше
-    недоставить, чем прислать дубль (то же правило, что в unified/store)."""
-    row = await load(pool, call_id)
-    if row is None:
-        return {}
+async def _delivery_targets(pool, row):
     plan = engine.immediate(row['data'])
-    sent = {}
+    targets = {}
     if plan['manager']:
         chat = await pool.fetchval(
             "SELECT telegram_user_id FROM employees WHERE client_id=$1 AND extension=$2 AND role='manager'",
             row['client_id'], row['extension'])
-        claimed = chat and await pool.fetchval(
-            'UPDATE call_reviews SET manager_sent_at=now() WHERE call_id=$1 AND manager_sent_at IS NULL RETURNING call_id', call_id)
-        if claimed:
-            try:
-                await bot.send_message(chat, render.manager_message(row['meta'], row['data']), parse_mode='HTML',
-                                       reply_markup=render.keyboard(call_id, train=bool(row['data'].get('key_moment'))))
-                sent['manager'] = chat
-            except Exception:
-                log.exception('разбор менеджеру не доставлен, call id=%s', call_id)
+        if chat:
+            targets['manager'] = [chat]
     copies = await copy_chat_ids(pool, row['client_id'])
     if copies and row['data'].get('reviewed'):
-        claimed = await pool.fetchval(
-            'UPDATE call_reviews SET copy_sent_at=now() WHERE call_id=$1 AND copy_sent_at IS NULL RETURNING call_id', call_id)
-        if claimed:
-            from . import prompts
-            for chat in copies:
-                # Личный промт из режима промта: свой разбор этого звонка; если сломался —
-                # причина и стандартная копия.
-                try:
-                    text, problem, cost = await prompts.personal_review(pool, row, chat)
-                    await prompts.add_spend(pool, row['client_id'], cost)
-                except Exception:
-                    log.exception('личный разбор не собран, call id=%s chat=%s', call_id, chat)
-                    text, problem = None, None
-                try:
-                    if problem:
-                        await bot.send_message(chat, f'⚠️ Ваш личный промт разбора не сработал на этом звонке: {problem}. '
-                                                     'Ниже стандартный разбор.', parse_mode=None)
-                    await bot.send_message(chat, text or render.details_message(row['meta'], row['data']), parse_mode='HTML')
-                    sent.setdefault('copy', []).append(chat)
-                except Exception:
-                    log.exception('копия разбора не доставлена, call id=%s chat=%s', call_id, chat)
+        targets['copy'] = copies
     if plan['rop']:
-        claimed = await pool.fetchval(
-            'UPDATE call_reviews SET rop_sent_at=now() WHERE call_id=$1 AND rop_sent_at IS NULL RETURNING call_id', call_id)
-        if claimed:
-            for chat in await report_chat_ids(pool, row['client_id']):
-                if chat in copies:
-                    continue  # уже получил полный разбор
-                try:
-                    await bot.send_message(chat, render.rop_message(row['meta'], row['data']), parse_mode='HTML',
-                                           reply_markup=render.keyboard(call_id))
-                    sent.setdefault('rop', []).append(chat)
-                except Exception:
-                    log.exception('разбор РОПу не доставлен, call id=%s chat=%s', call_id, chat)
+        targets['rop'] = [chat for chat in await report_chat_ids(pool, row['client_id']) if chat not in copies]
+    return targets
+
+
+async def _seed_deliveries(pool, call_id, targets):
+    # Legacy markers also protect historical deliveries and reviews created by backfill.
+    async with pool.acquire() as conn, conn.transaction():
+        for kind, recipients in targets.items():
+            claimed = await conn.fetchval(
+                f'UPDATE call_reviews SET {kind}_sent_at=now()'
+                f' WHERE call_id=$1 AND {kind}_sent_at IS NULL RETURNING call_id', call_id)
+            if claimed and recipients:
+                await conn.executemany(
+                    'INSERT INTO review_delivery(call_id,kind,recipient) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',
+                    [(call_id, kind, recipient) for recipient in recipients])
+
+
+async def _copy_text(pool, row, chat):
+    from . import prompts
+
+    try:
+        text, problem, cost = await prompts.personal_review(pool, row, chat)
+        await prompts.add_spend(pool, row['client_id'], cost)
+    except Exception:
+        log.exception('личный разбор не собран, call id=%s', row['call_id'])
+        text, problem = None, None
+    text = text or render.details_message(row['meta'], row['data'])
+    if problem:
+        notice = render.esc(problem)
+        fallback = f'⚠️ Ваш личный промт разбора не сработал: {notice}.\nНиже стандартный разбор.\n\n{text}'
+        if len(fallback) <= 4096:
+            text = fallback
+    return text
+
+
+async def _send_delivery(pool, bot, row, kind, recipient):
+    call_id = row['call_id']
+    entry = await pool.fetchrow(
+        """UPDATE review_delivery SET status='sending', attempts=attempts+1, updated_at=now()
+           WHERE call_id=$1 AND kind=$2 AND recipient=$3 AND status='pending' AND retry_at<=now()
+           RETURNING body, attempts""", call_id, kind, recipient)
+    if entry is None:
+        return False
+
+    keyboard = None
+    if kind == 'manager':
+        text = render.manager_message(row['meta'], row['data'])
+        keyboard = render.keyboard(call_id, train=bool(row['data'].get('key_moment')))
+    elif kind == 'rop':
+        text = render.rop_message(row['meta'], row['data'])
+        keyboard = render.keyboard(call_id)
+    else:
+        text = entry['body']
+        if text is None:
+            text = await _copy_text(pool, row, recipient)
+
+    status, error, delay = 'sent', None, timedelta()
+    try:
+        if keyboard is None:
+            await bot.send_message(recipient, text, parse_mode='HTML')
+        else:
+            await bot.send_message(recipient, text, parse_mode='HTML', reply_markup=keyboard)
+    except TelegramRetryAfter as exc:
+        error = type(exc).__name__
+        if entry['attempts'] < 5:
+            status, delay = 'pending', timedelta(seconds=max(1, exc.retry_after))
+        else:
+            status = 'failed'
+    except (TelegramBadRequest, TelegramForbiddenError) as exc:
+        status, error = 'failed', type(exc).__name__
+    except Exception as exc:
+        status, error = 'uncertain', type(exc).__name__
+
+    await pool.execute(
+        """UPDATE review_delivery SET status=$4, error=$5, retry_at=now()+$6::interval,
+                                      body=$7, updated_at=now()
+           WHERE call_id=$1 AND kind=$2 AND recipient=$3""", call_id, kind, recipient, status, error, delay,
+        text if kind == 'copy' and status == 'pending' else None)
+    if error:
+        log.warning('доставка разбора call id=%s kind=%s: %s (%s)', call_id, kind, status, error)
+    return status == 'sent'
+
+
+async def deliver_now(pool, bot, call_id: int) -> dict:
+    """Retry explicit Telegram throttles through the analysis job; ambiguous sends never replay."""
+    from queue_runner import RetryLater
+
+    row = await load(pool, call_id)
+    if row is None:
+        return {}
+    targets = await _delivery_targets(pool, row)
+    await _seed_deliveries(pool, call_id, targets)
+    sent = {}
+    for kind in ('manager', 'copy', 'rop'):
+        recipients = targets.get(kind, [])
+        await pool.execute(
+            """UPDATE review_delivery SET status='failed', error='Recipient removed', body=NULL, updated_at=now()
+               WHERE call_id=$1 AND kind=$2 AND status='pending' AND NOT (recipient=ANY($3::bigint[]))""",
+            call_id, kind, recipients)
+        for recipient in recipients:
+            if await _send_delivery(pool, bot, row, kind, recipient):
+                if kind == 'manager':
+                    sent[kind] = recipient
+                else:
+                    sent.setdefault(kind, []).append(recipient)
+
+    # A worker crash leaves 'sending' for reconciliation because Telegram has no delivery idempotency key.
+    pending = await pool.fetchval(
+        """SELECT GREATEST(min(retry_at)-now(), interval '1 second')
+           FROM review_delivery WHERE call_id=$1 AND status='pending' HAVING count(*)>0""", call_id)
+    if pending is not None:
+        raise RetryLater(pending, f'Telegram отложил доставку разбора, call id={call_id}', record_limit=False)
     return sent
 
 

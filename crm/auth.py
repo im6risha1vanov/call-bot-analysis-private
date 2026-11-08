@@ -17,7 +17,6 @@ import time
 from dataclasses import dataclass
 from datetime import timedelta
 
-import crypto_util
 from tools import Actor, home_client_id, resolve_actor
 
 TEST_TTL = timedelta(days=7)
@@ -51,15 +50,22 @@ def digest(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-PUBLIC_KEY = 'open'  # /t/open — выбор входа для всех, когда сайт открыт (CRM_PUBLIC=1 в .env)
+PUBLIC_KEY = 'open'
+
+
+def demo_instance() -> bool:
+    """Разрешать демо-входы только в отдельном экземпляре с тестовой базой."""
+    return os.getenv('CRM_DEMO_INSTANCE') == '1'
 
 
 def public_on() -> bool:
-    return os.getenv('CRM_PUBLIC') == '1'
+    return demo_instance() and os.getenv('CRM_PUBLIC') == '1'
 
 
 def test_key_ok(key: str | None) -> bool:
     """Тестовая ссылка или открытый сайт. Входы по ним только для просмотра (is_test)."""
+    if not demo_instance():
+        return False
     if key == PUBLIC_KEY:
         return public_on()
     expected = os.getenv('CRM_TEST_KEY') or ''
@@ -147,34 +153,33 @@ async def account_create(pool, client_id: int, role: str, login, extension=None,
         raise ValueError('Такой логин уже есть.')
     password = clean_password(password) if password else new_password()
     await invite_create(pool, client_id, role, extension, client_key, name, tg, login=login,
-                        password_hash=hash_password(password), password_enc=crypto_util.encrypt(password))
+                        password_hash=hash_password(password))
     return password
 
 
 async def account_change(pool, client_id: int, invite_id: int, login=None, password=None, new=False) -> dict:
     """Директор меняет логин и/или пароль (new — придумать новый). Со сменой пароля открытые входы закрываются."""
-    row = await pool.fetchrow('SELECT login FROM crm_invites WHERE id=$1 AND client_id=$2 AND login IS NOT NULL AND revoked_at IS NULL',
-                              invite_id, client_id)
-    if row is None:
-        raise ValueError('Учётной записи нет или доступ отозван.')
-    if login is not None and clean_login(login) != row['login']:
-        login = clean_login(login)
-        if not await login_free(pool, login):
-            raise ValueError('Такой логин уже есть.')
-        await pool.execute('UPDATE crm_invites SET login=$2 WHERE id=$1', invite_id, login)
-    if new or password:
-        password = new_password() if new else clean_password(password)
-        await pool.execute('UPDATE crm_invites SET password_hash=$2, password_enc=$3 WHERE id=$1',
-                           invite_id, hash_password(password), crypto_util.encrypt(password))
-        await pool.execute('DELETE FROM crm_sessions WHERE invite_id=$1', invite_id)
-    return next(i for i in await invites(pool, client_id) if i['id'] == invite_id)
-
-
-def _shown_password(enc: str | None) -> str | None:
-    try:
-        return crypto_util.decrypt(enc) if enc else None
-    except Exception:  # ключ шифрования сменили: пароль видно не будет, его можно задать заново
-        return None
+    async with pool.acquire() as conn, conn.transaction():
+        row = await conn.fetchrow(
+            """SELECT login FROM crm_invites
+               WHERE id=$1 AND client_id=$2 AND login IS NOT NULL AND revoked_at IS NULL FOR UPDATE""",
+            invite_id, client_id)
+        if row is None:
+            raise ValueError('Учётной записи нет или доступ отозван.')
+        if login is not None and clean_login(login) != row['login']:
+            login = clean_login(login)
+            if not await login_free(conn, login):
+                raise ValueError('Такой логин уже есть.')
+            await conn.execute('UPDATE crm_invites SET login=$2 WHERE id=$1', invite_id, login)
+        if new or password:
+            password = new_password() if new else clean_password(password)
+            await conn.execute('UPDATE crm_invites SET password_hash=$2, password_enc=NULL WHERE id=$1',
+                               invite_id, hash_password(password))
+            await conn.execute('DELETE FROM crm_sessions WHERE invite_id=$1', invite_id)
+        item = next(i for i in await invites(conn, client_id) if i['id'] == invite_id)
+    if password:
+        item['password'] = password
+    return item
 
 
 async def password_login(pool, login, password) -> tuple[str, str]:
@@ -185,16 +190,26 @@ async def password_login(pool, login, password) -> tuple[str, str]:
         raise ValueError('Слишком много неверных попыток. Подождите 10 минут.')
     row = await pool.fetchrow('SELECT id, password_hash FROM crm_invites WHERE lower(login)=$1 AND revoked_at IS NULL', login) \
         if login else None
-    if row is None or not password_ok(password, row['password_hash']):
+    if row is None:
+        raise ValueError('Неверный логин или пароль.')
+    # The database read yields to other attempts. Re-read the counter before
+    # checking the password and update it without yielding.
+    fails, until = _fails.get(login, (0, 0.0))
+    if until > time.monotonic():
+        raise ValueError('Слишком много неверных попыток. Подождите 10 минут.')
+    if not password_ok(password, row['password_hash']):
         fails += 1
         _fails[login] = (0, time.monotonic() + LOCK_SECONDS) if fails >= MAX_FAILS else (fails, 0.0)
         raise ValueError('Неверный логин или пароль.')
+    opened = await _open_session(pool, row['id'], login, row['password_hash'])
+    if opened is None:
+        raise ValueError('Неверный логин или пароль.')
     _fails.pop(login, None)
-    return await _open_session(pool, row['id'])
+    return opened
 
 
 async def invite_create(pool, client_id: int, role: str, extension=None, client_key=None, name=None, tg=None,
-                        login=None, password_hash=None, password_enc=None) -> str:
+                        login=None, password_hash=None) -> str:
     """Личная ссылка. Токен показываем один раз, в базе только хэш.
 
     tg — чья это ссылка директора: тогда в CRM он работает под своим Telegram ID
@@ -211,9 +226,9 @@ async def invite_create(pool, client_id: int, role: str, extension=None, client_
         tg_id, name = int(person['tg']), name or person['name']
     token = secrets.token_urlsafe(24)
     await pool.execute(
-        """INSERT INTO crm_invites(token_hash,role,client_id,extension,client_key,name,telegram_user_id,login,password_hash,password_enc)
-           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)""",
-        digest(token), role, client_id, extension, client_key, name, tg_id, login, password_hash, password_enc)
+        """INSERT INTO crm_invites(token_hash,role,client_id,extension,client_key,name,telegram_user_id,login,password_hash)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)""",
+        digest(token), role, client_id, extension, client_key, name, tg_id, login, password_hash)
     return token
 
 
@@ -226,27 +241,36 @@ async def invite_login(pool, token: str | None) -> tuple[str, str] | None:
     return None if invite_id is None else await _open_session(pool, invite_id)
 
 
-async def _open_session(pool, invite_id: int) -> tuple[str, str]:
-    row = await pool.fetchrow(
-        """UPDATE crm_invites SET last_used_at=now() WHERE id=$1
-           RETURNING id, role, client_id, extension, client_key, telegram_user_id""", invite_id)
+async def _open_session(pool, invite_id: int, login: str | None = None,
+                        password_hash: str | None = None) -> tuple[str, str] | None:
+    # Serialize session insertion and password reset on the same invite row.
     session = secrets.token_urlsafe(32)
-    await pool.execute(
-        """INSERT INTO crm_sessions(token_hash,telegram_user_id,expires_at,role,client_id,extension,client_key,is_test,invite_id)
-           VALUES($1,$8,now()+$2::interval,$3,$4,$5,$6,false,$7)""",
-        digest(session), PERSONAL_TTL, row['role'], row['client_id'], row['extension'], row['client_key'], row['id'],
-        row['telegram_user_id'])
+    async with pool.acquire() as conn, conn.transaction():
+        row = await conn.fetchrow(
+            """UPDATE crm_invites SET last_used_at=now() WHERE id=$1 AND revoked_at IS NULL
+                 AND lower(login) IS NOT DISTINCT FROM $2::text
+                 AND ($2 IS NULL OR password_hash=$3)
+               RETURNING id, role, client_id, extension, client_key, telegram_user_id""",
+            invite_id, login, password_hash)
+        if row is None:
+            return None
+        await conn.execute(
+            """INSERT INTO crm_sessions(token_hash,telegram_user_id,expires_at,role,client_id,extension,client_key,is_test,invite_id)
+               VALUES($1,$8,now()+$2::interval,$3,$4,$5,$6,false,$7)""",
+            digest(session), PERSONAL_TTL, row['role'], row['client_id'], row['extension'], row['client_key'], row['id'],
+            row['telegram_user_id'])
     return session, row['role']
 
 
 async def invites(pool, client_id: int) -> list[dict]:
     rows = await pool.fetch(
-        """SELECT i.*, e.full_name FROM crm_invites i
+        """SELECT i.id, i.role, i.extension, i.client_key, i.login, i.name,
+                  i.telegram_user_id, i.created_at, i.last_used_at, e.full_name
+           FROM crm_invites i
            LEFT JOIN employees e ON e.client_id=i.client_id AND e.extension=i.extension AND e.role='manager'
            WHERE i.client_id=$1 AND i.revoked_at IS NULL ORDER BY i.role, i.created_at""", client_id)
     fmt = lambda v: v.strftime('%Y-%m-%dT%H:%M:%S%z') if v else None  # noqa: E731
     return [{'id': r['id'], 'role': r['role'], 'ext': r['extension'], 'client': r['client_key'], 'login': r['login'],
-             'password': _shown_password(r['password_enc']),
              'name': r['name'] or r['full_name'] or r['client_key'] or '', 'tg': bool(r['telegram_user_id']),
              'created': fmt(r['created_at']),
              'used': fmt(r['last_used_at'])} for r in rows]
@@ -267,7 +291,11 @@ async def viewer_for(pool, session: str | None) -> Viewer | None:
     row = await pool.fetchrow(
         """UPDATE crm_sessions s SET last_seen_at=now() WHERE token_hash=$1 AND expires_at>now()
              AND (invite_id IS NULL OR EXISTS(SELECT 1 FROM crm_invites i WHERE i.id=s.invite_id AND i.revoked_at IS NULL))
-           RETURNING telegram_user_id, role, client_id, extension, client_key, is_test, invite_id, support_by""", digest(session))
+             AND (support_by IS NULL OR EXISTS(SELECT 1 FROM crm_invites i WHERE i.id=s.support_by
+                                               AND i.platform AND i.revoked_at IS NULL))
+             AND ($2 OR is_test IS NOT TRUE OR support_by IS NOT NULL)
+           RETURNING telegram_user_id, role, client_id, extension, client_key, is_test, invite_id, support_by""",
+        digest(session), demo_instance())
     if row is None:
         return None
     extra = {'support': row['support_by'] is not None, 'support_by': row['support_by'], 'invite_id': row['invite_id']}

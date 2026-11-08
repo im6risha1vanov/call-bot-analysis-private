@@ -1,8 +1,13 @@
 """Synthetic legacy data, in-memory database and fake providers only."""
 import asyncio
 import copy
+import hashlib
 import html
+import io
 import json
+from pathlib import Path
+import tarfile
+import tempfile
 import unittest
 from unittest.mock import AsyncMock, patch
 from types import SimpleNamespace
@@ -212,7 +217,27 @@ class PolicyTests(unittest.IsolatedAsyncioTestCase):
 class DeploymentTests(unittest.IsolatedAsyncioTestCase):
     def test_original_backup_verified_without_db(self):
         from scripts.apply_legacy_method import original_backup
-        self.assertEqual(str(original_backup()),policy.BACKUP)
+        with tempfile.TemporaryDirectory() as directory, patch.object(policy, 'BACKUP', directory):
+            folder = Path(directory)
+            archive = folder / 'current-source.tar.gz'
+            with tarfile.open(archive, 'w:gz') as bundle:
+                for number in range(100):
+                    content = b'# synthetic source\n'
+                    entry = tarfile.TarInfo(f'source/{number}.py')
+                    entry.size = len(content)
+                    bundle.addfile(entry, io.BytesIO(content))
+            manifest = folder / 'backup.json'
+            metadata = {'archive_sha256': hashlib.sha256(archive.read_bytes()).hexdigest(), 'files': 100}
+            manifest.write_text(json.dumps(metadata), encoding='utf-8')
+            self.assertEqual(original_backup(), folder)
+
+            manifest.write_text(json.dumps({**metadata, 'files': 99}), encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, 'Incomplete original backup'):
+                original_backup()
+            manifest.write_text(json.dumps(metadata), encoding='utf-8')
+            archive.write_bytes(b'synthetic corruption')
+            with self.assertRaisesRegex(ValueError, 'Original backup checksum mismatch'):
+                original_backup()
     def test_restart_three_required_services_only_and_check_trainer(self):
         from scripts import apply_legacy_method as deploy
         with patch.object(deploy,'state',return_value='active'), \

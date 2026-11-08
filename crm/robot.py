@@ -178,7 +178,7 @@ async def voices_clone(who, name: str, files: list[tuple[str, bytes]]) -> dict:
     return {'voice_id': voice_id, 'voices': speech._eleven_direct}
 
 
-async def call(who, phone, operator) -> dict:
+async def call(who, phone, operator, pool) -> dict:
     check(who, write=True)
     number = normalize(phone)
     if not number:
@@ -187,11 +187,14 @@ async def call(who, phone, operator) -> dict:
     operator = str(operator or 'kitchen')
     if operator not in known:
         raise ValueError('Нет такого сценария робота.')
+    # Ручной вызов из вкладки «Голос» относится к кабинету Averon (owner='').
+    if await pool.fetchval("SELECT 1 FROM robot_stoplist WHERE owner='' AND phone=$1", number):
+        raise ValueError('Номер в стоп-листе робота.')
     if time.monotonic() - _last_dial['at'] < DIAL_GAP_S:
         raise ValueError('Робот только что звонил. Подождите 20 секунд.')
     _last_dial['at'] = time.monotonic()
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
             r = await client.post(f'http://127.0.0.1:{api_port()}/dial', json={'phone': number, 'operator': operator})
     except httpx.HTTPError:
         _last_dial['at'] = 0.0
@@ -226,7 +229,9 @@ async def calls(who, limit: int = 30) -> list[dict]:
     rows = await asyncio.to_thread(_calls_tail, limit)
     return [{
         'at': r.get('at'), 'phone': r.get('phone'), 'operator': r.get('operator'),
-        'outcome': OUTCOMES.get(r.get('outcome'), r.get('outcome') or ''), 'good': r.get('outcome') in ('interested', 'callback'),
+        'outcome': ('Соединение не подтверждено' if r.get('error') == 'connection_unconfirmed'
+                    else OUTCOMES.get(r.get('outcome'), r.get('outcome') or '')),
+        'good': r.get('outcome') in ('interested', 'callback'),
         'transfer': bool(r.get('transfer')), 'comment': r.get('comment') or '', 'seconds': r.get('duration_s'),
         'facts': r.get('facts') or {}, 'error': r.get('error'),
         'transcript': [{'who': 'Робот' if who_ == 'robot' else 'Клиент' if who_ == 'client' else who_, 'text': text}

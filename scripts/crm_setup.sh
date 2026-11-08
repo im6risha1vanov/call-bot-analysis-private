@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # CRM (crm/): один сайт на этом сервере за Caddy с HTTPS, входы Директор / Менеджер / Клиент.
-# Входы: личные ссылки /p/... из раздела «Доступы» и тестовая https://DOMAIN/t/<CRM_TEST_KEY> с выбором роли.
+# Входы: личные ссылки /p/... из раздела «Доступы». Демо-входы требуют CRM_DEMO_INSTANCE=1
+# в отдельном экземпляре с синтетической БД и тестовыми интеграциями.
 # Запуск на сервере (root), из /opt/callbot-astra:
 #   bash scripts/crm_setup.sh check            — что занимает порты 80/443, есть ли Caddy, файрвол
 #   bash scripts/crm_setup.sh install [DOMAIN] — миграции CRM, сервис callbot-crm, Caddy, CRM_URL, тестовая ссылка
@@ -20,6 +21,7 @@
 #   bash scripts/crm_setup.sh gpt-check [dreamn] — AveronGPT: типовые вопросы директора, менеджера и клиента, ответы на экран (ничего не меняет)
 #   bash scripts/crm_setup.sh auto-agent-check [dreamn] — помощник «Автоматизаций»: типовые просьбы, ответы и черновики на экран (ничего не сохраняет)
 #   bash scripts/crm_setup.sh auto-status      — автоматизации: подключения, сценарии, запуски и ошибки за сутки, очередь событий (ничего не меняет)
+#   bash scripts/crm_setup.sh review-status    — состояния отправки уведомлений о разборах V2
 #   bash scripts/crm_setup.sh donor-check      — агент доноров: ключи, один поиск Яндекса, одна страница, вопрос моделям (в базу не пишет)
 #   bash scripts/crm_setup.sh yandex-key       — подключить yandex-sa-key.json (ключ сервисного аккаунта Яндекса для цены YandexGPT)
 #   bash scripts/crm_setup.sh rollback         — выключить сайт и убрать CRM_URL (таблицы CRM остаются, они ничему не мешают)
@@ -39,7 +41,9 @@ default_domain() {
 }
 
 new_key() { head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24; }
+demo_instance() { grep -qx 'CRM_DEMO_INSTANCE=1' .env; }
 test_link() {
+  if ! demo_instance; then return 0; fi
   local url key
   url=$(grep -m1 '^CRM_URL=' .env | cut -d= -f2- || true)
   key=$(grep -m1 '^CRM_TEST_KEY=' .env | cut -d= -f2- || true)
@@ -47,7 +51,7 @@ test_link() {
 }
 
 # Все миграции CRM; каждая только добавляет и повторный запуск ничего не ломает.
-migrate() { for f in migrations/014_crm.sql migrations/015_crm_roles.sql migrations/016_crm_access.sql migrations/017_crm_reports.sql migrations/018_crm_questions.sql migrations/019_crm_staff.sql migrations/020_robot.sql migrations/021_manager_memory.sql migrations/022_presentations.sql migrations/023_tg_chats.sql migrations/024_deals.sql migrations/025_contracts.sql migrations/026_presentation_client.sql migrations/027_sources.sql migrations/028_crm_logins.sql migrations/029_averongpt.sql migrations/030_automations.sql migrations/030_company_settings.sql migrations/031_company_prompts.sql migrations/032_platform.sql migrations/033_callcenter.sql migrations/034_donor_agent.sql migrations/035_donor_rub.sql; do
+migrate() { for f in migrations/014_crm.sql migrations/015_crm_roles.sql migrations/016_crm_access.sql migrations/017_crm_reports.sql migrations/018_crm_questions.sql migrations/019_crm_staff.sql migrations/020_robot.sql migrations/021_manager_memory.sql migrations/022_presentations.sql migrations/023_tg_chats.sql migrations/024_deals.sql migrations/025_contracts.sql migrations/026_presentation_client.sql migrations/027_sources.sql migrations/028_crm_logins.sql migrations/029_averongpt.sql migrations/030_automations.sql migrations/030_company_settings.sql migrations/031_company_prompts.sql migrations/032_platform.sql migrations/033_callcenter.sql migrations/034_donor_agent.sql migrations/035_donor_rub.sql migrations/036_crm_clear_recoverable_passwords.sql migrations/037_automation_webhook_key.sql migrations/038_automation_event_claim.sql migrations/039_review_delivery.sql migrations/040_crm_outcome_callback.sql; do
   psql "$DATABASE_URL" -q -v ON_ERROR_STOP=1 -f "$f"; done; }
 
 listeners() { ss -ltnpH "( sport = :80 or sport = :443 )" || true; }
@@ -69,7 +73,7 @@ install)
   git rev-parse HEAD > "$STATE/commit.before"
   cp .env "$STATE/env.before.$(date +%s)"
   migrate
-  grep -q '^CRM_TEST_KEY=' .env || echo "CRM_TEST_KEY=$(new_key)" >> .env
+  if demo_instance && ! grep -q '^CRM_TEST_KEY=' .env; then echo "CRM_TEST_KEY=$(new_key)" >> .env; fi
   cat > "$UNIT" <<UNIT
 [Unit]
 Description=Averon CRM for managers (crm/web.py)
@@ -149,12 +153,14 @@ test-link-off)
   echo 'test link is off; personal links keep working'
   ;;
 new-test-link)
+  demo_instance || { echo 'Демо-входы доступны только в отдельном тестовом экземпляре.' >&2; exit 1; }
   sed -i '/^CRM_TEST_KEY=/d' .env
   echo "CRM_TEST_KEY=$(new_key)" >> .env
   systemctl restart callbot-crm
   test_link
   ;;
 public-on)
+  demo_instance || { echo 'Публичный просмотр доступен только в отдельном тестовом экземпляре.' >&2; exit 1; }
   grep -q '^CRM_PUBLIC=1' .env || { sed -i '/^CRM_PUBLIC=/d' .env; echo 'CRM_PUBLIC=1' >> .env; }
   systemctl restart callbot-crm
   sleep 3
@@ -262,13 +268,29 @@ auto-status)
   q 'последние ошибки' "SELECT r.created_at::timestamp(0) AS at, a.name, r.status, r.attempts, s->>'type' AS action, s->>'error' AS error
      FROM automation_runs r JOIN automations a ON a.id=r.automation_id, jsonb_array_elements(r.steps) s
      WHERE r.status IN ('failed','retry','limit') AND s->>'error' IS NOT NULL ORDER BY r.id DESC LIMIT 10"
-  q 'очередь событий' "SELECT kind, count(*) FILTER (WHERE processed_at IS NULL) AS waiting, count(*) AS last_24h,
-     max(created_at)::timestamp(0) AS last FROM automation_events WHERE created_at > now() - interval '24 hours' GROUP BY 1 ORDER BY 1"
+  q 'очередь событий' "SELECT kind, count(*) FILTER (WHERE claimed_at IS NULL AND processed_at IS NULL) AS waiting,
+     count(*) FILTER (WHERE claimed_at IS NOT NULL AND processed_at IS NULL) AS unconfirmed,
+     count(*) FILTER (WHERE created_at > now() - interval '24 hours') AS last_24h,
+     max(created_at)::timestamp(0) AS last FROM automation_events
+     WHERE processed_at IS NULL OR created_at > now() - interval '24 hours' GROUP BY 1 ORDER BY 1"
+  q 'события без подтверждения старше 15 минут' "SELECT id, client_id, automation_id, kind, claimed_at
+     FROM automation_events WHERE processed_at IS NULL AND claimed_at < now() - interval '15 minutes'
+     ORDER BY claimed_at LIMIT 50"
+  q 'повторы без подтверждения' "SELECT id, client_id, automation_id, event_id, attempts, created_at
+     FROM automation_runs WHERE status='retry' AND retry_at IS NULL ORDER BY created_at LIMIT 50"
   q 'расход за месяц' "SELECT month, runs FROM automation_usage ORDER BY month DESC LIMIT 2"
   journalctl -u callbot-crm --since '24 hours ago' --no-pager 2>/dev/null | grep -i 'автоматизац' | tail -5 || true
   ;;
+review-status)
+  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -P pager=off \
+    -c "SELECT status, count(*) FROM review_delivery GROUP BY status ORDER BY status" \
+    -c "SELECT call_id, kind, status, attempts, retry_at, updated_at
+        FROM review_delivery WHERE status IN ('pending', 'sending', 'uncertain')
+          OR (status = 'failed' AND updated_at > now() - interval '24 hours')
+        ORDER BY updated_at LIMIT 50"
+  ;;
 accounts)
-  # Пароли видно только здесь и в «Доступах» у директора; в базе — хэш и зашифрованная копия.
+  # Новые пароли выдаются один раз, в базе сохраняются хэши.
   DATABASE_URL="$DATABASE_URL" .venv/bin/python - <<'PY'
 import asyncio, os
 import asyncpg
@@ -357,7 +379,7 @@ yandex-key)
   ;;
 status)
   git log -1 --oneline
-  grep -q '^CRM_PUBLIC=1' .env && echo 'public view-only: ON' || echo 'public view-only: off'
+  if demo_instance && grep -q '^CRM_PUBLIC=1' .env; then echo 'public view-only: ON'; else echo 'public view-only: off'; fi
   grep '^CRM_URL=' .env || echo 'CRM_URL not set'
   systemctl is-active callbot-crm caddy || true
   URL=$(grep -m1 '^CRM_URL=' .env | cut -d= -f2- || true)

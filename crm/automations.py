@@ -17,6 +17,7 @@ automation_events триггер базы (migrations/030_automations.sql); вх
 from __future__ import annotations
 
 import asyncio
+from hashlib import sha256
 import json
 import logging
 import re
@@ -38,6 +39,7 @@ RATE_MAX = 30  # запусков одного сценария в минуту,
 MAX_ACTIONS = 10
 MAX_CONDITIONS = 10
 MAX_HOOK_BYTES = 64_000
+HOOK_KEY_PATTERN = re.compile(r'[!-~]{1,128}')
 CODE_TTL = timedelta(hours=24)
 TG_PREFIX = 'aut_'
 TG_CODE = re.compile(r'aut_([A-Za-z0-9]{12,40})')
@@ -361,22 +363,23 @@ async def delete_account(pool, client_id: int, account_id: int) -> dict:
 
 # --- Сценарии -------------------------------------------------------------------------------------
 
-def automation_view(row, accs: dict[int, dict]) -> dict:
+def automation_view(row, accs: dict[int, dict], *, include_hook: bool = True) -> dict:
     spec = json.loads(row['spec']) if isinstance(row['spec'], str) else row['spec']
     out = {'id': row['id'], 'name': row['name'], 'enabled': row['enabled'], 'spec': spec,
            'text': describe(spec, accs), 'paused_reason': row['paused_reason']}
-    if spec['trigger']['type'] == 'webhook.in':
+    if include_hook and spec['trigger']['type'] == 'webhook.in':
         out['hook'] = f'/hook/{row["hook_token"]}'
     return out
 
 
-async def overview(pool, client_id: int) -> dict:
+async def overview(pool, client_id: int, *, include_hooks: bool = True) -> dict:
     accs = await accounts(pool, client_id)
     rows = await pool.fetch('SELECT * FROM automations WHERE client_id=$1 ORDER BY id', client_id)
     month = datetime.now(timezone.utc).strftime('%Y-%m')
     runs = await pool.fetchval('SELECT runs FROM automation_usage WHERE client_id=$1 AND month=$2', client_id, month)
     lim = await pool.fetchrow('SELECT * FROM automation_limits WHERE client_id=$1', client_id)
-    return {'automations': [automation_view(r, accs) for r in rows], 'accounts': list(accs.values()),
+    return {'automations': [automation_view(r, accs, include_hook=include_hooks) for r in rows],
+            'accounts': list(accs.values()),
             'usage': {'month': month, 'runs': runs or 0, 'active': sum(r['enabled'] for r in rows),
                       'max_runs_month': lim and lim['max_runs_month'], 'max_active': lim and lim['max_active']},
             'catalog': catalog()}
@@ -643,19 +646,23 @@ async def handle(pool, ev) -> None:
         await fire(pool, auto, ev['id'], ev['kind'], payload)
 
 
-async def take_events(pool) -> list:
-    return await pool.fetch(
-        """UPDATE automation_events SET processed_at=now() WHERE id IN (
-             SELECT id FROM automation_events WHERE processed_at IS NULL ORDER BY id LIMIT $1 FOR UPDATE SKIP LOCKED)
-           RETURNING *""", BATCH)
+async def take_event(pool):
+    return await pool.fetchrow(
+        """UPDATE automation_events SET claimed_at=now() WHERE id = (
+             SELECT id FROM automation_events WHERE processed_at IS NULL AND claimed_at IS NULL
+             ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED)
+           RETURNING *""")
 
 
 async def retry_due(pool) -> None:
-    rows = await pool.fetch(
-        """UPDATE automation_runs SET retry_at=NULL WHERE id IN (
-             SELECT id FROM automation_runs WHERE status='retry' AND retry_at <= now() ORDER BY retry_at LIMIT $1
-             FOR UPDATE SKIP LOCKED) RETURNING *""", BATCH)
-    for run in rows:
+    for _ in range(BATCH):
+        # Убираем время только у запуска, который сейчас берём в работу.
+        run = await pool.fetchrow(
+            """UPDATE automation_runs SET retry_at=NULL WHERE id = (
+                 SELECT id FROM automation_runs WHERE status='retry' AND retry_at <= now()
+                 ORDER BY retry_at, id LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING *""")
+        if run is None:
+            break
         auto = await pool.fetchrow('SELECT * FROM automations WHERE id=$1', run['automation_id'])
         if auto is None or not auto['enabled']:
             await pool.execute("UPDATE automation_runs SET status='failed' WHERE id=$1", run['id'])
@@ -684,24 +691,32 @@ async def schedule(pool, now: datetime | None = None) -> None:
         tz = ZoneInfo(r['tz'])
         local = now.astimezone(tz)
         spec = json.loads(r['spec']) if isinstance(r['spec'], str) else r['spec']
-        if local.strftime('%H:%M') < spec['trigger']['time'] or r['last_fired'] == local.date().isoformat():
-            continue
         day = local.date().isoformat()
-        if await pool.fetchval(
-                """UPDATE automations SET last_fired=$2 WHERE id=$1 AND last_fired IS DISTINCT FROM $2 RETURNING id""",
-                r['id'], day):
-            payload = {'date': day, 'day': await day_stats(pool, r['client_id'], tz, local.date())}
-            await pool.execute(
-                """INSERT INTO automation_events(client_id, kind, automation_id, payload) VALUES($1,'schedule.daily',$2,$3)""",
-                r['client_id'], r['id'], json.dumps(plain(payload), ensure_ascii=False))
+        if local.strftime('%H:%M') < spec['trigger']['time'] or (r['last_fired'] or '') >= day:
+            continue
+        payload = {'date': day, 'day': await day_stats(pool, r['client_id'], tz, local.date())}
+        await pool.execute(
+            """WITH scheduled AS (
+                 UPDATE automations SET last_fired=$2 WHERE id=$1 AND enabled AND spec=$4::jsonb
+                     AND (last_fired IS NULL OR last_fired < $2)
+                 RETURNING client_id, id
+               )
+               INSERT INTO automation_events(client_id, kind, automation_id, payload)
+               SELECT client_id, 'schedule.daily', id, $3 FROM scheduled""",
+            r['id'], day, json.dumps(plain(payload), ensure_ascii=False), json.dumps(spec, ensure_ascii=False))
 
 
 async def tick(pool) -> None:
     await schedule(pool)
-    for ev in await take_events(pool):
+    for _ in range(BATCH):
+        ev = await take_event(pool)
+        if ev is None:
+            break
         try:
             await handle(pool, ev)
+            await pool.execute('UPDATE automation_events SET processed_at=now() WHERE id=$1', ev['id'])
         except Exception:
+            # Отправка могла завершиться до ошибки. Не повторяем событие вслепую.
             log.exception('автоматизация: событие %s', ev['id'])
     await retry_due(pool)
 
@@ -756,20 +771,40 @@ async def test_run(pool, client_id: int, automation_id: int) -> dict:
             'payload': payload, 'steps': steps}
 
 
-async def incoming(pool, token: str, raw: bytes) -> bool:
-    """Вебхук от другой системы. False — такого включённого сценария нет."""
+class WebhookKeyConflict(ValueError):
+    pass
+
+
+async def incoming(pool, token: str, raw: bytes, *, delivery_key: str | None = None) -> bool:
+    """Поставить событие в очередь или подтвердить повтор с тем же ключом и данными."""
     if len(raw) > MAX_HOOK_BYTES:
         raise ValueError('Слишком большой запрос.')
     auto = await pool.fetchrow("SELECT id, client_id FROM automations WHERE hook_token=$1 AND enabled", token)
     if auto is None:
         return False
+    if delivery_key is not None and not HOOK_KEY_PATTERN.fullmatch(delivery_key):
+        raise ValueError('Некорректный Idempotency-Key.')
     try:
         data = json.loads(raw or b'{}')
     except ValueError:
         data = {'text': raw.decode('utf-8', 'replace')}
     if not isinstance(data, dict):
         data = {'items': data}
-    await pool.execute(
-        "INSERT INTO automation_events(client_id, kind, automation_id, payload) VALUES($1,'webhook.in',$2,$3)",
-        auto['client_id'], auto['id'], json.dumps({'data': data}, ensure_ascii=False))
+    payload = json.dumps({'data': data}, ensure_ascii=False)
+    if delivery_key is None:
+        await pool.execute(
+            "INSERT INTO automation_events(client_id, kind, automation_id, payload) VALUES($1,'webhook.in',$2,$3)",
+            auto['client_id'], auto['id'], payload)
+        return True
+
+    key = sha256(delivery_key.encode('ascii')).hexdigest()
+    event = await pool.fetchval(
+        """INSERT INTO automation_events(client_id, kind, automation_id, payload, webhook_key)
+           VALUES($1,'webhook.in',$2,$3,$4)
+           ON CONFLICT (client_id, automation_id, webhook_key) WHERE webhook_key IS NOT NULL DO NOTHING
+           RETURNING id""", auto['client_id'], auto['id'], payload, key)
+    if event is None and not await pool.fetchval(
+            """SELECT payload = $3::jsonb FROM automation_events
+               WHERE client_id=$1 AND automation_id=$2 AND webhook_key=$4""", auto['client_id'], auto['id'], payload, key):
+        raise WebhookKeyConflict('Этот Idempotency-Key уже использован для другого события.')
     return True

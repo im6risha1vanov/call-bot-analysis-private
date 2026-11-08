@@ -2,6 +2,7 @@
 
 Робот подменён маленьким HTTP-сервером (/status, /dial), его журнал звонков — временным файлом.
 """
+import asyncio
 import base64
 import io
 import json
@@ -11,7 +12,10 @@ import unittest
 import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
+
+import asyncpg
 
 from tests.test_crm import DSN, TEST_KEY, DBCase, WebTests, fake_values
 
@@ -52,6 +56,26 @@ class ParseTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             robot_store.xlsx_rows(b'not a zip')
 
+    def test_xlsx_rejects_unsafe_sheet_before_allocating_rows(self):
+        def book(ref='A1', doctype=''):
+            buffer = io.BytesIO()
+            ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+            with zipfile.ZipFile(buffer, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr('xl/worksheets/sheet1.xml',
+                                 f'{doctype}<worksheet xmlns="{ns}"><row><c r="{ref}"><v>79990001122</v></c></row></worksheet>')
+            return buffer.getvalue()
+
+        with self.assertRaisesRegex(ValueError, 'столбец'):
+            robot_store.xlsx_rows(book('ZZZZZZ1'))
+        with self.assertRaisesRegex(ValueError, 'столбец'):
+            robot_store.xlsx_rows(book('XFE1'))
+        with self.assertRaisesRegex(ValueError, 'DTD'):
+            robot_store.xlsx_rows(book(doctype='<!DOCTYPE worksheet [<!ENTITY sample "synthetic">]>'))
+        with patch.object(robot_store, 'MAX_XLSX_XML', 100), self.assertRaisesRegex(ValueError, 'распаковки'):
+            robot_store.xlsx_rows(book())
+        with patch.object(robot_store, 'MAX_XLSX_CELLS', 1), self.assertRaisesRegex(ValueError, 'ячеек'):
+            robot_store.xlsx_rows(book('B1'))
+
     def test_window(self):
         c = {'timezone': 'Asia/Yekaterinburg', 'days': [1, 2, 3, 4, 5], 'start_time': datetime(2026, 1, 1, 10).time(),
              'end_time': datetime(2026, 1, 1, 19).time()}
@@ -59,6 +83,14 @@ class ParseTest(unittest.TestCase):
         self.assertTrue(robot_store.in_window(c, datetime(2026, 10, 16, 6, tzinfo=timezone.utc)))
         self.assertFalse(robot_store.in_window(c, datetime(2026, 10, 16, 3, tzinfo=timezone.utc)))  # 08:00
         self.assertFalse(robot_store.in_window(c, datetime(2026, 10, 17, 6, tzinfo=timezone.utc)))  # суббота
+
+
+class VoiceLogTests(unittest.IsolatedAsyncioTestCase):
+    async def test_missing_audio_does_not_claim_the_customer_ignored_the_call(self):
+        entries = [{'outcome': 'ndz', 'error': 'connection_unconfirmed'}, {'outcome': 'ndz'}]
+        with patch.object(robot, '_calls_tail', return_value=entries):
+            result = await robot.calls(SimpleNamespace(role='director'))
+        self.assertEqual([item['outcome'] for item in result], ['Соединение не подтверждено', 'Не взял трубку'])
 
 
 @unittest.skipUnless(DSN, 'METHODOLOGY_TEST_DATABASE_URL не задан')
@@ -84,9 +116,18 @@ class CabinetTests(DBCase):
         self.dialed, self.busy = [], {'active': 0, 'pending': 0}
 
         self.dial_fail = None  # (статус, ошибка): робот отказал в звонке
+        self.drop_dial_reply = False
+        self.hold_dial_reply = False
+        self.dial_received = asyncio.Event()
+        self.dial_release = asyncio.Event()
 
         async def fake_dial(request):
             self.dialed.append(await request.json())
+            self.dial_received.set()
+            if self.hold_dial_reply:
+                await self.dial_release.wait()
+            if self.drop_dial_reply:
+                request.transport.abort()
             if self.dial_fail:
                 return aweb.json_response({'error': self.dial_fail[1]}, status=self.dial_fail[0])
             return aweb.json_response({'id': f'call-{len(self.dialed)}'})
@@ -100,7 +141,8 @@ class CabinetTests(DBCase):
         await self.robot.start_server()
         for p in (patch.object(robot, 'DATA', self.tmp), patch.object(robot, 'CALLS_LOG', self.log),
                   patch.object(vop, 'EXTRA_DIR', self.tmp / 'operators'), patch.object(robot, 'api_port', lambda: self.robot.port),
-                  patch.dict(os.environ, {'CRM_TEST_KEY': TEST_KEY, 'KITCHEN_SHEET_ID': 'leads', 'VOICE_SHEET_ID': ''}),
+                  patch.dict(os.environ, {'CRM_DEMO_INSTANCE': '1', 'CRM_TEST_KEY': TEST_KEY,
+                                          'KITCHEN_SHEET_ID': 'leads', 'VOICE_SHEET_ID': ''}),
                   patch('crm.gsheets.values', fake_values)):
             p.start()
             self.addCleanup(p.stop)
@@ -112,11 +154,139 @@ class CabinetTests(DBCase):
     async def as_director(self):
         await self.http.get('/p/' + await auth.invite_create(self.pool, 1, 'director', tg='901'))
 
+    async def test_xlsx_upload_rejects_invalid_column_without_importing(self):
+        await self.as_director()
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, 'w') as archive:
+            archive.writestr('xl/worksheets/sheet1.xml',
+                             '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+                             '<row><c r="ZZZZZZ1"><v>79990001122</v></c></row></worksheet>')
+        response = await self.http.post('/api/robot/cab/contacts/upload',
+                                        json={'name': 'sample.xlsx', 'data': base64.b64encode(buffer.getvalue()).decode()},
+                                        headers=H)
+        self.assertEqual(response.status, 400)
+        self.assertIn('столбец', (await response.json())['error'])
+        self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM robot_contacts'), 0)
+
     def call_line(self, **rec):
         base = {'at': datetime.now(timezone.utc).isoformat(timespec='seconds'), 'operator': 'kitchen', 'mode': 'телефон', 'outcome': 'ndz', 'comment': '',
                 'facts': {}, 'duration_s': 0, 'cost': 0, 'cost_unit': 'ток.', 'transcript': []}
         with self.log.open('a', encoding='utf-8') as f:
             f.write(json.dumps({**base, **rec}, ensure_ascii=False) + '\n')
+
+    async def test_manual_call_uses_home_stoplist(self):
+        await self.as_director()
+        await robot_store.stop_add(self.pool, '', '79990000014')
+        await robot_store.stop_add(self.pool, '#2', '79990000015')
+        with patch.object(robot, '_last_dial', {'at': 0.0}):
+            blocked = await self.http.post('/api/robot/call', json={'phone': '8 (999) 000-00-14'}, headers=H)
+            self.assertEqual(blocked.status, 400, await blocked.text())
+            self.assertIn('стоп-листе', (await blocked.json())['error'])
+            self.assertEqual(self.dialed, [])
+            allowed = await self.http.post('/api/robot/call', json={'phone': '8 (999) 000-00-15'}, headers=H)
+            self.assertEqual(allowed.status, 200, await allowed.text())
+            self.assertEqual(self.dialed, [{'phone': '79990000015', 'operator': 'kitchen'}])
+
+    async def test_opt_out_survives_database_failure_and_journal_replay(self):
+        phone = '79990000014'
+        await robot_store.upload_contacts(self.pool, '', {'name': 'sample.csv', 'text': f'Телефон\n{phone}\n'})
+        campaign = await robot_store.save_campaign(self.pool, '', {
+            'name': 'Синтетический звонок', 'operator': 'kitchen', 'days': [1, 2, 3, 4, 5, 6, 7],
+            'start_time': '00:00', 'end_time': '23:59', 'contacts': 'all', 'attempts': 2,
+        })
+        await robot_store.campaign_action(self.pool, '', campaign['id'], 'start')
+        now = datetime(2026, 11, 7, 9, tzinfo=timezone.utc)
+        dial = await robot_runner.tick(self.pool, now)
+        self.assertEqual(dial['phone'], phone)
+        self.call_line(call_id='opt-out', outcome='do_not_call', **dial)
+
+        await self.pool.execute('ALTER TABLE robot_stoplist ADD CONSTRAINT test_fail_insert CHECK (false) NOT VALID')
+        try:
+            with self.assertRaises(asyncpg.CheckViolationError):
+                await robot_runner.ingest(self.pool)
+        finally:
+            await self.pool.execute('ALTER TABLE robot_stoplist DROP CONSTRAINT test_fail_insert')
+
+        self.assertEqual(await robot_runner.ingest(self.pool), 1)
+        self.assertIsNone(await robot_runner.tick(self.pool, now + timedelta(minutes=20)),
+                          'A replayed opt-out must not schedule another call')
+        self.assertEqual(len(self.dialed), 1)
+        self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM robot_calls'), 1)
+        self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM robot_stoplist WHERE phone=$1', phone), 1)
+        self.assertEqual(await self.pool.fetchval('SELECT status FROM robot_campaigns WHERE id=$1', campaign['id']), 'done')
+        self.assertEqual(await robot_runner.ingest(self.pool), 0)
+
+    async def test_lost_dial_response_does_not_repeat_dispatch(self):
+        phone = '79990000016'
+        await robot_store.upload_contacts(self.pool, '', {'name': 'sample.csv', 'text': f'Телефон\n{phone}\n'})
+        campaign = await robot_store.save_campaign(self.pool, '', {
+            'name': 'Потеря ответа', 'operator': 'kitchen', 'days': [1, 2, 3, 4, 5, 6, 7],
+            'start_time': '00:00', 'end_time': '23:59', 'contacts': 'all', 'attempts': 2,
+        })
+        await robot_store.campaign_action(self.pool, '', campaign['id'], 'start')
+        now = datetime(2026, 11, 7, 9, tzinfo=timezone.utc)
+        self.drop_dial_reply = True
+        self.assertIsNone(await robot_runner.tick(self.pool, now))
+        self.drop_dial_reply = False
+        self.assertIsNone(await robot_runner.tick(self.pool, now + timedelta(minutes=20)),
+                          'A lost response must not schedule a second call')
+        self.assertEqual(len(self.dialed), 1)
+        target, = await robot_store.targets(self.pool, '', campaign['id'])
+        self.assertEqual((target['done'], target['attempts']), (True, 1))
+        self.assertIn('Проверьте', target['outcome'])
+
+        self.call_line(call_id='late-dial-result', outcome='callback', **self.dialed[0])
+        self.assertEqual(await robot_runner.ingest(self.pool), 1)
+        target, = await robot_store.targets(self.pool, '', campaign['id'])
+        self.assertEqual((target['done'], target['outcome']), (True, robot.OUTCOMES['callback']))
+
+    async def test_cancelled_dispatch_is_visible_after_restart(self):
+        await robot_store.upload_contacts(self.pool, '', {'name': 'sample.csv', 'text': 'Телефон\n79990000017\n'})
+        campaign = await robot_store.save_campaign(self.pool, '', {
+            'name': 'Перезапуск', 'operator': 'kitchen', 'days': [1, 2, 3, 4, 5, 6, 7],
+            'start_time': '00:00', 'end_time': '23:59', 'contacts': 'all', 'attempts': 2,
+        })
+        await robot_store.campaign_action(self.pool, '', campaign['id'], 'start')
+        now = datetime(2026, 11, 7, 9, tzinfo=timezone.utc)
+        self.hold_dial_reply = True
+        task = asyncio.create_task(robot_runner.tick(self.pool, now))
+        try:
+            await asyncio.wait_for(self.dial_received.wait(), 5)
+        finally:
+            task.cancel()
+            self.dial_release.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+        self.hold_dial_reply = False
+        later = now + timedelta(minutes=robot_runner.HOLD_MIN + 1)
+        self.assertIsNone(await robot_runner.tick(self.pool, later))
+        self.assertEqual(len(self.dialed), 1)
+        target, = await robot_store.targets(self.pool, '', campaign['id'])
+        self.assertEqual((target['done'], target['attempts']), (True, 1))
+        self.assertIn('Проверьте', target['outcome'])
+
+    async def test_pending_dispatch_is_not_eligible_for_old_worker(self):
+        await robot_store.upload_contacts(self.pool, '', {'name': 'sample.csv', 'text': 'Телефон\n79990000018\n'})
+        campaign = await robot_store.save_campaign(self.pool, '', {
+            'name': 'Откат', 'operator': 'kitchen', 'days': [1, 2, 3, 4, 5, 6, 7],
+            'start_time': '00:00', 'end_time': '23:59', 'contacts': 'all', 'attempts': 2,
+        })
+        await robot_store.campaign_action(self.pool, '', campaign['id'], 'start')
+        now = datetime(2026, 11, 7, 9, tzinfo=timezone.utc)
+        self.hold_dial_reply = True
+        task = asyncio.create_task(robot_runner.tick(self.pool, now))
+        try:
+            await asyncio.wait_for(self.dial_received.wait(), 5)
+            legacy_eligible = await self.pool.fetchval(
+                """SELECT id FROM robot_targets WHERE campaign_id=$1 AND NOT done
+                   AND (next_at IS NULL OR next_at<=$2)""", campaign['id'], now + timedelta(days=1))
+            self.assertIsNone(legacy_eligible)
+            target, = await robot_store.targets(self.pool, '', campaign['id'])
+            self.assertTrue(target['dispatching'])
+            self.assertIsNone(target['next_at'])
+        finally:
+            self.dial_release.set()
+            await task
 
     async def test_director_campaign_end_to_end(self):
         await self.as_director()

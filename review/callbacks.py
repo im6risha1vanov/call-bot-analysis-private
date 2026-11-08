@@ -12,6 +12,8 @@ import re
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+from aiohttp import ClientConnectorError
+from aiogram.exceptions import TelegramNetworkError
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from reports import esc, fmt_phone
@@ -150,13 +152,26 @@ async def send_reminders(pool, bot, client, now_local: datetime) -> int:
         due = datetime.combine(task['due_date'], task['due_time'], tzinfo=tz)
         if not (due - REMIND_BEFORE <= now_local < due):
             continue
-        claimed = await pool.fetchval('UPDATE callback_tasks SET reminded_at=now() WHERE id=$1 AND reminded_at IS NULL RETURNING id', task['id'])
+        claimed = await pool.fetchval(
+            """UPDATE callback_tasks SET reminded_at=now()
+               WHERE id=$1 AND status='open' AND reminded_at IS NULL
+                 AND due_date=$2 AND due_time=$3 RETURNING reminded_at""",
+            task['id'], task['due_date'], task['due_time'])
         chat = await pool.fetchval("SELECT telegram_user_id FROM employees WHERE client_id=$1 AND extension=$2 AND role='manager'",
                                    client['id'], task['extension'])
         if claimed and chat:
             try:
                 await bot.send_message(chat, '⏰ Через 30 минут\n' + line(task), parse_mode='HTML', reply_markup=keyboard([task]))
                 sent += 1
+            except TelegramNetworkError as exc:
+                if isinstance(exc.__cause__, ClientConnectorError):
+                    # No connection was established, so the next tick can retry safely.
+                    await pool.execute(
+                        'UPDATE callback_tasks SET reminded_at=NULL WHERE id=$1 AND reminded_at=$2',
+                        task['id'], claimed)
+                    log.warning('напоминание о перезвоне будет повторено, task id=%s', task['id'])
+                else:
+                    log.exception('доставка напоминания не подтверждена, task id=%s', task['id'])
             except Exception:
                 log.exception('напоминание о перезвоне не доставлено, task id=%s', task['id'])
     return sent

@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT / '.env')
 
 import asyncpg  # noqa: E402
-from aiohttp import web  # noqa: E402
+from aiohttp import BodyPartReader, web  # noqa: E402
 
 import mango_client  # noqa: E402
 from tools import Forbidden, home_client_id, is_privileged  # noqa: E402
@@ -90,8 +90,12 @@ async def guard(request: web.Request, handler):
         response = fail(403, str(exc))
     except ValueError as exc:
         response = fail(400, str(exc))
-    except Exception:
-        log.exception('ошибка CRM: %s %s', request.method, request.path)
+    except Exception as exc:
+        credential_route = next((prefix for prefix in ('/hook/', '/p/', '/t/') if request.path.startswith(prefix)), None)
+        if credential_route:
+            log.error('ошибка CRM: %s %s<redacted> (%s)', request.method, credential_route, type(exc).__name__)
+        else:
+            log.exception('ошибка CRM: %s %s', request.method, request.path)
         response = fail(500, 'Что-то пошло не так. Попробуйте ещё раз.')
     if isinstance(response, web.WebSocketResponse):  # сокет телефона уже закрыт, заголовки ему не нужны
         return response
@@ -537,9 +541,10 @@ async def api_access_create(request):
         name = {'manager': team.get(str(data.get('person_ext') or '')), 'client': data.get('client'),
                 'director': heads.get(str(data.get('tg') or '')) or data.get('name')}.get(role)
         login = await accounts.free_login(pool, accounts.slug(name or '') or role)
-    await auth.account_create(pool, who.actor.client_id, role, login, data.get('person_ext'), data.get('client'),
-                              data.get('name'), data.get('tg'), data.get('password') or None)
-    return web.json_response({'invites': await auth.invites(pool, who.actor.client_id)})
+    password = await auth.account_create(pool, who.actor.client_id, role, login, data.get('person_ext'), data.get('client'),
+                                          data.get('name'), data.get('tg'), data.get('password') or None)
+    return web.json_response({'login': auth.clean_login(login), 'password': password,
+                              'invites': await auth.invites(pool, who.actor.client_id)})
 
 
 async def api_access_account(request):
@@ -716,8 +721,8 @@ def path_id(request, name: str = 'id') -> int:
 
 
 async def api_automations(request):
-    who = await automation_admin(request)
-    return web.json_response(await automations.overview(request.app[POOL], who.client_id))
+    who = await director(request)
+    return web.json_response(await automations.overview(request.app[POOL], who.company, include_hooks=not who.test))
 
 
 async def api_automation_save(request):
@@ -782,7 +787,12 @@ async def hook(request):
     """Вебхук другой системы: событие для сценария с этим токеном."""
     if request.content_length and request.content_length > automations.MAX_HOOK_BYTES:
         return fail(413, 'Слишком большой запрос.')
-    if not await automations.incoming(request.app[POOL], request.match_info['token'], await request.read()):
+    try:
+        accepted = await automations.incoming(request.app[POOL], request.match_info['token'], await request.read(),
+                                             delivery_key=request.headers.get('Idempotency-Key'))
+    except automations.WebhookKeyConflict as exc:
+        return fail(409, str(exc))
+    if not accepted:
         return fail(404, 'Сценарий не найден или выключен.')
     return web.json_response({'ok': True})
 
@@ -1019,25 +1029,32 @@ async def api_robot_voice_clone(request):
     if request.content_length and request.content_length > robot.CLONE_MAX_BYTES:
         raise ValueError('Записи больше 20 МБ: сократите или сожмите в mp3.')
     reader = await request.multipart()
-    name, files, total = '', [], 0
+    name, files, total, fields = '', [], 0, 0
     while (part := await reader.next()) is not None:
+        fields += 1
+        if fields > 30 or not isinstance(part, BodyPartReader):
+            raise ValueError('Слишком много полей или неверный формат.')
+        if part.name not in ('name', 'files') or (part.name == 'files' and not part.filename):
+            raise ValueError('Неверное поле формы.')
+        data = bytearray()
+        while chunk := await part.read_chunk(256 * 1024):
+            total += len(chunk)
+            if total > robot.CLONE_MAX_BYTES:
+                raise ValueError('Записи больше 20 МБ: сократите или сожмите в mp3.')
+            if part.name == 'name' and len(data) + len(chunk) > 240:
+                raise ValueError('Слишком длинное имя голоса.')
+            data.extend(chunk)
         if part.name == 'name':
-            name = (await part.text())[:60]
-        elif part.name == 'files' and part.filename:
-            chunks = []
-            while chunk := await part.read_chunk(256 * 1024):
-                total += len(chunk)
-                if total > robot.CLONE_MAX_BYTES:
-                    raise ValueError('Записи больше 20 МБ: сократите или сожмите в mp3.')
-                chunks.append(chunk)
-            files.append((part.filename[-80:], b''.join(chunks)))
+            name = data.decode('utf-8', errors='replace')[:60]
+        else:
+            files.append((part.filename[-80:], bytes(data)))
     return web.json_response(await robot.voices_clone(who, name, files))
 
 
 async def api_robot_call(request):
     who = await robot_director(request)
     data = await body(request)
-    return web.json_response(await robot.call(who, data.get('phone'), data.get('operator')))
+    return web.json_response(await robot.call(who, data.get('phone'), data.get('operator'), request.app[POOL]))
 
 
 async def api_reports(request):

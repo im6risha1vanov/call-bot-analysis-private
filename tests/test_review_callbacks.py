@@ -6,11 +6,14 @@ import unittest
 from datetime import date, datetime, time
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from zoneinfo import ZoneInfo
 
 import asyncpg
 import httpx
+from aiohttp import ClientConnectorError
+from aiogram.exceptions import TelegramNetworkError
+from aiogram.methods import SendMessage
 
 os.environ.setdefault('BOT_TOKEN', '1:test')
 os.environ.setdefault('CVC_API_KEY', 'test')
@@ -79,13 +82,15 @@ class SheetsWriteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('addSheet', batches[0][0])  # «Сводка» создана
         self.assertEqual(batches[1][0]['appendDimension']['dimension'], 'ROWS')  # в «Звонках» не хватало строк
         self.assertEqual(batches[2], [{'deleteSheet': {'sheetId': 6}}])
-        puts = [(path, body) for method, path, body in seen if method == 'PUT']
-        self.assertEqual(puts[1][1]['values'][2], ['07.10.2026 11:40', 'Результат'])
         unmerge = batches[3]  # объединения снимаются до записи значений, иначе строка на месте разделителя теряет ячейки
         self.assertEqual({r['unmergeCells']['range']['sheetId'] for r in unmerge}, {5, 9})
-        self.assertLess(seen.index(next(x for x in seen if x[2] is not None and x[2].get('requests') == unmerge)),
-                        seen.index(next(x for x in seen if x[0] == 'PUT')))
-        styling = batches[4]
+        self.assertEqual([batch[0]['updateCells']['range']['sheetId'] for batch in batches[4:6]], [9, 5])
+        updated_calls = batches[5][0]['updateCells']
+        self.assertEqual(updated_calls['rows'][2]['values'], [
+            {'userEnteredValue': {'stringValue': '07.10.2026 11:40'}},
+            {'userEnteredValue': {'stringValue': 'Результат'}},
+        ])
+        styling = batches[6]
         self.assertEqual(sum('deleteConditionalFormatRule' in r for r in styling), 2)
         merges = [r['mergeCells']['range'] for r in styling if 'mergeCells' in r]
         self.assertEqual([(m['sheetId'], m['startRowIndex']) for m in merges], [(5, 1)])
@@ -111,13 +116,14 @@ class CallbackStoreTests(unittest.IsolatedAsyncioTestCase):
         await self.pool.execute("""
             ALTER TABLE calls ADD COLUMN IF NOT EXISTS duration_seconds INTEGER DEFAULT 90;
             ALTER TABLE calls ADD COLUMN IF NOT EXISTS client_number TEXT;
+            ALTER TABLE calls ADD COLUMN IF NOT EXISTS recording_id TEXT;
             ALTER TABLE calls ADD COLUMN IF NOT EXISTS direction INTEGER DEFAULT 2;
             ALTER TABLE clients ADD COLUMN IF NOT EXISTS min_call_seconds INTEGER DEFAULT 30;
             ALTER TABLE employees ADD COLUMN IF NOT EXISTS id BIGSERIAL;
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS topic TEXT;
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS mode TEXT;
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS assigned_by_telegram_user_id BIGINT;""")
-        for name in ('008_call_reviews.sql', '009_callback_tasks.sql', '021_manager_memory.sql'):
+        for name in ('008_call_reviews.sql', '009_callback_tasks.sql', '014_crm.sql', '021_manager_memory.sql'):
             await self.pool.execute((root / 'migrations' / name).read_text())
         await self.pool.execute('TRUNCATE clients CASCADE')
         await self.pool.execute("INSERT INTO clients VALUES(1,'Europe/Moscow',true)")
@@ -167,6 +173,26 @@ class CallbackStoreTests(unittest.IsolatedAsyncioTestCase):
         soon = datetime(2026, 10, 9, 10, 40, tzinfo=MSK)
         self.assertEqual(await callbacks.send_reminders(self.pool, self.bot, self.client, soon), 2)
         self.assertEqual(await callbacks.send_reminders(self.pool, self.bot, self.client, soon), 0)
+
+    async def test_reminder_retries_after_connection_refusal_only(self):
+        _, task_id = await self.add(TIMED)
+        soon = datetime(2026, 10, 9, 10, 40, tzinfo=MSK)
+        method = SendMessage(chat_id=123, text='synthetic')
+        refused = TelegramNetworkError(method=method, message='synthetic connection refusal')
+        destination = MagicMock(host='test.invalid', port=443, ssl=True)
+        refused.__cause__ = ClientConnectorError(destination, OSError(111, 'synthetic refusal'))
+        self.bot.send_message.side_effect = refused
+        self.assertEqual(await callbacks.send_reminders(self.pool, self.bot, self.client, soon), 0)
+        self.assertIsNone(await self.pool.fetchval('SELECT reminded_at FROM callback_tasks WHERE id=$1', task_id))
+
+        unknown = TelegramNetworkError(method=method, message='synthetic response timeout')
+        unknown.__cause__ = TimeoutError()
+        self.bot.send_message.side_effect = unknown
+        self.assertEqual(await callbacks.send_reminders(self.pool, self.bot, self.client, soon), 0)
+        self.assertIsNotNone(await self.pool.fetchval('SELECT reminded_at FROM callback_tasks WHERE id=$1', task_id))
+        self.bot.send_message.side_effect = None
+        self.assertEqual(await callbacks.send_reminders(self.pool, self.bot, self.client, soon), 0)
+        self.assertEqual(self.bot.send_message.await_count, 2)
 
     async def test_buttons_change_status_only_for_own_tasks(self):
         _, task_id = await self.add(TIMED)

@@ -78,9 +78,10 @@ class ExplicitReanalysisTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_duplicate_create_and_run_two_paid_stages_one_new_snapshot(self):
         before = await self.pool.fetchrow('SELECT * FROM astra_analysis WHERE call_id=$1', self.call_id)
-        ids = await asyncio.gather(*[self.create() for _ in range(4)])
-        self.assertEqual(len(set(ids)), 1)
-        with patch.object(reanalysis.transport, 'request', AsyncMock(side_effect=self.fake)) as paid:
+        with patch('automatic.jobs.enabled', return_value=True), \
+                patch.object(reanalysis.transport, 'request', AsyncMock(side_effect=self.fake)) as paid:
+            ids = await asyncio.gather(*[self.create() for _ in range(4)])
+            self.assertEqual(len(set(ids)), 1)
             result = await reanalysis.run(self.pool, self.actor, ids[0])
             await reanalysis.run(self.pool, self.actor, ids[0])
             self.assertEqual(paid.await_count, 2)

@@ -1,11 +1,14 @@
 """Конструктор автоматизаций: проверка сценария, шаблоны, очередь событий, повторы, лимиты, вебхуки.
 Внешние сервисы подменены: ничего не уходит в Telegram, Google и чужие адреса."""
+import asyncio
 import json
 import os
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
+
+import httpx
 
 os.environ.setdefault('BOT_TOKEN', '1:test')
 os.environ.setdefault('CVC_API_KEY', 'test')
@@ -79,14 +82,61 @@ class PureTests(unittest.TestCase):
         self.assertEqual(automations.telegram_code('/start aut_abcdefABCDEF12'), 'abcdefABCDEF12')
         self.assertEqual(automations.telegram_code('/start@averon_bot aut_abcdefABCDEF12'), 'abcdefABCDEF12')
         self.assertIsNone(automations.telegram_code('/start inv_abcdefABCDEF12'))
-        url = 'https://docs.google.com/spreadsheets/d/1chzMdgtuHf2ipvaVH6zEuY_aHAEolr15NqB9NMAZrKU/edit#gid=0'
-        self.assertEqual(blocks.sheet_id(url), '1chzMdgtuHf2ipvaVH6zEuY_aHAEolr15NqB9NMAZrKU')
+        sheet = 'test_document_identifier_001'
+        url = f'https://docs.google.com/spreadsheets/d/{sheet}/edit#gid=0'
+        self.assertEqual(blocks.sheet_id(url), sheet)
         self.assertIsNone(blocks.sheet_id('https://example.com'))
 
     def test_webhook_never_goes_inside(self):
         for host in ('127.0.0.1', 'localhost', '10.0.0.5', '169.254.169.254', '::1'):
-            self.assertFalse(blocks.public_address(host), host)
-        self.assertTrue(blocks.public_address('8.8.8.8'))
+            self.assertIsNone(blocks.resolve_public_address(host), host)
+        self.assertEqual(blocks.resolve_public_address('8.8.8.8'), '8.8.8.8')
+
+
+class WebhookDestinationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_direct_webhook_uses_validated_address_and_original_hostname(self):
+        def receive(request):
+            self.assertEqual(str(request.url), 'https://8.8.8.8:8443/hook?q=1')
+            self.assertEqual(request.headers['Host'], 'service.example:8443')
+            self.assertEqual(request.extensions['sni_hostname'], 'service.example')
+            return httpx.Response(204)
+
+        transport = httpx.MockTransport(receive)
+        client = httpx.AsyncClient(transport=transport)
+        with patch.object(blocks, 'resolve_public_address', return_value='8.8.8.8') as resolve, \
+                patch.object(httpx, 'AsyncClient', return_value=client) as create_client:
+            result = await blocks.webhook_send({'url': 'https://service.example:8443/hook?q=1'}, 'test', {})
+        resolve.assert_called_once_with('service.example')
+        self.assertFalse(create_client.call_args.kwargs['trust_env'])
+        self.assertIn('204', result)
+
+    async def test_webhook_does_not_connect_to_private_addresses_or_use_proxy(self):
+        with patch.object(httpx, 'AsyncClient') as create_client:
+            for use_proxy in (False, True):
+                with self.assertRaises(blocks.Fail):
+                    await blocks.webhook_send({'url': 'http://127.0.0.1/', 'proxy': use_proxy}, 'test', {})
+        create_client.assert_not_called()
+
+    async def test_webhook_uses_status_without_consuming_remote_response_body(self):
+        class UnreadableBody(httpx.AsyncByteStream):
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise AssertionError('Webhook response body must not be consumed')
+
+        for status, error in ((204, None), (400, blocks.Fail), (503, blocks.Retry)):
+            with self.subTest(status=status):
+                transport = httpx.MockTransport(lambda request: httpx.Response(status, stream=UnreadableBody()))
+                client = httpx.AsyncClient(transport=transport)
+                with patch.object(blocks, 'resolve_public_address', return_value='8.8.8.8'), \
+                        patch.object(httpx, 'AsyncClient', return_value=client):
+                    if error:
+                        with self.assertRaisesRegex(error, str(status)):
+                            await blocks.webhook_send({'url': 'https://service.example/hook'}, 'test', {})
+                    else:
+                        result = await blocks.webhook_send({'url': 'https://service.example/hook'}, 'test', {})
+                        self.assertIn(str(status), result)
 
 
 class FakeBlocks:
@@ -110,6 +160,7 @@ class EngineTests(DBCase):
         await super().asyncSetUp()
         root = Path(__file__).resolve().parents[1]
         await self.pool.execute((root / 'migrations/030_automations.sql').read_text())
+        await self.pool.execute((root / 'migrations/038_automation_event_claim.sql').read_text())
         await self.pool.execute('TRUNCATE automation_events, automation_usage, automation_limits, automations, '
                                 'automation_accounts CASCADE')
         self.acc = await self.pool.fetchval(
@@ -178,6 +229,33 @@ class EngineTests(DBCase):
         self.assertEqual((run['status'], run['attempts']), ('ok', 2))
         self.assertEqual(len(self.fake.sent), 1)
 
+    async def test_restart_preserves_other_due_retries(self):
+        spec = {'trigger': {'type': 'webhook.in'}, 'if': [],
+                'actions': [{'type': 'telegram.send', 'account': self.acc, 'text': 'Событие {data.number}'}]}
+        token = (await self.make(spec))['hook'].rsplit('/', 1)[1]
+        for number in (1, 2):
+            await automations.incoming(self.pool, token, json.dumps({'number': number}).encode())
+        self.fake.fail_next = 2
+        await automations.tick(self.pool)
+        self.assertEqual(self.fake.sent, [])
+        await self.pool.execute("UPDATE automation_runs SET retry_at=now() WHERE status='retry'")
+
+        run_actions = automations.run_actions
+
+        async def interrupted(*args, **kwargs):
+            await run_actions(*args, **kwargs)
+            raise asyncio.CancelledError
+
+        with patch.object(automations, 'run_actions', interrupted):
+            with self.assertRaises(asyncio.CancelledError):
+                await automations.retry_due(self.pool)
+
+        await automations.retry_due(self.pool)
+        await automations.retry_due(self.pool)
+        self.assertEqual(self.fake.sent, [(-100500, 'Событие 1'), (-100500, 'Событие 2')])
+        runs = await self.pool.fetch('SELECT status, retry_at FROM automation_runs WHERE NOT test ORDER BY id')
+        self.assertEqual([(run['status'], run['retry_at']) for run in runs], [('retry', None), ('ok', None)])
+
     async def test_month_limit_and_loop_guard(self):
         auto = await self.make()
         await self.pool.execute('INSERT INTO automation_limits(client_id, max_runs_month) VALUES(1, 1)')
@@ -209,6 +287,59 @@ class EngineTests(DBCase):
         with self.assertRaisesRegex(ValueError, 'такого подключения нет'):  # чужой аккаунт не подставить
             await automations.save(self.pool, 2, None, 'x', spec, None)
 
+    async def test_webhook_retries_with_same_key_queue_and_send_once(self):
+        from aiohttp.test_utils import TestClient, TestServer
+        from crm import web
+
+        root = Path(__file__).resolve().parents[1]
+        await self.pool.execute((root / 'migrations/037_automation_webhook_key.sql').read_text())
+        spec = {'trigger': {'type': 'webhook.in'}, 'if': [],
+                'actions': [{'type': 'telegram.send', 'account': self.acc, 'text': 'Тестовое событие'}]}
+        hook = (await self.make(spec))['hook']
+        headers = {'Idempotency-Key': 'event-test-1'}
+        async with TestClient(TestServer(web.build(self.pool))) as http:
+            responses = await asyncio.gather(*(http.post(hook, json={'amount': 10}, headers=headers) for _ in range(2)))
+            self.assertEqual([response.status for response in responses], [200, 200])
+            self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM automation_events'), 1)
+            await automations.tick(self.pool)
+            self.assertEqual(self.fake.sent, [(-100500, 'Тестовое событие')])
+            self.assertEqual((await http.post(hook, json={'amount': 10}, headers=headers)).status, 200)
+            self.assertEqual((await http.post(hook, json={'amount': 20}, headers=headers)).status, 409)
+            self.assertEqual((await http.post(hook, headers={'Idempotency-Key': 'x' * 129})).status, 400)
+            self.assertEqual((await http.post('/hook/invalid', json={'amount': 10}, headers=headers)).status, 404)
+            self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM automation_events'), 1)
+
+            second_hook = (await self.make(spec))['hook']
+            self.assertEqual((await http.post(second_hook, json={'amount': 10}, headers=headers)).status, 200)
+            self.assertEqual((await http.post(hook, json={'amount': 10})).status, 200)
+            self.assertEqual((await http.post(hook, json={'amount': 10})).status, 200)
+            self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM automation_events'), 4)
+
+    async def test_restart_preserves_pending_events_without_repeating_unconfirmed_send(self):
+        spec = {'trigger': {'type': 'webhook.in'}, 'if': [],
+                'actions': [{'type': 'telegram.send', 'account': self.acc, 'text': 'Событие {data.number}'}]}
+        token = (await self.make(spec))['hook'].rsplit('/', 1)[1]
+        for number in (1, 2):
+            await automations.incoming(self.pool, token, json.dumps({'number': number}).encode())
+
+        handle = automations.handle
+
+        async def interrupted(pool, event):
+            await handle(pool, event)
+            raise asyncio.CancelledError
+
+        with patch.object(automations, 'handle', interrupted):
+            with self.assertRaises(asyncio.CancelledError):
+                await automations.tick(self.pool)
+
+        await automations.tick(self.pool)
+        await automations.tick(self.pool)
+        self.assertEqual(self.fake.sent, [(-100500, 'Событие 1'), (-100500, 'Событие 2')])
+        records = await self.pool.fetch('SELECT claimed_at, processed_at FROM automation_events ORDER BY id')
+        self.assertIsNotNone(records[0]['claimed_at'])
+        self.assertIsNone(records[0]['processed_at'])
+        self.assertIsNotNone(records[1]['processed_at'])
+
     async def test_daily_schedule_fires_once_per_day(self):
         spec = {'trigger': {'type': 'schedule.daily', 'time': '19:00'}, 'if': [],
                 'actions': [{'type': 'telegram.send', 'account': self.acc, 'text': 'Итоги {date}: оплат {day.paid}'}]}
@@ -220,8 +351,25 @@ class EngineTests(DBCase):
         await automations.schedule(self.pool, after)
         await automations.schedule(self.pool, after)
         self.assertEqual(await self.pool.fetchval("SELECT count(*) FROM automation_events WHERE kind='schedule.daily'"), 1)
-        await automations.tick(self.pool)
+        with patch.object(automations, 'schedule', AsyncMock()):
+            await automations.tick(self.pool)
         self.assertEqual(self.fake.sent, [(-100500, 'Итоги 2026-10-24: оплат 0')])
+
+    async def test_daily_schedule_recovers_after_failed_payload_and_ignores_stale_poll(self):
+        spec = {'trigger': {'type': 'schedule.daily', 'time': '19:00'}, 'if': [],
+                'actions': [{'type': 'telegram.send', 'account': self.acc, 'text': 'Итоги {date}'}]}
+        auto = await self.make(spec)
+        await self.pool.execute('UPDATE automations SET last_fired=NULL WHERE id=$1', auto['id'])
+        due = datetime(2026, 10, 24, 16, 5, tzinfo=timezone.utc)
+        with patch.object(automations, 'day_stats', AsyncMock(side_effect=RuntimeError('synthetic DB failure'))):
+            with self.assertRaisesRegex(RuntimeError, 'synthetic DB failure'):
+                await automations.schedule(self.pool, due)
+
+        self.assertIsNone(await self.pool.fetchval('SELECT last_fired FROM automations WHERE id=$1', auto['id']))
+        await asyncio.gather(automations.schedule(self.pool, due), automations.schedule(self.pool, due))
+        await automations.schedule(self.pool, due - timedelta(days=1))
+        dates = await self.pool.fetch("SELECT payload->>'date' AS day FROM automation_events WHERE kind='schedule.daily'")
+        self.assertEqual([row['day'] for row in dates], ['2026-10-24'])
 
     async def test_telegram_binding_and_account_in_use(self):
         with patch('crm.telegram.bot_username', AsyncMock(return_value='averon_bot')):

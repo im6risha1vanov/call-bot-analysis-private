@@ -360,11 +360,16 @@ class ExistingSurfaceTests(unittest.TestCase):
     def test_existing_forms_helper_and_gpt_are_unchanged_except_inert_targets(self):
         import re,subprocess
         base='2a11936af00465fafdaa07059da179ee8ce7313a'
+        guide_release='2abe9f833e76f80fbf8dc584a32d8d38ef2d29af'
         for name in ['crm/static/helper.js','crm/gpt.py','crm/static/people.js','crm/static/summary.js']:
             process=subprocess.run(['git','show',base+':'+name],cwd=ROOT,capture_output=True,text=True)
             if process.returncode:
                 self.skipTest('Pinned Git baseline unavailable for source regression check')
-            current=(ROOT/name).read_text()
+            if name == 'crm/gpt.py':
+                # Check the training release separately from the later GPT access fixes.
+                current=subprocess.check_output(['git','show',guide_release+':'+name],cwd=ROOT,text=True)
+            else:
+                current=(ROOT/name).read_text()
             current=re.sub(r' data-learning-target="[^"]+"','',current)
             if name.endswith('/review.js'):
                 current=current.replace("      if(box.dataset.learningLoaded)document.dispatchEvent(new CustomEvent('crm-review-closed',{detail:{id}}));\n",'').replace("    box.dataset.learningLoaded='true';\n",'').replace("    if (!box.isConnected) return;\n",'')

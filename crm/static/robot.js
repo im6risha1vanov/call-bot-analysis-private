@@ -283,7 +283,7 @@ async function campaignForm(c) {
     const {items} = await rbGet(`/campaigns/${c.id}/targets`);
     $('#cf-list', box).innerHTML = items.length ? `<div class="scroll"><table class="tbl"><thead><tr><th>Номер</th><th>Имя</th><th class="n">Попыток</th><th>Итог</th></tr></thead><tbody>
       ${items.map(t => `<tr><td>${esc(phone(t.phone))}</td><td>${esc(t.name)}</td><td class="n">${t.attempts}</td>
-        <td>${t.done ? esc(CRMText.label(t.outcome,RB.st.outcomes,'Завершён')) : t.next_at ? 'повтор ' + fmtWhen(t.next_at) : 'ждёт звонка'}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">Номеров нет.</div>';
+        <td>${t.done ? esc(CRMText.label(t.outcome,RB.st.outcomes,'Завершён')) : t.dispatching ? 'заявка отправляется' : t.next_at ? 'повтор ' + fmtWhen(t.next_at) : 'ждёт звонка'}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">Номеров нет.</div>';
   });
   for (const [sel, action, ask] of [['#cf-finish', 'finish', 'Завершить кампанию? Робот больше не будет по ней звонить.'], ['#cf-del', 'delete', 'Удалить кампанию вместе со списком номеров? Звонки останутся во вкладке «Звонки».']]) {
     $(sel, box)?.addEventListener('click', async () => {

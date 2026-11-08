@@ -1,0 +1,1 @@
+ALTER TABLE automation_events ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ;

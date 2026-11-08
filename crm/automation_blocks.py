@@ -49,11 +49,12 @@ def client(use_proxy: bool) -> httpx.AsyncClient:
     return httpx.AsyncClient(timeout=TIMEOUT, proxy=proxy_url() if use_proxy else None, follow_redirects=False)
 
 
-def check_status(r: httpx.Response, what: str):
+def check_status(r: httpx.Response, what: str, *, include_body: bool = True):
     if r.status_code == 429 or r.status_code >= 500:
         raise Retry(f'{what}: сервис ответил {r.status_code}, попробуем позже.')
     if r.status_code >= 400:
-        raise Fail(f'{what}: сервис ответил {r.status_code}. {r.text[:200]}')
+        details = f' {r.text[:200]}' if include_body else ''
+        raise Fail(f'{what}: сервис ответил {r.status_code}.{details}')
 
 
 # --- Telegram -------------------------------------------------------------------------------------
@@ -185,17 +186,16 @@ async def sheets_append(params: dict, account: dict | None, row: list[str]) -> s
 
 # --- Вебхук ---------------------------------------------------------------------------------------
 
-def public_address(host: str) -> bool:
-    """Адрес снаружи: в нашу сеть, на сам сервер и в служебные адреса вебхук не ходит."""
+def resolve_public_address(host: str) -> str | None:
+    """Выбрать адрес для соединения, только если все ответы DNS публичные."""
     try:
-        infos = socket.getaddrinfo(host, None)
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
     except (socket.gaierror, UnicodeError):
-        return False
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0].split('%')[0])
-        if not ip.is_global or ip.is_multicast:
-            return False
-    return bool(infos)
+        return None
+    addresses = [ipaddress.ip_address(info[4][0].split('%')[0]) for info in infos]
+    if not addresses or any(not ip.is_global or ip.is_multicast for ip in addresses):
+        return None
+    return str(addresses[0])
 
 
 def check_url(url: str) -> str:
@@ -212,18 +212,25 @@ def check_url(url: str) -> str:
 
 async def webhook_send(params: dict, event: str, payload: dict) -> str:
     url = check_url(params['url'])
-    host = urlsplit(url).hostname
-    use_proxy = bool(params.get('proxy'))
-    if not use_proxy and not await asyncio.to_thread(public_address, host):
+    if params.get('proxy'):
+        raise Fail('Отключите прокси для этого вебхука. Отправка доступна на публичный адрес напрямую.')
+    target = httpx.URL(url)
+    host = target.raw_host.decode('ascii')
+    address = await asyncio.to_thread(resolve_public_address, host)
+    if address is None:
         raise Fail('Адрес вебхука ведёт во внутреннюю сеть или не существует.')
     body = {'event': event, 'data': payload}
     try:
-        async with client(use_proxy) as http:
-            r = await http.post(url, json=body, headers={'User-Agent': 'AveronCRM-Automations/1'})
+        # Подключаемся к проверенному IP, сохраняя Host и имя для проверки TLS.
+        async with httpx.AsyncClient(timeout=TIMEOUT, trust_env=False, follow_redirects=False) as http:
+            async with http.stream('POST', target.copy_with(host=address), json=body,
+                                   headers={'Host': target.netloc.decode('ascii'),
+                                            'User-Agent': 'AveronCRM-Automations/1'},
+                                   extensions={'sni_hostname': host}) as r:
+                check_status(r, 'Вебхук', include_body=False)
+                return f'POST {url} → {r.status_code}'
     except httpx.HTTPError as exc:
         raise Retry(f'Адрес вебхука не ответил: {type(exc).__name__}')
-    check_status(r, 'Вебхук')
-    return f'POST {url} → {r.status_code}'
 
 
 # --- Каталог: что видит агент и редактор ----------------------------------------------------------
