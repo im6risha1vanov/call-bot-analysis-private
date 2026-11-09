@@ -428,7 +428,7 @@ const menu = () => {
 function showLogin() {
   window.closePageHelp?.();window.CRMGuideGuard?.setMode(false);
   root.innerHTML = `<form class="login panel" autocomplete="on">
-    <div class="logo"><i></i>Averon <b>CRM</b></div>
+    <div class="logo"><span>Averon <b>CRM</b></span></div>
     <h1>Вход в CRM</h1>
     <label class="field">Логин<input name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>
     <label class="field">Пароль<input name="password" type="password" autocomplete="current-password" required></label>
@@ -458,7 +458,7 @@ function shell() {
   moreOpen = m.more.includes(S.page);
   root.innerHTML = `<div class="app">
     <aside class="side">
-      <div class="logo"><i></i><span>Averon <b>CRM</b></span></div>
+      <div class="logo"><span>Averon <b>CRM</b></span></div>
       <nav class="nav" id="nav" aria-label="Разделы"></nav>
       ${window.gptButton && hasModule('gpt') ? gptButton() : ''}
       <div class="side-foot"><span>${esc(S.me.name || '')} · ${esc(ROLE_NAME[S.me.role] || '')}${S.me.ext ? ', доб. ' + esc(S.me.ext) : ''}</span>

@@ -72,9 +72,7 @@ code{font-family:var(--mono);font-size:.92em;background:var(--surface-2);padding
 .app{display:grid;grid-template-columns:232px minmax(0,1fr);min-height:100vh}
 .side{background:var(--surface);border-right:1px solid var(--line);padding-block:18px;padding-right:12px;padding-left:max(12px, env(safe-area-inset-left, 0px));
   display:flex;flex-direction:column;gap:18px;position:sticky;top:0;height:100vh;overflow-y:auto}
-.logo{font-weight:700;font-size:17px;display:flex;align-items:center;gap:9px;padding:0 8px;letter-spacing:-.01em}
-.logo i{width:24px;height:24px;border-radius:7px;background:var(--accent);display:inline-block;position:relative;flex:none}
-.logo i::after{content:"";position:absolute;inset:8px;border-radius:50%;background:var(--accent-ink)}
+.logo{font-weight:700;font-size:17px;display:flex;align-items:center;padding:0 8px;letter-spacing:-.01em}
 .logo b{color:var(--accent-text);font-weight:700}
 .nav{display:flex;flex-direction:column;gap:2px}
 .nav button{position:relative;display:flex;align-items:center;gap:11px;padding:9px 10px;border-radius:9px;border:0;background:none;text-align:left;width:100%;color:var(--fg);transition:background .15s, transform .12s}
