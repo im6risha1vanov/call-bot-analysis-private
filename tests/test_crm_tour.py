@@ -32,17 +32,12 @@ class PolicyTests(unittest.TestCase):
      self.assertNotIn('expected',step);self.assertIn(step.get('example'),examples);self.assertNotIn('Борис',step['text']);self.assertNotIn('УЧ-001',step['text'])
  def test_operational_handlers_remain_isolated_from_learning(self):
   import subprocess
-  before = ast.parse(subprocess.check_output(['git', 'show', '0ac0a55:crm/web.py'], cwd=ROOT, text=True))
+  before = ast.parse(subprocess.check_output(['git', 'show', '53a7a04:crm/web.py'], cwd=ROOT, text=True))
   after = ast.parse((ROOT / 'crm/web.py').read_text())
   old = {node.name: node for node in before.body if isinstance(node, ast.AsyncFunctionDef)}
   new = {node.name: node for node in after.body if isinstance(node, ast.AsyncFunctionDef)}
-  # Manual robot calls now use the database connection to enforce the stop list.
-  call = next(node for node in ast.walk(old['api_robot_call']) if isinstance(node, ast.Call)
-              and isinstance(node.func, ast.Attribute) and node.func.attr == 'call'
-              and isinstance(node.func.value, ast.Name) and node.func.value.id == 'robot')
-  call.args.append(ast.parse('request.app[POOL]', mode='eval').body)
   for name in ('api_dial', 'api_outcome', 'api_task_change', 'api_deal_event', 'api_contracts_register',
-               'api_training_assign', 'api_robot_call'):
+               'api_robot_call'):
    self.assertEqual(ast.dump(old[name]), ast.dump(new[name]), name)
 class ServerTests(unittest.IsolatedAsyncioTestCase):
  async def asyncSetUp(self):

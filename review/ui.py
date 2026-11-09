@@ -4,7 +4,6 @@ from __future__ import annotations
 import logging
 
 from aiogram import F
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from reports import send_long
 from tools import Forbidden, resolve_actor
@@ -24,15 +23,7 @@ def install(router, pool_getter):
             pool = pool_getter()
             actor = await resolve_actor(pool, cq.from_user.id)
             if bits[1] == 't':
-                if not render.train_bot():
-                    raise ValueError('Тренажёр не подключён.')
-                assignment_id = await store.train_assignment(pool, actor, int(bits[2]))
-                url = f'https://t.me/{render.train_bot()}?start=train_{assignment_id}'
-                await cq.bot.send_message(
-                    cq.from_user.id, 'Тренажёр повторит этот момент звонка: клиент тот же, попробуй довести до шага.',
-                    parse_mode=None, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                        InlineKeyboardButton(text='Начать тренировку', url=url)]]))
-                return
+                raise Forbidden('Действие недоступно.')
             row = await store.access(pool, actor, int(bits[2]))
             await send_long(cq.bot, cq.from_user.id, render.details_message(row['meta'], row['data']))
         except (Forbidden, ValueError) as exc:

@@ -7,10 +7,10 @@ const RB_DAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 const RB_COSTS = [['mango_min', 'Минута Mango', 'за минуту'], ['eleven_1k_chars', 'Синтез ElevenLabs', 'за 1000 символов'], ['llm_1k_tokens', 'Модель YandexGPT', 'за 1000 токенов']];
 // Шесть вкладок; клиент видит первые четыре.
 const RB_TABS = [
-  ['campaigns', 'Кампании'], ['numbers', 'Номера'], ['calls', 'Звонки'], ['operators', 'Операторы'],
+  ['campaigns', 'Кампании и номера'], ['calls', 'Звонки'], ['operators', 'Операторы'],
   ['voice', 'Голос', 'director'], ['settings', 'Настройки', 'director'],
 ];
-const RB_OLD_TAB = {contacts: 'numbers', stop: 'numbers', analytics: 'calls', integrations: 'settings'};
+const RB_OLD_TAB = {numbers: 'campaigns', contacts: 'campaigns', stop: 'campaigns', analytics: 'calls', integrations: 'settings'};
 try { const saved = (window.AveronLearningWorkspace ? store.get('crm-robot', {}) : JSON.parse(localStorage.getItem('crm-robot') || '{}')); RB.tab = RB_OLD_TAB[saved.tab] || saved.tab || RB.tab; RB.owner = saved.owner || ''; } catch (e) { /* без хранилища */ }
 
 const rbq = (path, extra = {}) => '/api/robot/cab' + path + qs({owner: RB.owner, ...extra});
@@ -22,7 +22,9 @@ const money = v => v == null ? '—' : `${Number(v).toLocaleString('ru-RU', {max
 const opName = id => (RB.st.operators || []).find(o => o.id === id)?.name || 'Оператор не указан';
 
 VIEWS.robot = async (view, arg) => {
-  if (arg && RB_TABS.some(t => t[0] === arg)) RB.tab = arg;
+  const oldNumbers = ['numbers', 'contacts', 'stop'].includes(arg);
+  const tab = RB_OLD_TAB[arg] || arg;
+  if (tab && RB_TABS.some(t => t[0] === tab)) RB.tab = tab;
   RB.st = await loading(view, api(rbq('')).catch(async e => {
     if (RB.owner) { RB.owner = ''; rbSave(); return api(rbq('')); }
     throw e;
@@ -41,7 +43,16 @@ VIEWS.robot = async (view, arg) => {
   view.innerHTML = `<div class="page">${tabsHtml(tabs.map(([k, t]) => [k, t]), RB.tab)}<div class="page" id="rb-body"></div></div>`;
   $$('[data-tab]', view).forEach(b => b.addEventListener('click', () => { RB.tab = b.dataset.tab; rbSave(); go('robot', RB.tab, {replace: true}); }));
   const body = $('#rb-body', view);
-  try { await RB_VIEW[RB.tab](body); } catch (e) { body.innerHTML = emptyCard(esc(e.message)); }
+  try {
+    if (RB.tab === 'campaigns') {
+      body.innerHTML = '<div data-campaigns></div><div id="rb-numbers"></div>';
+      const panels = [[RB_VIEW.campaigns, $('[data-campaigns]', body)], [RB_VIEW.numbers, $('#rb-numbers', body)]];
+      await Promise.all(panels.map(([render, el]) => render(el).catch(e => { el.innerHTML = errCard(e.message); })));
+      if (oldNumbers && view.isConnected) $('#rb-numbers', body).scrollIntoView();
+    } else {
+      await RB_VIEW[RB.tab](body);
+    }
+  } catch (e) { body.innerHTML = emptyCard(esc(e.message)); }
 };
 
 const RB_VIEW = {};
@@ -193,7 +204,7 @@ function opSortable(list) {
 
 const CAMPAIGN_GUIDE = `<details class="rb-more op-guide"><summary>Как запустить кампанию</summary><div class="op-guide-body">
   <ol>
-    <li><b>Номера.</b> Сначала загрузите их во вкладке «Номера»: файлом CSV или Excel либо из листов «Прозвон лидов». Звоните только тем, кто согласился на звонок.</li>
+    <li><b>Номера.</b> Сначала загрузите их в разделе «Кампании и номера»: файлом CSV или Excel либо из листов «Прозвон лидов». Звоните только тем, кто согласился на звонок.</li>
     <li><b>Оператор.</b> Выберите анкету, по которой робот будет говорить. Своего оператора можно завести на вкладке «Операторы». Перед запуском послушайте его: тестовый звонок делается на вкладке «Голос», а если её у вас нет, попросите менеджера Averon.</li>
     <li><b>Дни и часы.</b> Робот звонит только в эти часы по выбранному часовому поясу. Ставьте пояс клиентов, а не свой.</li>
     <li><b>Попытки и повтор.</b> Если не дозвонился или ответил автоответчик, робот перезвонит через указанное число минут, пока не кончатся попытки. Обычно хватает 2–3 попыток с перерывом в 2 часа.</li>
@@ -230,7 +241,7 @@ RB_VIEW.campaigns = async el => {
         <td class="n nw">${c.done} из ${c.total}</td><td class="n">${c.interested}</td>
         <td>${c.status === 'running' ? `<button class="btn small" type="button" data-ca="pause" data-id="${c.id}"${rbRO()}>Пауза</button>`
           : c.status !== 'done' ? `<button class="btn small primary" type="button" data-ca="start" data-id="${c.id}"${rbRO()}>Запустить</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`
-      : '<div class="empty">Кампаний пока нет. Сначала загрузите номера во вкладке «Номера».</div>'}</section>`;
+      : '<div class="empty">Кампаний пока нет. Добавьте контакты в блоке «Номера для обзвона» ниже.</div>'}</section>`;
   $('#cp-new', el).addEventListener('click', () => campaignForm(null));
   $$('[data-ce]', el).forEach(tr => tr.addEventListener('click', e => { if (!e.target.closest('[data-ca]')) campaignForm(items.find(c => c.id === +tr.dataset.ce)); }));
   $$('[data-ca]', el).forEach(b => b.addEventListener('click', async () => {

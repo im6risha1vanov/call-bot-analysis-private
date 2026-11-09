@@ -1525,48 +1525,45 @@ class WebTests(DBCase):
         self.assertEqual((rop['title'], rop['calls']), ('Итог дня по отделу', [{'id': 5, 'label': 'Первый · 10:00'}]))
         self.assertEqual({i['who'] for i in items if i['kind'] == 'day_manager'}, {'Первый', 'Второй'})
 
-    async def test_trainings(self):
+    async def test_trainings_are_visible_only_to_owner(self):
         h = {'X-CRM': '1'}
-        await self.pool.execute(
-            """INSERT INTO training_sessions(client_id,extension,mode,status,drill_state,transcript) VALUES
-               (1,'101','drill','completed',$1,'[]'),(1,'102','dialog','completed','{}',$2)""",
-            json.dumps({'results': [{'objection': 'Дорого', 'answer': 'Давайте посчитаем', 'passed': True, 'comment': 'ок'},
-                                    {'objection': 'Нет времени', 'answer': 'Ладно', 'passed': False}]}),
-            json.dumps([{'role': 'client', 'text': 'Алло'}, {'role': 'manager', 'text': 'Добрый день'}]))
-        with patch.dict(os.environ, {'TRAIN_BOT_USERNAME': 'trainer_bot'}), \
-                patch('crm.training.notify', AsyncMock(return_value=True)) as notify:
+        await self.pool.execute("UPDATE employees SET role='owner' WHERE telegram_user_id=901")
+        training_id = await self.pool.fetchval(
+            "INSERT INTO training_sessions(client_id,extension,mode,status,transcript) "
+            "VALUES(1,'101','dialog','completed','[]') RETURNING id")
+        with patch.dict(os.environ, {'TRAIN_BOT_USERNAME': 'trainer_bot'}):
             await self.login(901)
-            r = await self.http.post('/api/trainings', json={'person_ext': '101', 'mode': 'drill', 'topic': 'дорого'}, headers=h)
-            self.assertEqual(r.status, 200, await r.text())
-            notify.assert_awaited_once()
-            self.assertEqual((await self.http.post('/api/trainings', json={'person_ext': '999', 'mode': 'drill'}, headers=h)).status, 400)
-            team = await (await self.http.get('/api/trainings?ext=102')).json()
-            self.assertEqual([t['ext'] for t in team['items']], ['102'])
+            self.assertEqual((await (await self.http.get('/api/me')).json())['trainer'], 'trainer_bot')
+            self.assertEqual((await self.http.get(f'/api/trainings/{training_id}')).status, 200)
+            self.assertEqual((await self.http.post('/api/trainings', json={}, headers=h)).status, 403)
             await self.http.post('/api/logout', json={}, headers=h)
-
             await self.login(123)
-            mine = await (await self.http.get('/api/trainings?ext=102')).json()
-            self.assertEqual([(t['ext'], t['result']) for t in mine['items']], [('101', 'зачтено 1 из 2')])
-            self.assertEqual(len(mine['pending']), 1)
-            self.assertTrue(mine['pending'][0]['link'].startswith('https://t.me/trainer_bot?start=train_'))
-            one = await (await self.http.get(f"/api/trainings/{mine['items'][0]['id']}")).json()
-            self.assertEqual([c['passed'] for c in one['checks']], [True, False])
-            other = await self.pool.fetchval("SELECT id FROM training_sessions WHERE extension='102'")
-            self.assertEqual((await self.http.get(f'/api/trainings/{other}')).status, 403)
-            self.assertEqual((await self.http.post('/api/trainings', json={'person_ext': '101', 'mode': 'drill'}, headers=h)).status, 403)
+            self.assertIsNone((await (await self.http.get('/api/me')).json())['trainer'])
+            self.assertIsNone((await (await self.http.get('/api/person')).json())['trainings'])
+            self.assertEqual((await self.http.get('/api/trainings')).status, 403)
+            self.assertEqual((await self.http.get(f'/api/trainings/{training_id}')).status, 403)
+            self.assertEqual((await self.http.post('/api/review/1/train', json={}, headers=h)).status, 403)
 
-            # «Потренировать» ошибку из своего разбора
-            call_id = await self.pool.fetchval(
-                "INSERT INTO calls(client_id,extension,transcript,call_started_at,client_number) VALUES(1,'101',$1,now(),'79990001122') RETURNING id",
-                TRANSCRIPT)
-            call = await self.pool.fetchrow('SELECT * FROM calls WHERE id=$1', call_id)
-            async with self.pool.acquire() as conn:
-                await review_store.save(conn, call, engine.validate(copy.deepcopy(LOST), TRANSCRIPT), 1.0)
-            self.assertTrue((await (await self.http.get(f'/api/review/{call_id}')).json())['can_train'])
-            r = await (await self.http.post(f'/api/review/{call_id}/train', json={}, headers=h)).json()
-            self.assertTrue(r['link'].startswith('https://t.me/trainer_bot?start=train_'))
-            self.assertEqual(await self.pool.fetchval('SELECT topic FROM pending_train_assignments ORDER BY id DESC LIMIT 1'),
-                             f'review:{call_id}')
+    async def test_owner_manages_other_company_accounts(self):
+        headers = {'X-CRM': '1'}
+        await self.pool.execute("INSERT INTO clients(id,timezone) VALUES(2,'Europe/Moscow')")
+        await self.login(901)
+        self.assertEqual((await self.http.get('/api/access?company=2')).status, 403)
+        await self.pool.execute("UPDATE employees SET role='owner' WHERE telegram_user_id=901")
+        response = await self.http.post('/api/access?company=2',
+                                        json={'role': 'director', 'login': 'new.director'}, headers=headers)
+        self.assertEqual(response.status, 200, await response.text())
+        invite_id = (await response.json())['invites'][0]['id']
+        path = f'/api/access/{invite_id}'
+        response = await self.http.post(path + '/account?company=2',
+                                        json={'login': 'changed.director', 'new': True}, headers=headers)
+        self.assertEqual(response.status, 200, await response.text())
+        credentials = await response.json()
+        session, _ = await auth.password_login(self.pool, credentials['login'], credentials['password'])
+        self.assertEqual((await auth.viewer_for(self.pool, session)).company, 2)
+        response = await self.http.post(path + '/revoke?company=2', json={}, headers=headers)
+        self.assertEqual(response.status, 200, await response.text())
+        self.assertIsNone(await auth.viewer_for(self.pool, session))
 
     async def test_ask_department(self):
         h = {'X-CRM': '1'}

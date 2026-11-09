@@ -128,7 +128,7 @@ function callbackMove(row, t, today) {
 }
 
 VIEWS.callbacks = async view => {
-  setHead({filters: managerSelect(S.f.ext)});
+  setHead({filters: isDir() ? managerSelect(S.f.ext) : queueTabs('callbacks')});
   bindManager($('#top'), () => reload());
   const data = await loading(view, api('/api/callbacks' + qs({ext: isDir() ? S.f.ext : ''})), 'cards');
   const today = data.today;

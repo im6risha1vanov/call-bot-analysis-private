@@ -425,6 +425,8 @@ async def get_training_history(pool: asyncpg.Pool, actor: Actor, manager_extensi
     какой теме/сценарию, с каким результатом. Оценка тренировки — той же
     линейкой (score_call/compute_level), что и реальные звонки, поэтому level
     здесь сравним с level в get_stats/find_calls."""
+    if actor.role != 'owner':
+        raise Forbidden('Раздел недоступен.')
     extension = _scope_extension(actor, manager_extension)
     client = await _require_client(pool, actor.client_id)
     limit = min(int(limit), 50)

@@ -27,7 +27,6 @@ from . import activity, economics, lead_import
 from . import learning, tour
 from . import accounts, ask as asking, auth, automation_agent, automations, cabinet, callcenter_db, company, contracts, deals, donor_agent, gpt, journal, overview, people, platform, recording, reviews, sources, staff, store, training  # noqa: E402
 from . import prompts as prompt_mode, robot, webphone, robot_api, robot_prices, robot_runner, robot_store  # noqa: E402
-from review import store as review_store  # noqa: E402
 from .dial import dial  # noqa: E402
 
 log = logging.getLogger('crm')
@@ -274,7 +273,8 @@ async def api_me(request):
     pool = request.app[POOL]
     firm = await company.info(pool, who.company)
     cc_mode = ('sheet' if firm['settings'].get('callcenter_sheet') else 'db') if 'callcenter' in firm['modules'] else None
-    firm = {'company': firm['name'], 'modules': firm['modules'], 'support': who.support, 'callcenter_mode': cc_mode,
+    owner = await is_home_owner(pool, who)
+    firm = {'manage_accounts': owner, 'trainer': training.bot() if owner else None, 'company': firm['name'], 'modules': firm['modules'], 'support': who.support, 'callcenter_mode': cc_mode,
             'platform': who.platform and not who.support and firm['home'], 'switcher': await can_switch(pool, who),
             'learning_mode':tour.active(request) and who.role in {'manager','director'}}
     if who.role == 'client':
@@ -493,25 +493,27 @@ async def api_review(request):
 
 
 async def api_review_train(request):
-    who = await actor(request, write=True)
-    assignment_id = await review_store.train_assignment(request.app[POOL], who, int_id(request.match_info['id']))
-    return web.json_response({'link': training.link(assignment_id)})
+    raise Forbidden('Действие недоступно.')
+
+
+async def trainer_owner(request):
+    who = await viewer(request)
+    if not await is_home_owner(request.app[POOL], who):
+        raise Forbidden('Раздел недоступен.')
+    return who.actor
 
 
 async def api_trainings(request):
-    who = await actor(request)
+    who = await trainer_owner(request)
     return web.json_response(await training.listing(request.app[POOL], who, request.query.get('ext') or None))
 
 
 async def api_training(request):
-    return web.json_response(await training.detail(request.app[POOL], await actor(request), int_id(request.match_info['id'])))
+    return web.json_response(await training.detail(request.app[POOL], await trainer_owner(request), int_id(request.match_info['id'])))
 
 
 async def api_training_assign(request):
-    who = await director(request)
-    data = await body(request)
-    return web.json_response(await training.assign(request.app[POOL], who.actor, data.get('person_ext'),
-                                                   str(data.get('mode') or ''), data.get('topic')))
+    raise Forbidden('Действие недоступно.')
 
 
 def base_url(request) -> str:
@@ -519,17 +521,50 @@ def base_url(request) -> str:
     return url if url.startswith('https://') else f'{request.scheme}://{request.host}'
 
 
+async def is_home_owner(pool, who) -> bool:
+    return bool(who.actor and who.actor.role == 'owner' and who.actor.telegram_user_id
+                and not who.test and not who.support and who.company == await home_client_id(pool))
+
+
+async def access_company(request, who) -> int:
+    value = request.query.get('company')
+    if value is None:
+        return who.company
+    pool = request.app[POOL]
+    if not await is_home_owner(pool, who):
+        raise Forbidden('Раздел доступен только владельцу.')
+    tenant = int_id(value)
+    if not 0 < tenant < 2**31 or not await pool.fetchval('SELECT 1 FROM clients WHERE id=$1', tenant):
+        raise ValueError('Такой компании нет.')
+    return tenant
+
+
+async def check_account_target(request, who, tenant, invite_id, *, revoke=False):
+    pool = request.app[POOL]
+    if revoke and invite_id == who.invite_id:
+        raise ValueError('Нельзя удалить учётную запись, под которой вы вошли.')
+    protected = await pool.fetchval(
+        """SELECT i.platform OR EXISTS (
+               SELECT 1 FROM employees e WHERE e.client_id=i.client_id
+               AND e.telegram_user_id=i.telegram_user_id AND e.role='owner')
+           FROM crm_invites i WHERE i.id=$1 AND i.client_id=$2 AND i.revoked_at IS NULL""",
+        invite_id, tenant)
+    if protected and not await is_home_owner(pool, who):
+        raise Forbidden('Этой учётной записью управляет владелец.')
+
+
 async def api_access(request):
     who = await director(request)
     pool = request.app[POOL]
+    tenant = await access_company(request, who)
     try:
-        clients = await cabinet.client_names(pool, who.company)
+        clients = await cabinet.client_names(pool, tenant)
     except Exception:
         log.exception('список клиентов колл-центра не загрузился')
         clients = []
-    return web.json_response({'invites': await auth.invites(pool, who.actor.client_id),
-                              'managers': await store.team(pool, who.actor.client_id), 'clients': clients,
-                              'directors': await auth.directors(pool, who.actor.client_id)})
+    return web.json_response({'invites': await auth.invites(pool, tenant), 'current': who.invite_id,
+                              'managers': await store.team(pool, tenant), 'clients': clients,
+                              'directors': await auth.directors(pool, tenant)})
 
 
 async def api_access_create(request):
@@ -538,27 +573,36 @@ async def api_access_create(request):
     pool = request.app[POOL]
     data = await body(request)
     role = str(data.get('role') or '')
-    if role == 'client' and str(data.get('client') or '') not in await cabinet.client_names(pool, who.company):
+    tenant = await access_company(request, who)
+    if role == 'director' and data.get('tg') and not await is_home_owner(pool, who):
+        if await pool.fetchval("SELECT 1 FROM employees WHERE client_id=$1 AND telegram_user_id::text=$2 AND role='owner'",
+                               tenant, str(data['tg'])):
+            raise Forbidden('Учётную запись владельца создаёт только владелец.')
+    if role == 'client' and str(data.get('client') or '') not in await cabinet.client_names(pool, tenant):
         raise ValueError('Такого клиента нет.')
     login = str(data.get('login') or '').strip()
     if not login:
-        team = {m['ext']: m['name'] for m in await store.team(pool, who.actor.client_id)}
-        heads = {d['tg']: d['name'] for d in await auth.directors(pool, who.actor.client_id)}
+        team = {m['ext']: m['name'] for m in await store.team(pool, tenant)}
+        heads = {d['tg']: d['name'] for d in await auth.directors(pool, tenant)}
         name = {'manager': team.get(str(data.get('person_ext') or '')), 'client': data.get('client'),
                 'director': heads.get(str(data.get('tg') or '')) or data.get('name')}.get(role)
         login = await accounts.free_login(pool, accounts.slug(name or '') or role)
-    password = await auth.account_create(pool, who.actor.client_id, role, login, data.get('person_ext'), data.get('client'),
+    password = await auth.account_create(pool, tenant, role, login, data.get('person_ext'), data.get('client'),
                                           data.get('name'), data.get('tg'), data.get('password') or None)
     return web.json_response({'login': auth.clean_login(login), 'password': password,
-                              'invites': await auth.invites(pool, who.actor.client_id)})
+                              'invites': await auth.invites(pool, tenant)})
 
 
 async def api_access_account(request):
     """Директор меняет логин или пароль учётной записи."""
     who = await director(request)
     data = await body(request)
-    item = await auth.account_change(request.app[POOL], who.actor.client_id, int_id(request.match_info['id']),
-                                     data.get('login'), data.get('password') or None, bool(data.get('new')))
+    tenant = await access_company(request, who)
+    invite_id = int_id(request.match_info['id'])
+    await check_account_target(request, who, tenant, invite_id)
+    item = await auth.account_change(request.app[POOL], tenant, invite_id,
+                                     data.get('login'), data.get('password') or None, bool(data.get('new')),
+                                     allow_legacy=await is_home_owner(request.app[POOL], who))
     return web.json_response(item)
 
 
@@ -620,7 +664,8 @@ async def api_switch_accounts(request):
     who = await viewer(request)
     pool = request.app[POOL]
     await platform.switcher(pool, who)
-    return web.json_response({'accounts': await platform.accounts_all(pool), 'current': who.invite_id})
+    return web.json_response({'accounts': await platform.accounts_all(pool), 'current': who.invite_id,
+                              'manage': await is_home_owner(pool, who)})
 
 
 async def api_switch(request):
@@ -654,7 +699,10 @@ async def api_company_enter(request):
 
 async def api_access_revoke(request):
     who = await director(request)
-    await auth.invite_revoke(request.app[POOL], who.actor.client_id, int_id(request.match_info['id']))
+    tenant = await access_company(request, who)
+    invite_id = int_id(request.match_info['id'])
+    await check_account_target(request, who, tenant, invite_id, revoke=True)
+    await auth.invite_revoke(request.app[POOL], tenant, invite_id)
     return web.json_response({'ok': True})
 
 
@@ -678,8 +726,11 @@ async def api_staff(request):
 
 async def api_person(request):
     """Карточка сотрудника. Директор выбирает человека (?person=), менеджер видит только себя."""
-    who = await actor(request)
-    return web.json_response(await people.card(request.app[POOL], who, request.query.get('person')))
+    who = await viewer(request)
+    if who.actor is None:
+        raise Forbidden('Этот раздел недоступен.')
+    return web.json_response(await people.card(request.app[POOL], who.actor, request.query.get('person'),
+                                               include_training=await is_home_owner(request.app[POOL], who)))
 
 
 async def api_deals(request):

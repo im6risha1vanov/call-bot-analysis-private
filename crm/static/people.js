@@ -8,9 +8,31 @@ const crmChip = p => p.crm_links ? `<span class="chip ${p.crm_used ? 'good' : ''
 const exBtns = list => (list || []).map(c => `<button class="btn small" type="button" data-review="${c.id}">${esc(c.at ? when(c.at) : 'звонок ' + c.id)}</button>`).join('');
 
 VIEWS.staff = async (view, arg) => {
+  if (arg === 'accounts' && S.me.manage_accounts) {
+    setHead({title: 'Учётные записи', back: () => go('staff')});
+    view.innerHTML = '<div class="page"><div data-account-company></div><div data-staff-accounts></div></div>';
+    const panel = $('[data-staff-accounts]', view);
+    if (S.me.platform) {
+      const {companies} = await api('/api/platform/companies');
+      if (!view.isConnected) return;
+      $('[data-account-company]', view).innerHTML = `<label class="field">Компания<select>${companies.map(c =>
+        `<option value="${c.id}"${c.home ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>`;
+      const select = $('select', view);
+      const draw = () => {
+        const next = document.createElement('div');
+        panel.replaceChildren(next);
+        return loading(next, accessView(next, select.value), 'table').catch(e => { next.innerHTML = errCard(e.message); });
+      };
+      select.addEventListener('change', draw);
+      return draw();
+    }
+    return loading(panel, accessView(panel), 'table');
+  }
   if (arg) return personView(view, arg);
   setHead({actions: S.me.readonly || S.me.support ? '' :
-    '<button class="btn primary" type="button" data-register>Добавить менеджера</button><button class="btn" type="button" data-add>Пригласить в Telegram</button>'});
+    '<button class="btn primary" type="button" data-register>Добавить менеджера</button><button class="btn" type="button" data-add>Пригласить в Telegram</button>' +
+    (S.me.manage_accounts ? '<button class="btn" type="button" data-go="staff" data-arg="accounts">Учётные записи</button>' : '') +
+    (S.me.trainer ? `<a class="btn" href="https://t.me/${encodeURIComponent(S.me.trainer)}" target="_blank" rel="noopener">Тренажёр</a>` : '')});
   $('[data-register]', $('#top'))?.addEventListener('click', addManager);
   $('[data-add]', $('#top'))?.addEventListener('click', addPerson);
   const d = await loading(view, api('/api/staff'), 'table');
@@ -111,11 +133,11 @@ const PERSON_TABS = [['over', 'Обзор'], ['train', 'Тренировки'], 
 
 async function personView(view, ext) {
   const p = await loading(view, api('/api/person' + qs({person: ext || ''})), 'page');
-  const tabs = PERSON_TABS.filter(([k]) => k === 'access' ? !!p.access : k === 'train' ? p.manager : true);
+  const tabs = PERSON_TABS.filter(([k]) => k === 'access' ? !!p.access : k === 'train' ? p.manager && S.me.trainer && p.trainings : true);
   let tab = tabs.some(([k]) => k === S.personTab) ? S.personTab : 'over';
   const own = !ext;
   const dir = S.me.role === 'director';
-  const links = p.manager ? `<div class="links">
+  const links = p.manager && dir ? `<div class="links">
     <button class="ghost" type="button" data-go="calls"${dir ? ` data-fext="${esc(p.ext)}"` : ''}>Звонки</button>
     <button class="ghost" type="button" data-go="callbacks"${dir ? ` data-fext="${esc(p.ext)}"` : ''}>Перезвоны</button>
     <button class="ghost" type="button" data-go="deals"${dir ? ` data-fext="${esc(p.ext)}"` : ''}>Сделки</button>
@@ -205,28 +227,15 @@ const PERSON_TAB = {
     $$('[data-mem]', el).forEach(b => b.addEventListener('click', () => memoryModal(cards[+b.dataset.mem])));
   },
 
-  train(el, p, again) {
-    const t = p.trainings, top = p.mistakes[0];
-    const canAssign = S.me.role === 'director' && !S.me.test;
-    el.innerHTML = `${canAssign ? `<section class="card blk"><div class="card-h"><h2>Назначить тренировку</h2></div>
-        <p class="lead" data-css="margin-bottom:12px">Менеджеру придёт сообщение в боте с кнопкой старта. Тренажёр работает в Telegram, там можно отвечать голосом.</p>
-        <div class="row">${top ? `<button class="btn primary" type="button" data-tr="drill">Отработать «${esc(top.label)}»</button>` : ''}
-          <button class="btn" type="button" data-tr="dialog">Разговор целиком</button></div></section>` : ''}
-      ${t.pending.length ? `<section class="card blk" data-css="--i:1"><div class="card-h"><h2>Назначено, ещё не начато</h2><span class="hint">${t.pending.length}</span></div><div class="list">
-        ${t.pending.map(x => `<div class="item"><div class="main-l"><div class="t">${esc(x.mode)}</div>${x.topic ? `<div class="s">${esc(x.topic)}</div>` : ''}</div>
-          ${x.link ? `<a class="btn small primary" href="${esc(x.link)}" target="_blank" rel="noopener">Начать в тренажёре</a>` : ''}</div>`).join('')}</div></section>` : ''}
+  train(el, p) {
+    const t = p.trainings;
+    el.innerHTML = `<section class="card blk"><div class="card-h"><h2>Тренажёр</h2><span class="sp"></span>
+      <a class="btn" href="https://t.me/${encodeURIComponent(S.me.trainer)}" target="_blank" rel="noopener">Открыть в Telegram</a></div></section>
       <section class="card blk" data-css="--i:2"><div class="card-h"><h2>Пройденные тренировки</h2><span class="hint">${t.items.length}</span></div>${t.items.length ? `<div class="tbl-wrap"><table class="tbl anim">
         <thead><tr><th>Когда</th><th>Режим</th><th class="hide-m">Тема</th><th>Итог</th></tr></thead><tbody>
         ${t.items.map((x, r) => `<tr class="click" data-tid="${x.id}" data-css="--r:${Math.min(r, 20)}"><td class="nw">${fmtWhen(x.at)}</td><td>${esc(x.mode)}</td><td class="hide-m">${esc(x.topic || '')}</td><td>${esc(x.result)}${x.test ? ' <span class="s">· пробная</span>' : ''}</td></tr>`).join('')}
-        </tbody></table></div>` : `<div class="empty">Тренировок пока не было.${S.me.role === 'manager' ? ' Откройте разбор звонка и нажмите «Потренировать этот момент».' : ''}</div>`}</section>`;
+        </tbody></table></div>` : `<div class="empty">Тренировок пока не было.</div>`}</section>`;
     $$('tr[data-tid]', el).forEach(tr => tr.addEventListener('click', () => trainingDetail(tr.dataset.tid)));
-    $$('[data-tr]', el).forEach(b => b.addEventListener('click', async () => {
-      busy(b, true);
-      try {
-        await api('/api/trainings', {method: 'POST', body: {person_ext: p.ext, mode: b.dataset.tr, topic: b.dataset.tr === 'drill' ? top.label : ''}});
-        doneBtn(b, 'Назначено'); setTimeout(again, 900);
-      } catch (e) { busy(b, false); toast(e.message, true); }
-    }));
   },
 
   access(el, p, again) {

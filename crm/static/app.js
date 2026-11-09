@@ -402,7 +402,7 @@ const PAGES = {
 };
 const MENU = {
   director: {nav: ['summary', 'calls', 'callbacks', 'deals', 'staff', 'callcenter', 'robot'], more: ['learning', 'sources', 'reports', 'logs', 'economics', 'auto', 'settings', 'companies'], tabs: ['summary', 'calls', 'callbacks', 'deals']},
-  manager: {nav: ['queue', 'callbacks', 'deals', 'calls', 'me'], more: ['learning', 'callcenter', 'sources', 'reports'], tabs: ['queue', 'callbacks', 'deals', 'calls']},
+  manager: {nav: ['queue', 'deals', 'calls'], more: ['me', 'learning', 'callcenter', 'sources', 'reports'], tabs: ['queue', 'deals', 'calls']},
   client: {nav: ['cab', 'robot'], more: [], tabs: ['cab', 'robot']},
 };
 const HOME = {director: 'summary', manager: 'queue', client: 'cab'};
@@ -488,7 +488,7 @@ function shell() {
 }
 function navButton(id) {
   const p = PAGES[id];
-  return `<button type="button" data-go="${id}"${S.page === id ? ' aria-current="page"' : ''}>${svg(p.icon)}<span>${esc(p.name)}</span><span class="count" data-count="${id}">${S.counts?.[id] || ''}</span></button>`;
+  return `<button type="button" data-go="${id}"${(S.page === id || (id === 'queue' && S.me.role === 'manager' && S.page === 'callbacks')) ? ' aria-current="page"' : ''}>${svg(p.icon)}<span>${esc(p.name)}</span><span class="count" data-count="${id}">${S.counts?.[id] || ''}</span></button>`;
 }
 function renderNav() {
   const m = menu();
@@ -496,9 +496,9 @@ function renderNav() {
   $('#nav').innerHTML = m.nav.map(navButton).join('') + (m.more.length ? `<button type="button" class="more" aria-expanded="${moreOpen}">${svg('dots')}<span>Ещё</span>${svg('chev', 'chev')}</button>
     <div class="sub${moreOpen ? ' open' : ''}"><div>${m.more.map(id => `<button type="button" data-go="${id}"${S.page === id ? ' aria-current="page"' : ''}>${esc(PAGES[id].name)}</button>`).join('')}</div></div>` : '');
   const rest = [...m.nav, ...m.more].filter(id => !m.tabs.includes(id));
-  const inTabs = m.tabs.includes(S.page);
+  const inTabs = m.tabs.includes(S.page) || (S.me.role === 'manager' && S.page === 'callbacks');
   $('#tabbar').hidden = false;
-  $('#tabbar').innerHTML = m.tabs.map(id => `<button type="button" data-go="${id}"${S.page === id ? ' aria-current="page"' : ''}>${svg(PAGES[id].icon)}${esc(PAGES[id].name)}<span class="count" data-count="${id}">${S.counts?.[id] || ''}</span></button>`).join('') +
+  $('#tabbar').innerHTML = m.tabs.map(id => `<button type="button" data-go="${id}"${(S.page === id || (id === 'queue' && S.me.role === 'manager' && S.page === 'callbacks')) ? ' aria-current="page"' : ''}>${svg(PAGES[id].icon)}${esc(PAGES[id].name)}<span class="count" data-count="${id}">${S.counts?.[id] || ''}</span></button>`).join('') +
     (rest.length ? `<button type="button" data-sheet${inTabs ? '' : ' aria-current="page"'}>${svg('dots')}Ещё</button>` : '');
 }
 function moreSheet() {
@@ -518,7 +518,7 @@ function setCount(page, n) {
 function setHead({title = '', sub = '', filters = '', back = null, actions = ''} = {}) {
   const top = $('#top');
   top.innerHTML = `<div class="title-row">${back ? `<button class="back" type="button" aria-label="Назад">${svg('back')}</button>` : ''}
-    <h1>${esc(title || PAGES[S.page]?.name || '')}</h1>${sub ? `<span class="sub-t">${sub}</span>` : ''}<span class="sp"></span>${actions}${['manager','director'].includes(S.me?.role)?'<button class="ghost small" type="button" data-page-help aria-controls="page-help" aria-expanded="false">Справка</button>':''}</div>
+    <h1>${esc(title || PAGES[S.page]?.name || '')}</h1>${sub ? `<span class="sub-t">${sub}</span>` : ''}<div class="head-actions">${actions}${['manager','director'].includes(S.me?.role)?'<button class="btn" type="button" data-page-help aria-controls="page-help" aria-expanded="false">Справка</button>':''}</div></div>
     <div class="bar-f">${filters}</div>`;
   if (back) $('.back', top).onclick = back;
   return top;

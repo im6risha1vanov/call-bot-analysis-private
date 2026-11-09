@@ -24,8 +24,9 @@ _client = httpx.AsyncClient(timeout=30.0)
 
 
 class MangoHTTPError(RuntimeError):
-    def __init__(self, method: str, status: int):
+    def __init__(self, method: str, status: int, retry_after: str | None = None):
         self.status = status
+        self.retry_after = int(retry_after) if retry_after and len(retry_after) <= 7 and retry_after.isascii() and retry_after.isdigit() else None
         super().__init__(f'Mango {method} HTTP {status}')
 
 
@@ -42,7 +43,7 @@ async def call(method: str, vpbx_api_key: str, salt: str, payload: dict, timeout
     data = {"vpbx_api_key": vpbx_api_key, "sign": sign(vpbx_api_key, raw, salt), "json": raw}
     r = await _client.post(f"{BASE_URL}/{method}", data=data, timeout=timeout)
     if r.status_code >= 300:
-        raise MangoHTTPError(method, r.status_code)
+        raise MangoHTTPError(method, r.status_code, r.headers.get('Retry-After'))
     return r.json()
 
 

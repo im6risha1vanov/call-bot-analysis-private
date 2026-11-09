@@ -277,13 +277,14 @@ async def poll_all_clients(pool: asyncpg.Pool, next_poll_at: dict[int, float]) -
             _last_error_notice.pop(client["id"], None)
             _rate_limited_since.pop(client["id"], None)
         except Exception as exc:
-            if " 429:" in str(exc):
+            if isinstance(exc, mango_client.MangoHTTPError) and exc.status == 429:
                 # Общий лимит запросов ВАТС: его расходуют и другие интеграции Mango.
                 # Звонки не теряются (окно опроса начинается с прошлого успешного),
                 # поэтому владельцу пишем, только если лимит не отпускает долго.
                 since = _rate_limited_since.setdefault(client["id"], now)
-                log.warning("Mango: лимит запросов, client id=%s, повтор через %s сек", client["id"], RATE_LIMIT_RETRY_SEC)
-                next_poll_at[client["id"]] = now + RATE_LIMIT_RETRY_SEC
+                delay = max(client["mango_poll_interval_sec"], RATE_LIMIT_RETRY_SEC, exc.retry_after or 0)
+                log.warning("Mango: лимит запросов, client id=%s, повтор через %s сек", client["id"], delay)
+                next_poll_at[client["id"]] = time.monotonic() + delay
                 if now - since >= RATE_LIMIT_NOTICE_AFTER_SEC:
                     await _send_poll_error(pool, client, f"лимит запросов Mango не отпускает больше "
                                                          f"{int((now - since) // 60)} минут: {exc}")

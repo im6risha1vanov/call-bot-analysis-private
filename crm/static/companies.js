@@ -85,20 +85,29 @@ async function switchAccount() {
     <div class="rvm-body"><label class="field">Поиск<input data-q placeholder="имя, логин, компания" autocomplete="off"></label><div data-list><p class="hint">Загружаю…</p></div></div>`, true);
   const ROLE = {director: 'директор', manager: 'менеджер', client: 'клиент'};
   let d;
-  try { d = await api('/api/platform/accounts'); } catch (e) { $('[data-list]', box).innerHTML = `<p class="bad-text">${esc(e.message)}</p>`; return; }
+  const loadAccounts = async () => { d = await api('/api/platform/accounts'); };
+  try { await loadAccounts(); } catch (e) { $('[data-list]', box).innerHTML = `<p class="bad-text">${esc(e.message)}</p>`; return; }
   const draw = () => {
     const q = $('[data-q]', box).value.trim().toLowerCase();
     const list = d.accounts.filter(a => !q || [a.name, a.login, a.company, a.client, a.ext].some(v => String(v || '').toLowerCase().includes(q)));
     const groups = [...new Set(list.map(a => a.company))];
     $('[data-list]', box).innerHTML = list.length ? groups.map(g => `<h3>${esc(g)}</h3><div class="sheet-list">${list.filter(a => a.company === g).map(a =>
-      `<button type="button" data-acc="${a.id}"${a.id === d.current ? ' aria-current="page"' : ''}><span><b>${esc(a.name)}</b> · ${esc(ROLE[a.role] || a.role)}${a.ext ? ', доб. ' + esc(a.ext) : ''}
-        <span class="hint">${a.login ? esc(a.login) : 'старая ссылка'}${a.id === d.current ? ' · сейчас' : ''}</span></span>${svg('chev')}</button>`).join('')}</div>`).join('')
+      `<div class="account-switch-row"><button type="button" data-acc="${a.id}"${a.id === d.current ? ' aria-current="page"' : ''}><span><b>${esc(a.name)}</b> · ${esc(ROLE[a.role] || a.role)}${a.ext ? ', доб. ' + esc(a.ext) : ''}
+        <span class="hint">${a.login ? esc(a.login) : 'старая ссылка'}${a.id === d.current ? ' · сейчас' : ''}</span></span>${svg('chev')}</button>${d.manage ? `<button type="button" class="btn" data-account-edit="${a.id}" aria-label="Изменить: ${esc(a.name)}">Изменить</button>` : ''}</div>`).join('')}</div>`).join('')
       : '<p class="hint">Никого не нашлось.</p>';
   };
   draw();
   $('[data-q]', box).addEventListener('input', draw);
   $('[data-q]', box).focus();
   $('[data-list]', box).addEventListener('click', async e => {
+    const edit = e.target.closest('[data-account-edit]');
+    if (edit && d.manage) {
+      const a = d.accounts.find(item => item.id === +edit.dataset.accountEdit);
+      if (!a) return;
+      box.close();
+      editAccount(a, null, qs({company: a.company_id}));
+      return;
+    }
     const b = e.target.closest('[data-acc]');
     if (!b) return;
     busy(b, true);

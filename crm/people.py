@@ -82,7 +82,7 @@ async def target(pool, actor, ext) -> dict:
     return await staff._person(pool, actor.client_id, ext)
 
 
-async def card(pool, actor, ext, now: datetime | None = None) -> dict:
+async def card(pool, actor, ext, now: datetime | None = None, *, include_training=False) -> dict:
     person = await target(pool, actor, ext)
     ext = person['ext']
     privileged = is_privileged(actor)
@@ -135,7 +135,7 @@ async def card(pool, actor, ext, now: datetime | None = None) -> dict:
         'outcome_labels': render.OUTCOME_LABELS,
         'calls': [call_item(r, tz) for r in rows[:60]],
         'tasks': (await store.tasks(pool, actor.client_id, ext))['items'][:50],
-        'trainings': await training.listing(pool, actor, ext),
+        'trainings': await training.listing(pool, actor, ext) if include_training else None,
         'memory': await memory_view(pool, actor.client_id, ext, tz),
         'memory_on': memory.enabled(),
         'memory_hour': memory.hour(),

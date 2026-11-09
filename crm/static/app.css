@@ -684,17 +684,27 @@ audio.rec{display:block;width:100%;max-width:420px;height:36px;margin-top:6px}
 .time-caption{margin:4px 0 10px;line-height:1.5}
 .page,.card,.drawer,.rvm,.gpt{overflow-wrap:anywhere}
 @media(max-width:600px){.title-row{flex-wrap:wrap}.title-row [data-page-help]{margin-left:auto}.row .btn{white-space:normal}.field input,.field select,.field textarea{max-width:100%}}
-.title-row:has([data-go="queue"][data-arg="manage"]) > :is([data-go="queue"][data-arg="manage"],[data-page-help]){
-  display:inline-flex;align-items:center;justify-content:center;width:min(170px,calc((100% - 10px)/2));
-  height:40px;padding:6px 8px;border-radius:9px;font-size:13.5px;font-weight:600;line-height:1.15;
-  white-space:normal;text-align:center;margin-left:0
+/* A single rhythm for page actions, navigation and account switching. */
+.head-actions{margin-inline-start:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.head-actions:empty{display:none}
+.head-actions > :is(button,a),.bar-f .links > button{min-height:38px}
+.bar-f .links > [aria-current="page"]{color:var(--accent-text);border-color:var(--accent);background:var(--accent-soft)}
+.account-switch-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}
+.account-switch-row > [data-acc]{width:100%;min-width:0}
+.account-switch-row > [data-acc] span{min-width:0;overflow-wrap:anywhere}
+.sheet-list .account-switch-row > [data-account-edit]{font-size:13px;padding-inline:12px}
+.funnel-card .hint{margin:0 0 8px}
+.funnel-direction{display:flex;align-items:center;gap:12px;margin-bottom:8px;color:var(--muted);font-weight:600}
+.funnel-arrow{position:relative;flex:1;min-width:20px;height:2px;background:var(--accent)}
+.funnel-arrow::after{content:"";position:absolute;right:0;top:50%;width:8px;height:8px;border:solid var(--accent);border-width:2px 2px 0 0;transform:translateY(-50%) rotate(45deg)}
+.funnel-card .stage .fill{height:5px}
+#rb-numbers{scroll-margin-top:125px}
+@media(max-width:640px){
+  .head-actions{flex:1 0 100%;margin:0}
+  .head-actions > :is(button,a){flex:1}
+  .account-switch-row{gap:5px}
+  .sheet-list .account-switch-row > [data-account-edit]{padding-inline:8px}
 }
-@media(max-width:480px){
-  .title-row:has([data-go="queue"][data-arg="manage"]) > h1{flex-basis:100%}
-  .title-row:has([data-go="queue"][data-arg="manage"]) > .sp{display:none}
-}
-
-/* A compact, persistent safety indicator in ordinary-account orientation. */
 .banner[data-guide-banner]{flex-wrap:wrap;align-items:center}
 .banner[data-guide-banner] span{flex:1 1 240px;min-width:0;overflow-wrap:anywhere}
 .banner[data-guide-banner] button{white-space:normal;max-width:100%}

@@ -65,10 +65,14 @@ VIEWS.deals = async (view, arg) => {
     const stageScroll = $('.stages', view)?.scrollLeft || 0;
     let i = 0;
     view.innerHTML = `<div class="page">${dealTabs('')}
-      <div class="stages blk" data-css="--i:${i++}" role="group" aria-label="Этапы сделки">${fn.stages.map((st, k) => `<button type="button" class="stage" data-stage="${k + 1}" aria-pressed="${f.stage === k + 1}"
+      <section class="card funnel-card blk" data-css="--i:${i++}" aria-labelledby="funnel-title">
+        <div class="card-h"><h2 id="funnel-title">Воронка продаж</h2></div>
+        <div class="funnel-direction"><span>Первый контакт</span><span class="funnel-arrow" aria-hidden="true"></span><span>Оплата</span></div>
+        <p class="hint">Число показывает, сколько сделок дошло до этапа. Нажмите на этап, чтобы отфильтровать список.</p>
+      <div class="stages" role="group" aria-label="Этапы воронки">${fn.stages.map((st, k) => `<button type="button" class="stage" data-stage="${k + 1}" aria-pressed="${f.stage === k + 1}"
         title="${esc(st.reasons.map(([r, n]) => `${r}: ${n}`).join('\n'))}">
         <span class="nm">${k + 1}. ${esc(st.name)}</span><b>${fmt(st.reached)}</b><span class="ls">${st.lost ? `отказ ${fmt(st.lost)}` : ''}</span>
-        <i class="fill" data-css="--w:${Math.max(0, st.reached / maxReached * 100)}%;--k:${k}"></i></button>`).join('')}</div>
+        <i class="fill" data-css="--w:${Math.max(0, st.reached / maxReached * 100)}%;--k:${k}"></i></button>`).join('')}</div></section>
       ${picked && picked.lost ? `<p class="hint blk" data-css="--i:${i++};margin:-6px 0 0">Почему отказываются на этапе «${esc(picked.name)}»: ${picked.reasons.map(([r, n]) => `${esc(r)} · ${n}`).join('; ')}</p>` : ''}
       ${d.unlinked?.length ? `<div class="alert acc blk" data-css="--i:${i++}"><span class="pdot"></span><p><b>${plainItems(d.unlinked.length, 'презентация', 'презентации', 'презентаций')} без клиента</b>: шли не через Mango, бот не знает номер.</p>
         <button class="btn small" type="button" data-unlinked>Привязать</button></div>` : ''}

@@ -17,6 +17,8 @@ import time
 from dataclasses import dataclass
 from datetime import timedelta
 
+from asyncpg import UniqueViolationError
+
 from tools import Actor, home_client_id, resolve_actor
 
 TEST_TTL = timedelta(days=7)
@@ -153,25 +155,33 @@ async def account_create(pool, client_id: int, role: str, login, extension=None,
     if not await login_free(pool, login):
         raise ValueError('Такой логин уже есть.')
     password = clean_password(password) if password else new_password()
-    await invite_create(pool, client_id, role, extension, client_key, name, tg, login=login,
-                        password_hash=hash_password(password))
+    try:
+        await invite_create(pool, client_id, role, extension, client_key, name, tg, login=login,
+                            password_hash=hash_password(password))
+    except UniqueViolationError as exc:
+        raise ValueError('Такой логин уже есть.') from exc
     return password
 
 
-async def account_change(pool, client_id: int, invite_id: int, login=None, password=None, new=False) -> dict:
+async def account_change(pool, client_id: int, invite_id: int, login=None, password=None, new=False, *, allow_legacy=False) -> dict:
     """Директор меняет логин и/или пароль (new — придумать новый). Со сменой пароля открытые входы закрываются."""
     async with pool.acquire() as conn, conn.transaction():
         row = await conn.fetchrow(
             """SELECT login FROM crm_invites
-               WHERE id=$1 AND client_id=$2 AND login IS NOT NULL AND revoked_at IS NULL FOR UPDATE""",
+               WHERE id=$1 AND client_id=$2 AND revoked_at IS NULL FOR UPDATE""",
             invite_id, client_id)
-        if row is None:
+        if row is None or (row['login'] is None and not allow_legacy):
             raise ValueError('Учётной записи нет или доступ отозван.')
+        if row['login'] is None and (not login or not (new or password)):
+            raise ValueError('Для старой ссылки задайте логин и новый пароль.')
         if login is not None and clean_login(login) != row['login']:
             login = clean_login(login)
             if not await login_free(conn, login):
                 raise ValueError('Такой логин уже есть.')
-            await conn.execute('UPDATE crm_invites SET login=$2 WHERE id=$1', invite_id, login)
+            try:
+                await conn.execute('UPDATE crm_invites SET login=$2 WHERE id=$1', invite_id, login)
+            except UniqueViolationError as exc:
+                raise ValueError('Такой логин уже есть.') from exc
         if new or password:
             password = new_password() if new else clean_password(password)
             await conn.execute('UPDATE crm_invites SET password_hash=$2, password_enc=NULL WHERE id=$1',

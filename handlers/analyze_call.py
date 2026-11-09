@@ -19,7 +19,7 @@ import asyncpg
 from aiogram import Bot
 
 import mango_client
-from analysis import score_call, short_report_call
+from analysis import AstraModelUnavailable, require_model, score_call, short_report_call
 from crypto_util import decrypt
 from deepgram_client import transcribe_bytes
 from queue_runner import RetryLater, on_startup, register
@@ -124,6 +124,11 @@ async def analyze_call(pool: asyncpg.Pool, task: asyncpg.Record) -> dict:
         if await _over_daily_limit(pool, client):
             raise RetryLater(timedelta(minutes=BUDGET_RECHECK_MIN), "дневной лимит клиента исчерпан")
 
+        try:
+            require_model()
+        except AstraModelUnavailable as exc:
+            raise RetryLater(timedelta(seconds=exc.seconds), str(exc), record_limit=False) from exc
+
         await pool.execute("UPDATE calls SET status='processing', updated_at=now() WHERE id=$1", call["id"])
         await pool.execute(
             "INSERT INTO astra_analysis (call_id, status) VALUES ($1,'processing') "
@@ -131,13 +136,14 @@ async def analyze_call(pool: asyncpg.Pool, task: asyncpg.Record) -> dict:
             call["id"],
         )
 
+        transcript, dg_duration = call['transcript'], 0
         try:
-            vpbx_api_key = decrypt(client["vpbx_api_key_enc"])
-            vpbx_api_salt = decrypt(client["vpbx_api_salt_enc"])
-
-            audio = await mango_client.fetch_recording(vpbx_api_key, vpbx_api_salt, call["recording_id"])
-            transcript, dg_duration = await transcribe_bytes(audio)
-            del audio
+            if not transcript:
+                vpbx_api_key = decrypt(client["vpbx_api_key_enc"])
+                vpbx_api_salt = decrypt(client["vpbx_api_salt_enc"])
+                audio = await mango_client.fetch_recording(vpbx_api_key, vpbx_api_salt, call["recording_id"])
+                transcript, dg_duration = await transcribe_bytes(audio)
+                del audio
 
             kitchen = None
             if review_kitchen.handles(call['extension']):
@@ -164,6 +170,12 @@ async def analyze_call(pool: asyncpg.Pool, task: asyncpg.Record) -> dict:
 
             await _add_spend(pool, client, cost)
             log.info("Deepgram (справочно, не в бюджете Astra): $%.4f", dg_duration / 60 * DG_PRICE_PER_MIN_USD)
+        except AstraModelUnavailable as exc:
+            async with pool.acquire() as conn, conn.transaction():
+                await conn.execute("UPDATE calls SET status='new', transcript=$2, updated_at=now() WHERE id=$1",
+                                   call['id'], transcript)
+                await conn.execute("UPDATE astra_analysis SET status='new' WHERE call_id=$1", call['id'])
+            raise RetryLater(timedelta(seconds=exc.seconds), str(exc), record_limit=False) from exc
         except Exception:
             log.exception("ошибка обработки call id=%s (задача id=%s)", call["id"], task["id"])
             await pool.execute("UPDATE calls SET status='new', updated_at=now() WHERE id=$1", call["id"])

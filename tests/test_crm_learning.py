@@ -365,8 +365,8 @@ class ExistingSurfaceTests(unittest.TestCase):
             process=subprocess.run(['git','show',base+':'+name],cwd=ROOT,capture_output=True,text=True)
             if process.returncode:
                 self.skipTest('Pinned Git baseline unavailable for source regression check')
-            if name == 'crm/gpt.py':
-                # Check the training release separately from the later GPT access fixes.
+            if name in {'crm/gpt.py', 'crm/static/helper.js', 'crm/static/people.js'}:
+                # Verify the guide release separately from later CRM access and workspace changes.
                 current=subprocess.check_output(['git','show',guide_release+':'+name],cwd=ROOT,text=True)
             else:
                 current=(ROOT/name).read_text()

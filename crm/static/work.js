@@ -233,6 +233,11 @@ async function refreshQueueInBackground(){
   }catch(error){return false;/* Keep the visible data and the current exercise on a transient refresh failure. */}
   finally{queueRefreshBusy=false;}
 }
+const queueTabs = current => `<div class="links" aria-label="Работа с очередью">
+  <button class="btn" type="button" data-go="queue"${current === 'queue' ? ' aria-current="page"' : ''}>К обзвону</button>
+  <button class="btn" type="button" data-go="callbacks"${current === 'callbacks' ? ' aria-current="page"' : ''}>Перезвоны</button>
+</div>`;
+
 VIEWS.queue = async (view, arg, refresh={}) => {
   queueRefreshState=null;
   const director = S.me.role === 'director';
@@ -245,7 +250,7 @@ VIEWS.queue = async (view, arg, refresh={}) => {
   }
   const ext = director ? (arg || S.f.ext || S.me.team[0]?.ext) : null;
   const person = director ? S.me.team.find(p => p.ext === ext) : null;
-  setHead({title: director ? `Очередь · ${person?.name || 'доб. ' + ext}` : 'Очередь', back: director ? () => go('staff', ext) : null,
+  setHead({title: director ? `Очередь · ${person?.name || 'доб. ' + ext}` : 'Очередь', filters: director ? '' : queueTabs('queue'), back: director ? () => go('staff', ext) : null,
     actions: canManage ? '<button class="btn" type="button" data-go="queue" data-arg="manage">Управлять очередью</button>' : ''});
   const q = refresh.data||await loading(view, api('/api/queue' + qs({ext})), 'cards');
   if(!view.isConnected)return;
@@ -274,9 +279,13 @@ VIEWS.queue = async (view, arg, refresh={}) => {
       reload();
     }, {ext, extra: q.items.length > 1 ? '<button class="btn small ghost" type="button" data-skip>Пропустить ›</button>' : ''});
     $('[data-skip]', view)?.addEventListener('click', () => { pos = (pos + 1) % q.items.length; show(); });
-    const n = Math.min(q.items.length, 12); // ближайшие номера, начиная с текущего; остальные числом
-    $('[data-next]', view).innerHTML = Array.from({length: n}, (_, k) => (pos + k) % q.items.length).map(i => listItem(q.items[i], i, i === pos)).join('')
-      + (q.items.length > n ? `<p class="hint more-l">и ещё ${fmt(q.items.length - n)}</p>` : '');
+    const remaining = q.items.length - 1;
+    const n = Math.min(remaining, 12);
+    $('[data-next]', view).innerHTML = remaining
+      ? Array.from({length: n}, (_, k) => (pos + k + 1) % q.items.length).map(i => listItem(q.items[i], i)).join('')
+        + (remaining > n ? `<p class="hint more-l">и ещё ${fmt(remaining - n)}</p>` : '')
+      : '<p class="hint">Следующих номеров нет.</p>';
+    $('.card-h .hint', $('[data-next]', view).parentElement).textContent = fmt(remaining);
   };
   $('[data-next]', view).addEventListener('click', e => {
     const b = e.target.closest('.item'); if (!b) return;
@@ -286,11 +295,11 @@ VIEWS.queue = async (view, arg, refresh={}) => {
   show();
 };
 
-function listItem(it, i, current) {
+function listItem(it, i) {
   const right = it.kind === 'task'
     ? `<span class="chip ${it.late ? 'late' : 'today'}">${esc(dueText(it))}</span>`
     : `<span class="chip ${it.status === 'no_answer' ? 'warn' : ''}">${it.status === 'no_answer' ? 'повтор ' + (it.attempts + 1) : 'новый'}</span>`;
-  return `<button class="item" type="button" data-i="${i}" aria-current="${current}"><div class="main-l">
+  return `<button class="item" type="button" data-i="${i}"><div class="main-l">
     <div class="t num">${esc(phone(it.number))}</div><div class="s">${esc(it.title || it.note || (it.kind === 'task' ? it.label : it.source) || '')}</div></div>
     <div class="r">${right}</div></button>`;
 }

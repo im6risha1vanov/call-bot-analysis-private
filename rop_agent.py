@@ -130,8 +130,7 @@ def _system_prompt(today_iso: str, tz_name: str, *, allow_course=False) -> str:
         + ("\nМетодика курса работает параллельно. Для её наблюдений используй get_course_evaluation/get_course_stats. "
            "Не смешивай их с исходными баллами, не строй рейтинги и не объявляй общий навык менеджера доказанным по отдельной цитате. "
            "Условия без утверждённого источника неизвестны, не выдавай внутренний учебный прайс клиентам. "
-           "Ситуационные вопросы, краткая зацепка, уместная презентация и согласованное КП допустимы для своего этапа. "
-           "Для тренировки можно назначить тему по названию ситуации из /scenarios."
+           "Ситуационные вопросы, краткая зацепка, уместная презентация и согласованное КП допустимы для своего этапа."
            if allow_course and shadow_enabled() else '')
         + f"\n\nСегодняшняя дата: {today_iso} (часовой пояс {tz_name}). Все относительные "
         + "периоды («этот месяц», «на прошлой неделе», «вчера», «в этом году») считай от "
@@ -282,6 +281,10 @@ async def answer(pool: asyncpg.Pool, actor: Actor, question: str, *, allow_cours
     course_allowed = allow_course and shadow_enabled()
     system_text = _system_prompt(today_iso, tz_name, allow_course=course_allowed)
 
+    schemas = TOOLS if course_allowed else tools.TOOL_SCHEMAS + [VERIFY_CONCLUSION_SCHEMA]
+    if actor.role != 'owner':
+        schemas = [schema for schema in schemas if schema['name'] != 'get_training_history']
+
     messages: list[dict] = [{"role": "user", "content": question}]
     verified: set[str] = set()
     candidates: set[str] = set()
@@ -290,7 +293,7 @@ async def answer(pool: asyncpg.Pool, actor: Actor, question: str, *, allow_cours
         resp = await claude.messages.create(
             model=MODEL, max_tokens=2000, thinking={"type": "disabled"},
             system=[{"type": "text", "text": system_text, "cache_control": {"type": "ephemeral"}}],
-            tools=TOOLS if course_allowed else tools.TOOL_SCHEMAS+[VERIFY_CONCLUSION_SCHEMA], messages=messages,
+            tools=schemas, messages=messages,
         )
         await _add_spend(pool, actor.client_id, _cost_of(resp.usage))
         messages.append({"role": "assistant", "content": resp.content})

@@ -41,7 +41,7 @@ import training_menu as menu
 from methodology import training as course_training
 from methodology.runtime import training_enabled
 from deepgram_client import transcribe_bytes as dg_transcribe_bytes  # noqa: E402
-from tools import resolve_actor  # noqa: E402
+from tools import home_client_id, resolve_actor  # noqa: E402
 
 BOT_TOKEN = os.environ['TRAIN_BOT_TOKEN']
 
@@ -481,10 +481,21 @@ async def text_turn(message: Message):
     await _process_turn(message, session, message.text or '')
 
 
+async def owner_only(handler, event, data):
+    user = event.from_user
+    actor = await resolve_actor(PG_POOL, user.id) if user else None
+    if actor and actor.role == 'owner' and actor.client_id == await home_client_id(PG_POOL):
+        return await handler(event, data)
+    if isinstance(event, CallbackQuery):
+        await event.answer()
+
+
 async def main() -> None:
     global PG_POOL
     bot = Bot(BOT_TOKEN)
     dp = Dispatcher()
+    router.message.outer_middleware(owner_only)
+    router.callback_query.outer_middleware(owner_only)
     dp.include_router(router)
     PG_POOL = await asyncpg.create_pool(os.environ['DATABASE_URL'], min_size=1, max_size=3)
     log.info('training bot started')

@@ -181,7 +181,7 @@ async def _send_delivery(pool, bot, row, kind, recipient):
     keyboard = None
     if kind == 'manager':
         text = render.manager_message(row['meta'], row['data'])
-        keyboard = render.keyboard(call_id, train=bool(row['data'].get('key_moment')))
+        keyboard = render.keyboard(call_id)
     elif kind == 'rop':
         text = render.rop_message(row['meta'], row['data'])
         keyboard = render.keyboard(call_id)

@@ -179,26 +179,28 @@ VIEWS.settings = async (view, arg) => {
   catch (e) { body.innerHTML = emptyCard(esc(e.message)); }
 };
 
-async function accessView(box) {
-  const d = await api('/api/access');
+async function accessView(box, companyId = null) {
+  const path = '/api/access';
+  const scope = qs({company: companyId});
+  const d = await api(path + scope);
   const roleName = {director: 'Руководитель', manager: 'Менеджер', client: 'Клиент'};
   const who = i => i.role === 'manager' ? `${esc(i.name)} <span class="s">· доб. ${esc(i.ext)}</span>` : esc(i.name || roleName[i.role]) + (i.tg ? ' <span class="s">· с Telegram</span>' : '');
   const ro = S.me.readonly;
   const rows = d.invites.map((i, r) => `<tr data-css="--r:${Math.min(r, 30)}"><td>${who(i)}</td><td class="hide-m">${roleName[i.role]}</td>
     <td>${i.login ? `<code>${esc(i.login)}</code>` : '<span class="s">старая ссылка</span>'}</td>
     <td class="nw hide-m">${i.used ? fmtWhen(i.used) : '<span class="s">ещё не входил</span>'}</td>
-    <td class="nw">${ro ? '' : `${i.login ? `<button class="btn small" type="button" data-edit="${i.id}">Изменить</button> ` : ''}<button class="btn small" type="button" data-revoke="${i.id}">${i.login ? 'Удалить' : 'Отозвать'}</button>`}</td></tr>`).join('');
+    <td class="nw">${ro ? '' : `${(i.login || S.me.manage_accounts) ? `<button class="btn small" type="button" data-edit="${i.id}">Изменить</button> ` : ''}${i.id === d.current ? '' : `<button class="btn small" type="button" data-revoke="${i.id}">${i.login ? 'Удалить' : 'Отозвать'}</button>`}`}</td></tr>`).join('');
   box.innerHTML = `<section class="card blk" data-learning-target="access-list"><div class="card-h"><h2>Учётные записи</h2><span class="hint">${d.invites.length}</span><span class="sp"></span>
       ${ro ? '' : '<button class="btn primary" type="button" data-new>Новая учётная запись</button>'}</div>
     ${d.invites.length ? `<div class="tbl-wrap"><table class="tbl anim"><thead><tr><th>Кто</th><th class="hide-m">Вход</th><th>Логин</th><th class="hide-m">Последний вход</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
       : '<div class="empty">Учётных записей ещё нет.</div>'}
     <p class="hint" data-css="margin:12px 0 0">Человек входит на главной странице CRM по логину и паролю. Смена пароля и удаление сразу закрывают его входы на всех устройствах.</p></section>`;
   const byId = id => d.invites.find(i => i.id === +id);
-  $('[data-new]', box)?.addEventListener('click', () => newAccount(d, () => accessView(box)));
-  $$('[data-edit]', box).forEach(b => b.addEventListener('click', () => editAccount(byId(b.dataset.edit), () => accessView(box))));
+  $('[data-new]', box)?.addEventListener('click', () => newAccount(d, () => accessView(box, companyId), scope));
+  $$('[data-edit]', box).forEach(b => b.addEventListener('click', () => editAccount(byId(b.dataset.edit), () => accessView(box, companyId), scope)));
   $$('[data-revoke]', box).forEach(b => b.addEventListener('click', async () => {
     if (!await askConfirm('Закрыть доступ? Человек сразу выйдет из CRM.', 'Закрыть доступ', true)) return;
-    try { await api(`/api/access/${b.dataset.revoke}/revoke`, {method: 'POST', body: {}}); toast('Доступ закрыт'); accessView(box); }
+    try { await api(`/api/access/${b.dataset.revoke}/revoke` + scope, {method: 'POST', body: {}}); toast('Доступ закрыт'); await accessView(box, companyId); }
     catch (e) { toast(e.message, true); }
   }));
 }
@@ -213,7 +215,7 @@ function accountBox(out, login, password) {
   });
 }
 
-function newAccount(d, onDone) {
+function newAccount(d, onDone, scope = '') {
   const box = modal(`${modalHead('Новая учётная запись', 'Логин и пароль можно не заполнять: придумаем сами. Скопируйте пароль сразу после создания.')}
     <div class="rvm-body"><div class="outform">
       <label class="field">Кому<select data-v="role"><option value="manager">Менеджеру</option><option value="client">Клиенту колл-центра</option><option value="director">Руководителю</option></select></label>
@@ -234,7 +236,7 @@ function newAccount(d, onDone) {
     const btn = e.currentTarget; // после await e.currentTarget уже null
     busy(btn, true);
     try {
-      const r = await api('/api/access', {method: 'POST', body: {role: v('role').value, person_ext: v('ext').value, client: v('client').value,
+      const r = await api('/api/access' + scope, {method: 'POST', body: {role: v('role').value, person_ext: v('ext').value, client: v('client').value,
         name: v('tg').value ? '' : v('name').value, tg: v('tg').value, login: v('login').value, password: v('password').value}});
       accountBox($('[data-out]', box), r.login, r.password);
       doneBtn(btn, 'Создано');
@@ -243,7 +245,7 @@ function newAccount(d, onDone) {
   });
 }
 
-function editAccount(acc, onDone) {
+function editAccount(acc, onDone, scope = '') {
   const box = modal(`${modalHead('Логин и пароль', esc(acc.name || ''))}
     <div class="rvm-body"><div class="outform">
       <label class="field">Логин<input data-v="login" maxlength="40" autocapitalize="none" spellcheck="false" value="${esc(acc.login)}"></label>
@@ -254,10 +256,11 @@ function editAccount(acc, onDone) {
   const send = async (btn, extra) => {
     busy(btn, true);
     try {
-      const r = await api(`/api/access/${acc.id}/account`, {method: 'POST', body: {login: v('login').value, ...extra}});
+      const r = await api(`/api/access/${acc.id}/account` + scope, {method: 'POST', body: {login: v('login').value, ...extra}});
       const out = $('[data-out]', box);
       if (r.password) accountBox(out, r.login, r.password);
       else out.replaceChildren();
+      v('password').value = '';
       busy(btn, false); toast('Сохранено');
       onDone && onDone();
     } catch (err) { busy(btn, false); toast(err.message, true); }

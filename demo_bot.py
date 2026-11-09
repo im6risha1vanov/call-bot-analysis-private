@@ -105,10 +105,8 @@ async def help_command(message):
             '«Расширенный обзор» под сообщением открывает критерии и цитаты того же разбора.\n\n'
             'Менеджеру автоматически приходят звонки, требующие разбора; остальные результаты доступны в вечерней сводке. '
             'Для сохранённого звонка можно использовать /review и его номер.\n\n'
-            'Тренировки: @averon_training_bot — откройте личный чат и нажмите /start. '
-            'Выбирайте ситуацию, отвечайте голосом или текстом.\n\n'
             + ('Если доступ ещё не выдан, попросите своего руководителя подключить вас, затем снова отправьте /start.'
-               if actor is None else 'Выберите одну рекомендацию из разбора и отработайте её в тренажёре.'),
+               if actor is None else ''),
             parse_mode=None)
         return
     menu = head_menu(message.from_user.id) if actor and actor.role in {'head', 'owner'} else None
@@ -120,96 +118,21 @@ async def help_command(message):
         '<b>Команды</b>\n'
         '/analysis_status — версия анализа; /analysis_rollback — старая методика; /analysis_restore — сохранённая версия (вашему отделу)\n'
         '/check &lt;критерий&gt; [дней] — что модель увидела по критерию (руководителю)\n'
-        '/assign_train &lt;добавочный&gt; [режим] — назначить тренировку в тренажёре (руководителю)\n'
-        '/trainings — последние тренировки, /training &lt;номер&gt; — одна подробно\n'
         '/combined_analysis — пробный объединённый разбор выбранных звонков (руководителю)\n'
         '/compare_analysis — сравнить две методики на двух последних звонках (руководителю)\n'
         '/methodology &lt;номер звонка&gt; — отдельный разбор по курсу\n'
-        '/methodology_training &lt;номер&gt; — разбор тренировки по курсу\n'
         '/methodology_stats &lt;начало&gt; &lt;конец&gt; [добавочный] — наблюдения по курсу\n'
         '/approvals — задачи, ждущие подтверждения (руководителю)\n'
+        + ('/trainings — история тренировок, /training &lt;номер&gt; — подробно\n' if actor.role == 'owner' else '')
         + ('/prompt или «✏️ Режим промта» — править свои промты: разбор звонка и отчёты\n'
            if is_editor(message.from_user.id) else '') + '\n'
         'Свободный текст — вопрос по отделу.\n'
         + 'id этого чата: <code>{}</code>'.format(message.chat.id),
         parse_mode='HTML', reply_markup=menu)
 
-# --------------------------------------------------------- тренажёр возражений
-# Сама тренировка живёт в отдельном боте (training_bot.py).
-# Здесь остаётся только назначение тренировки РОПом.
-
-TRAIN_BOT_USERNAME = os.getenv('TRAIN_BOT_USERNAME', '').strip().lstrip('@')
-
-
 @router.message(Command('assign_train'))
 async def assign_train_command(message: Message):
-    """Только РОП. Менеджеру уходит ссылка на бота-тренажёра: одно нажатие и
-    запускает того бота (иначе Telegram не даст ему написать первым), и
-    стартует назначенную тренировку."""
-    if PG_POOL is None:
-        return
-    actor = await resolve_actor(PG_POOL, message.from_user.id)
-    if actor is None or not is_privileged(actor):
-        await message.answer('Команда доступна только РОПу.')
-        return
-    args = (message.text or '').split(maxsplit=3)
-    if len(args) < 2:
-        await message.answer(
-            'Использование: <code>/assign_train &lt;добавочный&gt; &lt;режим&gt; [тема]</code>\n\n'
-            '<b>Режимы</b>\n'
-            '• <code>разговор</code> — холодный звонок целиком, до 20 реплик\n'
-            '• <code>возражения</code> — отработка возражений поштучно, с разбором каждого ответа\n\n'
-            'Например: <code>/assign_train 13 возражения</code>', parse_mode='HTML')
-        return
-    extension = args[1]
-    mode, topic = 'dialog', None
-    if len(args) > 2:
-        raw_mode = args[2].lower()
-        if raw_mode in ('возражения', 'отработка', 'drill'):
-            mode = 'drill'
-            topic = args[3] if len(args) > 3 else None
-        elif raw_mode in ('разговор', 'звонок', 'dialog'):
-            topic = args[3] if len(args) > 3 else None
-        else:
-            # Режим не указан — значит всё после добавочного это тема,
-            # как было до появления второго режима.
-            topic = ' '.join(args[2:])
-    manager = await PG_POOL.fetchrow(
-        "SELECT * FROM employees WHERE client_id=$1 AND extension=$2 AND role='manager'",
-        actor.client_id, extension,
-    )
-    if not manager:
-        await message.answer(f'Менеджер с добавочным {html.escape(extension)} не найден.')
-        return
-    if not manager['telegram_user_id']:
-        await message.answer(f'Менеджер (доб. {html.escape(extension)}) ещё не подключён к боту.')
-        return
-    assignment_id = await PG_POOL.fetchval(
-        """INSERT INTO pending_train_assignments (client_id, extension, topic, mode,
-                                                   assigned_by_telegram_user_id)
-           VALUES ($1,$2,$3,$4,$5) RETURNING id""",
-        actor.client_id, extension, topic, mode, actor.telegram_user_id,
-    )
-    if not TRAIN_BOT_USERNAME:
-        await message.answer('Не задан TRAIN_BOT_USERNAME в .env — ссылку на тренажёр не собрать.')
-        return
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text='Начать тренировку',
-                              url=f'https://t.me/{TRAIN_BOT_USERNAME}?start=train_{assignment_id}')
-    ]])
-    mode_line = 'отработка возражений' if mode == 'drill' else 'разговор целиком'
-    topic_line = f', тема «{html.escape(topic)}»' if topic else ''
-    try:
-        await message.bot.send_message(
-            manager['telegram_user_id'],
-            f'РОП назначил вам тренировку: {mode_line}{topic_line}. Она пройдёт в боте-тренажёре.',
-            reply_markup=kb)
-    except Exception:
-        log.exception('не удалось отправить уведомление о тренировке, доб.=%s', extension)
-        await message.answer('Не удалось отправить уведомление менеджеру (возможно, он не запускал бота).')
-        return
-    await message.answer(
-        f'Назначено ({mode_line}), доб. {html.escape(extension)} получит ссылку на тренажёр.')
+    await message.answer('Действие недоступно.')
 
 
 # ------------------------------------------------ проверка критерия руками
@@ -384,7 +307,7 @@ async def trainings_command(message: Message):
     if PG_POOL is None:
         return
     actor = await resolve_actor(PG_POOL, message.from_user.id)
-    if actor is None:
+    if actor is None or actor.role != 'owner':
         return
     args = (message.text or '').split()[1:]
     requested_ext = args[0] if args else None
@@ -425,7 +348,7 @@ async def training_detail_command(message: Message):
     if PG_POOL is None:
         return
     actor = await resolve_actor(PG_POOL, message.from_user.id)
-    if actor is None:
+    if actor is None or actor.role != 'owner':
         return
     args = (message.text or '').split()
     if len(args) < 2 or not args[1].isdigit():
@@ -577,11 +500,13 @@ async def methodology_command(message: Message):
     if actor is None:
         return
     args = (message.text or '').split()
+    key = 'training_session_id' if args[0].split('@')[0] == '/methodology_training' else 'call_id'
+    if key == 'training_session_id' and actor.role != 'owner':
+        return
     if len(args) != 2 or not args[1].isdigit():
-        await message.answer('Разбор по курсу: /methodology <номер звонка> или /methodology_training <номер тренировки>.')
+        await message.answer('Укажите номер записи.')
         return
     from tools import Forbidden
-    key = 'training_session_id' if args[0].split('@')[0] == '/methodology_training' else 'call_id'
     try:
         data = await get_course_evaluation(PG_POOL, actor, **{key: int(args[1])})
     except Forbidden:
