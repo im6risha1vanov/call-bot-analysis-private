@@ -107,7 +107,8 @@ async def assign(pool, actor, ext: str, mode: str, topic: str | None) -> dict:
         raise Forbidden('Назначает тренировки руководитель.')
     if mode not in MODES:
         raise ValueError('Выберите режим.')
-    if not await pool.fetchval("SELECT 1 FROM employees WHERE client_id=$1 AND extension=$2 AND role='manager'",
+    if not await pool.fetchval("""SELECT 1 FROM employees WHERE client_id=$1 AND extension=$2
+                                  AND role='manager' AND archived_at IS NULL""",
                                actor.client_id, str(ext or '')):
         raise ValueError('Такого менеджера нет.')
     topic = (str(topic or '').strip() or None)

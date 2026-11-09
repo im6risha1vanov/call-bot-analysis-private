@@ -384,6 +384,8 @@ const PAGES = {
   robot: {name: 'Робот', icon: 'bot', roles: ['director', 'client']},
   sources: {name: 'Источники', icon: 'source', roles: ['director', 'manager']},
   reports: {name: 'Отчёты', icon: 'report', roles: ['director', 'manager']},
+  logs: {name: 'Журнал действий', icon: 'report', roles: ['director']},
+  economics: {name: 'Экономика', icon: 'report', roles: ['director']},
   auto: {name: 'Автоматизации', icon: 'flow', roles: ['director']},
   learning: {name: 'Обучение', icon: 'report', roles: ['manager', 'director']},
   settings: {name: 'Настройки', icon: 'gear', roles: ['director']},
@@ -391,7 +393,7 @@ const PAGES = {
   companies: {name: 'Компании', icon: 'building', roles: ['director']},
 };
 const MENU = {
-  director: {nav: ['summary', 'calls', 'callbacks', 'deals', 'staff', 'callcenter', 'robot'], more: ['learning', 'sources', 'reports', 'auto', 'settings', 'companies'], tabs: ['summary', 'calls', 'callbacks', 'deals']},
+  director: {nav: ['summary', 'calls', 'callbacks', 'deals', 'staff', 'callcenter', 'robot'], more: ['learning', 'sources', 'reports', 'logs', 'economics', 'auto', 'settings', 'companies'], tabs: ['summary', 'calls', 'callbacks', 'deals']},
   manager: {nav: ['queue', 'callbacks', 'deals', 'calls', 'me'], more: ['learning', 'callcenter', 'sources', 'reports'], tabs: ['queue', 'callbacks', 'deals', 'calls']},
   client: {nav: ['cab', 'robot'], more: [], tabs: ['cab', 'robot']},
 };
@@ -408,6 +410,8 @@ const hasModule = m => !S.me.modules || S.me.modules.includes(m);
 const PAGE_MODULE = {callcenter: 'callcenter', robot: 'robot', sources: 'sources', auto: 'automations'};
 const allowed = p => !!PAGES[p] && PAGES[p].roles.includes(S.me.role) && (!PAGE_MODULE[p] || hasModule(PAGE_MODULE[p]))
   && (p !== 'companies' || !!S.me.platform) && (p !== 'callcenter' || S.me.role !== 'manager' || S.me.callcenter_mode === 'db')
+  && (p !== 'logs' || (!S.me.readonly && !S.me.support))
+  && (p !== 'economics' || !!S.me.economics)
   && (p !== 'robot' || S.me.role !== 'client' || S.me.robot);
 function resolve(page, arg) {
   page = String(page || '').replace(/^[aw]:/, '');

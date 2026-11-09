@@ -15,9 +15,11 @@ import json
 import re
 import secrets
 
+from asyncpg import UniqueViolationError
+
 from tools import Forbidden
 from review import store as review_store
-from . import telegram
+from . import accounts, auth, telegram
 
 ROLE_TITLES = {'owner': 'Владелец', 'head': 'Руководитель', 'manager': 'Менеджер'}
 ORDER = {'owner': 0, 'head': 1, 'manager': 2}
@@ -64,7 +66,7 @@ def matches(person: dict, token: str) -> bool:
 async def _people(pool, client_id: int) -> list[dict]:
     rows = await pool.fetch(
         """SELECT extension, role, full_name, telegram_user_id, telegram_username FROM employees
-           WHERE client_id=$1""", client_id)
+           WHERE client_id=$1 AND archived_at IS NULL""", client_id)
     people = [{'ext': r['extension'], 'role': r['role'], 'name': r['full_name'] or '', 'tg': r['telegram_user_id'],
                'username': r['telegram_username']} for r in rows]
     people.sort(key=lambda p: (ORDER.get(p['role'], 3), int(p['ext']) if p['ext'].isdigit() else 10**9, p['ext']))
@@ -105,16 +107,58 @@ async def _person(pool, client_id: int, ext) -> dict:
 
 async def invite(pool, actor, ext) -> dict:
     """Новая одноразовая ссылка в бота на 7 дней; прежние неиспользованные остаются в силе до своего срока."""
-    person = await _person(pool, actor.client_id, ext)
-    if person['tg'] is not None:
-        raise ValueError('Этот человек уже подключён к боту.')
     bot = await telegram.bot_username()
     if not bot:
         raise ValueError('Не удалось узнать имя бота. Попробуйте позже.')
     code = secrets.token_hex(10)
-    await pool.execute('INSERT INTO employee_invites(code, client_id, extension) VALUES($1,$2,$3)',
-                       code, actor.client_id, person['ext'])
-    return {'link': f'https://t.me/{bot}?start=inv_{code}', 'ext': person['ext']}
+    ext = str(ext or '')
+    created = await pool.fetchval(
+        """INSERT INTO employee_invites(code, client_id, extension)
+           SELECT $1, client_id, extension FROM employees
+           WHERE client_id=$2 AND extension=$3 AND archived_at IS NULL AND telegram_user_id IS NULL
+           FOR UPDATE RETURNING code""", code, actor.client_id, ext)
+    if created is None:
+        raise ValueError('Сотрудник недоступен или уже подключён к боту.')
+    return {'link': f'https://t.me/{bot}?start=inv_{code}', 'ext': ext}
+
+
+async def add_manager(pool, actor, name, ext=None, login=None) -> dict:
+    """Создать сотрудника и его вход в CRM в одной транзакции."""
+    name, ext = clean_name(name), str(ext or '').strip()
+    if ext and not re.fullmatch(r'[0-9]{1,6}', ext):
+        raise ValueError('Добавочный Mango: от 1 до 6 цифр.')
+    ext = ext or 'crm:' + secrets.token_hex(8)
+    async with pool.acquire() as conn, conn.transaction():
+        employee = await conn.fetchval(
+            """INSERT INTO employees(client_id, extension, role, full_name) VALUES($1,$2,'manager',$3)
+               ON CONFLICT(client_id, extension) DO NOTHING RETURNING extension""", actor.client_id, ext, name)
+        if employee is None:
+            raise ValueError('Добавочный занят или в архиве. Для действующего сотрудника выдайте логин в «Доступах».')
+        login = auth.clean_login(login) if login else await accounts.free_login(conn, accounts.slug(name) or 'manager')
+        try:
+            password = await auth.account_create(conn, actor.client_id, 'manager', login, extension=ext, name=name)
+        except UniqueViolationError:
+            raise ValueError('Такой логин уже есть.') from None
+    return {'ext': ext, 'login': login, 'password': password}
+
+
+async def archive_manager(pool, actor, ext) -> None:
+    ext = str(ext or '')
+    async with pool.acquire() as conn, conn.transaction():
+        archived = await conn.fetchval(
+            """UPDATE employees SET archived_at=now(), telegram_user_id=NULL, telegram_username=NULL
+               WHERE client_id=$1 AND extension=$2 AND role='manager' AND archived_at IS NULL
+               RETURNING extension""", actor.client_id, ext)
+        if archived is None:
+            raise ValueError('Активный менеджер не найден.')
+        await conn.execute(
+            """UPDATE employee_invites SET expires_at=now()
+               WHERE client_id=$1 AND extension=$2 AND used_at IS NULL""", actor.client_id, ext)
+        await conn.execute(
+            """UPDATE crm_invites SET revoked_at=now()
+               WHERE client_id=$1 AND extension=$2 AND role='manager' AND revoked_at IS NULL""", actor.client_id, ext)
+        await conn.execute(
+            "DELETE FROM crm_sessions WHERE client_id=$1 AND extension=$2 AND role='manager'", actor.client_id, ext)
 
 
 async def add(pool, actor, role: str, ext=None, name=None, username=None) -> dict:
@@ -127,8 +171,10 @@ async def add(pool, actor, role: str, ext=None, name=None, username=None) -> dic
         ext = head_extension(name)
     else:
         raise ValueError('Можно добавить менеджера или руководителя.')
-    row = await pool.fetchrow('SELECT role, telegram_user_id FROM employees WHERE client_id=$1 AND extension=$2',
+    row = await pool.fetchrow('SELECT role, telegram_user_id, archived_at FROM employees WHERE client_id=$1 AND extension=$2',
                               actor.client_id, ext)
+    if row is not None and row['archived_at'] is not None:
+        raise ValueError('Добавочный в архиве. Используйте другой добавочный для нового сотрудника.')
     if row is not None and row['role'] != role:
         raise ValueError(f'Добавочный {ext} уже занят: там {ROLE_TITLES.get(row["role"], row["role"]).lower()}.')
     if row is not None and row['telegram_user_id'] is not None:
@@ -136,7 +182,8 @@ async def add(pool, actor, role: str, ext=None, name=None, username=None) -> dic
     await pool.execute(
         """INSERT INTO employees(client_id, extension, role, full_name, telegram_username) VALUES($1,$2,$3,$4,$5)
            ON CONFLICT(client_id, extension) DO UPDATE SET full_name=EXCLUDED.full_name,
-             telegram_username=coalesce(EXCLUDED.telegram_username, employees.telegram_username)""",
+             telegram_username=coalesce(EXCLUDED.telegram_username, employees.telegram_username)
+           WHERE employees.archived_at IS NULL AND employees.role=EXCLUDED.role""",
         actor.client_id, ext, role, name, username)
     return await invite(pool, actor, ext)
 

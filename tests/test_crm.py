@@ -135,7 +135,7 @@ class DBCase(unittest.IsolatedAsyncioTestCase):
         for name in ('008_call_reviews.sql', '009_callback_tasks.sql', '012_prompt_versions.sql', '031_company_prompts.sql', '013_employee_invites.sql',
                      '014_crm.sql', '015_crm_roles.sql', '016_crm_access.sql', '017_crm_reports.sql', '018_crm_questions.sql',
                      '019_crm_staff.sql', '020_robot.sql', '021_manager_memory.sql', '022_presentations.sql', '024_deals.sql', '025_contracts.sql', '026_presentation_client.sql', '027_sources.sql', '028_crm_logins.sql', '032_platform.sql', '033_callcenter.sql', '034_donor_agent.sql', '035_donor_rub.sql',
-                     '040_crm_outcome_callback.sql'):
+                     '040_crm_outcome_callback.sql', '041_crm_staff_activity.sql'):
             await self.pool.execute((root / 'migrations' / name).read_text())
         await self.pool.execute('TRUNCATE clients, crm_login_tokens, crm_sessions, crm_docs, crm_invites, crm_reports, crm_questions, '
                                 'employee_invites, manager_memory, deal_events, contracts, source_selections, donor_runs, donor_spend, prompt_active, prompt_versions, prompt_drafts, astra_daily_spend, robot_options CASCADE')
@@ -480,6 +480,65 @@ class WebTests(DBCase):
         r = await self.http.post('/api/test/login', json={'key': TEST_KEY, 'role': role, **extra}, headers={'X-CRM': '1'})
         self.assertEqual(r.status, 200, await r.text())
         return (await r.json())['go']
+
+    async def test_director_manages_crm_only_staff_and_sees_audit(self):
+        from aiohttp.test_utils import TestClient, TestServer
+        from crm import web
+
+        await self.director()
+        headers = {'X-CRM': '1'}
+        created = await self.http.post('/api/staff/register', json={'name': 'Новый менеджер'}, headers=headers)
+        self.assertEqual(created.status, 200, await created.text())
+        account = await created.json()
+        self.assertTrue(account['ext'].startswith('crm:'))
+        async with TestClient(TestServer(web.build(self.pool))) as manager:
+            result = await manager.post('/api/login', json={'login': account['login'], 'password': account['password']},
+                                        headers=headers)
+            self.assertEqual(result.status, 200, await result.text())
+            me = await (await manager.get('/api/me')).json()
+            self.assertEqual(me['role'], 'manager')
+            self.assertFalse(me['can_dial'])
+            self.assertEqual((await manager.get('/api/queue')).status, 200)
+            self.assertEqual((await manager.get('/api/activity')).status, 403)
+            unauthorized = await manager.post('/api/staff/archive', json={'person_ext': '101'}, headers=headers)
+            self.assertEqual(unauthorized.status, 403)
+
+            archived = await self.http.post('/api/staff/archive', json={'person_ext': account['ext']}, headers=headers)
+            self.assertEqual(archived.status, 200, await archived.text())
+            self.assertEqual((await manager.get('/api/me')).status, 401)
+            new_login = await manager.post('/api/login', json={'login': account['login'], 'password': account['password']},
+                                           headers=headers)
+            self.assertEqual(new_login.status, 400)
+
+        team = await store.team(self.pool, 1)
+        self.assertNotIn(account['ext'], {item['ext'] for item in team})
+        await self.pool.execute("INSERT INTO clients(id,timezone) VALUES(2,'Europe/Moscow')")
+        await self.pool.execute("""INSERT INTO crm_activity(client_id,actor_name,actor_role,action,status)
+                                   VALUES(2,'Другая компания','director','Чужое действие',200)""")
+        history = await self.http.get('/api/activity')
+        self.assertEqual(history.status, 200)
+        self.assertNotIn(account['password'], await history.text())
+        self.assertEqual([(item['who'], item['action']) for item in (await history.json())['items']], [
+            ('Директор', 'Удаление менеджера из активного списка'),
+            ('Новый менеджер', 'Вход по паролю'),
+            ('Директор', 'Создание менеджера с логином'),
+        ])
+
+    async def test_economics_needs_explicit_company_access(self):
+        from crm import web
+
+        await self.login(901)
+        self.assertEqual((await self.http.get('/api/economics')).status, 403)
+        await self.pool.execute("INSERT INTO clients(id,timezone) VALUES(2,'Europe/Moscow')")
+        await self.pool.execute("INSERT INTO crm_economics_viewers VALUES(2,901)")
+        self.assertFalse((await (await self.http.get('/api/me')).json())['economics'])
+        await self.pool.execute("INSERT INTO crm_economics_viewers VALUES(1,901)")
+        self.assertTrue((await (await self.http.get('/api/me')).json())['economics'])
+        self.assertEqual((await self.http.get('/api/economics?days=1000')).status, 400)
+        with patch.object(web.economics, 'overview', AsyncMock(return_value={'providers': []})) as overview:
+            response = await self.http.get('/api/economics?days=7')
+            self.assertEqual(response.status, 200, await response.text())
+            overview.assert_awaited_once_with(self.pool, 1, 7)
 
     async def test_sources_selections(self):
         """«Источники»: подборки общие для отдела, удалить может автор или руководитель, тестовый вход только смотрит."""
@@ -1512,6 +1571,16 @@ class WebTests(DBCase):
         self.assertEqual(r.status, 400)
         self.assertIn('3330', (await r.json())['error'])
         self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM crm_dials'), 2)
+
+    async def test_dial_reports_mango_connector_access_failure(self):
+        from mango_client import MangoHTTPError
+
+        await self.login(123)
+        with patch('crm.dial.mango_client.callback', AsyncMock(side_effect=MangoHTTPError('commands/callback', 401))) as callback:
+            response = await self.http.post('/api/dial', json={'number': '89991234567'}, headers={'X-CRM': '1'})
+        self.assertEqual(response.status, 400)
+        self.assertIn('права API-коннектора', (await response.json())['error'])
+        callback.assert_awaited_once()
 
     async def test_dial_from_browser(self):
         import json as _json, tempfile

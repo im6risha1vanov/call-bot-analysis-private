@@ -9,7 +9,9 @@ const exBtns = list => (list || []).map(c => `<button class="btn small" type="bu
 
 VIEWS.staff = async (view, arg) => {
   if (arg) return personView(view, arg);
-  setHead({actions: S.me.readonly ? '' : '<button class="btn primary" type="button" data-add>Добавить человека</button>'});
+  setHead({actions: S.me.readonly || S.me.support ? '' :
+    '<button class="btn primary" type="button" data-register>Добавить менеджера</button><button class="btn" type="button" data-add>Пригласить в Telegram</button>'});
+  $('[data-register]', $('#top'))?.addEventListener('click', addManager);
   $('[data-add]', $('#top'))?.addEventListener('click', addPerson);
   const d = await loading(view, api('/api/staff'), 'table');
   const order = {manager: 0, head: 1, owner: 2};
@@ -23,6 +25,60 @@ VIEWS.staff = async (view, arg) => {
   const open = tr => go('staff', tr.dataset.person);
   $('tbody', view).addEventListener('click', e => { const tr = e.target.closest('[data-person]'); if (tr) open(tr); });
   $('tbody', view).addEventListener('keydown', e => { const tr = e.target.closest('[data-person]'); if (tr && e.key === 'Enter') open(tr); });
+};
+
+function addManager() {
+  const box = modal(`${modalHead('Добавить менеджера', 'Пароль покажем один раз. Передайте его сотруднику лично.')}
+    <div class="rvm-body"><form class="outform">
+      <label class="field">Имя<input name="name" maxlength="80" required></label>
+      <label class="field">Добавочный Mango, если есть<input name="extension" inputmode="numeric" pattern="[0-9]{1,6}" maxlength="6"></label>
+      <label class="field">Логин, по желанию<input name="login" maxlength="40" autocapitalize="none" spellcheck="false"></label>
+      <div class="row wide"><button class="btn primary" type="submit">Создать менеджера</button></div>
+    </form><div data-out></div></div>`);
+  const form = $('form', box);
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const button = $('button[type="submit"]', form);
+    busy(button, true);
+    const fields = new FormData(form);
+    try {
+      const result = await api('/api/staff/register', {method: 'POST', body: {
+        name: fields.get('name'), person_ext: fields.get('extension'), login: fields.get('login'),
+      }});
+      form.hidden = true;
+      accountBox($('[data-out]', box), result.login, result.password);
+      if (S.page === 'staff' && !S.arg) reload();
+    } catch (error) {
+      busy(button, false);
+      toast(error.message, true);
+    }
+  });
+}
+
+VIEWS.logs = async view => {
+  let before = null;
+  const draw = async append => {
+    const d = await api('/api/activity' + qs({before: append ? before : ''}));
+    if (!view.isConnected || S.page !== 'logs') return;
+    if (!append) view.innerHTML = `<div class="page"><section class="card blk">
+      <p class="lead">Входы, изменения данных и рабочие действия сотрудников с момента включения журнала.</p>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Когда</th><th>Сотрудник</th><th>Действие</th><th>Результат</th></tr></thead><tbody></tbody></table></div>
+      <div class="row" data-css="margin-top:12px"><button class="btn" type="button" data-older>Показать более ранние</button></div>
+    </section></div>`;
+    const rows = d.items.map(item => `<tr><td class="nw">${esc(fmtWhen(item.at))}</td>
+      <td>${esc(item.who)}<br><small class="muted">${esc(ROLE_NAME[item.role] || item.role)}</small></td>
+      <td>${esc(item.action)}</td><td>${item.status >= 500 ? 'Ошибка' : 'Выполнено'}</td></tr>`).join('');
+    $('tbody', view).insertAdjacentHTML('beforeend', rows || '<tr><td colspan="4">Действий пока нет.</td></tr>');
+    before = d.next;
+    const older = $('[data-older]', view);
+    older.hidden = !before;
+    older.onclick = async () => {
+      busy(older, true);
+      try { await draw(true); } catch (error) { toast(error.message, true); }
+      finally { busy(older, false); }
+    };
+  };
+  await loading(view, draw(false), 'table');
 };
 
 function addPerson() {
@@ -185,7 +241,20 @@ const PERSON_TAB = {
       <section class="card blk" data-css="--i:2"><div class="card-h"><h2>Вход в CRM</h2></div>
         <p class="lead">${a.crm_links ? `Личных ссылок: ${a.crm_links}. Последний вход: ${a.crm_used ? fmtWhen(a.crm_used) : 'ещё не входил'}.` : 'Личной ссылки нет.'}</p>
         <div class="row" data-css="margin-top:12px">${p.manager && !S.me.readonly ? '<button class="btn" type="button" data-crm>Выдать ссылку в CRM</button>' : ''}
-          <button class="btn ghost" type="button" data-go="settings" data-arg="access">Все ссылки →</button></div><div data-crm-out></div></section>`;
+          <button class="btn ghost" type="button" data-go="settings" data-arg="access">Все ссылки →</button></div><div data-crm-out></div></section>
+      ${p.manager && !S.me.readonly && !S.me.support ? `<section class="card blk"><div class="card-h"><h2>Удаление из отдела</h2></div>
+        <p class="lead">Вход в CRM и Telegram будет закрыт сразу. История звонков и перезвонов сохранится.</p>
+        <button class="btn danger" type="button" data-archive>Убрать менеджера</button></section>` : ''}`;
+    $('[data-archive]', el)?.addEventListener('click', async e => {
+      const button = e.currentTarget;
+      if (!await askConfirm(`Убрать сотрудника «${p.name}» из отдела?`, 'Убрать менеджера', true)) return;
+      busy(button, true);
+      try {
+        await api('/api/staff/archive', {method: 'POST', body: {person_ext: p.ext}});
+        toast('Доступ закрыт');
+        go('staff');
+      } catch (error) { busy(button, false); toast(error.message, true); }
+    });
     $('[data-inv]', el)?.addEventListener('click', async e => {
       const btn = e.currentTarget; // после await e.currentTarget уже null
       busy(btn, true);

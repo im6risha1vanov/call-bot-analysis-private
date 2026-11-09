@@ -89,7 +89,8 @@ async def check_target(pool, client_id: int, role: str, extension, client_key) -
     if role not in ROLES:
         raise ValueError('Неизвестный вход.')
     if role == 'manager':
-        if not await pool.fetchval("SELECT 1 FROM employees WHERE client_id=$1 AND extension=$2 AND role='manager'",
+        if not await pool.fetchval("""SELECT 1 FROM employees WHERE client_id=$1 AND extension=$2
+                                      AND role='manager' AND archived_at IS NULL""",
                                    client_id, str(extension or '')):
             raise ValueError('Такого менеджера нет.')
         return str(extension), None
@@ -225,10 +226,16 @@ async def invite_create(pool, client_id: int, role: str, extension=None, client_
             raise ValueError('Этого руководителя нет в боте.')
         tg_id, name = int(person['tg']), name or person['name']
     token = secrets.token_urlsafe(24)
-    await pool.execute(
+    created = await pool.fetchval(
         """INSERT INTO crm_invites(token_hash,role,client_id,extension,client_key,name,telegram_user_id,login,password_hash)
-           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)""",
+           SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9
+           WHERE $2 <> 'manager' OR EXISTS (
+               SELECT 1 FROM employees WHERE client_id=$3 AND extension=$4
+               AND role='manager' AND archived_at IS NULL FOR UPDATE
+           ) RETURNING id""",
         digest(token), role, client_id, extension, client_key, name, tg_id, login, password_hash)
+    if created is None:
+        raise ValueError('Такого менеджера нет.')
     return token
 
 
@@ -312,7 +319,8 @@ async def viewer_for(pool, session: str | None) -> Viewer | None:
             actor = Actor(0, row['client_id'], 'owner', None)
         elif row['role'] == 'manager':
             # Менеджера убрали из отдела: личная ссылка перестаёт работать сразу.
-            tg = await pool.fetchrow("SELECT telegram_user_id FROM employees WHERE client_id=$1 AND extension=$2 AND role='manager'",
+            tg = await pool.fetchrow("""SELECT telegram_user_id FROM employees WHERE client_id=$1 AND extension=$2
+                                        AND role='manager' AND archived_at IS NULL""",
                                      row['client_id'], row['extension'])
             if tg is None:
                 return None

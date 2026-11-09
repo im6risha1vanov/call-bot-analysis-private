@@ -627,6 +627,7 @@ async def sync_employees_for_client(pool: asyncpg.Pool, client: asyncpg.Record) 
             VALUES ($1, $2, $3, now())
             ON CONFLICT (client_id, extension) DO UPDATE SET
                 full_name = EXCLUDED.full_name, synced_at = now()
+            WHERE employees.archived_at IS NULL
             """,
             client["id"], extension, general.get("name") or "",
         )

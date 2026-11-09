@@ -66,10 +66,14 @@ async def dial(pool, client_id: int, extension: str | None, number, telegram_use
     client = await pool.fetchrow('SELECT vpbx_api_key_enc, vpbx_api_salt_enc FROM clients WHERE id=$1', client_id)
     command_id = f'crm-{ext}-{int(time.time() * 1000)}'
     code = None
+    http_status = None
     try:
         res = await mango_client.callback(decrypt(client['vpbx_api_key_enc']), decrypt(client['vpbx_api_salt_enc']),
                                           ext, target, command_id)
         code = res.get('result')
+    except mango_client.MangoHTTPError as error:
+        http_status = error.status
+        log.error('Mango отклонил команду звонка, доб.=%s HTTP %d', ext, http_status)
     except Exception:
         log.exception('Mango не ответил на команду звонка, доб.=%s', ext)
     dial_id = await pool.fetchval(
@@ -78,5 +82,7 @@ async def dial(pool, client_id: int, extension: str | None, number, telegram_use
     log.info('звонок из CRM: доб.=%s номер=%s… код=%s', ext, target[:4], code)
     if code != ACCEPTED:
         _last_dial.pop(key, None)
+        if http_status in (401, 403):
+            raise DialError('Mango отклонил доступ к API звонков. Проверьте права API-коннектора ВАТС.')
         raise DialError(f'Mango не принял звонок (код {code or "нет ответа"}). Позвоните вручную.')
     return {'dial_id': dial_id, 'number': target}

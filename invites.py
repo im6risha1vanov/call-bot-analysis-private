@@ -23,7 +23,16 @@ def code_from(text: str | None) -> str | None:
 async def accept(pool, code: str, tg_id: int, name: str | None) -> tuple[dict | None, str | None]:
     """(строка сотрудника, None) — подключён; (None, причина) — нет."""
     async with pool.acquire() as conn, conn.transaction():
-        invite = await conn.fetchrow('SELECT *, expires_at < now() AS expired FROM employee_invites WHERE code=$1 FOR UPDATE', code)
+        target = await conn.fetchrow('SELECT client_id, extension FROM employee_invites WHERE code=$1', code)
+        if target is None:
+            return None, 'Ссылка-приглашение уже использована или неверна. Попросите новую.'
+        active = await conn.fetchval(
+            """SELECT 1 FROM employees WHERE client_id=$1 AND extension=$2
+               AND archived_at IS NULL FOR UPDATE""", target['client_id'], target['extension'])
+        if active is None:
+            return None, 'Сотрудник больше не активен. Обратитесь к руководителю.'
+        invite = await conn.fetchrow(
+            'SELECT *, expires_at <= now() AS expired FROM employee_invites WHERE code=$1 FOR UPDATE', code)
         if invite is None or invite['used_at'] is not None:
             return None, 'Ссылка-приглашение уже использована или неверна. Попросите новую.'
         if invite['expired']:

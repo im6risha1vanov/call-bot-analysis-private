@@ -23,6 +23,12 @@ BASE_URL = "https://app.mango-office.ru/vpbx"
 _client = httpx.AsyncClient(timeout=30.0)
 
 
+class MangoHTTPError(RuntimeError):
+    def __init__(self, method: str, status: int):
+        self.status = status
+        super().__init__(f'Mango {method} HTTP {status}')
+
+
 async def close() -> None:
     await _client.aclose()
 
@@ -36,7 +42,7 @@ async def call(method: str, vpbx_api_key: str, salt: str, payload: dict, timeout
     data = {"vpbx_api_key": vpbx_api_key, "sign": sign(vpbx_api_key, raw, salt), "json": raw}
     r = await _client.post(f"{BASE_URL}/{method}", data=data, timeout=timeout)
     if r.status_code >= 300:
-        raise RuntimeError(f"Mango {method} {r.status_code}: {r.text[:500]}")
+        raise MangoHTTPError(method, r.status_code)
     return r.json()
 
 

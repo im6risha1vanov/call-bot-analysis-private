@@ -46,7 +46,7 @@ async def _bind_by_username(message) -> str | None:
         return None
     row = await PG_POOL.fetchrow(
         'UPDATE employees SET telegram_user_id=$1 '
-        'WHERE lower(telegram_username)=$2 AND telegram_user_id IS NULL '
+        'WHERE lower(telegram_username)=$2 AND telegram_user_id IS NULL AND archived_at IS NULL '
         'RETURNING full_name, role',
         message.from_user.id, username)
     if row is None:

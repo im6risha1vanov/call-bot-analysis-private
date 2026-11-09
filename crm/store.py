@@ -38,8 +38,9 @@ async def zone(pool, client_id: int) -> ZoneInfo:
 
 async def team(pool, client_id: int) -> list[dict]:
     rows = await pool.fetch(
-        """SELECT extension, full_name FROM employees WHERE client_id=$1 AND role='manager'
-           AND extension ~ '^[0-9]+$' ORDER BY extension::int""", client_id)
+        """SELECT extension, full_name FROM employees WHERE client_id=$1 AND role='manager' AND archived_at IS NULL
+           AND (extension ~ '^[0-9]+$' OR extension LIKE 'crm:%')
+           ORDER BY CASE WHEN extension ~ '^[0-9]+$' THEN extension::numeric END, full_name, extension""", client_id)
     return [{'ext': r['extension'], 'name': r['full_name'] or f"Доб. {r['extension']}"} for r in rows]
 
 
@@ -48,7 +49,7 @@ async def scope(pool, actor, ext: str | None) -> str:
     if actor is None:
         raise Forbidden('Нужно войти.')
     if not is_privileged(actor):
-        if not str(actor.extension or '').isdigit():
+        if not actor.extension or not (actor.extension.isdigit() or actor.extension.startswith('crm:')):
             raise Forbidden('У вас нет добавочного в Mango.')
         return actor.extension
     people = await team(pool, actor.client_id)

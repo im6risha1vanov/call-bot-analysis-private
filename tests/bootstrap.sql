@@ -1,6 +1,6 @@
 -- Only for an empty isolated test database; no production data is imported.
 CREATE TABLE clients(id INTEGER PRIMARY KEY,timezone TEXT NOT NULL,processing_enabled BOOLEAN NOT NULL DEFAULT true);
-CREATE TABLE employees(client_id INTEGER NOT NULL REFERENCES clients(id),extension TEXT NOT NULL,telegram_user_id BIGINT,role TEXT NOT NULL,full_name TEXT,PRIMARY KEY(client_id,extension));
+CREATE TABLE employees(client_id INTEGER NOT NULL REFERENCES clients(id),extension TEXT NOT NULL,telegram_user_id BIGINT,role TEXT NOT NULL,full_name TEXT,PRIMARY KEY(client_id,extension),archived_at TIMESTAMPTZ);
 CREATE TABLE calls(id BIGSERIAL PRIMARY KEY,client_id INTEGER NOT NULL REFERENCES clients(id),extension TEXT,transcript TEXT,status TEXT DEFAULT 'analyzed',call_started_at TIMESTAMPTZ DEFAULT now());
 CREATE TABLE astra_analysis(call_id BIGINT PRIMARY KEY REFERENCES calls(id),score INTEGER,level TEXT);
 CREATE TABLE astra_daily_spend(client_id INTEGER,day DATE,spent_units NUMERIC(16,4),PRIMARY KEY(client_id,day));

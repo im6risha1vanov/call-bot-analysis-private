@@ -23,6 +23,7 @@ from aiohttp import BodyPartReader, web  # noqa: E402
 
 import mango_client  # noqa: E402
 from tools import Forbidden, home_client_id, is_privileged  # noqa: E402
+from . import activity, economics
 from . import learning, tour
 from . import accounts, ask as asking, auth, automation_agent, automations, cabinet, callcenter_db, company, contracts, deals, donor_agent, gpt, journal, overview, people, platform, recording, reviews, sources, staff, store, training  # noqa: E402
 from . import prompts as prompt_mode, robot, webphone, robot_api, robot_prices, robot_runner, robot_store  # noqa: E402
@@ -113,6 +114,7 @@ async def viewer(request: web.Request) -> auth.Viewer:
     who = await auth.viewer_for(request.app[POOL], request.cookies.get(COOKIE))
     if who is None:
         raise web.HTTPUnauthorized(reason='Войдите в CRM по логину и паролю.')
+    request[activity.ACTOR] = who
     return who
 
 
@@ -207,6 +209,7 @@ async def personal_page(request):
             '<title>Averon CRM</title><body style="font:16px system-ui;margin:40px auto;max-width:420px;padding:0 16px">'
             '<h1>Ссылка не действует</h1><p>Её отозвали или в ней ошибка. Попросите у руководителя новую.</p></body>'))
     session, role = got
+    request[activity.ACTOR] = await auth.viewer_for(request.app[POOL], session)
     await auth.logout(request.app[POOL], request.cookies.get(COOKIE))
     response = web.HTTPFound('/')
     response.set_cookie(COOKIE, session, max_age=int(auth.PERSONAL_TTL.total_seconds()), httponly=True,
@@ -241,6 +244,7 @@ async def support_exit(request):
 
 
 async def logout_page(request):
+    request[activity.ACTOR] = await auth.viewer_for(request.app[POOL], request.cookies.get(COOKIE))
     await auth.logout(request.app[POOL], request.cookies.get(COOKIE))
     response = web.HTTPFound('/')
     response.del_cookie(COOKIE, path='/')
@@ -257,6 +261,7 @@ async def old_director(request):
 # ---- API ----
 
 async def api_logout(request):
+    request[activity.ACTOR] = await auth.viewer_for(request.app[POOL], request.cookies.get(COOKIE))
     await auth.logout(request.app[POOL], request.cookies.get(COOKIE))
     response = web.json_response({'ok': True})
     response.del_cookie(COOKIE, path='/')
@@ -289,6 +294,7 @@ async def api_me(request):
         or ('Директор' if who.role == 'director' else ''), 'role': who.role, 'test': who.test,
         'ext': a.extension if str(a.extension or '').isdigit() else None,
         'can_dial': can_dial, 'privileged': privileged, 'readonly': who.test,
+        'economics': await can_view_economics(pool, who),
         'webphone': not tour.active(request) and can_dial and await webphone.account(pool, a.client_id, a.extension) is not None,
         'team': await store.team(pool, a.client_id) if privileged else [],
         'outcomes': store.OUTCOMES, 'needs_date': sorted(store.NEEDS_DATE), 'lead_status': store.LEAD_STATUS, **firm,
@@ -559,6 +565,7 @@ async def api_access_account(request):
 async def api_login(request):
     data = await body(request)
     session, role = await auth.password_login(request.app[POOL], data.get('login'), data.get('password'))
+    request[activity.ACTOR] = await auth.viewer_for(request.app[POOL], session)
     await auth.logout(request.app[POOL], request.cookies.get(COOKIE))
     response = web.json_response({'ok': True, 'role': role})
     response.set_cookie(COOKIE, session, max_age=int(auth.PERSONAL_TTL.total_seconds()), httponly=True,
@@ -920,6 +927,56 @@ async def api_staff_add(request):
                                              data.get('name'), data.get('username')))
 
 
+async def staff_admin(request):
+    who = await director(request)
+    if not activity.employee(who):
+        raise Forbidden('Войдите под собственной учётной записью директора.')
+    return who.actor
+
+
+async def api_staff_register(request):
+    who = await staff_admin(request)
+    data = await body(request)
+    return web.json_response(await staff.add_manager(request.app[POOL], who, data.get('name'),
+                                                     data.get('person_ext'), data.get('login')))
+
+
+async def api_staff_archive(request):
+    who = await staff_admin(request)
+    data = await body(request)
+    await staff.archive_manager(request.app[POOL], who, data.get('person_ext'))
+    return web.json_response({'ok': True})
+
+
+async def api_activity(request):
+    who = await staff_admin(request)
+    before = request.query.get('before')
+    if before is not None:
+        before = int_id(before)
+        if not 0 < before < 2**63:
+            raise ValueError('Некорректная страница журнала.')
+    return web.json_response(await activity.listing(request.app[POOL], who.client_id, before))
+
+
+async def can_view_economics(pool, who) -> bool:
+    if who.role != 'director' or not activity.employee(who) or not who.actor.telegram_user_id:
+        return False
+    return bool(await pool.fetchval(
+        'SELECT 1 FROM crm_economics_viewers WHERE client_id=$1 AND telegram_user_id=$2',
+        who.actor.client_id, who.actor.telegram_user_id))
+
+
+async def api_economics(request):
+    who = await director(request)
+    pool = request.app[POOL]
+    if not await can_view_economics(pool, who):
+        raise Forbidden('Раздел «Экономика» доступен только назначенным руководителям.')
+    days = request.query.get('days', '30')
+    if days not in {'7', '30', '90'}:
+        raise ValueError('Выберите период 7, 30 или 90 дней.')
+    return web.json_response(await economics.overview(pool, who.actor.client_id, int(days)))
+
+
 async def api_staff_action(request):
     """Действие над сотрудником: invite — новая ссылка в бота, unlink — отключить, copies — копии разборов."""
     who = await director(request)
@@ -1106,6 +1163,7 @@ async def api_tasks(request):
 async def api_task_change(request):
     who = await actor(request, write=True)
     data = await body(request)
+    request[activity.DETAIL] = activity.TASK_DETAILS.get(str(data.get('action') or ''))
     await store.change_task(request.app[POOL], who, who.client_id, await ext_of(request, who, data.get('ext')),
                             int_id(request.match_info['id']), str(data.get('action') or ''),
                             parse_date(data.get('due_date')), parse_time(data.get('due_time')))
@@ -1279,8 +1337,21 @@ async def learning_exit(request):
     return response
 
 
+@web.middleware
+async def log_activity(request, handler):
+    try:
+        response = await handler(request)
+    except web.HTTPException as error:
+        await activity.record(request.app[POOL], request, error.status)
+        raise
+    if response.status >= 500:
+        log.error('CRM HTTP request failed, status=%d', response.status)
+    await activity.record(request.app[POOL], request, response.status)
+    return response
+
+
 def build(pool) -> web.Application:
-    app = web.Application(middlewares=[guard], client_max_size=512 * 1024)
+    app = web.Application(middlewares=[log_activity, guard], client_max_size=512 * 1024)
     app[POOL] = pool
     app.router.add_get('/', index)
     app.router.add_get('/t/{key}', test_page)
@@ -1330,6 +1401,8 @@ def build(pool) -> web.Application:
     app.router.add_post('/api/access/{id}/account', api_access_account)
     app.router.add_post('/api/login', api_login)
     app.router.add_get('/api/staff', api_staff)
+    app.router.add_get('/api/activity', api_activity)
+    app.router.add_get('/api/economics', api_economics)
     app.router.add_get('/api/platform/companies', api_companies)
     app.router.add_post('/api/platform/companies', api_company_create)
     app.router.add_post('/api/platform/companies/{id}', api_company_update)
@@ -1371,6 +1444,8 @@ def build(pool) -> web.Application:
     app.router.add_post('/api/contracts/register', api_contracts_register)
     app.router.add_get('/api/contracts/lookup/{kind}/{value}', api_contracts_lookup)
     app.router.add_post('/api/staff', api_staff_add)
+    app.router.add_post('/api/staff/register', api_staff_register)
+    app.router.add_post('/api/staff/archive', api_staff_archive)
     app.router.add_post('/api/staff/{action}', api_staff_action)
     app.router.add_get('/api/prompts', api_prompts)
     app.router.add_get('/api/robot', api_robot)

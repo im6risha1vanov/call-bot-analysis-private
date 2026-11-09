@@ -53,7 +53,7 @@ async def create_all(pool) -> list[dict]:
                 {d['tg'] for d in await auth.directors(pool, client_id)} else None
             people.append(('director', r['full_name'] or 'director', {'tg': tg, 'name': r['full_name']}))
     for m in await pool.fetch("""SELECT extension, full_name FROM employees WHERE client_id=$1 AND role='manager'
-                                 AND extension ~ '^[0-9]+$' ORDER BY extension::int""", client_id):
+                                 AND archived_at IS NULL AND extension ~ '^[0-9]+$' ORDER BY extension::int""", client_id):
         if m['extension'] not in done_ext and m['extension'] not in ROBOT_EXTENSIONS:
             people.append(('manager', m['full_name'] or f"ext{m['extension']}", {'extension': m['extension']}))
     try:

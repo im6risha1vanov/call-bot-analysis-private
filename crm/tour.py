@@ -8,7 +8,7 @@ MESSAGE='Включён режим обучения: действие объяс
 # Only existing passive reads. Unknown future endpoints fail closed while learning.
 READS={
  '/api/me','/api/learning/guide','/api/learning/context','/api/summary','/api/journal','/api/callbacks','/api/queue','/api/card','/api/tasks','/api/calls','/api/stats',
- '/api/reports','/api/person','/api/staff','/api/access','/api/trainings','/api/ask','/api/gpt','/api/docs',
+ '/api/reports','/api/person','/api/staff','/api/access','/api/activity','/api/economics','/api/trainings','/api/ask','/api/gpt','/api/docs',
  '/api/deals','/api/contracts','/api/contracts/config','/api/contracts/next-number',
  '/api/prompts','/api/leads','/api/sources/selections','/api/donors','/api/callcenter','/api/callcenter/work','/api/automations',
  '/api/robot','/api/robot/calls','/api/robot/cab','/api/robot/cab/known-clients','/api/robot/cab/contacts','/api/robot/cab/contacts/tabs','/api/robot/cab/stop','/api/robot/cab/campaigns','/api/robot/cab/calls','/api/robot/cab/analytics',

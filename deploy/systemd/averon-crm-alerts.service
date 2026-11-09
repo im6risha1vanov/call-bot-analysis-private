@@ -1,0 +1,18 @@
+[Unit]
+Description=Averon CRM technical alerts
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=averon-crm-alerts
+SupplementaryGroups=systemd-journal
+EnvironmentFile=/etc/averon-crm-alerts.env
+ExecStart=/usr/bin/python3 -I /opt/callbot-astra/scripts/crm_alerts.py
+StateDirectory=averon-crm-alerts
+StateDirectoryMode=0700
+UMask=0077
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+TimeoutStartSec=35s
