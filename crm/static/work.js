@@ -64,30 +64,49 @@ function workCard(el, item, onDone, opts = {}) {
     try { await navigator.clipboard.writeText('+' + item.number); doneBtn(btn, 'Скопировано'); } catch (err) { toast(phone(item.number)); }
   });
   bindSeg(el, {dialmode: v => store.set(WP_MODE_KEY, v)});
-  $('[data-act="dial"]', el).addEventListener('click', async ev => {
-    const b = ev.currentTarget;
-    const browser = dialMode() === 'browser';
+  const dialButton = $('[data-act="dial"]', el);
+  dialButton.addEventListener('click', () => {
+    if (!opts.auto?.active()) dialNumber(dialMode() === 'browser');
+  });
+  async function dialNumber(browser, auto = null) {
+    const b = dialButton;
+    if (WP.session || b.classList.contains('busy')) {
+      toast('Сначала завершите текущий звонок.', true);
+      auto?.finished(false);
+      return;
+    }
     busy(b, true);
     ring.className = 'ringing'; ring.textContent = browser ? 'Звоню из браузера…' : 'Отправляю команду в Mango…';
     try {
       const res = await api('/api/dial', {method: 'POST', body: {number: item.number, via: browser ? 'browser' : undefined}});
+      const nextAt = performance.now() + 8000; // MIN_GAP_SEC в crm/dial.py
+      if (auto && !auto.active()) return;
       S.dial = {id: res.dial_id, number: item.number};
       if (browser) {
-        await wpCall(res.number, (text, kind) => {
-          if (!ring.isConnected) return;
+        await wpCall(res.number, (text, kind, finished) => {
+          if (!ring.isConnected) {
+            if (kind === 'end' || kind === 'err') auto?.finished(finished, nextAt);
+            return;
+          }
           ring.className = 'ringing' + (kind === 'err' ? ' err' : kind === 'talk' ? ' talk' : '');
-          ring.textContent = kind === 'end' || kind === 'err' ? `${text.replace(/\.$/, '')}. Отметьте итог ниже.` : text;
-        });
+          if (kind === 'end' || kind === 'err') {
+            ring.textContent = auto?.active() ? text : `${text.replace(/\.$/, '')}. Отметьте итог ниже.`;
+            auto?.finished(finished, nextAt);
+          } else {
+            ring.textContent = text;
+          }
+        }, () => !auto || auto.active());
       } else {
         ring.textContent = 'Сейчас зазвонит ваш Talker. Снимите трубку, и Mango наберёт клиента. После разговора отметьте итог ниже.';
       }
     } catch (e) {
       ring.className = 'ringing err'; ring.textContent = CRMText.error(e,'Не удалось начать звонок. Проверьте телефон и попробуйте ещё раз.');
+      auto?.finished(false);
     } finally {
       b.classList.remove('busy');
-      setTimeout(() => { b.disabled = false; }, 8000);
+      setTimeout(() => { b.disabled = !canDial || !!opts.auto?.active(); }, 8000);
     }
-  });
+  }
   $$('[data-out]', el).forEach(btn => btn.addEventListener('click', () => {
     chosen = btn.dataset.out;
     $$('[data-out]', el).forEach(x => x.setAttribute('aria-pressed', String(x === btn)));
@@ -141,6 +160,7 @@ function workCard(el, item, onDone, opts = {}) {
     }
   }
   loadHistory(item.number, $('.hist', el), opts.ext);
+  return () => dialNumber(true, opts.auto);
 }
 
 // Карточка номера в выдвижной панели: из перезвонов, журнала звонков, разбора.
@@ -216,8 +236,9 @@ document.addEventListener('crm-review', e => {
 
 // ---------- очередь менеджера ----------
 let queueRefreshState=null,queueRefreshBusy=false;
+addEventListener('pagehide', () => window.stopQueueAutodial?.());
 function canRefreshQueue(state){
-  return state&&state===queueRefreshState&&state.view.isConnected&&S.page==='queue'&&S.arg===state.arg&&!S.busy&&!S.dial&&!drawerOpen()&&!$('.outform:not(.hidden)')&&!$('.rvm')&&!window.AveronLearningWorkspace?.classroom?.presentationBusy;
+  return !window.stopQueueAutodial&&state&&state===queueRefreshState&&state.view.isConnected&&S.page==='queue'&&S.arg===state.arg&&!S.busy&&!S.dial&&!drawerOpen()&&!$('.outform:not(.hidden)')&&!$('.rvm')&&!window.AveronLearningWorkspace?.classroom?.presentationBusy;
 }
 async function refreshQueueInBackground(){
   const state=queueRefreshState;if(queueRefreshBusy||!canRefreshQueue(state))return false;
@@ -267,17 +288,108 @@ VIEWS.queue = async (view, arg, refresh={}) => {
   view.innerHTML = `<div class="page">
     <div class="qline blk"><span>В очереди <b>${fmt(q.items.length)}</b>${tasksN ? `, из них <b>${fmt(tasksN)}</b> ${plural(tasksN, 'перезвон', 'перезвона', 'перезвонов')}` : ''}</span>
       ${q.later ? `<span class="hint">ещё ${fmt(q.later)} ${q.later % 10 === 1 && q.later % 100 !== 11 ? 'вернётся' : 'вернутся'} позже ${help('Перезвоны на другие дни и номера, которые не взяли трубку: они возвращаются через 2 часа, до 3 попыток.')}</span>` : ''}</div>
+    ${canManage && S.me.can_dial ? `<div class="row">
+      <button class="btn" type="button" data-auto-queue${S.me.webphone ? '' : ' disabled'}>Начать автонабор</button>
+      <span class="hint" role="status" data-auto-status>${S.me.webphone ? 'Следующий номер после завершения звонка. Итоги можно отметить после остановки.' : 'Для автонабора подключите телефон в браузере.'}</span>
+    </div>` : ''}
     <div class="grid2"><div class="stack" data-work></div>
       <div class="card blk" data-css="--i:3"><div class="card-h"><h2>Дальше по очереди</h2><span class="hint">${fmt(q.items.length)}</span></div><div class="list" data-next></div></div></div></div>`;
+  const autoButton = $('[data-auto-queue]', view);
+  const autoStatus = $('[data-auto-status]', view);
+  const work = $('[data-work]', view);
+  let run = null;
+  let startCall;
+
+  function syncAuto() {
+    if (!autoButton) return;
+    autoButton.textContent = run ? 'Остановить автонабор' : 'Начать автонабор';
+    for (const node of $$('.outs, [data-skip], [data-next], .dialmode', view)) node.inert = !!run;
+    const dial = $('[data-act="dial"]', work);
+    if (dial && !dial.classList.contains('busy')) dial.disabled = !!run || !S.me.can_dial;
+  }
+
+  function stopAuto(message = '') {
+    if (!run) return;
+    clearTimeout(run.timer);
+    if (!WP.session) run.release?.();
+    run = null;
+    window.stopQueueAutodial = null;
+    if (view.isConnected) {
+      autoStatus.textContent = message || 'Автонабор остановлен. Можно отметить итог звонка.';
+      syncAuto();
+    }
+  }
+
+  function afterCall(current, item, finished, nextAt) {
+    if (run !== current || !view.isConnected) {
+      current.release?.();
+      return;
+    }
+    if (!finished) {
+      stopAuto('Автонабор остановлен из-за ошибки звонка.');
+      return;
+    }
+    current.seen.add(item.number);
+    autoStatus.textContent = 'Перехожу к следующему номеру…';
+    current.timer = setTimeout(async () => {
+      try {
+        const fresh = await api('/api/queue');
+        if (run !== current || !view.isConnected) return;
+        const index = fresh.items.findIndex(entry => !current.seen.has(entry.number));
+        if (index < 0) {
+          stopAuto('Автонабор завершён. Можно отметить итоги звонков.');
+          return;
+        }
+        q.items = fresh.items;
+        pos = index;
+        show();
+        startCall();
+      } catch (error) {
+        if (run === current) stopAuto('Не удалось обновить очередь. Автонабор остановлен.');
+      }
+    }, Math.max(0, nextAt - performance.now()));
+  }
+
+  autoButton?.addEventListener('click', () => {
+    if (run) return stopAuto();
+    if (!S.me.webphone || S.busy || S.dial || WP.session || $('[data-act="dial"]', work).classList.contains('busy')) {
+      toast('Завершите текущий звонок и отметьте итог.', true);
+      return;
+    }
+    const current = run = {seen: new Set()};
+    window.stopQueueAutodial = stopAuto;
+    syncAuto();
+    const launch = () => {
+      autoStatus.textContent = 'Автонабор через браузер включён.';
+      show();
+      startCall();
+    };
+    if (!navigator.locks) return launch();
+    navigator.locks.request('averon-queue-autodial-' + S.me.ext, {ifAvailable: true}, async lock => {
+      if (run !== current || !view.isConnected) return;
+      if (!lock) return stopAuto('Автонабор уже запущен в другой вкладке.');
+      await new Promise(resolve => {
+        current.release = resolve;
+        launch();
+      });
+    }).catch(() => {
+      if (run === current) stopAuto('Не удалось запустить автонабор.');
+    });
+  });
+
   const show = () => {
     const item = q.items[pos];
+    const current = run;
     S.qnum = item.number; S.dial = null;
-    workCard($('[data-work]', view), item, () => {
+    startCall = workCard(work, item, () => {
       if (S.me.learning) { reload(); return; } // Keep the saved fictional card visible for the history check.
       q.items.splice(pos, 1);
       S.qnum = q.items[pos % Math.max(1, q.items.length)]?.number || null;
       reload();
-    }, {ext, extra: q.items.length > 1 ? '<button class="btn small ghost" type="button" data-skip>Пропустить ›</button>' : ''});
+    }, {ext, auto: current ? {
+      active: () => run === current && view.isConnected,
+      finished: (ok, nextAt) => afterCall(current, item, ok, nextAt),
+    } : null, extra: q.items.length > 1 ? '<button class="btn small ghost" type="button" data-skip>Пропустить ›</button>' : ''});
     $('[data-skip]', view)?.addEventListener('click', () => { pos = (pos + 1) % q.items.length; show(); });
     const remaining = q.items.length - 1;
     const n = Math.min(remaining, 12);
@@ -286,6 +398,7 @@ VIEWS.queue = async (view, arg, refresh={}) => {
         + (remaining > n ? `<p class="hint more-l">и ещё ${fmt(remaining - n)}</p>` : '')
       : '<p class="hint">Следующих номеров нет.</p>';
     $('.card-h .hint', $('[data-next]', view).parentElement).textContent = fmt(remaining);
+    syncAuto();
   };
   $('[data-next]', view).addEventListener('click', e => {
     const b = e.target.closest('.item'); if (!b) return;

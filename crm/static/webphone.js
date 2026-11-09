@@ -52,9 +52,11 @@ const WP_CAUSE = {
 };
 
 // Звонок из браузера. onState(текст, вид) показывает ход звонка в карточке номера; вид: ring | talk | end | err.
-async function wpCall(number, onState) {
+async function wpCall(number, onState, canStart = () => true) {
   if (WP.session) throw new Error('Уже идёт звонок. Сначала положите трубку.');
   const ua = await wpConnect();
+  if (!canStart()) return;
+  if (WP.session) throw new Error('Уже идёт звонок. Сначала положите трубку.');
   WP.number = number; WP.onState = onState || null; WP.muted = false; WP.started = 0;
   const s = ua.call(`sip:${number}@crm.invalid`, {
     mediaConstraints: {audio: true, video: false}, pcConfig: {iceServers: []},
@@ -74,12 +76,17 @@ async function wpCall(number, onState) {
     clearInterval(WP.timer);
     WP.timer = setInterval(() => wpBar(), 1000);
   });
-  s.on('ended', () => wpEnd(WP.started ? `Звонок завершён, ${dur(Math.round((Date.now() - WP.started) / 1000))}` : 'Звонок завершён', 'end'));
-  s.on('failed', e => wpEnd(e.originator === 'local' && e.cause === 'Canceled' ? 'Звонок отменён' : WP_CAUSE[e.cause] || `Не получилось: ${e.cause}`,
-    e.cause === 'Canceled' ? 'end' : 'err'));
+  s.on('ended', () => {
+    if (WP.session === s) wpEnd(WP.started ? `Звонок завершён, ${dur(Math.round((Date.now() - WP.started) / 1000))}` : 'Звонок завершён', 'end', true);
+  });
+  s.on('failed', e => {
+    if (WP.session !== s) return;
+    const finished = ['Busy', 'Rejected', 'No Answer', 'Unavailable', 'Not Found', 'Address Incomplete', 'Canceled'].includes(e.cause);
+    wpEnd(WP_CAUSE[e.cause] || `Не получилось: ${e.cause}`, e.cause === 'Canceled' ? 'end' : 'err', finished);
+  });
 }
 
-function wpHangup() { if (WP.session) { try { WP.session.terminate(); } catch (e) { wpEnd('Звонок завершён', 'end'); } } }
+function wpHangup() { if (WP.session) { try { WP.session.terminate(); } catch (e) { wpEnd('Не удалось подтвердить завершение звонка', 'err'); } } }
 
 function wpAudio() {
   let a = $('#wp-audio');
@@ -87,18 +94,19 @@ function wpAudio() {
   return a;
 }
 
-function wpState(text, kind) {
+function wpState(text, kind, finished = false) {
   WP.state = {text, kind};
   wpBar();
-  WP.onState && WP.onState(text, kind);
+  WP.onState && WP.onState(text, kind, finished);
 }
 
-function wpEnd(text, kind) {
+function wpEnd(text, kind, finished = false) {
   clearInterval(WP.timer);
   WP.session = null;
   const a = $('#wp-audio');
   if (a) a.srcObject = null;
-  wpState(text, kind);
+  wpState(text, kind, finished);
+  WP.onState = null;
   const shown = WP.state;
   setTimeout(() => { if (WP.state === shown && !WP.session) $('#wpbar')?.remove(); }, kind === 'err' ? 8000 : 4000);
 }

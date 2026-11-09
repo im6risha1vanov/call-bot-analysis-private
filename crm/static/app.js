@@ -527,6 +527,7 @@ function setHead({title = '', sub = '', filters = '', back = null, actions = ''}
 // ---------- переходы ----------
 let navSeq = 0;
 async function go(target, arg = null, opts = {}) {
+  window.stopQueueAutodial?.();
   const [page, a] = resolve(target, arg);
   const same = page === S.page;
   S.page = page; S.arg = a;
