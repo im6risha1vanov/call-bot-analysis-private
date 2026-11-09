@@ -18,56 +18,121 @@ VIEWS.sources = async (view, arg) => {
 
 const LEAD_ORDER = ['new', 'no_answer', 'callback', 'interested', 'proposal', 'meeting', 'not_interested', 'bad_number'];
 S.leadFilter = '';
-async function leadsView(box) {
+async function leadsView(box, {queueOnly = false, before = '', draft = {}} = {}) {
   const ext = S.me.role === 'director' ? (S.f.ext || S.me.team[0]?.ext) : '';
-  const data = await api('/api/leads' + qs({status: S.leadFilter, ext}));
-  const ro = S.me.readonly;
+  const data = await api('/api/leads' + qs({status: queueOnly ? '' : S.leadFilter, ext, queue: queueOnly ? '1' : '', before}));
+  if (!box.isConnected) return;
+  const ro = S.me.readonly || S.me.learning_mode;
   const chipCls = st => st === 'new' ? 'acc' : ['meeting', 'proposal'].includes(st) ? 'good' : ['not_interested', 'bad_number'].includes(st) ? 'bad' : 'warn';
+  const state = () => ({text: $('[data-l="text"]', box)?.value || '', source: $('[data-l="src"]', box)?.value || ''});
+  const redraw = (cursor = before, saved = state()) => leadsView(box, {queueOnly, before: cursor, draft: saved});
   box.innerHTML = `<div class="grid2">
-    <section class="card blk"><div class="card-h"><h2>Номера в базе</h2><span class="hint">${fmt(data.total)}</span></div>
-      <div class="filters" data-css="margin-bottom:12px"><button type="button" data-f="" aria-pressed="${!S.leadFilter}">Все<span class="c">${data.total}</span></button>${LEAD_ORDER.filter(k => data.counts[k]).map(k =>
-        `<button type="button" data-f="${k}" aria-pressed="${S.leadFilter === k}">${esc(data.labels[k])}<span class="c">${data.counts[k]}</span></button>`).join('')}</div>
+    <section class="card blk"><div class="card-h"><h2>${queueOnly ? 'Номера в очереди' : 'Номера в базе'}</h2><span class="hint">${fmt(data.total)}</span>
+      ${queueOnly && !ro && data.total ? '<span class="sp"></span><button class="btn small danger" type="button" data-clear-queue>Очистить очередь</button>' : ''}</div>
+      ${queueOnly ? '<p class="hint">Здесь новые номера и запланированные повторы. Перезвоны находятся в своём разделе.</p>' :
+        `<div class="filters" data-css="margin-bottom:12px"><button type="button" data-f="" aria-pressed="${!S.leadFilter}">Все<span class="c">${data.total}</span></button>${LEAD_ORDER.filter(k => data.counts?.[k]).map(k =>
+        `<button type="button" data-f="${k}" aria-pressed="${S.leadFilter === k}">${esc(data.labels[k])}<span class="c">${data.counts[k]}</span></button>`).join('')}</div>`}
       ${data.items.length ? `<div class="tbl-wrap"><table class="tbl anim"><thead><tr><th>Номер</th><th>Клиент</th><th class="hide-m">Источник</th><th>Статус</th><th></th></tr></thead><tbody>
       ${data.items.map((l, r) => `<tr class="click" data-id="${l.id}" data-css="--r:${Math.min(r, 30)}"><td class="num nw">${esc(phone(l.number))}</td><td>${esc(l.title || '')}${l.note ? `<div class="s">${esc(l.note)}</div>` : ''}</td>
         <td class="hide-m">${esc(l.source)}</td><td><span class="chip ${chipCls(l.status)}">${esc(CRMText.label(l.status,{...S.me.outcomes,new:'Новый'},'Статус не указан'))}${l.status === 'no_answer' ? ' · ' + l.attempts : ''}</span></td>
-        <td>${ro ? '' : `<button class="x" type="button" data-del="${l.id}" aria-label="Удалить номер" data-css="width:28px;height:28px">${svg('x', '')}</button>`}</td></tr>`).join('')}
-      </tbody></table></div>${data.items.length >= 500 ? '<p class="hint">Показаны последние 500.</p>' : ''}` : '<div class="empty">Здесь пока пусто. Вставьте номера в форму.</div>'}</section>
+        <td>${ro ? '' : `<div class="row">${queueOnly ? `<button class="btn small" type="button" data-edit="${l.id}">Изменить</button>` : ''}
+          <button class="x" type="button" data-del="${l.id}" aria-label="Удалить номер" data-css="width:28px;height:28px">${svg('x', '')}</button></div>`}</td></tr>`).join('')}
+      </tbody></table></div>${!queueOnly && data.items.length >= 500 ? '<p class="hint">Показаны последние 500.</p>' : ''}` : '<div class="empty">Здесь пока пусто. Вставьте номера в форму.</div>'}
+      ${queueOnly && (before || data.next) ? `<div class="row" data-css="margin-top:12px">${before ? '<button class="btn small" type="button" data-page-first>Сначала</button>' : ''}
+        ${data.next ? '<button class="btn small" type="button" data-page-next>Следующие номера</button>' : ''}</div>` : ''}</section>
     ${ro ? '' : `<section class="card blk" data-css="--i:1"><div class="card-h"><h2>Добавить номера</h2></div>
       <p class="hint" data-css="margin:0 0 10px">По одному на строку. Можно сразу с именем и компанией через точку с запятой: <span class="num">89991234567; Иван; ООО Ромашка</span>. Повторы и номера, которые уже есть, пропущу.</p>
-      <label class="field">Номера<textarea data-l="text" rows="9" placeholder="+7 999 123-45-67; Иван Петров; ООО Ромашка"></textarea></label>
-      <label class="field">Откуда база<input data-l="src" maxlength="80" list="l-srcs" placeholder="например, ГЦК 17.10"><datalist id="l-srcs">${data.sources.map(s => `<option value="${esc(s)}">`).join('')}</datalist></label>
-      <div class="row" data-css="margin-top:12px"><button class="btn primary" type="button" data-add>Добавить в очередь</button></div><p class="hint" data-res></p></section>`}</div>`;
-  $$('[data-f]', box).forEach(b => b.addEventListener('click', () => { S.leadFilter = b.dataset.f; leadsView(box); }));
+      <label class="field">Номера<textarea data-l="text" rows="7" placeholder="+7 999 123-45-67; Иван Петров; ООО Ромашка">${esc(draft.text || '')}</textarea></label>
+      <label class="field">Откуда база<input data-l="src" maxlength="80" list="l-srcs" value="${esc(draft.source || '')}" placeholder="например, ГЦК 17.10"><datalist id="l-srcs">${(data.sources || []).map(s => `<option value="${esc(s)}">`).join('')}</datalist></label>
+      <div class="row" data-css="margin-top:12px"><button class="btn primary" type="button" data-add>Добавить в очередь</button></div>
+      ${queueOnly ? `<label class="field" data-css="margin-top:16px">Загрузить Excel или CSV
+        <input type="file" data-l-file accept=".xlsx,.csv"></label>
+        <p class="hint">До 280 КБ и 5 000 строк. Заголовки «Телефон», «Имя», «Компания», «Комментарий».</p>
+        <button class="btn" type="button" data-import-leads>Импортировать файл</button>` : ''}
+      <p class="hint" data-res aria-live="polite"></p></section>`}</div>`;
+  const safeRedraw = cursor => redraw(cursor).catch(error => toast(error.message, true));
+  $$('[data-f]', box).forEach(b => b.addEventListener('click', () => { S.leadFilter = b.dataset.f; safeRedraw(''); }));
+  $('[data-page-first]', box)?.addEventListener('click', () => safeRedraw(''));
+  $('[data-page-next]', box)?.addEventListener('click', () => safeRedraw(data.next));
+  $('[data-clear-queue]', box)?.addEventListener('click', async e => {
+    const button = e.currentTarget;
+    if (!await askConfirm(`Очистить очередь из ${plainItems(data.total, 'номера', 'номеров', 'номеров')}? Открытые перезвоны и история звонков сохранятся.`, 'Очистить очередь', true)) return;
+    busy(button, true);
+    try {
+      const result = await api('/api/leads/queue/clear', {method: 'POST', body: {before: data.snapshot}});
+      toast(`Удалено номеров: ${result.removed}`);
+      await redraw('');
+      refreshCounts();
+    } catch (error) { busy(button, false); toast(error.message, true); }
+  });
   const byId = Object.fromEntries(data.items.map(l => [String(l.id), l]));
   $('tbody', box)?.addEventListener('click', async e => {
+    const edit = e.target.closest('[data-edit]');
+    if (edit) return editLead(byId[edit.dataset.edit], () => safeRedraw());
     const del = e.target.closest('[data-del]');
     if (del) {
-      if (!await askConfirm('Удалить номер из базы?', 'Удалить', true)) return;
-      try { await api('/api/leads/' + del.dataset.del + qs({ext}), {method: 'DELETE'}); toast('Удалён'); leadsView(box); } catch (err) { toast(err.message, true); }
+      if (!await askConfirm(queueOnly ? 'Удалить номер из очереди?' : 'Удалить номер из базы?', 'Удалить', true)) return;
+      busy(del, true);
+      try {
+        const item = byId[del.dataset.del];
+        await api('/api/leads/' + item.id + qs({ext, queue: queueOnly ? '1' : '', version: queueOnly ? item.version : ''}), {method: 'DELETE'});
+        toast('Удалён'); await redraw(); refreshCounts();
+      } catch (err) { busy(del, false); toast(err.message, true); }
       return;
     }
     const tr = e.target.closest('tr[data-id]');
-    if (tr) workDrawer(byId[tr.dataset.id], {ext, onDone: () => leadsView(box)});
+    if (tr) workDrawer(byId[tr.dataset.id], {ext, onDone: () => safeRedraw()});
   });
-  $('[data-add]', box)?.addEventListener('click', async e => {
-    const btn = e.currentTarget; // после await e.currentTarget уже null
-    const text = $('[data-l="text"]', box).value;
-    if (!text.trim()) { toast('Вставьте номера', true); return; }
-    busy(btn, true);
+  async function add(btn, input, saved) {
     try {
-      const r = await api('/api/leads', {method: 'POST', body: {text, source: $('[data-l="src"]', box).value, ext: ext || undefined}});
+      const r = await api('/api/leads', {method: 'POST', body: {...input, source: saved.source, ext: ext || undefined}});
       const parts = [`Добавлено: ${r.added}`];
       if (r.duplicates) parts.push(`повторы и уже были в базе: ${r.duplicates}`);
       if (r.invalid) parts.push(`не распознано: ${r.invalid}`);
       toast(parts.join(', '));
       S.leadFilter = '';
-      await leadsView(box);
-      if (r.invalid) $('[data-res]', box).textContent = 'Не распознаны: ' + r.invalid_samples.join(' | ');
+      await redraw('', {...saved, text: input.file ? saved.text : ''});
+      const message = $('[data-res]', box);
+      if (message) message.textContent = parts.join(', ') + (r.invalid ? '. Не распознаны: ' + r.invalid_samples.join(' | ') : '');
       refreshCounts();
     } catch (err) { busy(btn, false); toast(err.message, true); }
+  }
+  $('[data-add]', box)?.addEventListener('click', e => {
+    const saved = state();
+    if (!saved.text.trim()) { toast('Вставьте номера', true); return; }
+    busy(e.currentTarget, true);
+    add(e.currentTarget, {text: saved.text}, saved);
+  });
+  $('[data-import-leads]', box)?.addEventListener('click', async e => {
+    const btn = e.currentTarget, file = $('[data-l-file]', box).files[0], saved = state();
+    if (!file || !/\.(xlsx|csv)$/i.test(file.name)) { toast('Выберите Excel (.xlsx) или CSV', true); return; }
+    if (file.size > 280000) { toast('Файл больше 280 КБ. Разбейте его на части.', true); return; }
+    busy(btn, true);
+    try { await add(btn, {file: {name: file.name, data: await fileB64(file)}}, saved); }
+    catch (error) { busy(btn, false); toast(error.message, true); }
   });
 }
 
+function editLead(item, onSaved) {
+  const box = modal(`${modalHead('Изменить контакт')}
+    <form class="rvm-body">
+      <label class="field">Телефон<input name="number" type="tel" required value="${esc(item.number)}"${item.can_edit_number ? '' : ' readonly'}></label>
+      <label class="field">Имя<input name="name" maxlength="120" value="${esc(item.name || '')}"></label>
+      <label class="field">Компания<input name="company" maxlength="120" value="${esc(item.company || '')}"></label>
+      <label class="field">Комментарий<textarea name="note" maxlength="500" rows="3">${esc(item.note || '')}</textarea></label>
+      <label class="field">Источник<input name="source" maxlength="80" value="${esc(item.source || '')}"></label>
+      <button class="btn primary" type="submit">Сохранить</button>
+    </form>`);
+  const form = $('form', box), button = $('button[type="submit"]', form);
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    busy(button, true);
+    try {
+      await api('/api/leads/' + item.id, {method: 'PATCH', body: {...Object.fromEntries(new FormData(form)), version: item.version}});
+      box.close(); toast('Контакт обновлён'); onSaved();
+    } catch (error) { busy(button, false); toast(error.message, true); }
+  });
+}
 // ---------- отчёты и вопросы ----------
 S.repFilter = 'all';
 const reportHtml = (r, i) => `<article class="card report click" tabindex="0"${r.id ? ` data-learning-report="${esc(r.id)}"` : ''} data-css="--i:${i}">

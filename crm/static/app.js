@@ -97,6 +97,14 @@ async function api(path, opts = {}) {
   return data;
 }
 const qs = obj => { const p = new URLSearchParams(); Object.entries(obj).forEach(([k, v]) => { if (v !== '' && v != null) p.set(k, v); }); const s = p.toString(); return s ? '?' + s : ''; };
+function fileB64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+    reader.onerror = () => reject(new Error('Файл не прочитался.'));
+    reader.readAsDataURL(file);
+  });
+}
 
 // ---------- иконки ----------
 const ICON = {

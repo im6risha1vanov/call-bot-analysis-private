@@ -349,9 +349,6 @@ RB_VIEW.contacts = async el => {
   });
 };
 
-function fileB64(f) {
-  return new Promise((ok, bad) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1] || ''); r.onerror = () => bad(new Error('Файл не прочитался.')); r.readAsDataURL(f); });
-}
 async function fileText(f) {
   const buf = await f.arrayBuffer();
   try { return new TextDecoder('utf-8', {fatal: true}).decode(buf); } catch (e) { return new TextDecoder('windows-1251').decode(buf); }

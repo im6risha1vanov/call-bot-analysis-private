@@ -540,6 +540,59 @@ class WebTests(DBCase):
             self.assertEqual(response.status, 200, await response.text())
             overview.assert_awaited_once_with(self.pool, 1, 7)
 
+    async def test_manager_import_edit_remove_and_clear_only_own_pending_queue(self):
+        from tests.test_lead_import import xlsx_payload
+
+        await self.login(123)
+        headers = {'X-CRM': '1'}
+
+        async def add(data):
+            r = await self.http.post('/api/leads', json={**data, 'ext': '102'}, headers=headers)
+            self.assertEqual(r.status, 200, await r.text())
+            return await r.json()
+
+        self.assertEqual((await add({'text': '79991230001; Анна; Тест'}))['added'], 1)
+        file = {'file': {'name': 'очередь.xlsx', 'data': xlsx_payload()}, 'source': 'Файл'}
+        self.assertEqual((await add(file))['added'], 1)
+        repeated = await add(file)
+        self.assertEqual((repeated['duplicates'], repeated['invalid']), (1, 1))
+        await self.pool.execute("""INSERT INTO crm_leads(client_id,extension,number,status,attempts,next_at) VALUES
+            (1,'102','79991230001','new',0,NULL),
+            (1,'101','79991230003','no_answer',1,now()+interval '2 hours'),
+            (1,'101','79991230004','interested',0,NULL),
+            (1,'101','79991230005','new',0,NULL)""")
+        await self.pool.execute("""INSERT INTO callback_tasks(client_id,extension,client_number,kind,due_date,source)
+                                   VALUES(1,'101','79991230005','callback',current_date+2,'crm')""")
+        await self.pool.execute("""INSERT INTO crm_outcomes(client_id,extension,number,outcome)
+                                   VALUES(1,'101','79991230003','no_answer')""")
+        result = await (await self.http.get('/api/leads?queue=1&ext=102')).json()
+        items = {row['number']: row for row in result['items']}
+        self.assertEqual(set(items), {'79991230001', '79991230002', '79991230003'})
+        first, imported = items['79991230001'], items['79991230002']
+        other = await self.pool.fetchval("SELECT id FROM crm_leads WHERE extension='102'")
+        self.assertEqual(imported['company'], 'Ромашка')
+        edit = {'version': first['version'], 'number': first['number'], 'name': 'Изменено'}
+        update = lambda lead_id, data: self.http.patch(f'/api/leads/{lead_id}', json=data, headers=headers)
+        self.assertEqual((await update(other, edit)).status, 403)
+        self.assertEqual((await update(first['id'], {**edit, 'number': imported['number']})).status, 400)
+        self.assertEqual((await update(first['id'], edit)).status, 200)
+        self.assertEqual((await update(first['id'], edit)).status, 400)
+        retry = items['79991230003']
+        self.assertEqual((await update(retry['id'], {'version': retry['version'], 'number': '79991230006'})).status, 400)
+        remove = await self.http.delete(f"/api/leads/{imported['id']}",
+                                        params={'queue': '1', 'version': imported['version']}, headers=headers)
+        self.assertEqual(remove.status, 200, await remove.text())
+        before = (await (await self.http.get('/api/leads?queue=1')).json())['snapshot']
+        self.assertEqual((await add({'text': '79991230006'}))['added'], 1)
+        clear = await self.http.post('/api/leads/queue/clear', json={'before': before, 'ext': '102'}, headers=headers)
+        self.assertEqual(clear.status, 200, await clear.text())
+        self.assertEqual(await clear.json(), {'removed': 2})
+        self.assertEqual(set(await self.pool.fetchval("SELECT array_agg(number) FROM crm_leads WHERE extension='101'")),
+                         {'79991230004', '79991230005', '79991230006'})
+        self.assertTrue(await self.pool.fetchval("SELECT EXISTS(SELECT 1 FROM crm_leads WHERE extension='102')"))
+        self.assertTrue(await self.pool.fetchval("SELECT EXISTS(SELECT 1 FROM callback_tasks WHERE status='open')"))
+        self.assertTrue(await self.pool.fetchval("SELECT EXISTS(SELECT 1 FROM crm_outcomes WHERE number='79991230003')"))
+
     async def test_sources_selections(self):
         """«Источники»: подборки общие для отдела, удалить может автор или руководитель, тестовый вход только смотрит."""
         h = {'X-CRM': '1'}

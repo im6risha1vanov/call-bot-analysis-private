@@ -236,17 +236,25 @@ async function refreshQueueInBackground(){
 VIEWS.queue = async (view, arg, refresh={}) => {
   queueRefreshState=null;
   const director = S.me.role === 'director';
+  const canManage = !director && !S.me.readonly && !S.me.learning && !S.me.learning_mode;
+  if (canManage && arg === 'manage') {
+    setHead({title: 'Управление очередью', back: () => go('queue')});
+    view.innerHTML = '<div class="page" data-queue-manage></div>';
+    await loading($('[data-queue-manage]', view), leadsView($('[data-queue-manage]', view), {queueOnly: true}), 'table');
+    return;
+  }
   const ext = director ? (arg || S.f.ext || S.me.team[0]?.ext) : null;
   const person = director ? S.me.team.find(p => p.ext === ext) : null;
-  setHead({title: director ? `Очередь · ${person?.name || 'доб. ' + ext}` : 'Очередь', back: director ? () => go('staff', ext) : null});
+  setHead({title: director ? `Очередь · ${person?.name || 'доб. ' + ext}` : 'Очередь', back: director ? () => go('staff', ext) : null,
+    actions: canManage ? '<button class="btn" type="button" data-go="queue" data-arg="manage">Управлять очередью</button>' : ''});
   const q = refresh.data||await loading(view, api('/api/queue' + qs({ext})), 'cards');
   if(!view.isConnected)return;
   queueRefreshState={view,arg,ext,snapshot:viewSnapshot(q)};
   S.today = q.today || S.today;
   if (!director) setCount('queue', q.items.length);
   if (!q.items.length) {
-    view.innerHTML = `<div class="page"><div class="card empty blk"><p><b>Очередь пуста.</b></p><p>${q.later ? `Ещё ${plainItems(q.later, 'номер', 'номера', 'номеров')} ${q.later % 10 === 1 && q.later % 100 !== 11 ? 'вернётся' : 'вернутся'} позже: перезвоны на другие дни и недозвоны через 2 часа.` : 'Добавьте номера в разделе «Источники», и они появятся здесь.'}</p>
-      ${director ? '' : '<button class="btn primary" type="button" data-go="sources" data-arg="base">Добавить номера</button>'}</div></div>`;
+    view.innerHTML = `<div class="page"><div class="card empty blk"><p><b>Очередь пуста.</b></p><p>${q.later ? `Ещё ${plainItems(q.later, 'номер', 'номера', 'номеров')} ${q.later % 10 === 1 && q.later % 100 !== 11 ? 'вернётся' : 'вернутся'} позже: перезвоны на другие дни и недозвоны через 2 часа.` : 'Добавьте номера списком или загрузите файл Excel.'}</p>
+      ${canManage ? '<button class="btn primary" type="button" data-go="queue" data-arg="manage">Добавить номера</button>' : ''}</div></div>`;
     return;
   }
   let pos = Math.max(0, q.items.findIndex(i => i.number === S.qnum));

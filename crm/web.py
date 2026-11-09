@@ -10,7 +10,7 @@ import json
 import logging
 import os
 import urllib.parse
-from datetime import date, time
+from datetime import date, datetime, time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -23,7 +23,7 @@ from aiohttp import BodyPartReader, web  # noqa: E402
 
 import mango_client  # noqa: E402
 from tools import Forbidden, home_client_id, is_privileged  # noqa: E402
-from . import activity, economics
+from . import activity, economics, lead_import
 from . import learning, tour
 from . import accounts, ask as asking, auth, automation_agent, automations, cabinet, callcenter_db, company, contracts, deals, donor_agent, gpt, journal, overview, people, platform, recording, reviews, sources, staff, store, training  # noqa: E402
 from . import prompts as prompt_mode, robot, webphone, robot_api, robot_prices, robot_runner, robot_store  # noqa: E402
@@ -1175,20 +1175,59 @@ async def api_leads(request):
     status = request.query.get('status') or None
     if status and status not in store.LEAD_STATUS:
         raise ValueError('Неизвестный статус.')
-    return web.json_response(await store.leads(request.app[POOL], who.client_id, await ext_of(request, who), status))
+    pending = request.query.get('queue') == '1'
+    before = request.query.get('before')
+    return web.json_response(await store.leads(request.app[POOL], who.client_id, await ext_of(request, who), status,
+                                               pending=pending, before=int_id(before) if pending and before else None))
 
 
 async def api_leads_add(request):
     who = await actor(request, write=True)
     data = await body(request)
-    result = await store.add_leads(request.app[POOL], who.client_id, await ext_of(request, who, data.get('ext')),
-                                   str(data.get('text') or ''), data.get('source'))
+    pool, ext = request.app[POOL], await ext_of(request, who, data.get('ext'))
+    if 'file' in data:
+        file = data['file']
+        if not isinstance(file, dict):
+            raise ValueError('Выберите файл Excel (.xlsx) или CSV.')
+        found, invalid = await asyncio.to_thread(lead_import.parse_file, file.get('name'), file.get('data'))
+        request[activity.DETAIL] = 'Импорт номеров в очередь из файла'
+        result = await store.insert_leads(pool, who.client_id, ext, found, invalid, data.get('source'))
+    else:
+        result = await store.add_leads(pool, who.client_id, ext, str(data.get('text') or ''), data.get('source'))
     return web.json_response(result)
+
+
+def lead_version(value) -> datetime:
+    try:
+        version = datetime.fromisoformat(str(value))
+        if version.tzinfo is not None:
+            return version
+    except ValueError:
+        pass
+    raise ValueError('Обновите список контактов и попробуйте снова.')
+
+
+async def api_lead_update(request):
+    who = await actor(request, write=True)
+    data = await body(request)
+    await store.update_lead(request.app[POOL], who.client_id, await ext_of(request, who, data.get('ext')),
+                            int_id(request.match_info['id']), lead_version(data.get('version')), data)
+    return web.json_response({'ok': True})
+
+
+async def api_leads_clear(request):
+    who = await actor(request, write=True)
+    data = await body(request)
+    removed = await store.clear_queue(request.app[POOL], who.client_id, await ext_of(request, who, data.get('ext')),
+                                      lead_version(data.get('before')))
+    return web.json_response({'removed': removed})
 
 
 async def api_lead_delete(request):
     who = await actor(request, write=True)
-    await store.delete_lead(request.app[POOL], who.client_id, await ext_of(request, who), int_id(request.match_info['id']))
+    version = lead_version(request.query.get('version')) if request.query.get('queue') == '1' else None
+    await store.delete_lead(request.app[POOL], who.client_id, await ext_of(request, who), int_id(request.match_info['id']),
+                            version)
     return web.json_response({'ok': True})
 
 
@@ -1470,6 +1509,8 @@ def build(pool) -> web.Application:
     app.router.add_post('/api/tasks/{id}', api_task_change)
     app.router.add_get('/api/leads', api_leads)
     app.router.add_post('/api/leads', api_leads_add)
+    app.router.add_post('/api/leads/queue/clear', api_leads_clear)
+    app.router.add_patch('/api/leads/{id}', api_lead_update)
     app.router.add_delete('/api/leads/{id}', api_lead_delete)
     app.router.add_get('/api/card', api_card)
     app.router.add_post('/api/dial', api_dial)

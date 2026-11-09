@@ -10,6 +10,8 @@ import re
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from asyncpg import UniqueViolationError
+
 from tools import Forbidden, is_privileged
 from .dial import normalize
 
@@ -30,6 +32,9 @@ MAX_ATTEMPTS = 3
 MAX_LINES = 5000
 INCOMING, OUTGOING = 1, 2
 PHONE = re.compile(r'\+?\d[\d\s\-()]{8,16}\d')
+PENDING_LEAD = f"""(l.status='new' OR (l.status='no_answer' AND l.attempts < {MAX_ATTEMPTS}))
+    AND NOT EXISTS (SELECT 1 FROM callback_tasks t WHERE t.client_id=l.client_id
+                    AND t.client_number=l.number AND t.status='open')"""
 
 
 async def zone(pool, client_id: int) -> ZoneInfo:
@@ -82,7 +87,8 @@ def task_item(t, today: date) -> dict:
 def lead_item(r) -> dict:
     return {'kind': 'lead', 'id': r['id'], 'number': r['number'], 'title': ' · '.join(x for x in (r['name'], r['company']) if x),
             'name': r['name'], 'company': r['company'], 'note': r['note'] or '', 'source': r['source'] or '',
-            'status': r['status'], 'label': LEAD_STATUS.get(r['status'], r['status']), 'attempts': r['attempts']}
+            'status': r['status'], 'label': LEAD_STATUS.get(r['status'], r['status']), 'attempts': r['attempts'],
+            'version': r['updated_at'].isoformat(), 'can_edit_number': r['status'] == 'new' and r['attempts'] == 0}
 
 
 TASK_SQL = """SELECT t.*, (SELECT l.name FROM crm_leads l WHERE l.client_id=t.client_id AND l.extension=t.extension
@@ -98,11 +104,10 @@ async def queue(pool, client_id: int, ext: str, now: datetime | None = None) -> 
         TASK_SQL + """ AND t.client_number IS NOT NULL AND t.due_date <= $3 AND (t.retry_at IS NULL OR t.retry_at <= $4)
                    ORDER BY t.due_date, t.due_time NULLS LAST, t.id""", client_id, ext, today, now)
     leads = await pool.fetch(
-        """SELECT * FROM crm_leads l WHERE client_id=$1 AND extension=$2
-             AND (status='new' OR (status='no_answer' AND attempts < $3 AND (next_at IS NULL OR next_at <= $4)))
-             AND NOT EXISTS (SELECT 1 FROM callback_tasks t WHERE t.client_id=l.client_id AND t.client_number=l.number AND t.status='open')
+        f"""SELECT * FROM crm_leads l WHERE client_id=$1 AND extension=$2
+             AND {PENDING_LEAD} AND (l.status='new' OR l.next_at IS NULL OR l.next_at <= $3)
            ORDER BY (status='no_answer') DESC, coalesce(next_at, created_at), id LIMIT 300""",
-        client_id, ext, MAX_ATTEMPTS, now)
+        client_id, ext, now)
     later = await pool.fetchval(
         """SELECT (SELECT count(*) FROM callback_tasks WHERE client_id=$1 AND extension=$2 AND status='open'
                      AND (due_date > $3 OR retry_at > $4))
@@ -179,39 +184,104 @@ def parse_leads(text: str) -> tuple[list[dict], list[str]]:
 
 async def add_leads(pool, client_id: int, ext: str, text: str, source: str | None) -> dict:
     found, bad = parse_leads(text)
-    source = (source or '').strip()[:80] or None
-    added = 0
+    return await insert_leads(pool, client_id, ext, found, bad, source)
+
+
+def lead_text(value, limit: int) -> str | None:
+    return str(value or '').replace('\x00', '').strip()[:limit] or None
+
+
+async def insert_leads(pool, client_id: int, ext: str, found: list[dict], bad: list[str], source) -> dict:
     unique: dict[str, dict] = {}
     for f in found:  # повтор номера в той же вставке дополняет пустые поля первого
         first = unique.setdefault(f['number'], f)
         for key in ('name', 'company', 'note'):
             first[key] = first[key] or f[key]
-    async with pool.acquire() as conn, conn.transaction():
-        for f in unique.values():
-            added += await conn.fetchval(
-                """WITH ins AS (INSERT INTO crm_leads(client_id,extension,number,name,company,note,source)
-                   VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING RETURNING 1) SELECT count(*) FROM ins""",
-                client_id, ext, f['number'], (f['name'] or '')[:120] or None, (f['company'] or '')[:120] or None,
-                (f['note'] or '')[:500] or None, source)
+    added = await pool.fetchval(
+        """WITH ins AS (
+             INSERT INTO crm_leads(client_id,extension,number,name,company,note,source)
+             SELECT $1,$2,number,name,company,note,$7
+             FROM unnest($3::text[],$4::text[],$5::text[],$6::text[]) WITH ORDINALITY AS incoming(number,name,company,note,ord)
+             ORDER BY ord
+             ON CONFLICT (client_id,extension,number) DO NOTHING RETURNING 1
+           ) SELECT count(*) FROM ins""",
+        client_id, ext, list(unique),
+        [lead_text(f['name'], 120) for f in unique.values()],
+        [lead_text(f['company'], 120) for f in unique.values()],
+        [lead_text(f['note'], 500) for f in unique.values()], lead_text(source, 80)) if unique else 0
     return {'added': added, 'duplicates': len(found) - added, 'invalid': len(bad), 'invalid_samples': bad[:5]}
 
 
-async def leads(pool, client_id: int, ext: str, status: str | None = None) -> dict:
+async def leads(pool, client_id: int, ext: str, status: str | None = None, *, pending: bool = False,
+                before: int | None = None) -> dict:
+    where = 'l.client_id=$1 AND l.extension=$2'
+    snapshot = None
+    if pending:
+        where += ' AND ' + PENDING_LEAD
+        snapshot = (await pool.fetchval('SELECT clock_timestamp()')).isoformat()
     counts = {r['status']: r['n'] for r in await pool.fetch(
-        'SELECT status, count(*) AS n FROM crm_leads WHERE client_id=$1 AND extension=$2 GROUP BY status', client_id, ext)}
-    rows = await pool.fetch(
-        """SELECT * FROM crm_leads WHERE client_id=$1 AND extension=$2 AND ($3::text IS NULL OR status=$3)
-           ORDER BY updated_at DESC, id DESC LIMIT 500""", client_id, ext, status)
+        f'SELECT status, count(*) AS n FROM crm_leads l WHERE {where} GROUP BY status', client_id, ext)}
+    next_page = None
+    if pending:
+        rows = await pool.fetch(
+            f"""SELECT * FROM crm_leads l WHERE {where} AND ($3::bigint IS NULL OR id<$3)
+               ORDER BY id DESC LIMIT 101""", client_id, ext, before)
+        if len(rows) > 100:
+            rows = rows[:100]
+            next_page = str(rows[-1]['id'])
+    else:
+        rows = await pool.fetch(
+            f"""SELECT * FROM crm_leads l WHERE {where} AND ($3::text IS NULL OR status=$3)
+               ORDER BY updated_at DESC, id DESC LIMIT 500""", client_id, ext, status)
     sources = [r['source'] for r in await pool.fetch(
         """SELECT source, count(*) FROM crm_leads WHERE client_id=$1 AND extension=$2 AND source IS NOT NULL
            GROUP BY source ORDER BY max(created_at) DESC LIMIT 20""", client_id, ext)]
     return {'items': [lead_item(r) for r in rows], 'counts': counts, 'total': sum(counts.values()),
-            'labels': LEAD_STATUS, 'sources': sources}
+            'labels': LEAD_STATUS, 'sources': sources, 'snapshot': snapshot, 'next': next_page}
 
 
-async def delete_lead(pool, client_id: int, ext: str, lead_id: int) -> None:
-    done = await pool.fetchval('DELETE FROM crm_leads WHERE id=$1 AND client_id=$2 AND extension=$3 RETURNING id',
-                               lead_id, client_id, ext)
+async def update_lead(pool, client_id: int, ext: str, lead_id: int, version: datetime, data: dict) -> None:
+    number = normalize(data.get('number'))
+    if number is None:
+        raise ValueError('Укажите корректный номер телефона.')
+    async with pool.acquire() as conn, conn.transaction():
+        current = await conn.fetchrow(
+            'SELECT * FROM crm_leads WHERE id=$1 AND client_id=$2 AND extension=$3 FOR UPDATE', lead_id, client_id, ext)
+        if current is None:
+            raise Forbidden('Номер не найден.')
+        if current['updated_at'] != version:
+            raise ValueError('Контакт уже изменён. Обновите список и попробуйте снова.')
+        if number != current['number']:
+            used = current['status'] != 'new' or current['attempts'] or await conn.fetchval(
+                """SELECT EXISTS (SELECT 1 FROM crm_dials WHERE client_id=$1 AND extension=$2 AND number=$3)
+                       OR EXISTS (SELECT 1 FROM callback_tasks WHERE client_id=$1 AND client_number=$3 AND status='open')""",
+                client_id, ext, current['number'])
+            if used:
+                raise ValueError('У контакта уже есть звонок или перезвон. Можно изменить его данные, сохранив телефон.')
+        try:
+            await conn.execute(
+                """UPDATE crm_leads SET number=$2,name=$3,company=$4,note=$5,source=$6,updated_at=clock_timestamp()
+                   WHERE id=$1""", lead_id, number, lead_text(data.get('name'), 120), lead_text(data.get('company'), 120),
+                lead_text(data.get('note'), 500), lead_text(data.get('source'), 80))
+        except UniqueViolationError:
+            raise ValueError('Этот номер уже есть в вашей базе.') from None
+
+
+async def clear_queue(pool, client_id: int, ext: str, before: datetime) -> int:
+    return await pool.fetchval(
+        f"""WITH removed AS (
+              DELETE FROM crm_leads l WHERE l.client_id=$1 AND l.extension=$2
+                AND l.updated_at <= least($3, clock_timestamp()) AND {PENDING_LEAD} RETURNING 1
+            ) SELECT count(*) FROM removed""", client_id, ext, before)
+
+
+async def delete_lead(pool, client_id: int, ext: str, lead_id: int, version: datetime | None = None) -> None:
+    where = 'l.id=$1 AND l.client_id=$2 AND l.extension=$3'
+    args = (lead_id, client_id, ext)
+    if version is not None:
+        where += ' AND l.updated_at=$4 AND ' + PENDING_LEAD
+        args += (version,)
+    done = await pool.fetchval(f'DELETE FROM crm_leads l WHERE {where} RETURNING id', *args)
     if done is None:
         raise Forbidden('Номер не найден.')
 
