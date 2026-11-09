@@ -21,8 +21,9 @@ class AlertTests(unittest.TestCase):
             {'_SYSTEMD_UNIT': 'callbot-crm.service', 'PRIORITY': '3', '__REALTIME_TIMESTAMP': '100000000'},
         ]
         stdout = '\n'.join(json.dumps({'__REALTIME_TIMESTAMP': '110000000', **row}) for row in rows)
-        with patch.object(alerts.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, stdout)):
+        with patch.object(alerts.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, stdout)) as run:
             self.assertEqual(alerts.read_journal(100, 120), Counter({'log:callbot-crm.service': 2}))
+            self.assertEqual(run.call_args.kwargs['timeout'], 15)
 
     def test_state_aggregates_retries_and_debounces(self):
         issue = 'log:callbot-crm.service'
@@ -52,10 +53,11 @@ class AlertTests(unittest.TestCase):
 
     def test_missing_systemd_and_failed_journal_are_reported_without_advancing_checkpoint(self):
         state = {'checked_until': 900}
-        with (patch.object(alerts, 'read_journal', side_effect=subprocess.TimeoutExpired('journalctl', 7)),
+        with (patch.object(alerts, 'read_journal', side_effect=subprocess.TimeoutExpired('sensitive command argument', alerts.JOURNAL_TIMEOUT)),
               patch.object(alerts, 'inactive_units', side_effect=RuntimeError('internal data')),
-              patch.object(alerts, 'api_ready', return_value=True)):
+              patch.object(alerts, 'api_ready', return_value=True), patch('sys.stderr') as stderr):
             alerts.poll(state, 1000, 8095)
+        self.assertEqual(stderr.write.call_args_list[0].args[0], 'CRM journal check failed (TimeoutExpired).')
         self.assertEqual(state['checked_until'], 900)
         self.assertEqual(state['pending'], {'journal': 1, 'systemd': 1})
 

@@ -29,6 +29,7 @@ ISSUES = {
 }
 ERROR_LINE = re.compile(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:[,.]\d+)? (?:ERROR|CRITICAL)\b')
 JOURNAL_LIMIT = 3000
+JOURNAL_TIMEOUT = 15  # оставляем время на остальные проверки и отправку в пределах 35 секунд systemd
 COOLDOWN = 15 * 60
 RETRY_DELAY = 5 * 60
 
@@ -47,7 +48,7 @@ def read_journal(start: int, end: int) -> Counter:
         ['journalctl', '--no-pager', '--quiet', '--output=json',
          '--output-fields=_SYSTEMD_UNIT,UNIT,PRIORITY,MESSAGE', f'--since=@{start}', f'--until=@{end}',
          f'--lines={JOURNAL_LIMIT}', *units],
-        check=True, capture_output=True, text=True, encoding='utf-8', timeout=7,
+        check=True, capture_output=True, text=True, encoding='utf-8', timeout=JOURNAL_TIMEOUT,
     )
     counts = Counter()
     lines = result.stdout.splitlines()
@@ -113,7 +114,8 @@ def poll(state: dict, now: int, port: int) -> None:
         try:
             pending.update(read_journal(start, now))
             state['checked_until'] = now
-        except (OSError, subprocess.SubprocessError, ValueError):
+        except (OSError, subprocess.SubprocessError, ValueError) as error:
+            print(f'CRM journal check failed ({type(error).__name__}).', file=sys.stderr)
             pending['journal'] += 1
     try:
         unhealthy = inactive_units()
