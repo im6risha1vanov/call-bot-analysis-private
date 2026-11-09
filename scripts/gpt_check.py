@@ -3,7 +3,7 @@
 Ничего не пишет в историю и не тратит лимит клиента. По умолчанию спрашивает только YandexGPT
 (без запасной модели), чтобы было видно, как справляется именно он. Запуск:
   bash scripts/crm_setup.sh gpt-check            # YandexGPT
-  bash scripts/crm_setup.sh gpt-check dreamn     # для сравнения dreamn
+  bash scripts/crm_setup.sh gpt-check starimg     # для сравнения starimg
 Телефоны в ответах скрыты.
 """
 from __future__ import annotations
@@ -21,7 +21,7 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(ROOT / '.env')
 KIND = (sys.argv[1] if len(sys.argv) > 1 else 'yandex').strip()
-os.environ['AVERONGPT_MODELS'] = {'yandex': 'yandex:yandexgpt-5.1', 'dreamn': 'dreamn:gpt-6.1-sol'}.get(KIND, KIND)
+os.environ['AVERONGPT_MODELS'] = {'yandex': 'yandex:yandexgpt-5.1', 'starimg': 'starimg:gpt-6.1-sol'}.get(KIND, KIND)
 
 import asyncpg  # noqa: E402
 

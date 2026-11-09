@@ -2,7 +2,7 @@
 
 Ничего не сохраняет и не включает (помощник только собирает черновик). По умолчанию YandexGPT. Запуск:
   bash scripts/crm_setup.sh auto-agent-check            # YandexGPT
-  bash scripts/crm_setup.sh auto-agent-check dreamn     # для сравнения dreamn
+  bash scripts/crm_setup.sh auto-agent-check starimg     # для сравнения starimg
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(ROOT / '.env')
 KIND = (sys.argv[1] if len(sys.argv) > 1 else 'yandex').strip()
-os.environ['AVERONGPT_MODELS'] = {'yandex': 'yandex:yandexgpt-5.1', 'dreamn': 'dreamn:gpt-6.1-sol'}.get(KIND, KIND)
+os.environ['AVERONGPT_MODELS'] = {'yandex': 'yandex:yandexgpt-5.1', 'starimg': 'starimg:gpt-6.1-sol'}.get(KIND, KIND)
 
 import asyncpg  # noqa: E402
 

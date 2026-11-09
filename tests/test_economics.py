@@ -72,36 +72,13 @@ class ProviderEconomicsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(get.await_args_list[-1].args, ('https://openrouter.ai/api/v1/credits',
                                                        {'Authorization': 'Bearer synthetic-admin'}))
 
-    async def test_dreamn_shared_key_shows_quota_without_exposing_credentials(self):
-        settings = {'CVC_BASE_URL': 'https://ai.dreamn-api-market.ru/v1', 'CVC_API_KEY': 'synthetic-dreamn-key'}
-        with (
-            patch.dict(os.environ, settings, clear=True),
-            patch.object(economics, 'get_json', new_callable=AsyncMock,
-                         return_value={'remain_quota': 500, 'used_quota': 100, 'expired_time': 1794929094}) as get,
-        ):
-            result = await economics.dreamn()
-        get.assert_awaited_once_with('https://ai.dreamn-api-market.ru/v1/key/status',
-                                     {'Authorization': 'Bearer synthetic-dreamn-key'}, accepted_errors=(401, 402))
-        self.assertEqual((result['name'], result['funding']), ('DreamN', 'available'))
-        self.assertEqual(result['metrics'][0], {'name': 'Остаток', 'amount': 500, 'unit': 'tokens'})
-        self.assertIn('expires_at', result)
-        self.assertNotIn('synthetic-dreamn-key', json.dumps(result))
-
-    async def test_dreamn_only_uses_verified_gateway_and_classifies_exhausted_key(self):
-        with (
-            patch.dict(os.environ, {'CVC_BASE_URL': 'https://example.test/v1', 'CVC_API_KEY': 'synthetic'}, clear=True),
-            patch.object(economics, 'get_json', new_callable=AsyncMock) as get,
-        ):
-            self.assertEqual((await economics.dreamn())['status'], 'unavailable')
-            get.assert_not_called()
-        with (
-            patch.dict(os.environ, {'CVC_BASE_URL': 'https://ai.dreamn-api-market.ru/v1', 'CVC_API_KEY': 'synthetic'}),
-            patch.object(economics, 'get_json', new_callable=AsyncMock,
-                         return_value={'error': {'message': 'Key quota exhausted: synthetic'}}),
-        ):
-            result = await economics.dreamn()
-        self.assertEqual(result['funding'], 'depleted')
-        self.assertNotIn('synthetic', json.dumps(result))
+    async def test_starimg_provider_links_to_dashboard_without_exposing_credentials(self):
+        settings = {'CVC_BASE_URL': 'https://ai.starimg.ru/v1', 'CVC_API_KEY': 'synthetic-starimg-key'}
+        with patch.dict(os.environ, settings, clear=True):
+            result = await economics.analysis_provider()
+        self.assertEqual(result['name'], 'AI Star')
+        self.assertEqual(result['source'], 'https://ai.starimg.ru/')
+        self.assertNotIn('synthetic-starimg-key', json.dumps(result))
 
     def test_totals_keep_currencies_separate_and_skip_unknown_values(self):
         expenses = [{'unit': 'RUB', 'amount': 10}, {'unit': 'RUB', 'amount': 4.25},
@@ -182,12 +159,12 @@ class ExpenseEconomicsTests(unittest.IsolatedAsyncioTestCase):
             """)
             day = date(2026, 11, 8)
             start, end = datetime(2026, 11, 7, 21, tzinfo=timezone.utc), datetime(2026, 11, 8, 21, tzinfo=timezone.utc)
-            with patch.dict(os.environ, {'AI_RUB_PER_MILLION_UNITS': '50', 'CVC_BASE_URL': 'https://ai.dreamn-api-market.ru/v1'}):
+            with patch.dict(os.environ, {'AI_RUB_PER_MILLION_UNITS': '50', 'CVC_BASE_URL': 'https://ai.starimg.ru/v1'}):
                 rows = await economics.expense_rows(connection, 1, day, day, start, end)
             amounts = {item['name']: (item['amount'], item['unit']) for item in rows}
-            self.assertEqual(set(amounts), {'DreamN', 'AveronGPT', 'Агент РОПа'})
-            self.assertAlmostEqual(amounts['DreamN'][0], 30)
-            self.assertEqual(amounts['DreamN'][1], 'RUB')
+            self.assertEqual(set(amounts), {'AI Star', 'AveronGPT', 'Агент РОПа'})
+            self.assertAlmostEqual(amounts['AI Star'][0], 30)
+            self.assertEqual(amounts['AI Star'][1], 'RUB')
             self.assertEqual(amounts['AveronGPT'], (4.25, 'RUB'))
             self.assertEqual(amounts['Агент РОПа'], (3.0, 'USD'))
             prices = {'tts_1k_chars': 2, 'llm_1k_tokens': 3}

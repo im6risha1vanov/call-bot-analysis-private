@@ -36,7 +36,7 @@ async def main(word: str) -> None:
         out.append(d)
         res = d['result'] or {}
         mins = (r['finished_at'] - r['started_at']).total_seconds() / 60 if r['finished_at'] and r['started_at'] else 0
-        print(f"#{d['id']} {d['niche']} | {d['city'] or 'вся Россия'} | модель сайтов: {d['sites_model'] or 'dreamn'} | {d['status']} | "
+        print(f"#{d['id']} {d['niche']} | {d['city'] or 'вся Россия'} | модель сайтов: {d['sites_model'] or 'starimg'} | {d['status']} | "
               f"{d['rub']:.0f} ₽ | поисков {d['searches']} | {mins:.0f} мин | в парсинг {res.get('good')} | живых {res.get('live')} | "
               f"номеров {len(res.get('phones') or [])} | компаний {len(res.get('sites') or [])} | расход {d['cost']}")
     OUT.write_text(json.dumps(out, ensure_ascii=False, indent=1))

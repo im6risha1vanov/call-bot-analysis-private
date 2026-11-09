@@ -339,7 +339,7 @@ class RunTests(DBCase):
             async def create(self, **kw):
                 raise NoKey('нет ключа')
         fake = FakeAI()
-        clients = {'dreamn': SimpleNamespace(messages=Down()), 'octav': SimpleNamespace(messages=fake)}
+        clients = {'starimg': SimpleNamespace(messages=Down()), 'octav': SimpleNamespace(messages=fake)}
         env = {'ANTHROPIC_API_KEY': 'k', 'OCTAV_API_KEY': 'k2'}
         with patch.dict(os.environ, env), patch.object(agent, 'ai_client', lambda p: clients[p['name']]):
             await self.pool.execute("INSERT INTO donor_runs(id, client_id, niche) VALUES(77, 1, 'Кухни')")

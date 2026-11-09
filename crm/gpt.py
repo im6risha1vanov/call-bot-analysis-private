@@ -34,10 +34,11 @@ MAX_STEPS = 6  # обращений к модели на один вопрос
 HISTORY_TURNS = 6  # сколько прошлых вопросов и ответов помощник помнит в разговоре
 PAGE_TEXT = 6000  # сколько текста с экрана берём в вопрос
 TOOL_TEXT = 9000  # и сколько из ответа инструмента
-DEFAULT_MODELS = 'yandex:yandexgpt-5.1,dreamn:gpt-6.1-sol'
+DEFAULT_MODELS = 'yandex:yandexgpt-5.1,starimg:gpt-6.1-sol'
 TIMEOUT = float(os.getenv('AVERONGPT_TIMEOUT', '45'))
-# Цена dreamn: те же цифры, что в счётчике агента РОПа (за миллион токенов, $).
-DREAMN_IN, DREAMN_OUT = float(os.getenv('AVERONGPT_DREAMN_IN_MTOK', '3')), float(os.getenv('AVERONGPT_DREAMN_OUT_MTOK', '15'))
+# Оценочные ставки CRM для лимитов (за миллион токенов, $).
+STARIMG_IN = float(os.getenv('AVERONGPT_STARIMG_IN_MTOK', '3'))
+STARIMG_OUT = float(os.getenv('AVERONGPT_STARIMG_OUT_MTOK', '15'))
 YANDEX_RUB_1K = 0.8  # YandexGPT Pro 5.1, если CRM ещё не узнала цену из прайса Яндекса
 USD_RUB_FALLBACK = 100.0
 
@@ -309,7 +310,9 @@ def models() -> list[tuple[str, str]]:
     out = []
     for part in (os.getenv('AVERONGPT_MODELS') or DEFAULT_MODELS).split(','):
         kind, _, model = part.strip().partition(':')
-        if kind in ('yandex', 'dreamn') and model:
+        if kind == 'dreamn':  # старое имя в сохранённых настройках
+            kind = 'starimg'
+        if kind in ('yandex', 'starimg') and model:
             out.append((kind, model.strip()))
     return out or [('yandex', 'yandexgpt-5.1')]
 
@@ -411,22 +414,24 @@ def anthropic_messages(turns: list[dict]) -> list[dict]:
     return out
 
 
-_dreamn = None
+_starimg = None
 
 
-async def ask_dreamn(model: str, system: str, turns: list[dict], tools: list[dict]) -> dict:
-    global _dreamn
+async def ask_starimg(model: str, system: str, turns: list[dict], tools: list[dict]) -> dict:
+    global _starimg
     if not os.getenv('ANTHROPIC_API_KEY'):
-        raise Unavailable('нет ключа dreamn в .env')
-    if _dreamn is None:
+        raise Unavailable('нет ключа Starimg в .env')
+    if _starimg is None:
         from anthropic import AsyncAnthropic
-        _dreamn = AsyncAnthropic(api_key=os.environ['ANTHROPIC_API_KEY'], timeout=TIMEOUT, max_retries=0)  # ANTHROPIC_BASE_URL из .env
+        _starimg = AsyncAnthropic(api_key=os.environ['ANTHROPIC_API_KEY'],
+                                  base_url=os.getenv('ANTHROPIC_BASE_URL') or 'https://ai.starimg.ru',
+                                  timeout=TIMEOUT, max_retries=0)
     try:
-        resp = await _dreamn.messages.create(model=model, max_tokens=1500, system=system, messages=anthropic_messages(turns),
+        resp = await _starimg.messages.create(model=model, max_tokens=1500, system=system, messages=anthropic_messages(turns),
                                              thinking={'type': 'disabled'}, **({'tools': tools} if tools else {}))
     except Exception as e:  # noqa: BLE001 — любая ошибка провайдера: отвечает следующая модель
-        raise Unavailable(f'dreamn: {type(e).__name__}: {str(e)[:200]}') from None
-    # dreamn ставит stop_reason="end_turn" и при вызове инструмента, поэтому смотрим на сами блоки.
+        raise Unavailable(f'Starimg: {type(e).__name__}') from None
+    # Читаем блоки tool_use независимо от stop_reason шлюза.
     calls = [{'id': b.id, 'name': b.name, 'args': b.input if isinstance(b.input, dict) else {}} for b in resp.content if b.type == 'tool_use']
     text = ''.join(b.text for b in resp.content if b.type == 'text')
     u = resp.usage
@@ -434,7 +439,7 @@ async def ask_dreamn(model: str, system: str, turns: list[dict], tools: list[dic
             'tokens': (u.input_tokens or 0) + (u.output_tokens or 0)}
 
 
-BACKENDS = {'yandex': ask_yandex, 'dreamn': ask_dreamn}
+BACKENDS = {'yandex': ask_yandex, 'starimg': ask_starimg}
 
 
 # ------------------------------------------------------------------ расходы
@@ -466,7 +471,7 @@ async def yandex_rub_1k(pool) -> float:
 async def cost_rub(pool, kind: str, got: dict) -> float:
     if kind == 'yandex':
         return got['tokens'] / 1000 * await yandex_rub_1k(pool)
-    return (got['in'] / 1e6 * DREAMN_IN + got['out'] / 1e6 * DREAMN_OUT) * await usd_rub(pool)
+    return (got['in'] / 1e6 * STARIMG_IN + got['out'] / 1e6 * STARIMG_OUT) * await usd_rub(pool)
 
 
 async def spent_today(pool, scope: str) -> float:

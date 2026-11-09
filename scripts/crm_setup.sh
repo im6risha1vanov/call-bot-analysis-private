@@ -18,8 +18,8 @@
 #   bash scripts/crm_setup.sh demo-off         — выключить демо: тестовую ссылку и открытый просмотр, вход только по логину
 #   bash scripts/crm_setup.sh dadata-key       — ключ DaData для поиска реквизитов по ИНН в «Договорах» (спросит ключ, на экран не выводит)
 #   bash scripts/crm_setup.sh prices           — пересчитать себестоимость звонка робота сейчас и показать, откуда взялись цены
-#   bash scripts/crm_setup.sh gpt-check [dreamn] — AveronGPT: типовые вопросы директора, менеджера и клиента, ответы на экран (ничего не меняет)
-#   bash scripts/crm_setup.sh auto-agent-check [dreamn] — помощник «Автоматизаций»: типовые просьбы, ответы и черновики на экран (ничего не сохраняет)
+#   bash scripts/crm_setup.sh gpt-check [starimg] — AveronGPT: типовые вопросы директора, менеджера и клиента, ответы на экран (ничего не меняет)
+#   bash scripts/crm_setup.sh auto-agent-check [starimg] — помощник «Автоматизаций»: типовые просьбы, ответы и черновики на экран (ничего не сохраняет)
 #   bash scripts/crm_setup.sh auto-status      — автоматизации: подключения, сценарии, запуски и ошибки за сутки, очередь событий (ничего не меняет)
 #   bash scripts/crm_setup.sh review-status    — состояния отправки уведомлений о разборах V2
 #   bash scripts/crm_setup.sh donor-check      — агент доноров: ключи, один поиск Яндекса, одна страница, вопрос моделям (в базу не пишет)

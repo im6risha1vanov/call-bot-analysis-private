@@ -25,8 +25,7 @@ ELEVEN_DOC = 'https://elevenlabs.io/docs/api-reference/user/subscription/get'
 OPENROUTER_DOC = 'https://openrouter.ai/docs/api/api-reference/api-keys/get-current-key'
 OPENROUTER_BALANCE_DOC = 'https://openrouter.ai/docs/api/api-reference/credits/get-remaining-credits'
 DEEPGRAM_DOC = 'https://developers.deepgram.com/reference/manage/billing/list'
-DREAMN_HOST = 'ai.dreamn-api-market.ru'
-DREAMN_SITE = 'https://dreamn-api-market.ru/'
+STARIMG_SITE = 'https://ai.starimg.ru/'
 YANDEX_DOC = 'https://yandex.cloud/ru/docs/billing/api-ref/BillingAccount/get'
 OCTAV_DOC = 'https://octavapi.shop/docs/start'
 EXPENSES = (
@@ -47,12 +46,9 @@ GUIDES = {
     'OpenRouter': ('Альтернативные модели и голоса, когда выбран OpenRouter.',
                    'Вызовы через OpenRouter остановятся, когда закончатся кредиты счёта или исчерпается лимит ключа.',
                    'Если будете использовать OpenRouter, добавьте рабочий ключ для лимита и отдельный Management Key для остатка счёта.'),
-    'DreamN': ('Разборы и проверка промтов, методология, варианты разборов и функции, которые используют модели DreamN.',
-               'Эти запросы к DreamN остановятся при исчерпании токенов или истечении срока ключа.',
-               'Для чтения остатка используется текущий ключ. Пополнение или продление выполняется в чате заказа DreamN.'),
-    'AI Star': ('Разборы звонков, проверка промтов и оценка тренировки через AI Star.',
+    'AI Star': ('Разборы звонков и переписок, агент РОПа, тренажёр и модели Starimg в AveronGPT и поиске доноров.',
                 'Остановятся запросы на модели AI Star.',
-                'Для автообновления нужен подтверждённый способ чтения остатка по API-ключу из кабинета AI Star.'),
+                'Остаток доступен в кабинете AI Star.'),
     'Шлюз разборов': ('Разборы звонков, проверка промтов и оценка тренировки.',
                        'Остановятся запросы к настроенному шлюзу разборов.',
                        'Нужны данные из кабинета поставщика о способе чтения остатка по API-ключу.'),
@@ -208,45 +204,12 @@ def analysis_gateway() -> str:
         url = urlsplit(configured('CVC_BASE_URL') or 'https://ai.starimg.ru/v1')
     except ValueError:
         return 'Шлюз разборов'
-    if url.scheme == 'https' and url.netloc == DREAMN_HOST:
-        return 'DreamN'
     return 'AI Star' if url.hostname in {'ai.starimg.ru', 'ai.starimg.space'} else 'Шлюз разборов'
 
 
-async def dreamn() -> dict:
-    name, key = analysis_gateway(), configured('CVC_API_KEY')
-    item = provider(name, key, source=DREAMN_SITE if name == 'DreamN' else None,
-                    note='Одна квота для моделей этого ключа.' if name == 'DreamN' else None)
-    if not key or name != 'DreamN':
-        return item
-    data = await get_json(f'https://{DREAMN_HOST}/v1/key/status', {'Authorization': 'Bearer ' + key},
-                          accepted_errors=(401, 402))
-    error = data.get('error')
-    if isinstance(error, dict):
-        message = str(error.get('message', ''))
-        if message.startswith('Key quota exhausted'):
-            return measured(item, [metric('Остаток', 0, 'tokens')], 'depleted')
-        if message.startswith('Key expired'):
-            return measured(item, [], 'inactive')
-        return item
-    remaining, used = number(data.get('remain_quota')), number(data.get('used_quota'))
-    unlimited = data.get('unlimited_quota') is True
-    funding = 'inactive' if data.get('active') is False else None
-    metrics = []
-    if unlimited:
-        funding = funding or 'unlimited'
-    elif remaining is not None:
-        funding = funding or available(remaining)
-        metrics.append(metric('Остаток', remaining, 'tokens'))
-    if used is not None:
-        metrics.append(metric('Израсходовано по ключу', used, 'tokens'))
-    if not (metrics or funding):
-        return item
-    result = measured(item, metrics, funding)
-    expiry = number(data.get('expired_time'))
-    if expiry is not None and 0 < expiry < 4102444800:
-        result['expires_at'] = datetime.fromtimestamp(expiry, timezone.utc).isoformat()
-    return result
+async def analysis_provider() -> dict:
+    name = analysis_gateway()
+    return provider(name, configured('CVC_API_KEY'), source=STARIMG_SITE if name == 'AI Star' else None)
 
 
 async def yandex() -> dict:
@@ -345,7 +308,7 @@ async def overview(pool, client_id: int, days: int = 30) -> dict:
     # Mango хранится в записи компании. Общие ключи из .env видны только домашней компании.
     if client_id == await home_client_id(pool):
         robot, *providers = await asyncio.gather(
-            robot_expense(pool, start, end), mango(pool, client_id), dreamn(), yandex(), deepgram(), eleven(),
+            robot_expense(pool, start, end), mango(pool, client_id), analysis_provider(), yandex(), deepgram(), eleven(),
             openrouter())
         if robot is not None:
             expenses.append(robot)

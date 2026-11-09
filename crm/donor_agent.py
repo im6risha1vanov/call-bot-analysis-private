@@ -10,7 +10,7 @@
 7. Вердикт по каждому номеру: в парсинг / проверить тестом / не брать, с причинами.
 
 Прогоны идут в фоне (loop), по одному. Состояние лежит в donor_runs, страница опрашивает его.
-ИИ: основная модель через dreamn (ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL, DONOR_MODEL), запасная через
+ИИ: основная модель через Starimg (ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL, DONOR_MODEL), запасная через
 OctavApi (OCTAV_API_KEY, OCTAV_BASE_URL, DONOR_RESERVE_MODEL); обе в формате Anthropic Messages.
 Расход считаем в рублях: ИИ по курсу ЦБ, поиск по прайсу Яндекса. Общий дневной лимит на ИИ и поиск — DONOR_DAILY_RUB
 (по умолчанию 1500 ₽), на прогон — DONOR_RUN_RUB (600 ₽). По шагам расход лежит в state['cost'].
@@ -39,7 +39,7 @@ POLL_SEC = 5
 MAX_QUEUED = 3  # прогонов в очереди на компанию
 LOG_LIMIT = 400
 TARGETS = (10, 20, 30, 50)
-SITES_MODELS = {'': 'dreamn (основная)', 'aliceai-llm-flash': 'Alice Flash (дешевле, тест)'}
+SITES_MODELS = {'': 'Starimg (основная)', 'aliceai-llm-flash': 'Alice Flash (дешевле, тест)'}
 SEARCH_RUB = 0.488  # Yandex Search API, синхронный запрос днём, ₽ за запрос (прайс 488 ₽ за 1000)
 DEFERRED_RUB = 0.0305  # отложенный запрос (30,5 ₽ за 1000): ответ через минуты, для пачек запросов
 USD_RUB_FALLBACK = 95.0
@@ -78,9 +78,10 @@ class AIUnavailable(Exception):
 def providers() -> list[dict]:
     out = []
     if os.getenv('ANTHROPIC_API_KEY'):
-        out.append({'name': 'dreamn', 'key': os.environ['ANTHROPIC_API_KEY'], 'base': os.getenv('ANTHROPIC_BASE_URL') or None,
+        out.append({'name': 'starimg', 'key': os.environ['ANTHROPIC_API_KEY'],
+                    'base': os.getenv('ANTHROPIC_BASE_URL') or 'https://ai.starimg.ru',
                     'model': os.getenv('DONOR_MODEL') or os.getenv('ROP_MODEL') or 'gpt-6.1-sol',
-                    'price': (env_float('AVERONGPT_DREAMN_IN_MTOK', 3), env_float('AVERONGPT_DREAMN_OUT_MTOK', 15))})
+                    'price': (env_float('AVERONGPT_STARIMG_IN_MTOK', 3), env_float('AVERONGPT_STARIMG_OUT_MTOK', 15))})
     if os.getenv('OCTAV_API_KEY'):
         out.append({'name': 'octav', 'key': os.environ['OCTAV_API_KEY'], 'base': os.getenv('OCTAV_BASE_URL') or 'https://octavapi.shop',
                     'model': os.getenv('DONOR_RESERVE_MODEL') or 'claude-sonnet-5',
@@ -348,7 +349,7 @@ class Run:
         await self.budget()
         provs = providers()
         if not provs:
-            raise AIUnavailable('нет ключа ИИ в .env (ANTHROPIC_API_KEY для dreamn или OCTAV_API_KEY)')
+            raise AIUnavailable('нет ключа ИИ в .env (ANTHROPIC_API_KEY для Starimg или OCTAV_API_KEY)')
         last = None
         for i in range(self.provider, len(provs)):
             p = provs[i]
@@ -419,7 +420,7 @@ class Run:
         return None
 
     async def agent(self, system: str, user: str, tools: list[dict], handlers: dict, max_turns: int, done=lambda: False) -> str:
-        """Цикл инструментов. dreamn ставит stop_reason=end_turn и при вызове инструмента, поэтому смотрим на сами блоки."""
+        """Цикл инструментов. Читаем блоки tool_use независимо от stop_reason шлюза."""
         messages = [{'role': 'user', 'content': user}]
         for turn in range(max_turns):
             await self.save()

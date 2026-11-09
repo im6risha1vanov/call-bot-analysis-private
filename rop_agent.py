@@ -298,8 +298,7 @@ async def answer(pool: asyncpg.Pool, actor: Actor, question: str, *, allow_cours
         await _add_spend(pool, actor.client_id, _cost_of(resp.usage))
         messages.append({"role": "assistant", "content": resp.content})
 
-        # Сторонние провайдеры (ai.dreamn-api-market.ru) ставят stop_reason="end_turn" и при вызове
-        # инструмента, поэтому решаем по самим блокам tool_use.
+        # Читаем блоки tool_use независимо от stop_reason шлюза.
         if not any(b.type == "tool_use" for b in resp.content):
             final_text = "".join(b.text for b in resp.content if b.type == "text").strip()
             bad = await _mentioned_unverified_managers(pool, actor, final_text, candidates, verified)

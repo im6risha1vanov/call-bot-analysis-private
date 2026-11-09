@@ -69,7 +69,7 @@ class PureTests(unittest.TestCase):
 
     def test_models_chain(self):
         with patch.dict(os.environ, {'AVERONGPT_MODELS': 'dreamn:gpt-6.1-sol, yandex:yandexgpt-5.1, bad:x'}):
-            self.assertEqual(gpt.models(), [('dreamn', 'gpt-6.1-sol'), ('yandex', 'yandexgpt-5.1')])
+            self.assertEqual(gpt.models(), [('starimg', 'gpt-6.1-sol'), ('yandex', 'yandexgpt-5.1')])
         with patch.dict(os.environ, {'AVERONGPT_MODELS': ''}):
             self.assertEqual(gpt.models()[0], ('yandex', 'yandexgpt-5.1'))
 
@@ -92,7 +92,7 @@ class GptTests(DBCase):
         await self.pool.execute((Path(__file__).resolve().parents[1] / 'migrations/029_averongpt.sql').read_text())
         await self.pool.execute('TRUNCATE crm_gpt_spend')
         await robot_store.set_option(self.pool, 'gpt_usd_rub', {'day': __import__('datetime').date.today().isoformat(), 'value': 100})
-        self.env = patch.dict(os.environ, {'KITCHEN_SHEET_ID': 'leads', 'AVERONGPT_MODELS': 'yandex:yandexgpt-5.1,dreamn:gpt-6.1-sol'})
+        self.env = patch.dict(os.environ, {'KITCHEN_SHEET_ID': 'leads', 'AVERONGPT_MODELS': 'yandex:yandexgpt-5.1,starimg:gpt-6.1-sol'})
         self.env.start()
 
     async def asyncTearDown(self):
@@ -134,12 +134,12 @@ class GptTests(DBCase):
     async def test_fallback_model_continues(self):
         async def down(*a):
             raise gpt.Unavailable('503')
-        dreamn = AsyncMock(return_value=reply('Ответ запасной модели'))
-        with patch.dict(gpt.BACKENDS, {'yandex': down, 'dreamn': dreamn}):
+        starimg = AsyncMock(return_value=reply('Ответ запасной модели'))
+        with patch.dict(gpt.BACKENDS, {'yandex': down, 'starimg': starimg}):
             got = await gpt.ask(self.pool, DIRECTOR, 'Где сделки?')
         self.assertIn('Ответ запасной модели', got['html'])
-        self.assertEqual(await self.pool.fetchval('SELECT model FROM crm_questions'), 'dreamn:gpt-6.1-sol')
-        with patch.dict(gpt.BACKENDS, {'yandex': down, 'dreamn': down}):
+        self.assertEqual(await self.pool.fetchval('SELECT model FROM crm_questions'), 'starimg:gpt-6.1-sol')
+        with patch.dict(gpt.BACKENDS, {'yandex': down, 'starimg': down}):
             got = await gpt.ask(self.pool, DIRECTOR, 'Где сделки?')
         self.assertIn('модель не отвечает', got['html'])
 
