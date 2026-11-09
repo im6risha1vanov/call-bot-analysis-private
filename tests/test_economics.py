@@ -4,7 +4,7 @@ import json
 import os
 import unittest
 from datetime import date, datetime, timezone
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
@@ -29,6 +29,7 @@ class ProviderEconomicsTests(unittest.IsolatedAsyncioTestCase):
         call.assert_awaited_once_with('account/balance', 'synthetic-key', 'synthetic-salt', {},
                                       timeout=economics.PROVIDER_TIMEOUT)
         self.assertEqual(result['status'], 'verified')
+        self.assertEqual(result['funding'], 'depleted')
         self.assertEqual(result['metrics'], [{'name': 'Баланс ВАТС', 'amount': 0.0, 'unit': 'RUB'}])
         self.assertNotIn('synthetic', json.dumps(result))
 
@@ -55,6 +56,77 @@ class ProviderEconomicsTests(unittest.IsolatedAsyncioTestCase):
             result = await economics.openrouter()
         self.assertEqual(result['metrics'], [{'name': 'Расход за месяц', 'amount': 7.45, 'unit': 'USD'}])
         self.assertNotIn('synthetic', json.dumps(result))
+
+    async def test_openrouter_reads_account_balance_with_separate_key(self):
+        responses = [
+            {'data': {'usage_monthly': 4, 'limit_remaining': 0}},
+            {'data': {'total_credits': 10, 'total_usage': 4}},
+        ]
+        with (
+            patch.dict(os.environ, {'OPENROUTER_API_KEY': 'synthetic-app', 'OPENROUTER_MANAGEMENT_KEY': 'synthetic-admin'}),
+            patch.object(economics, 'get_json', new_callable=AsyncMock, side_effect=responses) as get,
+        ):
+            result = await economics.openrouter()
+        self.assertEqual(result['funding'], 'limit')
+        self.assertEqual(result['metrics'][0], {'name': 'Остаток счёта', 'amount': 6, 'unit': 'USD'})
+        self.assertEqual(get.await_args_list[-1].args, ('https://openrouter.ai/api/v1/credits',
+                                                       {'Authorization': 'Bearer synthetic-admin'}))
+
+    async def test_dreamn_shared_key_shows_quota_without_exposing_credentials(self):
+        settings = {'CVC_BASE_URL': 'https://ai.dreamn-api-market.ru/v1', 'CVC_API_KEY': 'synthetic-dreamn-key'}
+        with (
+            patch.dict(os.environ, settings, clear=True),
+            patch.object(economics, 'get_json', new_callable=AsyncMock,
+                         return_value={'remain_quota': 500, 'used_quota': 100, 'expired_time': 1794929094}) as get,
+        ):
+            result = await economics.dreamn()
+        get.assert_awaited_once_with('https://ai.dreamn-api-market.ru/v1/key/status',
+                                     {'Authorization': 'Bearer synthetic-dreamn-key'}, accepted_errors=(401, 402))
+        self.assertEqual((result['name'], result['funding']), ('DreamN', 'available'))
+        self.assertEqual(result['metrics'][0], {'name': 'Остаток', 'amount': 500, 'unit': 'tokens'})
+        self.assertIn('expires_at', result)
+        self.assertNotIn('synthetic-dreamn-key', json.dumps(result))
+
+    async def test_dreamn_only_uses_verified_gateway_and_classifies_exhausted_key(self):
+        with (
+            patch.dict(os.environ, {'CVC_BASE_URL': 'https://example.test/v1', 'CVC_API_KEY': 'synthetic'}, clear=True),
+            patch.object(economics, 'get_json', new_callable=AsyncMock) as get,
+        ):
+            self.assertEqual((await economics.dreamn())['status'], 'unavailable')
+            get.assert_not_called()
+        with (
+            patch.dict(os.environ, {'CVC_BASE_URL': 'https://ai.dreamn-api-market.ru/v1', 'CVC_API_KEY': 'synthetic'}),
+            patch.object(economics, 'get_json', new_callable=AsyncMock,
+                         return_value={'error': {'message': 'Key quota exhausted: synthetic'}}),
+        ):
+            result = await economics.dreamn()
+        self.assertEqual(result['funding'], 'depleted')
+        self.assertNotIn('synthetic', json.dumps(result))
+
+    def test_totals_keep_currencies_separate_and_skip_unknown_values(self):
+        expenses = [{'unit': 'RUB', 'amount': 10}, {'unit': 'RUB', 'amount': 4.25},
+                    {'unit': 'RUB', 'amount': None}, {'unit': 'USD', 'amount': 3}]
+        self.assertEqual(economics.expense_totals(expenses), [{'unit': 'RUB', 'amount': 14.25},
+                                                            {'unit': 'USD', 'amount': 3}])
+
+    async def test_yandex_uses_billing_account_and_service_account_iam(self):
+        response = Mock()
+        response.json.return_value = {'id': 'syntheticaccount', 'balance': '-10.25', 'currency': 'RUB', 'active': True}
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.get.return_value = response
+        with (
+            patch.dict(os.environ, {'YANDEX_BILLING_ACCOUNT_ID': 'syntheticaccount'}, clear=True),
+            patch.object(economics.httpx, 'AsyncClient', return_value=client),
+            patch.object(economics.robot_prices, 'yandex_auth', new_callable=AsyncMock, return_value='Bearer synthetic-token'),
+        ):
+            result = await economics.yandex()
+        client.get.assert_awaited_once_with(
+            'https://billing.api.cloud.yandex.net/billing/v1/billingAccounts/syntheticaccount',
+            headers={'Authorization': 'Bearer synthetic-token'})
+        self.assertEqual((result['name'], result['funding']), ('Yandex Cloud', 'check'))
+        self.assertEqual(result['metrics'][0]['amount'], -10.25)
+        self.assertNotIn('synthetic-token', json.dumps(result))
 
     async def test_other_company_only_gets_own_mango_metadata(self):
         pool = AsyncMock()
@@ -88,12 +160,16 @@ class ExpenseEconomicsTests(unittest.IsolatedAsyncioTestCase):
         try:
             await connection.execute("""
                 CREATE TEMP TABLE astra_daily_spend (client_id integer, day date, spent_units numeric);
+                CREATE TEMP TABLE methodology_daily_spend (client_id integer, day date, spent_units numeric);
+                CREATE TEMP TABLE automatic_call_spend (client_id integer, day date, spent_units numeric);
                 CREATE TEMP TABLE crm_questions (client_id integer, created_at timestamptz, cost_rub numeric);
                 CREATE TEMP TABLE rop_agent_daily_spend (client_id integer, day date, spent_usd numeric);
                 CREATE TEMP TABLE robot_options (key text);
                 CREATE TEMP TABLE robot_calls (owner text, at timestamptz, tts_chars int, llm_tokens int, duration_s int);
                 INSERT INTO astra_daily_spend VALUES
                     (1, '2026-11-08', 200000), (1, '2026-11-07', 1000000), (2, '2026-11-08', 1000000);
+                INSERT INTO methodology_daily_spend VALUES (1, '2026-11-08', 100000), (2, '2026-11-08', 1000000);
+                INSERT INTO automatic_call_spend VALUES (1, '2026-11-08', 300000);
                 INSERT INTO crm_questions VALUES
                     (1, '2026-11-07T21:00:00Z', 1.50), (1, '2026-11-08T20:59:59Z', 2.75),
                     (1, '2026-11-08T21:00:00Z', 100), (2, '2026-11-08T20:59:59Z', 200);
@@ -106,11 +182,12 @@ class ExpenseEconomicsTests(unittest.IsolatedAsyncioTestCase):
             """)
             day = date(2026, 11, 8)
             start, end = datetime(2026, 11, 7, 21, tzinfo=timezone.utc), datetime(2026, 11, 8, 21, tzinfo=timezone.utc)
-            with patch.dict(os.environ, {'AI_RUB_PER_MILLION_UNITS': '50'}):
+            with patch.dict(os.environ, {'AI_RUB_PER_MILLION_UNITS': '50', 'CVC_BASE_URL': 'https://ai.dreamn-api-market.ru/v1'}):
                 rows = await economics.expense_rows(connection, 1, day, day, start, end)
             amounts = {item['name']: (item['amount'], item['unit']) for item in rows}
-            self.assertAlmostEqual(amounts['Разборы звонков и проверка промтов'][0], 10)
-            self.assertEqual(amounts['Разборы звонков и проверка промтов'][1], 'RUB')
+            self.assertEqual(set(amounts), {'DreamN', 'AveronGPT', 'Агент РОПа'})
+            self.assertAlmostEqual(amounts['DreamN'][0], 30)
+            self.assertEqual(amounts['DreamN'][1], 'RUB')
             self.assertEqual(amounts['AveronGPT'], (4.25, 'RUB'))
             self.assertEqual(amounts['Агент РОПа'], (3.0, 'USD'))
             prices = {'tts_1k_chars': 2, 'llm_1k_tokens': 3}

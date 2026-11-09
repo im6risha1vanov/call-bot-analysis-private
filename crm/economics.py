@@ -4,7 +4,9 @@ from __future__ import annotations
 import asyncio
 import math
 import os
+import re
 from datetime import datetime, time, timedelta, timezone
+from urllib.parse import urlsplit
 from uuid import UUID
 
 import httpx
@@ -13,7 +15,7 @@ from cryptography.fernet import InvalidToken
 import mango_client
 from crypto_util import decrypt
 from tools import home_client_id
-from . import company, robot_store, store
+from . import company, robot_prices, robot_store, store
 
 PERIODS = (7, 30, 90)
 PROVIDER_TIMEOUT = 5
@@ -21,28 +23,50 @@ MANGO_DOC = ('https://developers.mango-office.ru/support/5_api-i-razrabotka/1_ap
              '5_opisanie_metodov_api_virtualnoy_ats_mango/7_7_api_konfiguratsiya/3_7_6_poluchenie_balansa/')
 ELEVEN_DOC = 'https://elevenlabs.io/docs/api-reference/user/subscription/get'
 OPENROUTER_DOC = 'https://openrouter.ai/docs/api/api-reference/api-keys/get-current-key'
+OPENROUTER_BALANCE_DOC = 'https://openrouter.ai/docs/api/api-reference/credits/get-remaining-credits'
 DEEPGRAM_DOC = 'https://developers.deepgram.com/reference/manage/billing/list'
 DADATA_DOC = 'https://dadata.ru/api/balance/'
-
-UNIT_LABELS = ('Разборы звонков и проверка промтов', 'Методология и оценка тренировки', 'Варианты разбора звонков')
+DREAMN_HOST = 'ai.dreamn-api-market.ru'
+DREAMN_SITE = 'https://dreamn-api-market.ru/'
+YANDEX_DOC = 'https://yandex.cloud/ru/docs/billing/api-ref/BillingAccount/get'
+OCTAV_DOC = 'https://octavapi.shop/docs/start'
 EXPENSES = (
     ('AveronGPT', 'RUB', 'crm_questions', 'cost_rub', 'created_at', 'Расчёт CRM по использованию модели'),
     ('Агент доноров', 'RUB', 'donor_runs', 'rub', 'created_at', 'Расчёт CRM по запускам, включая поиск'),
     ('Тренажёр', 'USD', 'training_sessions', 'cost_usd', 'started_at', 'Расчёт CRM по дате начала тренировки'),
 )
-SHARED_CREDENTIALS = (
-    ('Astra / StarIMG', ('CVC_API_KEY',)),
-    ('Claude / Anthropic', ('ANTHROPIC_API_KEY',)),
-    ('Octav API', ('OCTAV_API_KEY',)),
-    ('YandexGPT', ('YANDEX_GPT_API_KEY', 'YANDEX_TTS_API_KEY')),
-    ('Yandex SpeechKit TTS', ('YANDEX_TTS_API_KEY',)),
-    ('Yandex SpeechKit STT', ('YANDEX_STT_API_KEY', 'YANDEX_TTS_API_KEY')),
-    ('Yandex Search', ('YANDEX_SEARCH_API_KEY', 'YANDEX_GPT_API_KEY')),
-    ('Telegram Bot API', ('BOT_TOKEN',)),
-    ('Telegram-бот тренажёра', ('TRAIN_BOT_TOKEN',)),
-    ('Telegram API для рабочих чатов', ('TG_API_HASH',)),
-    ('Google Sheets', ('GOOGLE_SERVICE_ACCOUNT_FILE',)),
-)
+GUIDES = {
+    'Mango Office': ('Телефония CRM, записи и история звонков, исходящие звонки робота через ВАТС.',
+                     'Исходящие могут остановиться. Для импорта истории и записей отдельно нужен действующий API-коннектор.',
+                     'Проверьте, что в ВАТС включён API-коннектор и серверу CRM разрешён доступ к запросу баланса.'),
+    'Deepgram': ('Расшифровка звонков и распознавание речи в голосовых сценариях с Deepgram.',
+                 'Новые аудиозаписи не будут расшифровываться через Deepgram, а зависящие от них разборы задержатся.',
+                 'Нужен ID рабочего проекта Deepgram. Если действующий ключ не читает баланс, нужен отдельный ключ с правом billing:read.'),
+    'ElevenLabs': ('Синтез речи для голосов ElevenLabs в голосовом роботе.',
+                   'Робот не сможет озвучивать реплики выбранными голосами ElevenLabs.',
+                   'Для автоматического чтения квоты действующему ключу нужен доступ User → Read.'),
+    'OpenRouter': ('Альтернативные модели и голоса, когда выбран OpenRouter.',
+                   'Вызовы через OpenRouter остановятся, когда закончатся кредиты счёта или исчерпается лимит ключа.',
+                   'Если будете использовать OpenRouter, добавьте рабочий ключ для лимита и отдельный Management Key для остатка счёта.'),
+    'DaData': ('Поиск реквизитов компаний по ИНН и банков по БИК при подготовке договора.',
+               'Автоподстановка может остановиться при исчерпании тарифа или квоты. Реквизиты можно вводить вручную.',
+               'Нужен секретный ключ из того же кабинета DaData, что и рабочий API-ключ.'),
+    'DreamN': ('Разборы и проверка промтов, методология, варианты разборов и функции, которые используют модели DreamN.',
+               'Эти запросы к DreamN остановятся при исчерпании токенов или истечении срока ключа.',
+               'Для чтения остатка используется текущий ключ. Пополнение или продление выполняется в чате заказа DreamN.'),
+    'AI Star': ('Разборы звонков, проверка промтов и оценка тренировки через AI Star.',
+                'Остановятся запросы на модели AI Star.',
+                'Для автообновления нужен подтверждённый способ чтения остатка по API-ключу из кабинета AI Star.'),
+    'Шлюз разборов': ('Разборы звонков, проверка промтов и оценка тренировки.',
+                       'Остановятся запросы к настроенному шлюзу разборов.',
+                       'Нужны данные из кабинета поставщика о способе чтения остатка по API-ключу.'),
+    'Yandex Cloud': ('YandexGPT, синтез и распознавание речи SpeechKit, поиск Yandex Search.',
+                     'Эти функции могут остановиться, если облако потеряет доступ к платёжному аккаунту.',
+                     'Укажите ID платёжного аккаунта и выдайте существующему сервисному аккаунту роль billing.accounts.viewer на нём.'),
+    'Octav API': ('Резервная модель агента доноров.',
+                  'Если резерв включён, он не подхватит запросы после сбоя основной модели.',
+                  'Если нужен этот резерв, подключите его рабочий ключ. Для автообновления остатка нужен подтверждённый Octav способ чтения баланса.'),
+}
 
 
 def number(value) -> float | None:
@@ -60,16 +84,22 @@ def configured(*names: str) -> str:
 
 
 def provider(name, enabled, *, scope='account', source=None, note=None) -> dict:
+    uses, impact, setup = GUIDES[name]
     return {'name': name, 'scope': scope, 'configured': bool(enabled), 'status': 'unavailable' if enabled else 'missing',
-            'metrics': [], 'source': source, 'note': note}
+            'metrics': [], 'source': source, 'note': note, 'uses': uses, 'impact': impact, 'setup': setup}
 
 
 def metric(name: str, amount: float, unit: str) -> dict:
     return {'name': name, 'amount': amount, 'unit': unit}
 
 
-def measured(item: dict, metrics: list[dict]) -> dict:
-    return {**item, 'status': 'verified', 'metrics': metrics, 'at': datetime.now(timezone.utc).isoformat()}
+def measured(item: dict, metrics: list[dict], funding=None) -> dict:
+    return {**item, 'status': 'verified', 'metrics': metrics, 'funding': funding,
+            'at': datetime.now(timezone.utc).isoformat()}
+
+
+def available(amount: float) -> str:
+    return 'depleted' if amount <= 0 else 'available'
 
 
 async def mango(pool, client_id: int) -> dict:
@@ -86,18 +116,22 @@ async def mango(pool, client_id: int) -> dict:
             timeout=PROVIDER_TIMEOUT), PROVIDER_TIMEOUT)
         amount, currency = number(data.get('balance')), data.get('currency')
         if data.get('result') == 1000 and amount is not None and currency in ('RUB', 'USD', 'EUR', 'KZT'):
-            return measured(item, [metric('Баланс ВАТС', amount, currency)])
+            return measured(item, [metric('Баланс ВАТС', amount, currency)], available(amount))
+    except mango_client.MangoHTTPError as exc:
+        if exc.status in (401, 403):
+            item['note'] = f'Mango отклонил доступ к балансу (HTTP {exc.status}).'
     except (ValueError, TypeError, AttributeError, KeyError, InvalidToken, RuntimeError, TimeoutError, httpx.HTTPError):
         # Тело ответа и поля запроса могут содержать реквизиты. Отдаём только статус.
         pass
     return item
 
 
-async def get_json(url: str, headers: dict) -> dict:
+async def get_json(url: str, headers: dict, *, accepted_errors: tuple[int, ...] = ()) -> dict:
     async def fetch():
         async with httpx.AsyncClient(timeout=PROVIDER_TIMEOUT, follow_redirects=False, trust_env=False) as http:
             response = await http.get(url, headers=headers)
-            response.raise_for_status()
+            if response.status_code not in accepted_errors:
+                response.raise_for_status()
             data = response.json()
             return data if isinstance(data, dict) else {}
 
@@ -116,27 +150,43 @@ async def eleven() -> dict:
     used, limit = number(data.get('character_count')), number(data.get('character_limit'))
     if used is None or limit is None or used < 0 or limit < 0:
         return item
-    return measured(item, [metric('Остаток квоты', max(0, limit - used), 'credits'),
-                           metric('Использовано', used, 'credits'), metric('Лимит', limit, 'credits')])
+    remaining = max(0, limit - used)
+    return measured(item, [metric('Остаток квоты', remaining, 'credits'),
+                           metric('Использовано', used, 'credits'), metric('Лимит', limit, 'credits')], available(remaining))
 
 
 async def openrouter() -> dict:
     key = configured('OPENROUTER_API_KEY')
-    item = provider('OpenRouter', key, source=OPENROUTER_DOC,
-                    note='Расход и лимит этого ключа. Общий баланс счёта требует отдельного доступа к биллингу.')
-    if not key:
+    management = configured('OPENROUTER_MANAGEMENT_KEY')
+    item = provider('OpenRouter', key or management, source=OPENROUTER_BALANCE_DOC if management else OPENROUTER_DOC,
+                    note='Расход и лимит ключа. Остаток счёта требует доступа к биллингу.')
+    if not (key or management):
         return item
-    data = await get_json('https://openrouter.ai/api/v1/key', {'Authorization': 'Bearer ' + key})
-    key_data = data.get('data')
-    if not isinstance(key_data, dict):
-        return item
+    data, balance = await asyncio.gather(
+        get_json('https://openrouter.ai/api/v1/key', {'Authorization': 'Bearer ' + key}) if key else empty_json(),
+        get_json('https://openrouter.ai/api/v1/credits', {'Authorization': 'Bearer ' + management}) if management else empty_json(),
+    )
+    key_data = data.get('data') if isinstance(data.get('data'), dict) else {}
+    credits = balance.get('data') if isinstance(balance.get('data'), dict) else {}
+    total, used = number(credits.get('total_credits')), number(credits.get('total_usage'))
     fields = (('Расход за месяц', 'usage_monthly'), ('Остаток лимита ключа', 'limit_remaining'), ('Лимит ключа', 'limit'))
     metrics = [metric(label, value, 'USD') for label, field in fields if (value := number(key_data.get(field))) is not None]
-    return measured(item, metrics) if metrics else item
+    funding = None
+    if total is not None and used is not None:
+        remaining = total - used
+        metrics.insert(0, metric('Остаток счёта', remaining, 'USD'))
+        funding = available(remaining)
+    if funding != 'depleted' and (key_remaining := number(key_data.get('limit_remaining'))) is not None and key_remaining <= 0:
+        funding = 'limit'
+    return measured(item, metrics, funding) if metrics else item
+
+
+async def empty_json() -> dict:
+    return {}
 
 
 async def deepgram() -> dict:
-    key = configured('DEEPGRAM_API_KEY')
+    key = configured('DEEPGRAM_BILLING_API_KEY', 'DEEPGRAM_API_KEY')
     item = provider('Deepgram', key, source=DEEPGRAM_DOC,
                     note='Баланс проекта. Нужны ID проекта и право ключа на чтение биллинга.')
     if not key:
@@ -149,13 +199,12 @@ async def deepgram() -> dict:
     balances = data.get('balances')
     if not isinstance(balances, list):
         return item
-    metrics = []
-    for balance in balances:
-        if isinstance(balance, dict) and balance.get('units') == 'USD':
-            amount = number(balance.get('amount'))
-            if amount is not None:
-                metrics.append(metric('Баланс проекта', amount, 'USD'))
-    return measured(item, metrics) if metrics else item
+    amounts = [amount for balance in balances if isinstance(balance, dict) and balance.get('units') == 'USD'
+               and (amount := number(balance.get('amount'))) is not None]
+    if not amounts:
+        return item
+    remaining = sum(amounts)
+    return measured(item, [metric('Баланс проекта', remaining, 'USD')], available(remaining))
 
 
 async def dadata() -> dict:
@@ -169,19 +218,95 @@ async def dadata() -> dict:
         'Accept': 'application/json', 'Content-Type': 'application/json',
     })
     balance = number(data.get('balance'))
-    return measured(item, [metric('Баланс', balance, 'RUB')]) if balance is not None else item
+    return measured(item, [metric('Баланс', balance, 'RUB')], available(balance)) if balance is not None else item
+
+
+def analysis_gateway() -> str:
+    try:
+        url = urlsplit(configured('CVC_BASE_URL') or 'https://ai.starimg.ru/v1')
+    except ValueError:
+        return 'Шлюз разборов'
+    if url.scheme == 'https' and url.netloc == DREAMN_HOST:
+        return 'DreamN'
+    return 'AI Star' if url.hostname in {'ai.starimg.ru', 'ai.starimg.space'} else 'Шлюз разборов'
+
+
+async def dreamn() -> dict:
+    name, key = analysis_gateway(), configured('CVC_API_KEY')
+    item = provider(name, key, source=DREAMN_SITE if name == 'DreamN' else None,
+                    note='Одна квота для моделей этого ключа.' if name == 'DreamN' else None)
+    if not key or name != 'DreamN':
+        return item
+    data = await get_json(f'https://{DREAMN_HOST}/v1/key/status', {'Authorization': 'Bearer ' + key},
+                          accepted_errors=(401, 402))
+    error = data.get('error')
+    if isinstance(error, dict):
+        message = str(error.get('message', ''))
+        if message.startswith('Key quota exhausted'):
+            return measured(item, [metric('Остаток', 0, 'tokens')], 'depleted')
+        if message.startswith('Key expired'):
+            return measured(item, [], 'inactive')
+        return item
+    remaining, used = number(data.get('remain_quota')), number(data.get('used_quota'))
+    unlimited = data.get('unlimited_quota') is True
+    funding = 'inactive' if data.get('active') is False else None
+    metrics = []
+    if unlimited:
+        funding = funding or 'unlimited'
+    elif remaining is not None:
+        funding = funding or available(remaining)
+        metrics.append(metric('Остаток', remaining, 'tokens'))
+    if used is not None:
+        metrics.append(metric('Израсходовано по ключу', used, 'tokens'))
+    if not (metrics or funding):
+        return item
+    result = measured(item, metrics, funding)
+    expiry = number(data.get('expired_time'))
+    if expiry is not None and 0 < expiry < 4102444800:
+        result['expires_at'] = datetime.fromtimestamp(expiry, timezone.utc).isoformat()
+    return result
+
+
+async def yandex() -> dict:
+    billing_id = configured('YANDEX_BILLING_ACCOUNT_ID')
+    enabled = configured('YANDEX_GPT_API_KEY', 'YANDEX_TTS_API_KEY', 'YANDEX_STT_API_KEY', 'YANDEX_SEARCH_API_KEY')
+    item = provider('Yandex Cloud', enabled or billing_id, source=YANDEX_DOC,
+                    note='Один платёжный аккаунт для облачных функций проекта.')
+    if not re.fullmatch(r'[a-z0-9]{1,64}', billing_id):
+        return item
+    try:
+        async with asyncio.timeout(PROVIDER_TIMEOUT):
+            async with httpx.AsyncClient(timeout=PROVIDER_TIMEOUT, follow_redirects=False, trust_env=False) as http:
+                auth = await robot_prices.yandex_auth(http)
+                if not auth.startswith('Bearer '):
+                    return item
+                response = await http.get(f'https://billing.api.cloud.yandex.net/billing/v1/billingAccounts/{billing_id}',
+                                          headers={'Authorization': auth})
+                response.raise_for_status()
+                data = response.json()
+    except (httpx.HTTPError, OSError, ValueError, TypeError, KeyError, AttributeError, TimeoutError, robot_prices.PriceError):
+        return item
+    if not isinstance(data, dict) or data.get('id') != billing_id:
+        return item
+    amount, currency = number(data.get('balance')), data.get('currency')
+    if amount is None or currency not in ('RUB', 'USD', 'KZT'):
+        return item
+    funding = 'inactive' if data.get('active') is False else ('available' if amount > 0 else 'check')
+    return measured(item, [metric('Баланс платёжного аккаунта', amount, currency)], funding)
 
 
 async def expense_rows(pool, client_id: int, first, today, start, end) -> list[dict]:
     expenses = []
-    for table, label in zip(company.UNIT_TABLES, UNIT_LABELS, strict=True):
+    gateway_units = []
+    for table in company.UNIT_TABLES:
         if await pool.fetchval('SELECT to_regclass($1) IS NOT NULL', table):
             units = await pool.fetchval(f'SELECT sum(spent_units) FROM {table} WHERE client_id=$1 AND day BETWEEN $2 AND $3',
                                         client_id, first, today)
-            amount = number(units)
-            if amount is not None:
-                amount = number(amount * company.rub_per_unit())
-            expenses.append({'name': label, 'amount': amount, 'unit': 'RUB', 'note': 'Оценка по кредит-единицам'})
+            if (amount := number(units)) is not None:
+                gateway_units.append(amount)
+    if gateway_units:
+        expenses.append({'name': analysis_gateway(), 'amount': number(math.fsum(gateway_units) * company.rub_per_unit()),
+                         'unit': 'RUB', 'note': 'Общая оценка по учёту токенов'})
 
     if await pool.fetchval("SELECT to_regclass('rop_agent_daily_spend') IS NOT NULL"):
         amount = await pool.fetchval('SELECT sum(spent_usd) FROM rop_agent_daily_spend WHERE client_id=$1 AND day BETWEEN $2 AND $3',
@@ -198,6 +323,12 @@ async def expense_rows(pool, client_id: int, first, today, start, end) -> list[d
                 client_id, start, end)
             expenses.append({'name': label, 'amount': number(amount), 'unit': unit, 'note': note})
     return expenses
+
+
+def expense_totals(expenses: list[dict]) -> list[dict]:
+    return [{'unit': unit, 'amount': math.fsum(row['amount'] for row in expenses
+                                              if row['unit'] == unit and row['amount'] is not None)}
+            for unit in sorted({row['unit'] for row in expenses if row['amount'] is not None})]
 
 
 async def robot_expense(pool, start, end) -> dict | None:
@@ -232,12 +363,14 @@ async def overview(pool, client_id: int, days: int = 30) -> dict:
     # Mango хранится в записи компании. Общие ключи из .env видны только домашней компании.
     if client_id == await home_client_id(pool):
         robot, *providers = await asyncio.gather(
-            robot_expense(pool, start, end), mango(pool, client_id), eleven(), openrouter(), deepgram(), dadata())
+            robot_expense(pool, start, end), mango(pool, client_id), dreamn(), yandex(), deepgram(), eleven(), dadata(),
+            openrouter())
         if robot is not None:
             expenses.append(robot)
-        providers.extend(provider(name, configured(*names), note='Отдельные данные биллинга не подключены.')
-                         for name, names in SHARED_CREDENTIALS)
+        providers.append(provider('Octav API', configured('OCTAV_API_KEY'), source=OCTAV_DOC,
+                                  note='Резерв для агента доноров.'))
     else:
         providers = [await mango(pool, client_id)]
     return {'from': first.isoformat(), 'to': today.isoformat(), 'days': days, 'expenses': expenses,
+            'totals': expense_totals(expenses),
             'today_rub': today_rub, 'ai_limit_rub': limit, 'providers': providers}
