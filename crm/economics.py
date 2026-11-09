@@ -25,7 +25,6 @@ ELEVEN_DOC = 'https://elevenlabs.io/docs/api-reference/user/subscription/get'
 OPENROUTER_DOC = 'https://openrouter.ai/docs/api/api-reference/api-keys/get-current-key'
 OPENROUTER_BALANCE_DOC = 'https://openrouter.ai/docs/api/api-reference/credits/get-remaining-credits'
 DEEPGRAM_DOC = 'https://developers.deepgram.com/reference/manage/billing/list'
-DADATA_DOC = 'https://dadata.ru/api/balance/'
 DREAMN_HOST = 'ai.dreamn-api-market.ru'
 DREAMN_SITE = 'https://dreamn-api-market.ru/'
 YANDEX_DOC = 'https://yandex.cloud/ru/docs/billing/api-ref/BillingAccount/get'
@@ -48,9 +47,6 @@ GUIDES = {
     'OpenRouter': ('Альтернативные модели и голоса, когда выбран OpenRouter.',
                    'Вызовы через OpenRouter остановятся, когда закончатся кредиты счёта или исчерпается лимит ключа.',
                    'Если будете использовать OpenRouter, добавьте рабочий ключ для лимита и отдельный Management Key для остатка счёта.'),
-    'DaData': ('Поиск реквизитов компаний по ИНН и банков по БИК при подготовке договора.',
-               'Автоподстановка может остановиться при исчерпании тарифа или квоты. Реквизиты можно вводить вручную.',
-               'Нужен секретный ключ из того же кабинета DaData, что и рабочий API-ключ.'),
     'DreamN': ('Разборы и проверка промтов, методология, варианты разборов и функции, которые используют модели DreamN.',
                'Эти запросы к DreamN остановятся при исчерпании токенов или истечении срока ключа.',
                'Для чтения остатка используется текущий ключ. Пополнение или продление выполняется в чате заказа DreamN.'),
@@ -207,20 +203,6 @@ async def deepgram() -> dict:
     return measured(item, [metric('Баланс проекта', remaining, 'USD')], available(remaining))
 
 
-async def dadata() -> dict:
-    key, secret = configured('DADATA_KEY'), configured('DADATA_SECRET')
-    item = provider('DaData', key, source=DADATA_DOC,
-                    note='Баланс пользователя. Для чтения нужен секретный ключ биллинга.')
-    if not key or not secret:
-        return item
-    data = await get_json('https://dadata.ru/api/v2/profile/balance', {
-        'Authorization': 'Token ' + key, 'X-Secret': secret,
-        'Accept': 'application/json', 'Content-Type': 'application/json',
-    })
-    balance = number(data.get('balance'))
-    return measured(item, [metric('Баланс', balance, 'RUB')], available(balance)) if balance is not None else item
-
-
 def analysis_gateway() -> str:
     try:
         url = urlsplit(configured('CVC_BASE_URL') or 'https://ai.starimg.ru/v1')
@@ -363,7 +345,7 @@ async def overview(pool, client_id: int, days: int = 30) -> dict:
     # Mango хранится в записи компании. Общие ключи из .env видны только домашней компании.
     if client_id == await home_client_id(pool):
         robot, *providers = await asyncio.gather(
-            robot_expense(pool, start, end), mango(pool, client_id), dreamn(), yandex(), deepgram(), eleven(), dadata(),
+            robot_expense(pool, start, end), mango(pool, client_id), dreamn(), yandex(), deepgram(), eleven(),
             openrouter())
         if robot is not None:
             expenses.append(robot)

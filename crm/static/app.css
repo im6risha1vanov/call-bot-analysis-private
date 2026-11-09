@@ -684,6 +684,15 @@ audio.rec{display:block;width:100%;max-width:420px;height:36px;margin-top:6px}
 .time-caption{margin:4px 0 10px;line-height:1.5}
 .page,.card,.drawer,.rvm,.gpt{overflow-wrap:anywhere}
 @media(max-width:600px){.title-row{flex-wrap:wrap}.title-row [data-page-help]{margin-left:auto}.row .btn{white-space:normal}.field input,.field select,.field textarea{max-width:100%}}
+.title-row:has([data-go="queue"][data-arg="manage"]) > :is([data-go="queue"][data-arg="manage"],[data-page-help]){
+  display:inline-flex;align-items:center;justify-content:center;width:min(170px,calc((100% - 10px)/2));
+  height:40px;padding:6px 8px;border-radius:9px;font-size:13.5px;font-weight:600;line-height:1.15;
+  white-space:normal;text-align:center;margin-left:0
+}
+@media(max-width:480px){
+  .title-row:has([data-go="queue"][data-arg="manage"]) > h1{flex-basis:100%}
+  .title-row:has([data-go="queue"][data-arg="manage"]) > .sp{display:none}
+}
 
 /* A compact, persistent safety indicator in ordinary-account orientation. */
 .banner[data-guide-banner]{flex-wrap:wrap;align-items:center}
