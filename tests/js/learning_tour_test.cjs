@@ -6,24 +6,30 @@ const {working}=require('./readability_fixture.cjs');
 const {Storage,read}=require('./learning_workspace_test.cjs');
 const {settle}=require('./dom_adapter.cjs');
 const config=JSON.parse(read('crm/learning_guide.json')),examples=JSON.parse(read('crm/learning_examples.json'));
+const visibleTabs=(role,modules)=>config[role].filter(t=>!t.capability&&(!t.module||modules.includes(t.module)));
 function backend(role='manager',enabled=true,modules=['contracts','automations','robot','gpt']){
  const base=working(role),reads=[],posts=[];let mode=enabled;
  return {base,reads,posts,mode:()=>mode,async request(path,opts={}){
   const url=new URL(path,'https://crm.invalid');if((opts.method||'GET')==='GET')reads.push(url.pathname);
   if(url.pathname==='/api/learning/mode'){posts.push(path);mode=opts.body.enabled;return {enabled:mode};}
-  if(url.pathname==='/api/learning/guide')return {role,tabs:config[role].filter(t=>!t.module||modules.includes(t.module)),examples,progress:'not_stored'};
+  if(url.pathname==='/api/learning/guide')return {role,tabs:visibleTabs(role,modules),examples,progress:'not_stored'};
+  if(role==='director'&&modules.includes('robot')){
+   if(url.pathname==='/api/robot/cab')return {home:true,role,owner:'',owners:[],enabled:true,readonly:mode,operators:[]};
+   if(['/api/robot/cab/campaigns','/api/robot/cab/contacts','/api/robot/cab/stop'].includes(url.pathname))return {items:[],total:0};
+   if(url.pathname==='/api/robot/cab/contacts/tabs')return {tabs:[]};
+  }
   const data=await base.request(path,opts);if(url.pathname==='/api/me')return {...data,learning_mode:mode,can_dial:true,webphone:false,modules};return data;
  }};
 }
 async function ui(role='manager',enabled=true,hash='#learning',modules){const api=backend(role,enabled,modules);return {api,view:await open(role,'ordinary-account',new Storage(),modules,hash,false,{backend:api,guide:true})};}
 async function next(view){await click(view,'[data-guide-continue]');}
 async function complete(view,role){
- const tabs=config[role].filter(t=>!t.module||view.run('S.me.modules').includes(t.module));let steps=0;const trace=[];
+ const tabs=visibleTabs(role,view.run('S.me.modules'));let steps=0;const trace=[];
  for(;steps<140;steps++){
-  assert(!view.document.querySelector('[data-ui-error]'),view.document.querySelector('[data-ui-error]')?.textContent);const card=view.document.querySelector('[data-guide-card]');assert(card,'Guide missing: '+view.document.body.textContent.slice(-1500));const ti=tabs.findIndex(t=>t.id===card.dataset.guideTab),index=Number(card.dataset.guideStep),step=tabs[ti].steps[index];
+  assert(!view.document.querySelector('[data-ui-error]'),view.run('S.page')+': '+view.document.querySelector('[data-ui-error]')?.textContent);const card=view.document.querySelector('[data-guide-card]');assert(card,'Guide missing: '+view.document.body.textContent.slice(-1500));const ti=tabs.findIndex(t=>t.id===card.dataset.guideTab),index=Number(card.dataset.guideStep),step=tabs[ti].steps[index];
   trace.push(card.dataset.guideTab+':'+index+':'+view.run('S.page')+':'+view.run('S.arg'));
   if(!step){if(ti===tabs.length-1){await next(view);return steps;}await next(view);continue;}
-  assert(card.querySelector('[data-guide-image]'));let target=view.document.querySelector(step.selector);
+  assert.equal(!!card.querySelector('[data-guide-image]'),!!step.example);let target=view.document.querySelector(step.selector);
   if(step.match)target=target?.querySelector(step.match);
   if(!target||target.disabled||step.event==='read'){await next(view);continue;}
   if(step.event==='change'){target.value='102';target.dispatch('change');await settle();}
@@ -39,6 +45,18 @@ async function main(){const cases=[],test=async(name,fn)=>{try{await fn();cases.
  for(const role of ['manager','director'])await test(role+'-whole-guide-is-read-only-and-does-not-store-records-or-progress',async()=>{
   const {api,view}=await ui(role,true,'#learning/start');const before=JSON.stringify(api.base.base.base),session=JSON.stringify([...view.storage.m]),prefs=JSON.stringify([...view.globals.localStorage.m]);await complete(view,role);
   assert.equal(JSON.stringify(api.base.base.base),before);assert.equal(api.base.events.length,0);assert.deepEqual(api.posts,[]);assert.equal(JSON.stringify([...view.storage.m]),session);assert.equal(JSON.stringify([...view.globals.localStorage.m]),prefs);assert(!view.globals.AveronLearningWorkspace);assert.equal(view.errors.length,0,view.errors.join('\n'));
+ });
+ await test('manager-autodial-is-visible-but-disabled-and-callbacks-are-in-queue',async()=>{
+  const {api,view}=await ui('manager',true,'#learning/start');
+  await next(view);
+  assert(view.document.querySelector('[data-guide-card]').textContent.includes('Автонабор из браузера'));
+  assert(view.document.querySelector('[data-auto-queue]').disabled);
+  assert(view.document.querySelector('[data-auto-status]').textContent.includes('автонабор отключён'));
+  while(Number(view.document.querySelector('[data-guide-card]').dataset.guideStep)<config.manager[0].steps.length)await next(view);
+  assert(view.document.querySelector('#top [data-go="callbacks"]').classList.contains('learn-highlight'));
+  await next(view);
+  assert.equal(view.run('S.page'),'callbacks');
+  assert.equal(api.base.events.length,0);
  });
  await test('dial-outcome-task-note-and-contract-cannot-reach-working-api',async()=>{
   const {api,view}=await ui('manager',true,'#learning/start');await click(view,'[data-next] [data-i="1"]');const card=view.document.querySelector('[data-guide-card]');

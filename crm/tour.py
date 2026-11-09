@@ -8,7 +8,7 @@ MESSAGE='Включён режим обучения: действие объяс
 # Only existing passive reads. Unknown future endpoints fail closed while learning.
 READS={
  '/api/me','/api/learning/guide','/api/learning/context','/api/summary','/api/journal','/api/callbacks','/api/queue','/api/card','/api/tasks','/api/calls','/api/stats',
- '/api/reports','/api/person','/api/staff','/api/access','/api/activity','/api/economics','/api/trainings','/api/ask','/api/gpt','/api/docs',
+ '/api/reports','/api/person','/api/staff','/api/access','/api/platform/companies','/api/activity','/api/economics','/api/trainings','/api/ask','/api/gpt','/api/docs',
  '/api/deals','/api/contracts','/api/contracts/config','/api/contracts/next-number',
  '/api/prompts','/api/leads','/api/sources/selections','/api/donors','/api/callcenter','/api/callcenter/work','/api/automations',
  '/api/robot','/api/robot/calls','/api/robot/cab','/api/robot/cab/known-clients','/api/robot/cab/contacts','/api/robot/cab/contacts/tabs','/api/robot/cab/stop','/api/robot/cab/campaigns','/api/robot/cab/calls','/api/robot/cab/analytics',
@@ -25,10 +25,11 @@ def permitted(method,path):
  if method not in {'GET','HEAD'}:return False
  if path in {'/','/logout','/learning/enter','/learning/exit','/learning/workspace','/learning/practice'} or path.startswith('/static/'):return True
  return path in READS or any(p.fullmatch(path) for p in READ_PATTERNS)
-def context(who,firm):
+def context(who,firm,*,capabilities=()):
  if who.role not in {'manager','director'} or who.actor is None or who.company!=who.actor.client_id or firm.get('id',who.company)!=who.company:
   raise web.HTTPForbidden(reason='Обучение доступно менеджеру и директору своей компании.')
  modules=firm.get('modules') or []
  data=json.loads((Path(__file__).parent/'learning_guide.json').read_text())
- return {'role':who.role,'tabs':[t for t in data[who.role] if not t.get('module') or t['module'] in modules],
+ return {'role':who.role,'tabs':[t for t in data[who.role] if (not t.get('module') or t['module'] in modules)
+                                 and (not t.get('capability') or t['capability'] in capabilities)],
          'examples':json.loads((Path(__file__).parent/'learning_examples.json').read_text()),'progress':'not_stored','records':'normal_authorized_reads'}

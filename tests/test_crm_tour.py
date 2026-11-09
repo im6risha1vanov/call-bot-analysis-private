@@ -16,11 +16,22 @@ class PolicyTests(unittest.TestCase):
   for role in ['client','guest']:
    with self.assertRaises(web.HTTPForbidden):tour.context(who(role),{'id':1,'modules':[]})
   with self.assertRaises(web.HTTPForbidden):tour.context(who(),{'id':2,'modules':[]})
+ def test_owner_routes_are_separate_from_the_director_programme(self):
+  firm={'id':1,'modules':['robot']}
+  def tabs(role,capabilities=()):
+   return {t['id']:t for t in tour.context(who(role),firm,capabilities=capabilities)['tabs']}
+  for role in ('manager','director'):
+   self.assertTrue({'staff_accounts','companies'}.isdisjoint(tabs(role)))
+  owner=tabs('director',{'manage_accounts','platform'})
+  self.assertEqual((owner['staff_accounts']['page'],owner['staff_accounts']['arg']),('staff','accounts'))
+  self.assertEqual(owner['companies']['page'],'companies')
+  self.assertIn('robot',owner)
+  self.assertTrue({'staff_accounts','companies'}.isdisjoint(tabs('manager',{'manage_accounts','platform'})))
  def test_closed_write_and_external_capability_policy(self):
-  for path in ['/api/dial','/api/outcome','/api/tasks/123','/api/deals/123/event','/api/contracts/register','/api/gpt','/api/automations/1/test','/api/robot/call','/hook/anything','/api/future-paid-operation']:
+  for path in ['/api/dial','/api/outcome','/api/tasks/123','/api/deals/123/event','/api/access/123/account','/api/platform/companies','/api/platform/companies/1','/api/contracts/register','/api/gpt','/api/automations/1/test','/api/robot/call','/hook/anything','/api/future-paid-operation']:
    for method in ['POST','PUT','PATCH','DELETE']:self.assertFalse(tour.permitted(method,path),(method,path))
   for path in ['/api/webphone','/webphone/ws','/api/contracts/lookup/inn/1111111111','/api/robot/voices','/api/robot/voices/sample','/api/future-paid-operation']:self.assertFalse(tour.permitted('GET',path),path)
-  for path in ['/api/card','/api/queue','/api/review/123','/api/deals/123','/api/reports','/api/robot/cab/campaigns']:self.assertTrue(tour.permitted('GET',path),path)
+  for path in ['/api/card','/api/queue','/api/review/123','/api/deals/123','/api/reports','/api/platform/companies','/api/robot/cab/campaigns']:self.assertTrue(tour.permitted('GET',path),path)
  def test_scripts_do_not_store_records_progress_or_fixtures(self):
   for name in ['guide.js','tour-guard.js']:
    source=(ROOT/'crm/static/learning'/name).read_text()
@@ -29,7 +40,8 @@ class PolicyTests(unittest.TestCase):
   for tabs in data.values():
    for tab in tabs:
     for step in tab['steps']:
-     self.assertNotIn('expected',step);self.assertIn(step.get('example'),examples);self.assertNotIn('Борис',step['text']);self.assertNotIn('УЧ-001',step['text'])
+     self.assertNotIn('expected',step);self.assertNotIn('Борис',step['text']);self.assertNotIn('УЧ-001',step['text'])
+     if 'example' in step:self.assertIn(step['example'],examples)
  def test_operational_handlers_remain_isolated_from_learning(self):
   import subprocess
   before = ast.parse(subprocess.check_output(['git', 'show', '53a7a04:crm/web.py'], cwd=ROOT, text=True))

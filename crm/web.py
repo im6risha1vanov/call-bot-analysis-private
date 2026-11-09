@@ -1388,8 +1388,15 @@ async def api_learning_guide(request):
     who=await viewer(request)
     if who.role not in {'manager','director'} or who.actor is None:
         raise web.HTTPForbidden(reason='Обучение доступно менеджеру и директору.')
-    firm=await company.info(request.app[POOL],who.company)
-    return web.json_response(tour.context(who,firm),headers={'Cache-Control':'no-store'})
+    pool = request.app[POOL]
+    firm = await company.info(pool, who.company)
+    capabilities = set()
+    if who.role == 'director':
+        if await is_home_owner(pool, who):
+            capabilities.add('manage_accounts')
+        if who.platform and not who.support and firm.get('home'):
+            capabilities.add('platform')
+    return web.json_response(tour.context(who, firm, capabilities=capabilities), headers={'Cache-Control':'no-store'})
 
 
 async def api_learning_mode(request):

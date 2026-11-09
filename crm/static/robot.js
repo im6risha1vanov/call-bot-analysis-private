@@ -17,7 +17,7 @@ const rbq = (path, extra = {}) => '/api/robot/cab' + path + qs({owner: RB.owner,
 const rbGet = (path, extra) => api(rbq(path, extra));
 const rbPost = (path, body = {}) => api('/api/robot/cab' + path, {method: 'POST', body: {...body, owner: RB.owner}});
 const rbRO = () => RB.st.readonly ? ' disabled' : '';
-const rbSave = () => { try { if (window.AveronLearningWorkspace) store.set('crm-robot', {tab: RB.tab, owner: RB.owner}); else localStorage.setItem('crm-robot', JSON.stringify({tab: RB.tab, owner: RB.owner})); } catch (e) { /* без хранилища */ } };
+const rbSave = () => store.set('crm-robot', {tab: RB.tab, owner: RB.owner});
 const money = v => v == null ? '—' : `${Number(v).toLocaleString('ru-RU', {maximumFractionDigits: 2})} ₽`;
 const opName = id => (RB.st.operators || []).find(o => o.id === id)?.name || 'Оператор не указан';
 

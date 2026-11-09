@@ -262,7 +262,7 @@ const queueTabs = current => `<div class="links" aria-label="Работа с о�
 VIEWS.queue = async (view, arg, refresh={}) => {
   queueRefreshState=null;
   const director = S.me.role === 'director';
-  const canManage = !director && !S.me.readonly && !S.me.learning && !S.me.learning_mode;
+  const canManage = !director && !S.me.readonly && !S.me.learning;
   if (canManage && arg === 'manage') {
     setHead({title: 'Управление очередью', back: () => go('queue')});
     view.innerHTML = '<div class="page" data-queue-manage></div>';
@@ -289,8 +289,8 @@ VIEWS.queue = async (view, arg, refresh={}) => {
     <div class="qline blk"><span>В очереди <b>${fmt(q.items.length)}</b>${tasksN ? `, из них <b>${fmt(tasksN)}</b> ${plural(tasksN, 'перезвон', 'перезвона', 'перезвонов')}` : ''}</span>
       ${q.later ? `<span class="hint">ещё ${fmt(q.later)} ${q.later % 10 === 1 && q.later % 100 !== 11 ? 'вернётся' : 'вернутся'} позже ${help('Перезвоны на другие дни и номера, которые не взяли трубку: они возвращаются через 2 часа, до 3 попыток.')}</span>` : ''}</div>
     ${canManage && S.me.can_dial ? `<div class="row">
-      <button class="btn" type="button" data-auto-queue${S.me.webphone ? '' : ' disabled'}>Начать автонабор</button>
-      <span class="hint" role="status" data-auto-status>${S.me.webphone ? 'Следующий номер после завершения звонка. Итоги можно отметить после остановки.' : 'Для автонабора подключите телефон в браузере.'}</span>
+      <button class="btn" type="button" data-auto-queue${S.me.webphone && !S.me.learning_mode ? '' : ' disabled'}>Начать автонабор</button>
+      <span class="hint" role="status" data-auto-status>${S.me.learning_mode ? 'В режиме обучения автонабор отключён.' : S.me.webphone ? 'Следующий номер после завершения звонка. Итоги можно отметить после остановки.' : 'Для автонабора подключите телефон в браузере.'}</span>
     </div>` : ''}
     <div class="grid2"><div class="stack" data-work></div>
       <div class="card blk" data-css="--i:3"><div class="card-h"><h2>Дальше по очереди</h2><span class="hint">${fmt(q.items.length)}</span></div><div class="list" data-next></div></div></div></div>`;

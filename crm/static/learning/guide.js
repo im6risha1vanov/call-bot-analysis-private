@@ -10,7 +10,7 @@
   const current=tab();if(!current)return null;
   if(stepIndex<current.steps.length)return current.steps[stepIndex];
   const next=context.tabs[tabIndex+1];
-  return next?{selector:'#nav [data-go="'+next.page+'"]',title:'Перейдите в «'+next.title+'»',text:'Раздел просмотрен. Найдите следующий раздел в меню CRM.',event:'navigate',next:next.id}:
+  return next?{selector:next.entry_selector||'#nav [data-go="'+next.page+'"], #tabbar [data-go="'+next.page+'"]',title:'Перейдите в «'+next.title+'»',text:next.entry_hint||'Раздел просмотрен. Найдите следующий раздел в меню CRM.',event:'navigate',next:next.id}:
    {selector:'',title:'Обзор завершён',text:'Вы познакомились с основными разделами. Можно вернуться к любой вкладке или выключить режим обучения и начать обычную работу.',event:'finish'};
  }
  async function load(){if(context)return context;if(!loading)loading=api('/api/learning/guide').then(data=>{context=data;return data;}).finally(()=>loading=null);return loading;}
@@ -23,7 +23,11 @@
   button.onclick=async()=>{await load();started=true;paused=false;selectCurrent();draw();};
   $('[data-guide-disable]',node).onclick=()=>toggle(false);
  }
- function matchesTab(t){return t.page===S.page&&(t.arg?S.arg===t.arg:!(S.page==='deals'&&S.arg==='contracts'));}
+ function matchesTab(t){
+  if(t.page!==S.page)return false;
+  if(t.arg)return S.arg===t.arg;
+  return !(S.page==='deals'&&S.arg==='contracts')&&!context.tabs.some(other=>other.page===S.page&&other.arg&&other.arg===S.arg);
+ }
  function selectCurrent(){const index=context?.tabs.findIndex(matchesTab);if(index>=0&&index!==tabIndex){tabIndex=index;stepIndex=0;manual=null;signature='';}}
  async function toggle(on){
   if(on&&(S.busy||guard.pending())){toast('Дождитесь завершения текущего действия, затем включите режим обучения.',true);return;}
@@ -72,7 +76,7 @@
    $('[data-guide-play]',panel)?.addEventListener('click',event=>{const image=$('[data-guide-image]',panel),key=image.closest('[data-guide-example]').dataset.guideExample,play=image.dataset.playing!=='true';image.src='/static/learning/examples/'+key+(play?'.gif':'.png');image.dataset.playing=String(play);event.currentTarget.textContent=play?'Приостановить пример':'Включить пример';event.currentTarget.setAttribute('aria-pressed',String(play));});
    $('[data-guide-image]',panel)?.addEventListener('load',place);
   }
-  const missing=$('[data-guide-missing]',panel),message=!highlight&&st.selector?'На экране сейчас нет этого элемента: список может быть пуст или действие недоступно. Посмотрите пример и продолжите обзор.':'';
+  const missing=$('[data-guide-missing]',panel),message=!highlight&&st.selector?'На экране сейчас нет этого элемента: список может быть пуст или действие недоступно. '+(st.example?'Посмотрите пример и продолжите обзор.':'Прочитайте подсказку и продолжите обзор.'):'';
   if(missing.textContent!==message)missing.textContent=message;
   $('[data-guide-focus]',panel).disabled=!highlight;
   const button=$('[data-guide-continue]',panel);button.textContent=st.event==='finish'?'К программе':st.event==='navigate'?'Открыть раздел':!highlight?'Продолжить обзор':'Понятно';
