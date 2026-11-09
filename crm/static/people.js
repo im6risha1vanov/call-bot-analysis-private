@@ -4,7 +4,7 @@
 
 const FOCUS_CHIP = {'получилось': 'good', 'частично': 'warn', 'не получилось': 'bad'};
 const botChip = p => p.linked ? '<span class="chip good">в боте</span>' : p.invite_until ? '<span class="chip warn">ждёт по ссылке</span>' : '<span class="chip">не подключён</span>';
-const crmChip = p => p.crm_links ? `<span class="chip ${p.crm_used ? 'good' : ''}">${p.crm_used ? 'входил ' + esc(fmtWhen(p.crm_used)) : 'ссылка выдана'}</span>` : '<span class="chip">нет ссылки</span>';
+const crmChip = p => p.crm_links ? `<span class="chip ${p.crm_used ? 'good' : ''}">${p.crm_used ? 'входил ' + esc(fmtWhen(p.crm_used)) : 'доступ выдан'}</span>` : '<span class="chip">нет доступа</span>';
 const exBtns = list => (list || []).map(c => `<button class="btn small" type="button" data-review="${c.id}">${esc(c.at ? when(c.at) : 'звонок ' + c.id)}</button>`).join('');
 
 VIEWS.staff = async (view, arg) => {
@@ -247,10 +247,6 @@ const PERSON_TAB = {
           ${a.can_unlink ? '<button class="btn danger" type="button" data-unlink>Отключить от бота</button>' : ''}</div><div data-inv-out></div></section>
       ${a.can_copy ? `<section class="card blk" data-css="--i:1"><label class="rb-sw"><input type="checkbox" data-copies${a.copies ? ' checked' : ''}><span class="rb-sw-ui"></span>
         <span><b>Копии всех разборов</b><span class="muted">Присылать в Telegram полные разборы всех менеджеров. Только руководителям.</span></span></label></section>` : ''}
-      <section class="card blk" data-css="--i:2"><div class="card-h"><h2>Вход в CRM</h2></div>
-        <p class="lead">${a.crm_links ? `Личных ссылок: ${a.crm_links}. Последний вход: ${a.crm_used ? fmtWhen(a.crm_used) : 'ещё не входил'}.` : 'Личной ссылки нет.'}</p>
-        <div class="row" data-css="margin-top:12px">${p.manager && !S.me.readonly ? '<button class="btn" type="button" data-crm>Выдать ссылку в CRM</button>' : ''}
-          <button class="btn ghost" type="button" data-go="settings" data-arg="access">Все ссылки →</button></div><div data-crm-out></div></section>
       ${p.manager && !S.me.readonly && !S.me.support ? `<section class="card blk"><div class="card-h"><h2>Удаление из отдела</h2></div>
         <p class="lead">Вход в CRM и Telegram будет закрыт сразу. История звонков и перезвонов сохранится.</p>
         <button class="btn danger" type="button" data-archive>Убрать менеджера</button></section>` : ''}`;
@@ -268,13 +264,6 @@ const PERSON_TAB = {
       const btn = e.currentTarget; // после await e.currentTarget уже null
       busy(btn, true);
       try { const r = await api('/api/staff/invite', {method: 'POST', body: {person_ext: p.ext}}); linkBox($('[data-inv-out]', el), r.link, 'Ссылка одноразовая, действует 7 дней.'); }
-      catch (err) { toast(err.message, true); }
-      busy(btn, false);
-    });
-    $('[data-crm]', el)?.addEventListener('click', async e => {
-      const btn = e.currentTarget; // после await e.currentTarget уже null
-      busy(btn, true);
-      try { const r = await api('/api/access', {method: 'POST', body: {role: 'manager', person_ext: p.ext}}); linkBox($('[data-crm-out]', el), r.link, 'Ссылку видно только сейчас: скопируйте и отправьте лично.'); }
       catch (err) { toast(err.message, true); }
       busy(btn, false);
     });
