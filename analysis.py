@@ -15,7 +15,6 @@ ai.starimg.ru вместо Anthropic напрямую).
 import json
 import logging
 import os
-import time
 from pathlib import Path
 
 import httpx
@@ -73,25 +72,7 @@ def _cost(usage: dict) -> float:
     return billed * ASTRA_MULTIPLIER
 
 
-MODEL_RETRY_SECONDS = 15 * 60
-_model_retry_at = 0.0
-
-
-class AstraModelUnavailable(RuntimeError):
-    def __init__(self, seconds: float):
-        self.seconds = max(1, seconds)
-        super().__init__(f'Модель Astra {MODEL} временно недоступна (HTTP 404).')
-
-
-def require_model():
-    remaining = _model_retry_at - time.monotonic()
-    if remaining > 0:
-        raise AstraModelUnavailable(remaining)
-
-
 async def _call(system: str, user: str, max_tokens: int):
-    global _model_retry_at
-    require_model()
     # temperature запрошена промтом (0 / 0.4), но reasoning-модели этого прокси
     # её игнорируют (API молча фиксирует temperature=1) — не передаём, чтобы не
     # создавать ложное впечатление, что она на что-то влияет.
@@ -108,22 +89,9 @@ async def _call(system: str, user: str, max_tokens: int):
             headers={"Authorization": "Bearer " + CVC_KEY},
             json=body,
         )
-    if r.status_code == 404:
-        try:
-            error = r.json().get('error') or {}
-        except (ValueError, AttributeError):
-            error = {}
-        if isinstance(error, dict) and (error.get('type') == 'not_found_error'
-                                       or error.get('code') == 'model_not_found'):
-            report = logging.warning if _model_retry_at else logging.error
-            _model_retry_at = time.monotonic() + MODEL_RETRY_SECONDS
-            exc = AstraModelUnavailable(MODEL_RETRY_SECONDS)
-            report('%s Повтор через %d минут.', exc, MODEL_RETRY_SECONDS // 60)
-            raise exc
     if r.status_code >= 300:
         logging.error("Astra %s: %s", r.status_code, r.text[:4000])
         raise RuntimeError(f"Astra {r.status_code}: {r.text[:700]}")
-    _model_retry_at = 0.0
     data = r.json()
     text = (data.get("output_text") or "").strip()
     if not text:

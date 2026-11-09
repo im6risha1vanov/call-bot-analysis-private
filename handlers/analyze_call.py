@@ -12,6 +12,7 @@ claim_next()/process_call() на таблице calls.
 import json
 import logging
 import os
+import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -19,7 +20,7 @@ import asyncpg
 from aiogram import Bot
 
 import mango_client
-from analysis import AstraModelUnavailable, require_model, score_call, short_report_call
+from analysis import score_call, short_report_call
 from crypto_util import decrypt
 from deepgram_client import transcribe_bytes
 from queue_runner import RetryLater, on_startup, register
@@ -29,6 +30,21 @@ from review import prompts as review_prompts
 log = logging.getLogger("callbot-astra-worker.analyze_call")
 
 BUDGET_RECHECK_MIN = 30
+MODEL_RETRY_SECONDS = 15 * 60
+_model_retry_at = 0.0
+
+
+def _missing_model(exc: Exception) -> bool:
+    prefix = 'Astra 404: '
+    if not isinstance(exc, RuntimeError) or not str(exc).startswith(prefix):
+        return False
+    try:
+        error = json.loads(str(exc)[len(prefix):]).get('error')
+    except (ValueError, AttributeError):
+        return False
+    return isinstance(error, dict) and (error.get('type') == 'not_found_error'
+                                       or error.get('code') == 'model_not_found')
+
 DG_PRICE_PER_MIN_USD = 0.0043  # nova-3, предзаписанное аудио — только для лога
 DAILY_UNIT_LIMIT = float(os.getenv("MAX_COST_PER_CHAT_UNITS", "2000000"))
 
@@ -101,6 +117,7 @@ async def _reset_orphaned(pool: asyncpg.Pool) -> None:
 
 @register("analyze_call")
 async def analyze_call(pool: asyncpg.Pool, task: asyncpg.Record) -> dict:
+    global _model_retry_at
     payload = json.loads(task["input"])
     from unified.analysis_policy import pin_task
     package = await pin_task(pool, task, payload)
@@ -124,10 +141,9 @@ async def analyze_call(pool: asyncpg.Pool, task: asyncpg.Record) -> dict:
         if await _over_daily_limit(pool, client):
             raise RetryLater(timedelta(minutes=BUDGET_RECHECK_MIN), "дневной лимит клиента исчерпан")
 
-        try:
-            require_model()
-        except AstraModelUnavailable as exc:
-            raise RetryLater(timedelta(seconds=exc.seconds), str(exc), record_limit=False) from exc
+        remaining = _model_retry_at - time.monotonic()
+        if remaining > 0:
+            raise RetryLater(timedelta(seconds=remaining), 'Модель Astra временно недоступна', record_limit=False)
 
         await pool.execute("UPDATE calls SET status='processing', updated_at=now() WHERE id=$1", call["id"])
         await pool.execute(
@@ -170,13 +186,15 @@ async def analyze_call(pool: asyncpg.Pool, task: asyncpg.Record) -> dict:
 
             await _add_spend(pool, client, cost)
             log.info("Deepgram (справочно, не в бюджете Astra): $%.4f", dg_duration / 60 * DG_PRICE_PER_MIN_USD)
-        except AstraModelUnavailable as exc:
-            async with pool.acquire() as conn, conn.transaction():
-                await conn.execute("UPDATE calls SET status='new', transcript=$2, updated_at=now() WHERE id=$1",
-                                   call['id'], transcript)
-                await conn.execute("UPDATE astra_analysis SET status='new' WHERE call_id=$1", call['id'])
-            raise RetryLater(timedelta(seconds=exc.seconds), str(exc), record_limit=False) from exc
-        except Exception:
+        except Exception as exc:
+            if _missing_model(exc):
+                _model_retry_at = time.monotonic() + MODEL_RETRY_SECONDS
+                async with pool.acquire() as conn, conn.transaction():
+                    await conn.execute("UPDATE calls SET status='new', transcript=$2, updated_at=now() WHERE id=$1",
+                                       call['id'], transcript)
+                    await conn.execute("UPDATE astra_analysis SET status='new' WHERE call_id=$1", call['id'])
+                raise RetryLater(timedelta(seconds=MODEL_RETRY_SECONDS),
+                                 'Модель Astra временно недоступна (HTTP 404)', record_limit=False) from exc
             log.exception("ошибка обработки call id=%s (задача id=%s)", call["id"], task["id"])
             await pool.execute("UPDATE calls SET status='new', updated_at=now() WHERE id=$1", call["id"])
             await pool.execute("UPDATE astra_analysis SET status='new' WHERE call_id=$1", call["id"])
