@@ -23,6 +23,30 @@ function repeatInsight(reachedFirst, reached, called) {
 const rubOrDash = v => v == null ? '<span class="muted">—</span>' : rub(v);
 const kpiDash = (k, i) => `<div class="kpi blk" data-css="--i:${i}"><span class="lab">${esc(k.label)}${k.help ? ' ' + help(k.help) : ''}</span>
   <span class="val" data-kind="n">—</span>${k.sub ? `<span class="foot">${k.sub}</span>` : ''}</div>`;
+// Сверка звонков Mango с листом: что связано, а что осталось без подтверждения.
+const MATCH_KINDS = [['ambiguous', 'Неоднозначно'], ['repeated', 'Повторные сверх попыток'], ['unmatched', 'Звонки без лида'],
+  ['missing_phone', 'Без телефона'], ['missing_date', 'Без даты'], ['campaign_mismatch', 'Другая кампания']];
+function matchSamples(m) {
+  const rows = [];
+  for (const [kind, label] of MATCH_KINDS) {
+    (m.samples?.[kind] || []).forEach(s => rows.push(`<tr><td class="nw">${esc(s.phone || '—')}</td><td class="nw">${s.date ? ddmm(s.date) : '—'}</td>
+      <td>${esc(s.extension || '—')}</td><td>${esc(s.campaign || '—')}</td><td class="wrap">${esc(label)}${s.note ? ': ' + esc(s.note) : ''}</td></tr>`));
+  }
+  return rows.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Телефон</th><th>Дата</th><th>Оператор</th><th>Лист/кампания</th><th>Что не подтвердилось</th></tr></thead><tbody>${rows.join('')}</tbody></table></div>` : '';
+}
+function matchNote(m) {
+  if (!m || !m.available) return m?.reason ? esc(m.reason) : '';
+  const parts = [];
+  parts.push(`связано ${plainItems(m.linked, 'попытка', 'попытки', 'попыток')}`);
+  if (m.ambiguous) parts.push(`неоднозначно ${plainItems(m.ambiguous, 'звонок', 'звонка', 'звонков')}`);
+  if (m.repeated) parts.push(`повторных сверх попыток ${m.repeated}`);
+  if (m.unmatched) parts.push(`без лида ${m.unmatched}`);
+  if (m.campaign_mismatch) parts.push(`другая кампания ${m.campaign_mismatch}`);
+  if (m.missing.phone) parts.push(`без телефона ${m.missing.phone}`);
+  if (m.missing.date) parts.push(`без даты ${m.missing.date}`);
+  if (m.attempts_without_call) parts.push(`попыток без звонка ${m.attempts_without_call}`);
+  return `Сверка с Mango: ${parts.join(', ')}.`;
+}
 const leadRows = (list, withClient, withRemind) => `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Телефон</th>${withClient ? '<th class="hide-m">Клиент</th>' : ''}<th>Звонок</th>
   ${withRemind ? '<th>Напоминание</th>' : ''}<th class="hide-m">Источник</th><th>Комментарий оператора</th></tr></thead><tbody>
   ${list.map(l => `<tr><td class="num nw">${esc(phone(l.phone) || l.phone)}</td>${withClient ? `<td class="hide-m">${esc(l.client)}</td>` : ''}
@@ -77,14 +101,19 @@ VIEWS.callcenter = async (view, arg) => {
     head(); bind();
     const t = d.total;
     let i = 0;
+    const filtering = !!(S.cc.period || S.cc.operator);
+    const rob = f.robot || {};
     // Что источник не хранит — так и пишем: прочерк и причина лучше выдуманного числа.
     const notes = [];
     if (canFilter && f.operator_available === false) notes.push(esc(f.operator_reason || 'Разрез по сотрудникам недоступен.'));
     if (canFilter && f.sum_available === false) notes.push(esc(f.sum_reason || 'Сумма за период недоступна.'));
-    const off = (f.operators || []).filter(o => !o.available);
+    const off = (f.operators || []).filter(o => !o.available && (o.kind !== 'robot' || filtering));
     if (canFilter && f.operator_available && off.length) notes.push('Разрез недоступен: ' + off.map(o => `<b>${esc(o.name)}</b> — ${esc(o.reason)}`).join('; '));
     if (canFilter && f.operator_available && f.unattributed) notes.push(`Без подтверждённого оператора: ${plainItems(f.unattributed, 'попытка', 'попытки', 'попыток')} — они входят только в «Весь отдел».`);
     if (canFilter && f.undated) notes.push(`Без даты звонка: ${plainItems(f.undated, 'попытка', 'попытки', 'попыток')} — в выбранный период они не попали.`);
+    if (canFilter && filtering && f.matching) notes.push(matchNote(f.matching));
+    if (canFilter && filtering && f.matching?.truncated) notes.push('Сверка ограничена последними звонками журнала Mango: выберите период, чтобы «без звонка» считалось по всему срезу.');
+    if (canFilter && S.cc.operator === 'robot' && rob.available) notes.push('Звонки робота не входят в попытки листа: они показаны отдельно из вкладки «Робот» и не засчитываются лидами листа.');
     const sumHelp = f.sum_available
       ? (db ? 'Первичные и повторные звонки и заинтересованные по ценам из «Клиенты и номера».' : 'Первичные и повторные звонки и заинтересованные по ценам из листа «Сводка».')
       : (f.sum_reason || '');
@@ -94,9 +123,23 @@ VIEWS.callcenter = async (view, arg) => {
       {key: 'cc-int', label: 'Заинтересованных', value: t.interested || 0}];
     const sumKpi = t.sum == null ? kpiDash({label: 'Сумма по тарифу', help: sumHelp}, i++)
       : kpiHtml({key: 'cc-sum', label: 'Сумма по тарифу', value: t.sum || 0, kind: 'rub', help: sumHelp}, i++);
+    // Робот — из своей вкладки: попытки и лиды считаются по разным определениям и не смешиваются с листом.
+    const robotCard = (canFilter && filtering && rob.source) ? `<section class="card blk" data-css="--i:${i++}">
+      <div class="card-h"><h2>Робот</h2><span class="hint">${esc(rob.source)}${rob.cabinet ? ' · ' + esc(rob.cabinet) : ''}</span></div>
+      ${rob.available ? `<div class="tbl-wrap"><table class="tbl"><tbody>
+        <tr><td>Попытки робота — звонки за ${esc(f.period_label || 'всё время')}</td><td class="n">${fmt(rob.attempts)}</td></tr>
+        <tr><td>Лиды — подтверждённые отметки CRM по этим номерам</td><td class="n">${fmt(rob.leads)}</td></tr>
+        <tr><td>Номеров без подтверждённого лида</td><td class="n">${fmt(rob.phones_without_lead)}</td></tr>
+        ${(rob.outcomes || []).map(o => `<tr><td class="hint">Итог робота: ${esc(o.label)}</td><td class="n">${fmt(o.count)}</td></tr>`).join('')}
+      </tbody></table></div><p class="hint">${esc(rob.note || '')}</p>`
+        : `<div class="empty">${esc(rob.reason || 'Данных робота за период нет.')}</div>`}</section>` : '';
+    const matchBlock = canFilter && filtering && f.matching?.available ? `<h3>Сверка звонков с листом</h3>
+      <p class="hint">${esc(matchNote(f.matching))} Связь ставится только при совпадении телефона, дня звонка и кампании; телефоны в примерах замаскированы.</p>
+      ${matchSamples(f.matching)}` : '';
     view.innerHTML = `<div class="page">
       ${notes.filter(Boolean).map(n => `<p class="hint blk" data-css="--i:${i++}">${n}</p>`).join('')}
       <div class="kpis">${kpis.map(k => kpiHtml(k, i++)).join('')}${sumKpi}</div>
+      ${robotCard}
       ${repeatInsight(t.reached_first || 0, t.reached || 0, t.called || 0).replace('class="insight"', `class="insight blk" data-css="--i:${i++}"`)}
       <section class="card blk" data-css="--i:${i++}"><div class="card-h"><h2>По клиентам</h2><span class="hint">нажмите, чтобы открыть кабинет так, как его видит клиент</span></div>
         ${d.clients.length ? `<div class="tbl-wrap"><table class="tbl anim"><thead><tr><th>Клиент</th><th class="n">Лидов</th><th class="n">Дозвон</th><th class="n">Заинтересованы</th>
@@ -108,7 +151,8 @@ VIEWS.callcenter = async (view, arg) => {
       ${d.days.length > 1 ? `<section class="card blk" data-css="--i:${i++}"><div class="card-h"><h2>Звонки по дням</h2><span class="hint">последние ${d.days.length} ${plural(d.days.length, 'день', 'дня', 'дней')} со звонками</span></div><div class="chart" data-chart></div></section>` : ''}
       <section class="card blk" data-css="--i:${i++}"><div class="card-h"><h2>${db ? 'Кому перезвонить' : 'Кому Ольге перезвонить'}</h2><span class="hint">${fmt(d.callbacks.length)}</span></div>
         ${d.callbacks.length ? longList(d.callbacks, l => leadRows(l, true, true)) : '<div class="empty">Перезвонов нет.</div>'}</section>
-      ${moreBlock('Подробнее', 'по базам и источникам', `
+      ${moreBlock('Подробнее', 'по базам, источникам и сверке', `
+        ${matchBlock}
         <h3>По базам</h3>${d.bases.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Клиент</th><th>База от</th><th class="n">Номеров</th><th class="n">Обзвонено</th><th class="n">Дозвон</th><th class="n">Заинтерес.</th></tr></thead><tbody>
           ${d.bases.map(b => `<tr><td>${esc(b.client)}</td><td class="nw">${yearDate(b.date)}</td><td class="n">${fmt(b.total)}</td><td class="n">${fmt(b.called)}</td><td class="n">${pctOf(b.reached || 0, b.called || 0)}</td><td class="n">${fmt(b.interested)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="hint">Дат баз в таблице нет.</p>'}
         <h3>Источники</h3>${d.sources.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Клиент</th><th>Источник</th><th class="n">Номеров</th><th class="n">Дозвон</th><th class="n">Заинтерес.</th></tr></thead><tbody>

@@ -25,7 +25,7 @@ import mango_client  # noqa: E402
 from tools import Forbidden, home_client_id, is_privileged  # noqa: E402
 from . import activity, economics, lead_import, lead_qualification
 from . import learning, tour
-from . import accounts, ask as asking, auth, automation_agent, automations, cabinet, call_analysis, callcenter_access, callcenter_db, company, contracts, deals, donor_agent, gpt, journal, overview, people, platform, recording, reviews, sources, staff, store, training  # noqa: E402
+from . import accounts, ask as asking, auth, automation_agent, automations, cabinet, call_analysis, callcenter_access, callcenter_db, callcenter_match, callcenter_robot, company, contracts, deals, donor_agent, gpt, journal, overview, people, platform, recording, reviews, sources, staff, store, training  # noqa: E402
 from . import prompts as prompt_mode, robot, webphone, robot_api, robot_prices, robot_runner, robot_store  # noqa: E402
 from .dial import dial  # noqa: E402
 
@@ -421,10 +421,22 @@ async def api_callcenter(request):
     try:
         src = await cabinet.source_of(pool, who.company)
         # «Сегодня» — по часовому поясу компании, а не сервера.
-        today = datetime.now(timezone.utc).astimezone(await store.zone(pool, who.company)).date()
+        tz = await store.zone(pool, who.company)
+        today = datetime.now(timezone.utc).astimezone(tz).date()
+        operators = await call_analysis.operators(pool, who.company)
+        calls = robot = None
+        if period or operator:
+            start, end = cabinet.period_range(period, today) if period else (None, None)
+            if getattr(src, 'mode', 'db') == 'sheet':
+                # Автор попытки в таблице не записан: сверяем звонки Mango по телефону, дню и кампании.
+                extensions = [op['extension'] for op in operators
+                              if op.get('kind') != 'robot' and op.get('extension') and op.get('configured')]
+                calls = await callcenter_match.mango_calls(pool, who.company, extensions, start, end, tz)
+            robot_spec = next((op for op in operators if op['id'] == 'robot'), None)
+            robot = await callcenter_robot.slice(pool, who.company, start, end, tz, robot_spec)
         return web.json_response(await cabinet.callcenter(src, period=period or None, operator=operator or None,
-                                                          operators=await call_analysis.operators(pool, who.company),
-                                                          today=today))
+                                                          operators=operators, today=today, calls=calls,
+                                                          tz=tz, robot=robot))
     except LookupError as exc:
         raise ValueError(str(exc))
 

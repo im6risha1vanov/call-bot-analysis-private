@@ -6,10 +6,11 @@
 она отдаёт те же строки, что лист, и всё ниже считается одним кодом.
 
 Фильтры «Колл-центра» — период и сотрудник. Период считается по датам попыток
-(дат звонков), сотрудник — по тому, кто записал попытку: в базе это добавочный
-Mango из ``cc_leads.attempts[].by``, в таблице — колонка «Оператор», если она
-есть. Чего источник не хранит, того фильтр не показывает: недоступный фильтр
-помечается причиной, а не заполняется догадками.
+(дат звонков). Сотрудник — по подтверждённому автору попытки: в базе это
+добавочный Mango из ``cc_leads.attempts[].by``, в таблице — колонка «Оператор»,
+если она есть, иначе сверка с журналом Mango по телефону, дню и кампании
+(crm/callcenter_match.py). Чего источник не хранит и что не подтвердилось,
+фильтр не показывает: недоступный фильтр помечается причиной, а не догадками.
 """
 from __future__ import annotations
 
@@ -17,8 +18,9 @@ import asyncio
 import re
 from collections import defaultdict
 from datetime import date, timedelta
+from zoneinfo import ZoneInfo
 
-from . import gsheets
+from . import callcenter_match, gsheets
 
 INTERESTED, CALLBACK, NOT_RELEVANT = 'Заинтересованный', 'Перезвон', 'Неактуально'
 PERIODS = (('today', 'Сегодня'), ('7', '7 дней'), ('30', '30 дней'), ('month', 'Месяц'))
@@ -31,12 +33,13 @@ COLUMNS = {'id': 'id', 'project': 'Проект', 'tag': 'Тег проекта'
            'd2': 'Дата звонка 2', 'd3': 'Дата звонка 3'}
 # Оператор звонка в таблице: колонки с такими названиями читаем, если владелец их добавил.
 OPERATOR_COLUMNS = ('Оператор', 'Сотрудник', 'Менеджер', 'Оператор звонка', 'Кто звонил')
-NO_OPERATOR = ('В Google-таблице «Прозвон лидов» нет колонки оператора: кто звонил, таблица не хранит. '
-               'Разрез по сотрудникам здесь недоступен — добавьте колонку «Оператор» в лист или ведите '
-               'колл-центр в базе.')
+NO_OPERATOR = ('В Google-таблице «Прозвон лидов» нет колонки оператора, а связать звонки Mango с попытками '
+               'не удалось: кто звонил, не подтверждено. Разрез по сотрудникам недоступен — добавьте колонку '
+               '«Оператор» в лист или задайте подтверждённые добавочные, чтобы включить сверку с журналом Mango.')
 NO_SUM = ('Сумма в таблице посчитана по лиду целиком, а не по каждому звонку: разделить её по периоду '
           'нельзя. Суммы за период считаются только там, где звонки и цены хранятся по попыткам — '
           'в колл-центре в базе.')
+NO_ROBOT = 'Данные робота не запрошены: срез из вкладки «Робот» не считался.'
 
 
 def ru_date(value) -> str:
@@ -327,15 +330,36 @@ def attempt_belongs(attempt: dict, operator: dict) -> bool:
     return bool(extension and by == extension) or by in operator_aliases(operator)
 
 
-def operator_state(operator: dict, mode: str, has_column: bool) -> tuple[bool, str]:
+def local_zone(name: str = 'Europe/Moscow') -> ZoneInfo:
+    """Пояс компании. На Windows без базы часовых поясов — фиксированный UTC+3."""
+    try:
+        return ZoneInfo(name)
+    except Exception:  # noqa: BLE001 — нет tzdata в среде
+        from datetime import timedelta as _delta, timezone as _tz
+        return _tz(_delta(hours=3), 'MSK')
+
+
+def operator_state(operator: dict, mode: str, has_column: bool, matched: bool,
+                   robot: dict | None = None) -> tuple[bool, str]:
     """Можно ли считать срез по этому сотруднику и что мешает, если нельзя."""
+    if operator.get('kind') == 'robot':
+        robot = robot or {}
+        if robot.get('available'):
+            return True, ''
+        if has_column and operator.get('extension'):
+            return True, ''
+        return False, robot.get('reason') or NO_ROBOT
     if mode == 'db':
         if operator.get('extension'):
             return True, ''
         return False, operator.get('note') or 'Добавочный сотрудника не подтверждён.'
-    if not has_column:
-        return False, NO_OPERATOR
-    return True, ''
+    if has_column:
+        return True, ''
+    if matched:
+        if operator.get('extension'):
+            return True, ''
+        return False, operator.get('note') or 'Добавочный сотрудника не подтверждён.'
+    return False, NO_OPERATOR
 
 
 def keep_attempts(start: date | None, end: date | None, operator: dict | None):
@@ -350,13 +374,18 @@ def keep_attempts(start: date | None, end: date | None, operator: dict | None):
 
 
 async def callcenter(src, period: str | None = None, operator: str | None = None,
-                     operators: list[dict] | None = None, today: date | None = None) -> dict:
+                     operators: list[dict] | None = None, today: date | None = None,
+                     calls: dict | None = None, tz=None, robot: dict | None = None) -> dict:
     """Колл-центр целиком для директора: все клиенты колл-центра в одном ответе.
 
     Без периода и сотрудника ответ тот же, что раньше. С фильтрами числа считаются
-    по попыткам: период — по дате звонка, сотрудник — по автору попытки.
+    по попыткам: период — по дате звонка, сотрудник — по подтверждённому автору
+    попытки. ``calls`` — звонки Mango для сверки с таблицей (crm/callcenter_match.py),
+    ``robot`` — срез вкладки «Робот» (crm/callcenter_robot.py). Ни один из них не
+    подменяет числа листа: они показываются отдельно и только с подтверждёнными связями.
     """
     src = _source(src)
+    tz = tz or local_zone()
     start = end = None
     if period:
         start, end = period_range(period, today)
@@ -367,21 +396,52 @@ async def callcenter(src, period: str | None = None, operator: str | None = None
     filtered = bool(period or operator)
     prices = await src.sum_prices() if filtered and hasattr(src, 'sum_prices') else None
 
+    pairs = []
+    for row, records in zip(info['clients'], sheets):
+        if isinstance(records, LookupError):
+            records = []
+        elif isinstance(records, BaseException):
+            raise records
+        pairs.append((row, records))
+
+    # Автор попытки: колонка листа, добавочный в базе или подтверждённая сверка с Mango.
+    if mode == 'db':
+        matching = callcenter_match.empty('Колл-центр ведётся в базе: автор попытки уже записан добавочным Mango.')
+        matching['source'] = 'db'
+    elif has_column:
+        matching = callcenter_match.empty('В таблице есть колонка «Оператор»: сверка с журналом Mango не нужна.')
+        matching['source'] = 'sheet'
+    elif calls is not None:
+        payload = calls if isinstance(calls, dict) else {'items': calls, 'truncated': False}
+        if payload.get('reason'):
+            matching = callcenter_match.empty(payload['reason'])
+        else:
+            matching = callcenter_match.attribute([(row['name'], records) for row, records in pairs],
+                                                  payload.get('items') or [], tz,
+                                                  truncated=bool(payload.get('truncated')))
+    else:
+        matching = callcenter_match.empty(NO_OPERATOR)
+    matched = bool(matching.get('available'))
+    robot = robot or {'available': False, 'reason': NO_ROBOT, 'attempts': 0, 'leads': 0, 'source': ''}
+
     by_id = {op['id']: op for op in operators or []}
     chosen = None
     if operator:
         chosen = by_id.get(operator)
         if chosen is None:
             raise ValueError('Неизвестный сотрудник.')
-    states, operator_available = [], mode == 'db' or has_column
+    states, operator_available = [], mode == 'db' or has_column or matched or bool(robot.get('available'))
     for op in operators or []:
-        available, reason = operator_state(op, mode, has_column)
-        states.append({'id': op['id'], 'name': op.get('short') or op['name'], 'available': available,
-                       'reason': reason, 'attempts': 0})
+        available, reason = operator_state(op, mode, has_column, matched, robot)
+        item = {'id': op['id'], 'name': op.get('short') or op['name'], 'available': available,
+                'reason': reason, 'attempts': 0, 'extension': op.get('extension') or '',
+                'source': op.get('source') or '', 'kind': op.get('kind') or 'operator'}
+        if op.get('kind') == 'robot':
+            item['robot'] = {'attempts': robot.get('attempts', 0), 'leads': robot.get('leads', 0),
+                             'source': robot.get('source') or '', 'reason': robot.get('reason') or ''}
+        states.append(item)
     if chosen is not None:
         state = next(s for s in states if s['id'] == chosen['id'])
-        if not operator_available:
-            raise ValueError(NO_OPERATOR)
         if not state['available']:
             raise ValueError(state['reason'] or 'Сотрудник не сопоставлен.')
     keep = keep_attempts(start, end, chosen) if filtered else None
@@ -391,11 +451,8 @@ async def callcenter(src, period: str | None = None, operator: str | None = None
     bases = []
     total = defaultdict(int)
     unattributed = undated = 0
-    for row, records in zip(info['clients'], sheets):
-        if isinstance(records, LookupError):
-            records = []
-        elif isinstance(records, BaseException):
-            raise records
+    for (row, records) in pairs:
+        name = row['name']
         for rec in records:
             for attempt in rec['attempts']:
                 if not attempt['result']:
@@ -405,15 +462,15 @@ async def callcenter(src, period: str | None = None, operator: str | None = None
                     continue
                 if filtered and not keep(attempt):
                     continue
-                matched = next((s for s in states if s['available'] and
-                                attempt_belongs(attempt, by_id[s['id']])), None)
-                if matched is not None:
-                    matched['attempts'] += 1
+                found = next((s for s in states if s['available'] and
+                              attempt_belongs(attempt, by_id[s['id']])), None)
+                if found is not None:
+                    found['attempts'] += 1
                 elif operator_available:
                     unattributed += 1
         p = parse_records(records, keep=keep, prices=prices if mode == 'db' else None)
         k = p['counts']
-        clients.append({'name': row['name'], 'since': p['since'], 'leads': k['total'], 'called': k['called'],
+        clients.append({'name': name, 'since': p['since'], 'leads': k['total'], 'called': k['called'],
                         'reached': k['reached'], 'interested': k['interested'], 'callback': k['callback'],
                         'waiting': p['waiting'], 'not_called': k['not_called'],
                         'sum': p['cost'] if filtered else row['sum']})
@@ -423,19 +480,20 @@ async def callcenter(src, period: str | None = None, operator: str | None = None
         if filtered:
             total['sum'] = None if p['cost'] is None else (total['sum'] or 0) + p['cost']
         else:
-            total['sum'] += row['sum']
+            total['sum'] += clients[-1]['sum']
         for d in p['days']:
             for key in ('first', 'repeat', 'reached', 'interested'):
                 days[d['day']][key] += d.get(key, 0)
-        callbacks += [{**c, 'client': row['name']} for c in p['callbacks']]
+        callbacks += [{**c, 'client': name} for c in p['callbacks']]
         for s in p['sources']:
             for key in ('total', 'reached', 'interested'):
-                sources[(row['name'], s['name'])][key] += s[key]
-        bases += [{**b, 'client': row['name']} for b in p['bases'] if b['date']]
+                sources[(name, s['name'])][key] += s[key]
+        bases += [{**b, 'client': name} for b in p['bases'] if b['date']]
     callbacks.sort(key=lambda x: x['last'], reverse=True)
     sum_available = not filtered or mode == 'db'
     if not sum_available:
         total['sum'] = None  # сумма листа не делится по звонкам: показываем прочерк, а не 0
+    operator_reason = '' if operator_available else (matching.get('reason') or NO_OPERATOR)
     return {
         'mode': mode, 'tariffs': info['tariffs'], 'clients': clients, 'total': dict(total),
         'days': [{'day': d, **v} for d, v in sorted(days.items())][-45:],
@@ -446,8 +504,9 @@ async def callcenter(src, period: str | None = None, operator: str | None = None
             'period': period or '', 'operator': (chosen or {}).get('id', ''),
             'periods': [list(p) for p in PERIODS], 'period_label': PERIOD_NAMES.get(period or '', 'за всё время'),
             'start': start.isoformat() if start else '', 'end': end.isoformat() if end else '',
-            'operator_available': operator_available, 'operator_reason': '' if operator_available else NO_OPERATOR,
+            'operator_available': operator_available, 'operator_reason': operator_reason,
             'operators': states, 'unattributed': unattributed, 'undated': undated,
             'sum_available': sum_available, 'sum_reason': '' if sum_available else NO_SUM,
+            'matching': matching, 'robot': robot,
         },
     }
