@@ -206,6 +206,22 @@ def attribute(pairs, calls, tz: ZoneInfo | None = None, *, truncated: bool = Fal
     return report
 
 
+async def mango_counts(pool, client_id: int, extensions, start: date | None, end: date | None, tz: ZoneInfo) -> dict:
+    """Count all outgoing calls in the CRM journal sourced from Mango, independently of sheet matching."""
+    extensions = [str(e) for e in extensions or [] if e]
+    if not extensions:
+        return {}
+    start_at = datetime.combine(start, time.min, tz) if start else None
+    end_at = datetime.combine(end + timedelta(days=1), time.min, tz) if end else None
+    rows = await pool.fetch(
+        """SELECT extension, count(*) AS n FROM calls
+           WHERE client_id=$1 AND direction=2 AND extension = ANY($2::text[])
+             AND ($3::timestamptz IS NULL OR call_started_at >= $3)
+             AND ($4::timestamptz IS NULL OR call_started_at < $4)
+           GROUP BY extension""", client_id, extensions, start_at, end_at)
+    return {str(row['extension']): int(row['n']) for row in rows}
+
+
 async def mango_calls(pool, client_id: int, extensions, start: date | None, end: date | None,
                       tz: ZoneInfo, limit: int = MAX_CALLS) -> dict:
     """Исходящие звонки операторов из журнала Mango за период (по дню компании).

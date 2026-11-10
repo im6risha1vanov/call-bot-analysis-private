@@ -118,6 +118,8 @@ VIEWS.callcenter = async (view, arg) => {
       ? (db ? 'Первичные и повторные звонки и заинтересованные по ценам из «Клиенты и номера».' : 'Первичные и повторные звонки и заинтересованные по ценам из листа «Сводка».')
       : (f.sum_reason || '');
     const kpis = [
+      ...(f.mango_calls != null ? [{key: 'cc-mango', label: 'Исходящих звонков Mango', value: f.mango_calls,
+        sub: 'Все звонки сотрудника за период, включая не связанные с таблицей'}] : []),
       {key: 'cc-called', label: 'Лидов обзвонено', value: t.called || 0, sub: `из ${fmt(t.total)} переданных`},
       {key: 'cc-rate', label: 'Дозвон', value: t.called ? t.reached / t.called * 100 : 0, kind: 'pct', sub: `${fmt(t.reached)} взяли трубку`},
       {key: 'cc-int', label: 'Заинтересованных', value: t.interested || 0}];
