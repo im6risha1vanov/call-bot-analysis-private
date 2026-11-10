@@ -133,14 +133,14 @@ async def run_once(pool: asyncpg.Pool, task_types: list[str] | None = None) -> b
     try:
         result = await handler(pool, task)
         await pool.execute(
-            "UPDATE tasks SET status='done', result=$2::jsonb, updated_at=now() WHERE id=$1",
+            "UPDATE tasks SET status='done', result=$2::jsonb, error=NULL, updated_at=now() WHERE id=$1",
             task["id"], json.dumps(result or {}, ensure_ascii=False, default=str),
         )
     except RetryLater as exc:
         log.info("задача id=%s type=%s отложена: %s (через %s)", task["id"], task["type"], exc, exc.delay)
         await pool.execute(
-            "UPDATE tasks SET status='new', run_after=now()+$2, updated_at=now() WHERE id=$1",
-            task["id"], exc.delay,
+            "UPDATE tasks SET status='new', run_after=now()+$2, error=$3, updated_at=now() WHERE id=$1",
+            task["id"], exc.delay, exc.reason[:2000] or None,
         )
         # Раньше срабатывание лимита только логировалось — в суточный отчёт
         # надзора его было не собрать, лог к тому моменту уже уехал.

@@ -117,6 +117,33 @@ async def calls_between(pool, client_id: int, start: datetime, end: datetime, ex
         client_id, start, end, exts)
 
 
+async def analysis_progress(pool, client_id: int, start: datetime, end: datetime, exts: list[str]) -> dict:
+    """Состояние обработки звонков за период, отдельно от результата разговора."""
+    rows = await pool.fetch(
+        """WITH selected AS (
+               SELECT id, extension, status FROM calls
+               WHERE client_id=$1 AND call_started_at >= $2 AND call_started_at < $3
+                 AND extension = ANY($4::text[]) AND direction=$5 AND status <> 'skipped'
+           ), latest AS (
+               SELECT DISTINCT ON (c.id) c.id, t.status
+               FROM selected c JOIN tasks t ON t.input->>'call_id'=c.id::text
+               WHERE c.status IN ('new','processing') AND t.client_id=$1 AND t.type='analyze_call'
+               ORDER BY c.id, t.id DESC
+           )
+           SELECT c.extension,
+                  count(*) FILTER (WHERE c.status IN ('analyzed','delivered')) AS processed,
+                  count(*) FILTER (WHERE c.status='awaiting_record') AS awaiting_record,
+                  count(*) FILTER (WHERE c.status='no_recording') AS no_recording,
+                  count(*) FILTER (WHERE c.status='failed' OR t.status='failed') AS failed,
+                  count(*) FILTER (WHERE t.status IN ('new','processing','awaiting_approval')) AS queued,
+                  count(*) FILTER (WHERE c.status IN ('new','processing') AND
+                                         (t.status IS NULL OR t.status='done')) AS unqueued
+           FROM selected c LEFT JOIN latest t ON t.id=c.id
+           GROUP BY c.extension""",
+        client_id, start, end, exts, store.OUTGOING)
+    return {r['extension']: {k: r[k] for k in r.keys() if k != 'extension'} for r in rows}
+
+
 async def missed_incoming(pool, client_id: int, rows, exts: set[str], tz, names: dict, common: bool) -> list[dict]:
     """Пропущенные входящие, по которым после этого никто не поговорил с клиентом.
 
@@ -195,6 +222,10 @@ async def summary(pool, actor, period: str = '7', ext: str | None = None, now: d
             add(prev, r)
     managers = [{'ext': p['ext'], 'name': p['name'], **{k: v for k, v in per[p['ext']].items() if k != 'categories'},
                  'mistake': top_mistake(per[p['ext']]['categories'])} for p in team]
+    if is_privileged(actor) and exts:
+        progress = await analysis_progress(pool, actor.client_id, b['start'], b['end'], exts)
+        for manager in managers:
+            manager['analysis_progress'] = progress.get(manager['ext'])
     current = [r for r in rows if b['start'] <= r['call_started_at'] < b['end']]
     return {
         'period': period, 'vs': b['vs'], 'hourly': b['hourly'], 'today': now.astimezone(tz).date().isoformat(),

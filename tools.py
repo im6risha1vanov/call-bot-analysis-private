@@ -77,30 +77,26 @@ def is_privileged(actor: Actor) -> bool:
 
 
 async def report_chat_ids(pool: asyncpg.Pool, client_id: int) -> list[int]:
-    """Кому уходят отчёты по отделу: разборы звонков, дайджесты, планёрка,
-    сводки, сообщения о сбоях. Это руководители И владелец системы — владелец
-    получает всё то же, что руководитель, плюс отдельный технический отчёт.
-
-    Раньше здесь стоял fetchrow(... role=head) — то есть одному, а какому
-    именно, решал порядок строк; с появлением второго получателя это значило бы
-    «кому повезёт»."""
+    """Руководители и владельцы, подписанные на отчёты отдела."""
     rows = await pool.fetch(
-        "SELECT telegram_user_id FROM employees "
-        "WHERE client_id=$1 AND role IN ('head', 'owner') AND telegram_user_id IS NOT NULL "
-        "ORDER BY id",
+        """SELECT telegram_user_id FROM employees e
+           WHERE client_id=$1 AND role IN ('head', 'owner') AND telegram_user_id IS NOT NULL
+             AND COALESCE((to_jsonb(e)->>'sales_reports_enabled')::boolean, true)
+           ORDER BY id""",
         client_id,
     )
     return [r["telegram_user_id"] for r in rows]
 
 
-async def owner_chat_ids(pool: asyncpg.Pool, client_id: int) -> list[int]:
-    """Владельцы системы — получатели технического отчёта о её работе."""
+async def technical_recipients(pool: asyncpg.Pool, client_id: int | None = None) -> tuple[list[int], bool]:
+    """Подписанные владельцы и признак, что владелец уже подключён к боту."""
     rows = await pool.fetch(
-        "SELECT telegram_user_id FROM employees "
-        "WHERE client_id=$1 AND role='owner' AND telegram_user_id IS NOT NULL ORDER BY id",
+        """SELECT telegram_user_id, COALESCE((to_jsonb(e)->>'technical_reports_enabled')::boolean, true) AS subscribed
+           FROM employees e WHERE ($1::int IS NULL OR client_id=$1) AND role='owner'
+             AND telegram_user_id IS NOT NULL ORDER BY id""",
         client_id,
     )
-    return [r["telegram_user_id"] for r in rows]
+    return [r["telegram_user_id"] for r in rows if r["subscribed"]], bool(rows)
 
 
 def _scope_extension(actor: Actor, requested: str | None) -> str | None:

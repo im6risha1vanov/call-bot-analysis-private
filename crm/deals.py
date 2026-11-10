@@ -82,7 +82,7 @@ async def has_table(pool, name: str) -> bool:
     return bool(await pool.fetchval('SELECT to_regclass($1) IS NOT NULL', name))
 
 
-async def load(pool, client_id: int, ext: str | None = None) -> dict:
+async def load(pool, client_id: int, ext: str | None = None, *, actor=None) -> dict:
     """Всё, из чего складываются сделки, одним проходом по базе."""
     calls = await pool.fetch(
         """SELECT c.id, c.client_number, c.extension, c.call_started_at, c.duration_seconds,
@@ -122,8 +122,10 @@ async def load(pool, client_id: int, ext: str | None = None) -> dict:
                                 max(m.sent_at) FILTER (WHERE m.outgoing) AS last_out
                          FROM tg_messages m WHERE m.client_id=c.client_id AND m.peer_id=c.peer_id) s ON true
            WHERE c.client_id=$1 AND c.phone IS NOT NULL AND s.messages > 0
+             AND ($2 OR cardinality(c.folders)=0 OR c.folder_owner_verified AND c.extension=$3)
              AND (c.analysis->>'kind' IS DISTINCT FROM 'not_client' OR c.analysis->'link'->>'by' = 'manual')
-           ORDER BY c.last_message_at""", client_id) if await has_table(pool, 'tg_chats') else []
+           ORDER BY c.last_message_at""", client_id, actor is None or is_privileged(actor),
+        actor.extension if actor else None) if await has_table(pool, 'tg_chats') else []
     names = {r['extension']: r['full_name'] for r in await pool.fetch(
         "SELECT extension, full_name FROM employees WHERE client_id=$1 AND role='manager'", client_id)}
     return {'calls': calls, 'shows': shows, 'events': events, 'tasks': tasks, 'outcomes': outcomes,
@@ -367,7 +369,7 @@ async def listing(pool, actor, ext: str | None = None, days: int | None = None, 
     if not is_privileged(actor):
         ext = actor.extension
     tz = await store.zone(pool, actor.client_id)
-    raw = await load(pool, actor.client_id)
+    raw = await load(pool, actor.client_id, actor=actor)
     deals = build(raw, tz, now)
     if ext:
         deals = [d for d in deals if d['ext'] == ext]
@@ -390,7 +392,7 @@ async def one(pool, actor, phone: str, now: datetime | None = None) -> dict:
     if not k:
         raise ValueError('Неверный номер.')
     tz = await store.zone(pool, actor.client_id)
-    found = next((d for d in build(await load(pool, actor.client_id), tz, now) if d['phone'] == k), None)
+    found = next((d for d in build(await load(pool, actor.client_id, actor=actor), tz, now) if d['phone'] == k), None)
     if not found:
         raise ValueError('Такой сделки нет.')
     if not is_privileged(actor) and found['ext'] != actor.extension:
@@ -461,7 +463,8 @@ async def unlinked_chats(pool, actor, ext: str | None = None) -> list[dict]:
                          FROM tg_messages m WHERE m.client_id=c.client_id AND m.peer_id=c.peer_id) s ON true
            WHERE c.client_id=$1 AND c.phone IS NULL AND c.kind='user' AND s.messages > 0
              AND c.analysis->>'kind' IS DISTINCT FROM 'not_client'
-             AND ($2::text IS NULL OR c.extension=$2 OR c.extension IS NULL AND $3)
+             AND ($3 AND ($2::text IS NULL OR c.extension IS NULL)
+                  OR c.extension=$2 AND ($3 OR cardinality(c.folders)=0 OR c.folder_owner_verified))
            ORDER BY c.last_message_at DESC NULLS LAST LIMIT 200""", actor.client_id, ext, is_privileged(actor))
     from review.tgreview import phones_in
     out = []
@@ -476,25 +479,29 @@ async def unlinked_chats(pool, actor, ext: str | None = None) -> list[dict]:
 
 
 async def chat_access(pool, actor, peer_id: int):
-    row = await pool.fetchrow('SELECT * FROM tg_chats WHERE client_id=$1 AND peer_id=$2', actor.client_id, peer_id) \
+    # Вызывается внутри транзакции чтения или ручной привязки: папка не меняет владельца до её конца.
+    row = await pool.fetchrow('SELECT * FROM tg_chats WHERE client_id=$1 AND peer_id=$2 FOR UPDATE', actor.client_id, peer_id) \
         if await has_table(pool, 'tg_chats') else None
     if not row:
         raise ValueError('Такой переписки нет.')
     if not is_privileged(actor):
+        if row['folders'] and (not row['folder_owner_verified'] or row['extension'] != actor.extension):
+            raise Forbidden('Это переписка другого менеджера.')
         if row['phone']:
             await one(pool, actor, row['phone'])  # сделка своя, иначе Forbidden
-        elif row['extension'] != actor.extension:
+        elif not actor.extension or row['extension'] != actor.extension:
             raise Forbidden('Это переписка другого менеджера.')
     return row
 
 
 async def chat_messages(pool, actor, peer_id: int, limit: int = 300) -> dict:
     """Переписка для карточки сделки: последние сообщения, старые сверху."""
-    row = await chat_access(pool, actor, peer_id)
-    tz = await store.zone(pool, actor.client_id)
-    rows = await pool.fetch(
-        """SELECT sent_at, outgoing, text, media FROM tg_messages WHERE client_id=$1 AND peer_id=$2
-           ORDER BY sent_at DESC, message_id DESC LIMIT $3""", actor.client_id, peer_id, limit)
+    async with pool.acquire() as conn, conn.transaction():
+        row = await chat_access(conn, actor, peer_id)
+        tz = await store.zone(conn, actor.client_id)
+        rows = await conn.fetch(
+            """SELECT sent_at, outgoing, text, media FROM tg_messages WHERE client_id=$1 AND peer_id=$2
+               ORDER BY sent_at DESC, message_id DESC LIMIT $3""", actor.client_id, peer_id, limit)
     data = loads(row['analysis'])
     return {'peer_id': peer_id, 'title': row['title'] or (f"@{row['username']}" if row['username'] else 'Без имени'),
             'username': row['username'], 'phone': key(row['phone']), 'linked': (data.get('link') or {}).get('by'),
@@ -509,18 +516,19 @@ async def link_chat(pool, actor, peer_id: int, phone: str, name: str | None) -> 
     digits = phone_digits(phone)
     if not digits:
         raise ValueError('Введите номер клиента, например +7 999 123-45-67.')
-    await chat_access(pool, actor, peer_id)
-    tz = await store.zone(pool, actor.client_id)
-    call_id = await call_by_phone(pool, actor.client_id, digits, None, tz)
-    if call_id and not is_privileged(actor):
-        owner = await pool.fetchval('SELECT extension FROM calls WHERE id=$1', call_id)
-        if owner and owner != actor.extension:
-            raise Forbidden('Это клиент другого менеджера.')
-    await pool.execute(
-        """UPDATE tg_chats SET phone=$3, call_id=$4, updated_at=now(),
-             analysis=coalesce(analysis, '{}'::jsonb) || jsonb_build_object('link',
-               jsonb_build_object('by', 'manual', 'name', $5::text, 'at', now()))
-           WHERE client_id=$1 AND peer_id=$2""", actor.client_id, peer_id, digits, call_id, name or 'CRM')
+    async with pool.acquire() as conn, conn.transaction():
+        await chat_access(conn, actor, peer_id)
+        tz = await store.zone(conn, actor.client_id)
+        call_id = await call_by_phone(conn, actor.client_id, digits, None, tz)
+        if call_id and not is_privileged(actor):
+            owner = await conn.fetchval('SELECT extension FROM calls WHERE id=$1', call_id)
+            if owner and owner != actor.extension:
+                raise Forbidden('Это клиент другого менеджера.')
+        await conn.execute(
+            """UPDATE tg_chats SET phone=$3, call_id=$4, updated_at=now(),
+                 analysis=coalesce(analysis, '{}'::jsonb) || jsonb_build_object('link',
+                   jsonb_build_object('by', 'manual', 'name', $5::text, 'at', now()))
+               WHERE client_id=$1 AND peer_id=$2""", actor.client_id, peer_id, digits, call_id, name or 'CRM')
     return {'phone': key(digits), 'call_found': call_id is not None}
 
 

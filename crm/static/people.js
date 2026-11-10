@@ -28,6 +28,7 @@ VIEWS.staff = async (view, arg) => {
     }
     return loading(panel, accessView(panel), 'table');
   }
+  if (arg === '@owner') return personView(view, '');
   if (arg) return personView(view, arg);
   setHead({actions: S.me.readonly || S.me.support ? '' :
     '<button class="btn primary" type="button" data-register>Добавить менеджера</button><button class="btn" type="button" data-add>Пригласить в Telegram</button>' +
@@ -38,16 +39,46 @@ VIEWS.staff = async (view, arg) => {
   const d = await loading(view, api('/api/staff'), 'table');
   const order = {manager: 0, head: 1, owner: 2};
   const items = [...d.items].sort((a, b) => (order[a.role] ?? 3) - (order[b.role] ?? 3));
-  view.innerHTML = `<div class="page"><section class="card blk" data-learning-target="staff-list"><div class="tbl-wrap"><table class="tbl anim">
-    <thead><tr><th>Сотрудник</th><th>Бот</th><th class="hide-m">Вход в CRM</th><th></th></tr></thead><tbody>
-    ${items.map((p, r) => `<tr class="click" tabindex="0" data-person="${esc(p.ext)}" data-css="--r:${r}">
-      <td><span class="who">${ava(p.name)}<span>${esc(p.name)}<small>${esc(p.role_title)}${/^\d+$/.test(p.ext) ? ' · доб. ' + esc(p.ext) : ''}${p.kitchen ? ' · свой скрипт' : ''}</small></span></span></td>
-      <td>${botChip(p)}</td><td class="hide-m">${crmChip(p)}</td><td>${svg('chev', 'go')}</td></tr>`).join('')}
-    </tbody></table></div></section></div>`;
-  const open = tr => go('staff', tr.dataset.person);
-  $('tbody', view).addEventListener('click', e => { const tr = e.target.closest('[data-person]'); if (tr) open(tr); });
-  $('tbody', view).addEventListener('keydown', e => { const tr = e.target.closest('[data-person]'); if (tr && e.key === 'Enter') open(tr); });
+  const qualification = d.lead_qualification;
+  const byExtension = new Map((qualification?.items || []).map(item => [item.ext, item]));
+  const main = items.filter(p => !byExtension.has(p.ext));
+  const operators = items.filter(p => byExtension.has(p.ext));
+  view.innerHTML = `<div class="page">
+    <section class="card blk" data-learning-target="staff-list">${staffTable(main)}</section>
+    ${operators.length ? `<section class="card blk">
+      <div class="card-h"><h2>Лидорубы</h2><span class="hint">Последние ${fmt(qualification.days)} дней · по звонкам</span></div>
+      ${staffTable(operators, byExtension)}
+      <p class="hint">Лидом считается звонок с исходом «Заинтересован». Перезвоны учитываются как звонки без подтверждённого лида.</p>
+    </section>` : ''}
+  </div>`;
+  const open = tr => go('staff', tr.dataset.person || '@owner');
+  $$('tbody', view).forEach(tbody => {
+    tbody.addEventListener('click', e => { const tr = e.target.closest('[data-person]'); if (tr) open(tr); });
+    tbody.addEventListener('keydown', e => { const tr = e.target.closest('[data-person]'); if (tr && e.key === 'Enter') open(tr); });
+  });
 };
+
+function staffTable(items, qualification) {
+  return `<div class="tbl-wrap"><table class="tbl anim"><thead><tr><th>Сотрудник</th>
+    ${qualification ? '<th>Исход звонков</th>' : ''}<th>Бот</th><th class="hide-m">Вход в CRM</th><th></th></tr></thead><tbody>
+    ${items.map((p, r) => {
+      const lead = qualification?.get(p.ext);
+      const mode = {script: 'Свой скрипт', unconfigured: 'Сценарий не подключён', robot: 'Голосовой робот'}[lead?.mode];
+      return `<tr class="click" tabindex="0" data-person="${esc(p.ext)}" data-css="--r:${r}">
+        <td><span class="who">${ava(p.name)}<span>${esc(p.name)}<small>${esc(mode || p.role_title)}${/^\d+$/.test(p.ext) ? ' · доб. ' + esc(p.ext) : ''}${!mode && p.kitchen ? ' · свой скрипт' : ''}</small></span></span></td>
+        ${lead ? `<td>${leadOutcome(lead)}</td>` : ''}
+        <td>${botChip(p)}</td><td class="hide-m">${crmChip(p)}</td><td>${svg('chev', 'go')}</td></tr>`;
+    }).join('')}
+  </tbody></table></div>`;
+}
+
+function leadOutcome(result) {
+  const other = [['no_answer', 'Недозвон'], ['error', 'Сбой'], ['unresolved', 'Без итога']]
+    .filter(([key]) => result[key] > 0).map(([key, label]) => `${label} ${fmt(result[key])}`);
+  if (result.mode === 'unconfigured' && !result.lead && !result.no_lead && !other.length) return '—';
+  return `<span class="chip good">Лид ${fmt(result.lead)}</span> <span class="chip">Нет лида ${fmt(result.no_lead)}</span>
+    ${other.length ? `<div class="hint">${other.join(' · ')}</div>` : ''}`;
+}
 
 function addManager() {
   const box = modal(`${modalHead('Добавить менеджера', 'Пароль покажем один раз. Передайте его сотруднику лично.')}
@@ -135,7 +166,7 @@ async function personView(view, ext) {
   const p = await loading(view, api('/api/person' + qs({person: ext || ''})), 'page');
   const tabs = PERSON_TABS.filter(([k]) => k === 'access' ? !!p.access : k === 'train' ? p.manager && S.me.trainer && p.trainings : true);
   let tab = tabs.some(([k]) => k === S.personTab) ? S.personTab : 'over';
-  const own = !ext;
+  const own = ext === null;
   const dir = S.me.role === 'director';
   const links = p.manager && dir ? `<div class="links">
     <button class="ghost" type="button" data-go="calls"${dir ? ` data-fext="${esc(p.ext)}"` : ''}>Звонки</button>
@@ -240,13 +271,20 @@ const PERSON_TAB = {
 
   access(el, p, again) {
     const a = p.access;
+    const subscription = (kind, enabled, title, hint) => `<label class="rb-sw">
+      <input type="checkbox" data-notification="${kind}"${enabled ? ' checked' : ''}><span class="rb-sw-ui"></span>
+      <span><b>${title}</b><span class="muted">${hint}</span></span></label>`;
     el.innerHTML = `<section class="card blk"><div class="card-h"><h2>Telegram-бот</h2>${botChip(a)}</div>
-        <p class="lead">${a.linked ? `Подключён${a.username ? ' как @' + esc(a.username) : ''}. Получает разборы и уведомления.` : a.invite_until ? `Ждёт подключения по ссылке до ${fmtWhen(a.invite_until)}.` : 'Не подключён.'}
-          ${a.reviewed === null ? '' : a.reviewed ? ' Звонки разбираются ботом.' : ' Звонки не разбираются ботом.'}</p>
+        <p class="lead">${a.linked ? `Подключён${a.username ? ' как @' + esc(a.username) : ''}.` : a.invite_until ? `Ждёт подключения по ссылке до ${fmtWhen(a.invite_until)}.` : 'Не подключён.'}
+          ${p.kitchen ? ' Звонки разбираются по своему скрипту.' : a.reviewed === null ? '' :
+            a.reviewed ? ' Полный разбор звонков включён.' : ' Полный разбор звонков выключен.'}</p>
         <div class="row" data-css="margin-top:12px">${a.linked ? '' : '<button class="btn" type="button" data-inv>Ссылка в бота</button>'}
           ${a.can_unlink ? '<button class="btn danger" type="button" data-unlink>Отключить от бота</button>' : ''}</div><div data-inv-out></div></section>
+      ${a.can_manage_notifications && !S.me.readonly && !S.me.support ? `<section class="card blk"><div class="card-h"><h2>Мои уведомления в Telegram</h2></div>
+        ${subscription('sales', a.sales_reports_enabled, 'Отчёты отдела', 'Разборы звонков, сводки и планёрки.')}
+        ${a.technical_reports_enabled === null ? '' : subscription('technical', a.technical_reports_enabled, 'Технические отчёты', 'Ежедневный отчёт о работе системы и сбои опроса Mango.')}</section>` : ''}
       ${a.can_copy ? `<section class="card blk" data-css="--i:1"><label class="rb-sw"><input type="checkbox" data-copies${a.copies ? ' checked' : ''}><span class="rb-sw-ui"></span>
-        <span><b>Копии всех разборов</b><span class="muted">Присылать в Telegram полные разборы всех менеджеров. Только руководителям.</span></span></label></section>` : ''}
+        <span><b>Копии всех разборов</b><span class="muted">Присылать полные разборы всех менеджеров, когда включены отчёты отдела.</span></span></label></section>` : ''}
       ${p.manager && !S.me.readonly && !S.me.support ? `<section class="card blk"><div class="card-h"><h2>Удаление из отдела</h2></div>
         <p class="lead">Вход в CRM и Telegram будет закрыт сразу. История звонков и перезвонов сохранится.</p>
         <button class="btn danger" type="button" data-archive>Убрать менеджера</button></section>` : ''}`;
@@ -276,6 +314,19 @@ const PERSON_TAB = {
       try { await api('/api/staff/copies', {method: 'POST', body: {person_ext: p.ext, on: e.target.checked}}); toast(e.target.checked ? 'Копии включены' : 'Копии выключены'); }
       catch (err) { toast(err.message, true); e.target.checked = !e.target.checked; }
     });
+    $$('[data-notification]', el).forEach(input => input.addEventListener('change', async () => {
+      const on = input.checked;
+      input.disabled = true;
+      try {
+        await api('/api/staff/notification', {method: 'POST', body: {kind: input.dataset.notification, on}});
+        toast('Настройка сохранена');
+      } catch (err) {
+        input.checked = !on;
+        toast(err.message, true);
+      } finally {
+        input.disabled = false;
+      }
+    }));
   },
 };
 

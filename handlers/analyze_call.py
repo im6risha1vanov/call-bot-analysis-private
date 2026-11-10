@@ -154,12 +154,15 @@ async def analyze_call(pool: asyncpg.Pool, task: asyncpg.Record) -> dict:
 
         transcript, dg_duration = call['transcript'], 0
         try:
-            if not transcript:
+            if transcript is None:
                 vpbx_api_key = decrypt(client["vpbx_api_key_enc"])
                 vpbx_api_salt = decrypt(client["vpbx_api_salt_enc"])
                 audio = await mango_client.fetch_recording(vpbx_api_key, vpbx_api_salt, call["recording_id"])
                 transcript, dg_duration = await transcribe_bytes(audio)
                 del audio
+                # Сохраняем распознавание до запроса к модели: повтор или
+                # перезапуск очереди продолжит с готовой расшифровки.
+                await pool.execute("UPDATE calls SET transcript=$2 WHERE id=$1", call["id"], transcript)
 
             kitchen = None
             if review_kitchen.handles(call['extension']):
@@ -187,17 +190,14 @@ async def analyze_call(pool: asyncpg.Pool, task: asyncpg.Record) -> dict:
             await _add_spend(pool, client, cost)
             log.info("Deepgram (справочно, не в бюджете Astra): $%.4f", dg_duration / 60 * DG_PRICE_PER_MIN_USD)
         except Exception as exc:
+            async with pool.acquire() as conn, conn.transaction():
+                await conn.execute("UPDATE calls SET status='new', updated_at=now() WHERE id=$1", call["id"])
+                await conn.execute("UPDATE astra_analysis SET status='new' WHERE call_id=$1", call["id"])
             if _missing_model(exc):
                 _model_retry_at = time.monotonic() + MODEL_RETRY_SECONDS
-                async with pool.acquire() as conn, conn.transaction():
-                    await conn.execute("UPDATE calls SET status='new', transcript=$2, updated_at=now() WHERE id=$1",
-                                       call['id'], transcript)
-                    await conn.execute("UPDATE astra_analysis SET status='new' WHERE call_id=$1", call['id'])
                 raise RetryLater(timedelta(seconds=MODEL_RETRY_SECONDS),
                                  'Модель Astra временно недоступна (HTTP 404)', record_limit=False) from exc
             log.exception("ошибка обработки call id=%s (задача id=%s)", call["id"], task["id"])
-            await pool.execute("UPDATE calls SET status='new', updated_at=now() WHERE id=$1", call["id"])
-            await pool.execute("UPDATE astra_analysis SET status='new' WHERE call_id=$1", call["id"])
             raise
 
         async with pool.acquire() as conn, conn.transaction():

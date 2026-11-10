@@ -67,7 +67,8 @@ class DBTests(unittest.IsolatedAsyncioTestCase):
         if not await self.pool.fetchval("SELECT to_regclass('clients') IS NOT NULL"):
             await self.pool.execute((root / 'tests/bootstrap.sql').read_text())
         await self.pool.execute('ALTER TABLE calls ADD COLUMN IF NOT EXISTS client_number TEXT')
-        for name in ('008_call_reviews.sql', '022_presentations.sql', '023_tg_chats.sql', '026_presentation_client.sql'):
+        for name in ('008_call_reviews.sql', '022_presentations.sql', '023_tg_chats.sql', '026_presentation_client.sql',
+                     '044_tg_folder_ownership.sql'):
             await self.pool.execute((root / 'migrations' / name).read_text())
         await self.pool.execute('TRUNCATE clients, tg_messages, astra_daily_spend CASCADE')
         await self.pool.execute("INSERT INTO clients VALUES(1,'Europe/Moscow',true)")
@@ -139,3 +140,15 @@ class DBTests(unittest.IsolatedAsyncioTestCase):
                                      analyzed_at=$1::timestamptz - (peer_id * 2 || ' days')::interval""", NOW - timedelta(hours=6))
         self.assertEqual(await T.process(self.pool, 1, NOW, call=fake), 1)  # только чат, проверенный 4 дня назад
         self.assertIsNotNone(await self.pool.fetchval("SELECT analyzed_at FROM tg_chats WHERE peer_id=2 AND analyzed_at > $1", NOW - timedelta(minutes=1)))
+
+    async def test_does_not_publish_review_after_folder_ownership_changes(self):
+        await self.chat(1, [(False, 'Пришлите условия')])
+        await self.pool.execute("""UPDATE tg_chats SET folders=ARRAY['Рабочая папка'], extension='101',
+                                   folder_owner_verified=true WHERE peer_id=1""")
+
+        async def fake(*args):
+            await self.pool.execute("UPDATE tg_chats SET extension=NULL, folder_owner_verified=false WHERE peer_id=1")
+            return {'kind': 'client', 'rop_line': 'Запросил условия'}, 0
+
+        self.assertEqual(await T.process(self.pool, 1, NOW, call=fake), 0)
+        self.assertIsNone(await self.pool.fetchval('SELECT analyzed_at FROM tg_chats WHERE peer_id=1'))

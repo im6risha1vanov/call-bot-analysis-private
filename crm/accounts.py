@@ -47,6 +47,7 @@ async def create_all(pool) -> list[dict]:
     people = []
     # руководители и владелец: полный доступ директора, со своим Telegram — ещё и личные промты
     for r in await pool.fetch("""SELECT full_name, telegram_user_id FROM employees WHERE client_id=$1 AND role IN ('owner','head')
+                                 AND archived_at IS NULL
                                  ORDER BY role DESC, full_name""", client_id):
         if r['telegram_user_id'] not in done_tg:
             tg = str(r['telegram_user_id']) if r['telegram_user_id'] and str(r['telegram_user_id']) in \

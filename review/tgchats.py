@@ -5,12 +5,13 @@ TG_SESSION) и **только читает**: ничего не отправля
 меняет папки. Менеджеры сами раскладывают клиентов по папкам Telegram Premium.
 
 sync раз в TG_SYNC_MINUTES:
-1. берёт папки аккаунта и чаты в них (явно добавленные и по типам: контакты, не контакты,
-   группы), чей клиент — по названию папки (совпадение с именем менеджера, как в реестре);
+1. берёт только явно добавленные личные чаты из настроенных папок менеджеров;
 2. дочитывает новые сообщения каждого чата: в первый раз за TG_HISTORY_DAYS дней.
 
 Включается TG_CHATS=on. Нужны TG_API_ID и TG_API_HASH (приложение на my.telegram.org для
 рабочего номера) и один вход на сервере: python -m review.tgchats login.
+TG_FOLDER_OWNERS задаёт пары ID папки и добавочного, например 2:10,3:11,4:12.
+ID можно посмотреть командой python -m review.tgchats folders. Переименование папки не меняет владельца.
 """
 from __future__ import annotations
 
@@ -23,8 +24,6 @@ from pathlib import Path
 
 from tools import home_client_id
 
-from .presentations import match_employee
-
 log = logging.getLogger(__name__)
 
 HISTORY_DAYS = int(os.getenv('TG_HISTORY_DAYS', '30'))
@@ -36,6 +35,22 @@ _last_sync: datetime | None = None
 def enabled() -> bool:
     return (os.getenv('TG_CHATS', 'off').strip().lower() == 'on'
             and bool(os.getenv('TG_API_ID') and os.getenv('TG_API_HASH')))
+
+
+def folder_owners() -> dict[int, str]:
+    owners = {}
+    raw = os.getenv('TG_FOLDER_OWNERS', '').strip()
+    if not raw:
+        return owners
+    for item in raw.split(','):
+        match = re.fullmatch(r'([1-9][0-9]*):([0-9]{1,6})', item.strip())
+        if not match:
+            raise ValueError('TG_FOLDER_OWNERS: укажите пары ID папки и добавочного, например 2:10,3:11.')
+        folder_id, extension = int(match[1]), match[2]
+        if folder_id in owners:
+            raise ValueError('TG_FOLDER_OWNERS: ID папки указан дважды.')
+        owners[folder_id] = extension
+    return owners
 
 
 def session_path() -> str:
@@ -113,7 +128,7 @@ async def folders(client) -> list[dict]:
                     ids[key].add(utils.get_peer_id(peer))
                 except Exception:
                     continue
-        out.append({'title': title, 'filter': f, 'ids': ids})
+        out.append({'id': getattr(f, 'id', None), 'title': title, 'filter': f, 'ids': ids})
     return out
 
 
@@ -130,29 +145,48 @@ def media_kind(message) -> str | None:
 async def sync(pool, client, client_id: int, now: datetime | None = None) -> dict:
     """Папки, чаты и новые сообщения. Возвращает счётчики для журнала."""
     now = now or datetime.now(timezone.utc)
-    employees = await pool.fetch("SELECT extension, full_name FROM employees WHERE client_id=$1 AND role='manager'", client_id)
+    owners = folder_owners()
+    employees = {r['extension'] for r in await pool.fetch(
+        "SELECT extension FROM employees WHERE client_id=$1 AND role='manager' AND archived_at IS NULL", client_id)}
     found = await folders(client)
-    for f in found:
-        f['extension'] = match_employee(f['title'], employees)
-    stats = {'folders': len(found), 'chats': 0, 'messages': 0}
-    if not found:
-        return stats
-    async for dialog in client.iter_dialogs(limit=MAX_DIALOGS):
+    configured = [f for f in found if owners.get(f['id']) in employees]
+    memberships = {}
+    for f in configured:
+        for peer_id in f['ids']['include'] - f['ids']['exclude']:
+            memberships.setdefault(peer_id, []).append(f)
+    stats = {'folders': len(found), 'configured_folders': len(configured),
+             'missing_mappings': len(owners) - len(configured), 'ambiguous': 0, 'chats': 0, 'messages': 0}
+    selected = []
+    if memberships:
+        async for dialog in client.iter_dialogs(limit=MAX_DIALOGS):
+            entity, peer_id = dialog.entity, dialog.id
+            inside = memberships.get(peer_id)
+            if not inside or chat_kind(entity) != 'user' or getattr(entity, 'bot', False) or getattr(entity, 'is_self', False):
+                continue
+            managers = {owners[f['id']] for f in inside}
+            if len(managers) != 1:
+                stats['ambiguous'] += 1
+                continue
+            selected.append((dialog, managers.pop(), [f['title'] for f in inside]))
+
+    # Снять прежнее назначение до дочитывания истории: пропавший или спорный чат нельзя показывать прежнему менеджеру.
+    stats['ownership_cleared'] = len(await pool.fetch(
+        """UPDATE tg_chats c SET extension=NULL, folder_owner_verified=false, updated_at=now()
+           WHERE c.client_id=$1 AND c.extension IS NOT NULL AND cardinality(c.folders)>0
+             AND NOT EXISTS (SELECT 1 FROM unnest($2::bigint[], $3::text[]) AS owner(peer_id, extension)
+                             WHERE owner.peer_id=c.peer_id AND owner.extension=c.extension)
+           RETURNING c.peer_id""", client_id, [d.id for d, _, _ in selected], [e for _, e, _ in selected]))
+    for dialog, extension, folder_titles in selected:
         entity, peer_id = dialog.entity, dialog.id
-        inside = [f for f in found if in_folder(f['filter'], peer_id, entity, f['ids'])]
-        if not inside:
-            continue
-        managers = {f['extension'] for f in inside if f['extension']}
         row = await pool.fetchrow(
-            """INSERT INTO tg_chats(client_id, peer_id, kind, title, username, phone, folders, extension)
-               VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+            """INSERT INTO tg_chats(client_id, peer_id, kind, title, username, phone, folders, extension, folder_owner_verified)
+               VALUES($1,$2,$3,$4,$5,$6,$7,$8,true)
                ON CONFLICT(client_id, peer_id) DO UPDATE SET kind=EXCLUDED.kind, title=EXCLUDED.title,
-                 username=EXCLUDED.username, phone=EXCLUDED.phone, folders=EXCLUDED.folders,
-                 extension=EXCLUDED.extension, updated_at=now()
+                 username=EXCLUDED.username, phone=coalesce(tg_chats.phone, EXCLUDED.phone), folders=EXCLUDED.folders,
+                 extension=EXCLUDED.extension, folder_owner_verified=true, updated_at=now()
                RETURNING last_message_id""",
-            client_id, peer_id, chat_kind(entity), dialog.name, getattr(entity, 'username', None),
-            getattr(entity, 'phone', None), [f['title'] for f in inside],
-            managers.pop() if len(managers) == 1 else None)  # чат в папках двух менеджеров: не угадываем
+            client_id, peer_id, 'user', dialog.name, getattr(entity, 'username', None),
+            getattr(entity, 'phone', None), folder_titles, extension)
         stats['chats'] += 1
         last_id = row['last_message_id']
         # Чтение истории не отмечает сообщения прочитанными (это делает только mark_read).
@@ -191,7 +225,10 @@ async def maybe_run(pool, now: datetime | None = None) -> dict | None:
             log.error('Telegram: сессия не авторизована, нужен вход: python -m review.tgchats login')
             return None
         stats = await sync(pool, client, client_id, now)
-        log.info('Telegram: папок %s, чатов %s, новых сообщений %s', stats['folders'], stats['chats'], stats['messages'])
+        log.info('Telegram: папок %s, чатов %s, новых сообщений %s, папок менеджеров %s, '
+                 'не найдены настройки для %s назначений, спорных чатов %s, снято прежних назначений %s',
+                 stats['folders'], stats['chats'], stats['messages'], stats['configured_folders'],
+                 stats['missing_mappings'], stats['ambiguous'], stats['ownership_cleared'])
         return stats
     finally:
         await client.disconnect()
@@ -200,6 +237,7 @@ async def maybe_run(pool, now: datetime | None = None) -> dict | None:
 if __name__ == '__main__':
     # python -m review.tgchats login — один раз: вход в рабочий аккаунт (номер, код из Telegram, пароль).
     # python -m review.tgchats folders — только чтение: какие папки видит бот и сколько в них чатов.
+    # python -m review.tgchats status — настройка синхронизации, без обращения к Telegram.
     # python -m review.tgchats setup — спросить api_id и api_hash (или получить их с my.telegram.org, review/tgapp.py),
     # записать в .env и сразу войти (login).
     import asyncio
@@ -209,6 +247,11 @@ if __name__ == '__main__':
         from scripts.kitchen_backfill import load_env
         env = Path(__file__).resolve().parents[1] / '.env'
         load_env(env)
+        if command == 'status':
+            print('Синхронизация:', 'включена' if enabled() else 'выключена или отсутствуют ключи')
+            print('Файл сессии:', 'есть' if Path(session_path()).is_file() else 'отсутствует')
+            print('Настроено папок:', len(folder_owners()))
+            return
         if command == 'setup':
             if os.getenv('TG_API_ID') and os.getenv('TG_API_HASH'):
                 print('Ключи уже есть в .env, сразу вход.')
@@ -246,16 +289,16 @@ if __name__ == '__main__':
                 print('Сессии нет: сначала python -m review.tgchats login')
                 return
             found = await folders(client)
-            counts = {f['title']: 0 for f in found}
+            counts = {f['id']: 0 for f in found}
             async for dialog in client.iter_dialogs(limit=MAX_DIALOGS):
                 for f in found:
                     if in_folder(f['filter'], dialog.id, dialog.entity, f['ids']):
-                        counts[f['title']] += 1
-            for title, n in counts.items():
-                print(f'папка «{title}»: чатов {n}')
+                        counts[f['id']] += 1
+            for f in found:
+                print(f'папка {f["id"]} «{f["title"]}»: чатов {counts[f["id"]]}')
             if not found:
                 print('папок нет')
         await client.disconnect()
 
-    if sys.argv[1:2] in (['login'], ['folders'], ['setup']):
+    if sys.argv[1:2] in (['login'], ['folders'], ['setup'], ['status']):
         asyncio.run(_main(sys.argv[1]))

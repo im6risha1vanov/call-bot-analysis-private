@@ -17,6 +17,7 @@ from aiogram import Bot
 
 import oversight
 from queue_runner import register
+from tools import technical_recipients
 
 log = logging.getLogger("queue-runner.oversight_report")
 
@@ -48,12 +49,9 @@ async def _owner_chat_ids(pool: asyncpg.Pool) -> list[int]:
     руководителя отдела: руководителю нужны звонки, владельцу — работает ли
     система. Роль в базе первична; переменные окружения остались как аварийный
     путь, если владелец в employees ещё не заведён."""
-    rows = await pool.fetch(
-        "SELECT telegram_user_id FROM employees "
-        "WHERE role='owner' AND telegram_user_id IS NOT NULL ORDER BY id"
-    )
-    if rows:
-        return [r["telegram_user_id"] for r in rows]
+    recipients, owner_linked = await technical_recipients(pool)
+    if owner_linked:
+        return recipients
 
     explicit = os.getenv("OVERSIGHT_CHAT_ID") or os.getenv("HEAD_CHAT_ID")
     if explicit and explicit.strip():
@@ -84,7 +82,10 @@ async def oversight_report(pool: asyncpg.Pool, task: asyncpg.Record) -> dict:
     metrics = await oversight.collect(pool)
     quiet = oversight.is_quiet(metrics, QUIET_SPEND_USD)
 
-    if quiet:
+    chat_ids = await _owner_chat_ids(pool)
+    if not chat_ids:
+        cost = 0.0
+    elif quiet:
         text = oversight.render_quiet_line(metrics)
         cost = 0.0
     else:
@@ -93,9 +94,6 @@ async def oversight_report(pool: asyncpg.Pool, task: asyncpg.Record) -> dict:
             text += (f"\n\nЖдут подтверждения: {metrics['queue']['awaiting_approval']} — "
                      f"посмотреть и решить: /approvals")
 
-    chat_ids = await _owner_chat_ids(pool)
-    if not chat_ids:
-        log.warning("некому отправить технический отчёт: нет роли owner в employees и не задан OVERSIGHT_CHAT_ID")
     for chat_id in chat_ids:
         try:
             await _bot.send_message(chat_id, text)

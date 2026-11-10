@@ -118,7 +118,15 @@ async def copy_chat_ids(pool, client_id: int) -> list[int]:
                    ORDER BY id LIMIT 1""", client_id, token)
             if chat:
                 ids.append(chat)
-    return list(dict.fromkeys(ids))
+    if not ids:
+        return []
+    muted = await pool.fetch(
+        """SELECT telegram_user_id FROM employees e
+           WHERE client_id=$1 AND telegram_user_id=ANY($2::bigint[])
+             AND role IN ('head', 'owner')
+             AND (to_jsonb(e)->>'sales_reports_enabled')::boolean IS FALSE""", client_id, ids)
+    muted_ids = {row['telegram_user_id'] for row in muted}
+    return [chat for chat in dict.fromkeys(ids) if chat not in muted_ids]
 
 
 async def _delivery_targets(pool, row):

@@ -22,8 +22,8 @@ class Channel(SimpleNamespace):
     pass
 
 
-def folder(title, include=(), exclude=(), **flags):
-    return SimpleNamespace(title=SimpleNamespace(text=title), include_peers=list(include), pinned_peers=[],
+def folder(title, include=(), exclude=(), folder_id=2, **flags):
+    return SimpleNamespace(id=folder_id, title=SimpleNamespace(text=title), include_peers=list(include), pinned_peers=[],
                            exclude_peers=list(exclude), **flags)
 
 
@@ -51,6 +51,14 @@ def msg(i, days_ago, out, text, **extra):
 
 
 class FolderTests(unittest.TestCase):
+    def test_explicit_owner_configuration(self):
+        for raw, expected in (('', {}), ('2:10, 8:11', {2: '10', 8: '11'})):
+            with patch.dict(os.environ, {'TG_FOLDER_OWNERS': raw}):
+                self.assertEqual(T.folder_owners(), expected)
+        for raw in ('2:10,2:11', 'Илья:12', '0:10', '2:head'):
+            with patch.dict(os.environ, {'TG_FOLDER_OWNERS': raw}), self.assertRaises(ValueError):
+                T.folder_owners()
+
     def test_membership(self):
         contact = User(id=1, contact=True, bot=False)
         stranger = User(id=2, contact=False, bot=False)
@@ -153,6 +161,7 @@ class SyncTests(unittest.IsolatedAsyncioTestCase):
         if not await self.pool.fetchval("SELECT to_regclass('clients') IS NOT NULL"):
             await self.pool.execute((root / 'tests/bootstrap.sql').read_text())
         await self.pool.execute((root / 'migrations' / '023_tg_chats.sql').read_text())
+        await self.pool.execute((root / 'migrations' / '044_tg_folder_ownership.sql').read_text())
         await self.pool.execute('TRUNCATE clients, tg_messages CASCADE')
         await self.pool.execute("INSERT INTO clients VALUES(1,'Europe/Moscow',true)")
         await self.pool.execute("INSERT INTO employees VALUES(1,'12',123,'manager','Козлов Илья'),(1,'10',124,'manager','Ефим Лузин')")
@@ -170,17 +179,29 @@ class SyncTests(unittest.IsolatedAsyncioTestCase):
         messages = {501: [msg(1, 40, True, 'старое'), msg(2, 3, True, 'Отправил КП'), msg(3, 1, False, 'Посмотрим', voice=True)],
                     502: [msg(7, 2, False, 'Здравствуйте')]}
         filters = [SimpleNamespace(title=None),  # «Все чаты»
-                   folder('Илья Козлов', include=['p501', 'p503']),
-                   folder('Лузин', include=['p502', 'p503'])]
+                   folder('Папка после переименования', include=['p501', 'p503'], contacts=True),
+                   folder('Лузин', include=['p502', 'p503'], folder_id=3),
+                   folder('Без назначения', include=['p504'], folder_id=4)]
+        await self.pool.execute("""INSERT INTO tg_chats(client_id,peer_id,kind,phone,folders,extension)
+                                 VALUES(1,501,'user','79991112233',ARRAY['Старое имя'],'12'),
+                                       (1,503,'user','79995554433',ARRAY['Старое имя'],'12'),
+                                       (1,505,'user',NULL,ARRAY['Удалённая папка'],'10')""")
         client = FakeClient(filters, dialogs, messages)
-        with patch('telethon.utils.get_peer_id', lambda p: int(p[1:])):
+        with patch('telethon.utils.get_peer_id', lambda p: int(p[1:])), \
+                patch.dict(os.environ, {'TG_FOLDER_OWNERS': '2:12,3:10,9:10'}):
             stats = await T.sync(self.pool, client, 1, NOW)
-            self.assertEqual(stats, {'folders': 2, 'chats': 3, 'messages': 3})  # старше 30 дней и «Мама» не читаются
+            self.assertEqual(stats, {'folders': 3, 'configured_folders': 2, 'missing_mappings': 1,
+                                     'chats': 2, 'messages': 3, 'ambiguous': 1, 'ownership_cleared': 2})
             chats = {r['peer_id']: r for r in await self.pool.fetch('SELECT * FROM tg_chats')}
-            self.assertEqual((chats[501]['extension'], chats[501]['folders'], chats[501]['last_message_id']), ('12', ['Илья Козлов'], 3))
+            self.assertEqual((chats[501]['extension'], chats[501]['folders'], chats[501]['last_message_id']),
+                             ('12', ['Папка после переименования'], 3))
+            self.assertTrue(chats[501]['folder_owner_verified'])
+            self.assertEqual(chats[501]['phone'], '79991112233')  # ручная связь не теряется
             self.assertEqual(chats[502]['extension'], '10')
             self.assertIsNone(chats[503]['extension'])  # в папках двух менеджеров
+            self.assertIsNone(chats[505]['extension'])  # папки больше нет
             self.assertNotIn(504, chats)
+            self.assertEqual([c['peer'] for c in client.calls], [501, 502])
             voice = await self.pool.fetchrow('SELECT outgoing, text, media FROM tg_messages WHERE peer_id=501 AND message_id=3')
             self.assertEqual(tuple(voice), (False, 'Посмотрим', 'voice'))
 
@@ -190,6 +211,32 @@ class SyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stats['messages'], 1)
         self.assertEqual(next(c for c in client.calls if c['peer'] == 501)['min_id'], 3)
         self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM tg_messages'), 4)
+
+    async def test_folder_sync_can_be_reviewed_without_personal_bot_binding(self):
+        from review import tgreview
+
+        await self.pool.execute('ALTER TABLE calls ADD COLUMN IF NOT EXISTS client_number TEXT')
+        await self.pool.execute("UPDATE employees SET telegram_user_id=NULL WHERE extension='12'")
+        await self.pool.execute("""INSERT INTO tg_chats(client_id,peer_id,kind,folders,extension,last_message_at)
+                                 VALUES(1,502,'user',ARRAY['Старая папка'],'12',$1)""", NOW - timedelta(days=2))
+        await self.pool.execute("INSERT INTO tg_messages VALUES(1,502,1,$1,false,'Личный чат',NULL)",
+                                NOW - timedelta(days=2))
+        entity = User(id=501, bot=False)
+        client = FakeClient([folder('Моя папка', include=['p501'])], [SimpleNamespace(id=501, entity=entity, name='Клиент')],
+                            {501: [msg(1, 1, False, 'Пришлите условия')]})
+        with patch('telethon.utils.get_peer_id', lambda p: int(p[1:])), \
+                patch.dict(os.environ, {'TG_FOLDER_OWNERS': '2:12'}):
+            await T.sync(self.pool, client, 1, NOW)
+
+        async def fake(system, prompt, max_tokens):
+            self.assertIn('Козлов Илья', prompt)
+            self.assertIn('Пришлите условия', prompt)
+            return {'kind': 'client', 'rop_line': 'Запросил условия'}, 0
+
+        self.assertEqual(await tgreview.process(self.pool, 1, NOW, call=fake), 1)
+        reviewed = await self.pool.fetchval("SELECT analysis->>'reviewed' FROM tg_chats WHERE peer_id=501")
+        self.assertEqual(reviewed, 'true')
+        self.assertIsNone(await self.pool.fetchval('SELECT analyzed_at FROM tg_chats WHERE peer_id=502'))
 
     async def test_disabled_without_keys(self):
         with patch.dict(os.environ, {'TG_CHATS': 'on', 'TG_API_ID': '', 'TG_API_HASH': ''}):

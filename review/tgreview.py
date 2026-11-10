@@ -76,6 +76,7 @@ async def link_chats(pool, client_id: int) -> int:
         r"""SELECT c.peer_id, array_agg(m.text ORDER BY m.sent_at) AS texts
             FROM tg_chats c JOIN tg_messages m ON m.client_id=c.client_id AND m.peer_id=c.peer_id
             WHERE c.client_id=$1 AND c.phone IS NULL AND c.kind='user' AND NOT m.outgoing AND m.text ~ '\d{3}'
+              AND (cardinality(c.folders)=0 OR c.folder_owner_verified AND c.extension IS NOT NULL)
               AND c.last_message_at > now() - interval '60 days'
             GROUP BY c.peer_id""", client_id)
     has_leads = bool(await pool.fetchval("SELECT to_regclass('crm_leads') IS NOT NULL"))
@@ -97,11 +98,13 @@ async def link_chats(pool, client_id: int) -> int:
         if len(known) != 1:
             continue  # ни одного знакомого номера или несколько разных: решит человек кнопкой
         phone = next(p for p in found if p[-10:] in known)
-        await pool.execute(
+        updated = await pool.fetchval(
             """UPDATE tg_chats SET phone=$3, updated_at=now(),
                  analysis=coalesce(analysis, '{}'::jsonb) || jsonb_build_object('link', jsonb_build_object('by', 'text'))
-               WHERE client_id=$1 AND peer_id=$2 AND phone IS NULL""", client_id, r['peer_id'], phone)
-        linked += 1
+               WHERE client_id=$1 AND peer_id=$2 AND phone IS NULL
+                 AND (cardinality(folders)=0 OR folder_owner_verified AND extension IS NOT NULL)
+               RETURNING 1""", client_id, r['peer_id'], phone)
+        linked += bool(updated)
     return linked
 
 
@@ -174,7 +177,7 @@ def validate(data: dict, messages: list) -> dict:
     return data
 
 
-async def review_chat(pool, chat, tz, now: datetime, call=None) -> float:
+async def review_chat(pool, chat, tz, now: datetime, call=None) -> float | None:
     """Один чат: собрать переписку и что известно о клиенте, спросить модель, сохранить разбор."""
     if call is None:
         from analysis import _call as call
@@ -195,18 +198,25 @@ async def review_chat(pool, chat, tz, now: datetime, call=None) -> float:
                    ORDER BY c.call_started_at DESC LIMIT 1)) LIMIT 1""",
             chat['client_id'], chat['extension'], chat['phone'] or '')
     history = await previous(pool, chat['client_id'], chat['phone'])
+    current = await pool.fetchval(
+        """SELECT 1 FROM tg_chats WHERE client_id=$1 AND peer_id=$2 AND last_message_id=$3
+           AND (cardinality(folders)=0 OR folder_owner_verified AND extension=$4)""",
+        chat['client_id'], chat['peer_id'], chat['last_message_id'], chat['extension'])
+    if not current:
+        return None
     raw, cost = await call(PROMPT, build_input(chat, messages, tz, now, manager, history, skipped), MAX_TOKENS)
     data = validate(raw, messages)
     data.update(prompt_version=PROMPT_VERSION, messages=len(messages), cost=cost)
     # Отметку о привязке (кто и как связал чат с клиентом) разбор не стирает.
-    await pool.execute(
+    saved = await pool.fetchval(
         """UPDATE tg_chats SET analysis=$3::jsonb || jsonb_strip_nulls(jsonb_build_object('link', analysis->'link')),
-             analyzed_at=$4, updated_at=now() WHERE client_id=$1 AND peer_id=$2""",
-        chat['client_id'], chat['peer_id'], json.dumps(data, ensure_ascii=False), now)
+             analyzed_at=$4, updated_at=now() WHERE client_id=$1 AND peer_id=$2 AND last_message_id=$5
+             AND (cardinality(folders)=0 OR folder_owner_verified AND extension=$6) RETURNING 1""",
+        chat['client_id'], chat['peer_id'], json.dumps(data, ensure_ascii=False), now, chat['last_message_id'], chat['extension'])
     if cost:
         from .prompts import add_spend
         await add_spend(pool, chat['client_id'], cost)
-    return cost
+    return cost if saved else None
 
 
 async def process(pool, client_id: int, now: datetime, limit: int = PER_RUN, call=None) -> int:
@@ -216,6 +226,7 @@ async def process(pool, client_id: int, now: datetime, limit: int = PER_RUN, cal
     chats = await pool.fetch(
         """SELECT c.* FROM tg_chats c
            WHERE c.client_id=$1 AND c.kind='user' AND c.last_message_at < $2
+             AND (cardinality(c.folders)=0 OR c.folder_owner_verified AND c.extension IS NOT NULL)
              AND (c.analyzed_at IS NULL OR c.analyzed_at < c.last_message_at)
              AND NOT (coalesce(c.analysis->>'kind', '') = 'not_client' AND coalesce(c.analyzed_at > $3, false))
              AND EXISTS (SELECT 1 FROM tg_messages m WHERE m.client_id=c.client_id AND m.peer_id=c.peer_id
@@ -230,8 +241,7 @@ async def process(pool, client_id: int, now: datetime, limit: int = PER_RUN, cal
         if _fails.get(attempt, 0) >= MAX_FAILS:
             continue
         try:
-            await review_chat(pool, chat, tz, now, call)
-            done += 1
+            done += (await review_chat(pool, chat, tz, now, call)) is not None
         except Exception:
             _fails[attempt] = _fails.get(attempt, 0) + 1
             log.exception('переписка %s не разобрана', chat['peer_id'])
@@ -273,22 +283,32 @@ if __name__ == '__main__':
                 """SELECT count(*) AS chats, count(*) FILTER (WHERE phone IS NOT NULL) AS linked,
                           count(*) FILTER (WHERE analysis->>'reviewed' = 'true') AS reviewed,
                           count(*) FILTER (WHERE analysis->>'kind' = 'not_client') AS not_client,
+                          count(*) FILTER (WHERE folder_owner_verified) AS assigned,
+                          count(*) FILTER (WHERE cardinality(folders)>0 AND NOT folder_owner_verified) AS unassigned,
+                          max(last_message_at) FILTER (WHERE folder_owner_verified) AS folder_last,
+                          max(analyzed_at) FILTER (WHERE folder_owner_verified) AS folder_review,
                           max(analyzed_at) AS last
                      FROM tg_chats WHERE kind='user'""")
             print(f"чатов {row['chats']}, с номером клиента {row['linked']}, разобрано {row['reviewed']}, "
                   f"не клиенты {row['not_client']}"
                   + (f", последний разбор {row['last']:%d.%m %H:%M} UTC" if row['last'] else ', разборов пока нет')
                   + ('' if enabled() else ' (разбор выключен: TG_REVIEW=off)'))
+            print(f"Чаты из папок: назначено {row['assigned']}, без владельца {row['unassigned']}"
+                  + (f", последнее сообщение {row['folder_last']:%d.%m %H:%M} UTC" if row['folder_last'] else '')
+                  + (f", последний разбор {row['folder_review']:%d.%m %H:%M} UTC" if row['folder_review'] else ''))
             # По последним чатам: почему разобран или нет (имён и текстов не печатаем).
             now = datetime.now(timezone.utc)
             for c in await pool.fetch(
                     """SELECT c.peer_id, c.phone IS NOT NULL AS linked, c.last_message_at, c.analyzed_at, c.analysis->>'kind' AS kind,
+                              cardinality(c.folders)>0 AND NOT c.folder_owner_verified AS unassigned,
                               count(m.message_id) AS messages,
                               count(m.message_id) FILTER (WHERE NOT m.outgoing AND m.text IS NOT NULL) AS client_texts
                          FROM tg_chats c LEFT JOIN tg_messages m ON m.client_id=c.client_id AND m.peer_id=c.peer_id
                         WHERE c.kind='user' GROUP BY c.id ORDER BY c.last_message_at DESC NULLS LAST LIMIT 10"""):
                 quiet = c['last_message_at'] and c['last_message_at'] + timedelta(hours=QUIET_HOURS)
-                if not c['client_texts']:
+                if c['unassigned']:
+                    state = 'папка без однозначного владельца'
+                elif not c['client_texts']:
                     state = 'клиент не писал текстом, разбирать нечего'
                 elif c['analyzed_at'] and c['analyzed_at'] >= c['last_message_at']:
                     state = ('не клиент' if c['kind'] == 'not_client' else 'разобран') + f" {c['analyzed_at']:%d.%m %H:%M} UTC"

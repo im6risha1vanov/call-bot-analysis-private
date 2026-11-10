@@ -32,7 +32,7 @@ from aiogram import Bot
 import mango_client
 from crypto_util import decrypt
 from reports import esc, send_long
-from tools import owner_chat_ids, report_chat_ids
+from tools import report_chat_ids, technical_recipients
 from crm import journal as crm_journal
 from review import callbacks as review_callbacks, engine as review_engine, kitchen as review_kitchen, memory as review_memory, presentations as review_presentations, render as review_render, tgchats as review_tgchats, sheets as review_sheets, store as review_store
 from review import tgreview as review_tgreview
@@ -246,7 +246,9 @@ async def _send_poll_error(pool: asyncpg.Pool, client: asyncpg.Record, error: st
         return
     # Если владелец не привязан к боту — лучше сказать хоть кому-то, чем
     # промолчать: именно из-за молчания опрос однажды простоял сутки.
-    chat_ids = await owner_chat_ids(pool, client["id"]) or await report_chat_ids(pool, client["id"])
+    chat_ids, owner_linked = await technical_recipients(pool, client["id"])
+    if not owner_linked:
+        chat_ids = await report_chat_ids(pool, client["id"])
     if not chat_ids:
         return
     _last_error_notice[client["id"]] = now

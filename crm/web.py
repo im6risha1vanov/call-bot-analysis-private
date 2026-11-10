@@ -23,7 +23,7 @@ from aiohttp import BodyPartReader, web  # noqa: E402
 
 import mango_client  # noqa: E402
 from tools import Forbidden, home_client_id, is_privileged  # noqa: E402
-from . import activity, economics, lead_import
+from . import activity, economics, lead_import, lead_qualification
 from . import learning, tour
 from . import accounts, ask as asking, auth, automation_agent, automations, cabinet, callcenter_db, company, contracts, deals, donor_agent, gpt, journal, overview, people, platform, recording, reviews, sources, staff, store, training  # noqa: E402
 from . import prompts as prompt_mode, robot, webphone, robot_api, robot_prices, robot_runner, robot_store  # noqa: E402
@@ -721,6 +721,7 @@ async def api_staff(request):
         own = [r for r in links if r['extension'] == item['ext'] or (tg.get(item['ext']) and r['telegram_user_id'] == tg[item['ext']])]
         used = max((r['last_used_at'] for r in own if r['last_used_at']), default=None)
         item['crm_links'], item['crm_used'] = len(own), used.isoformat() if used else None
+    data['lead_qualification'] = await lead_qualification.summary(pool, who, data['items'])
     return web.json_response(data)
 
 
@@ -1029,7 +1030,7 @@ async def api_economics(request):
 
 
 async def api_staff_action(request):
-    """Действие над сотрудником: invite — новая ссылка в бота, unlink — отключить, copies — копии разборов."""
+    """Управление ботом сотрудника и личными подписками директора."""
     who = await director(request)
     data = await body(request)
     pool, ext, action = request.app[POOL], data.get('person_ext'), request.match_info['action']
@@ -1039,6 +1040,11 @@ async def api_staff_action(request):
         await staff.unlink(pool, who.actor, ext)
     elif action == 'copies':
         await staff.set_copies(pool, who.actor, ext, bool(data.get('on')))
+    elif action == 'notification':
+        if not activity.employee(who):
+            raise Forbidden('Войдите под собственной учётной записью директора.')
+        request[activity.DETAIL] = 'Изменение личной подписки в Telegram'
+        await staff.set_notification(pool, who.actor, data.get('kind'), data.get('on'))
     else:
         raise web.HTTPNotFound()
     return web.json_response({'ok': True})

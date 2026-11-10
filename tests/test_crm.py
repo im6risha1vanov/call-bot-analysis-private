@@ -125,6 +125,7 @@ class DBCase(unittest.IsolatedAsyncioTestCase):
             ALTER TABLE calls ADD COLUMN IF NOT EXISTS client_number TEXT;
             ALTER TABLE calls ADD COLUMN IF NOT EXISTS recording_id TEXT;
             ALTER TABLE calls ADD COLUMN IF NOT EXISTS direction INTEGER DEFAULT 2;
+            ALTER TABLE calls ADD COLUMN IF NOT EXISTS external_id TEXT;
             ALTER TABLE clients ADD COLUMN IF NOT EXISTS min_call_seconds INTEGER DEFAULT 30;
             ALTER TABLE clients ADD COLUMN IF NOT EXISTS vpbx_api_key_enc TEXT;
             ALTER TABLE clients ADD COLUMN IF NOT EXISTS vpbx_api_salt_enc TEXT;
@@ -132,12 +133,13 @@ class DBCase(unittest.IsolatedAsyncioTestCase):
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS topic TEXT;
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS mode TEXT;
             ALTER TABLE pending_train_assignments ADD COLUMN IF NOT EXISTS assigned_by_telegram_user_id BIGINT;""")
-        for name in ('008_call_reviews.sql', '009_callback_tasks.sql', '012_prompt_versions.sql', '031_company_prompts.sql', '013_employee_invites.sql',
+        for name in ('008_call_reviews.sql', '009_callback_tasks.sql', '010_lead_attempts.sql', '012_prompt_versions.sql', '031_company_prompts.sql', '013_employee_invites.sql',
                      '014_crm.sql', '015_crm_roles.sql', '016_crm_access.sql', '017_crm_reports.sql', '018_crm_questions.sql',
                      '019_crm_staff.sql', '020_robot.sql', '021_manager_memory.sql', '022_presentations.sql', '024_deals.sql', '025_contracts.sql', '026_presentation_client.sql', '027_sources.sql', '028_crm_logins.sql', '032_platform.sql', '033_callcenter.sql', '034_donor_agent.sql', '035_donor_rub.sql',
-                     '040_crm_outcome_callback.sql', '041_crm_staff_activity.sql'):
+                     '040_crm_outcome_callback.sql', '041_crm_staff_activity.sql', '042_employee_notifications.sql',
+                     '023_tg_chats.sql', '044_tg_folder_ownership.sql'):
             await self.pool.execute((root / 'migrations' / name).read_text())
-        await self.pool.execute('TRUNCATE clients, crm_login_tokens, crm_sessions, crm_docs, crm_invites, crm_reports, crm_questions, '
+        await self.pool.execute('TRUNCATE clients, tg_messages, crm_login_tokens, crm_sessions, crm_docs, crm_invites, crm_reports, crm_questions, '
                                 'employee_invites, manager_memory, deal_events, contracts, source_selections, donor_runs, donor_spend, prompt_active, prompt_versions, prompt_drafts, astra_daily_spend, robot_options CASCADE')
         from crypto_util import encrypt
         await self.pool.execute("INSERT INTO clients(id,timezone,processing_enabled,vpbx_api_key_enc,vpbx_api_salt_enc) "
@@ -942,9 +944,12 @@ class WebTests(DBCase):
             self.assertEqual((await self.http.get('/api/queue')).status, 403)
 
     async def test_login_lockout_and_bulk_accounts(self):
+        await self.pool.execute("""INSERT INTO employees(client_id,extension,role,full_name,archived_at)
+                                  VALUES(1,'head:retired','head','Бывший руководитель',now())""")
         with patch.dict(auth._fails, clear=True), patch.dict(os.environ, {'KITCHEN_SHEET_ID': 'leads'}), \
                 patch('crm.gsheets.values', fake_values):
             made = await accounts.create_all(self.pool)
+            self.assertNotIn('Бывший руководитель', [a['name'] for a in made])
             self.assertEqual({(a['role'], a['login']) for a in made} >= {('director', 'rukovoditel'), ('client', 'kukhni')}, True)
             self.assertEqual(await accounts.create_all(self.pool), [])  # второй раз никого не заводит
             one = made[0]
@@ -1156,7 +1161,6 @@ class WebTests(DBCase):
 
     async def test_deals_telegram(self):
         """Переписка рабочего Telegram в сделке: этап, «ждёт ответа», отказ по разбору, привязка вручную."""
-        await self.pool.execute((Path(__file__).resolve().parents[1] / 'migrations/023_tg_chats.sql').read_text())
         await self.add_review('101', WON, '6 days', number='79990000003')
         await self.add_review('102', LOST, '6 days', number='79990000004')
         warm = {'kind': 'client', 'reviewed': True, 'temperature': 'warm', 'contract': {'company': 'ООО Чат', 'missing': ['inn']},
@@ -1225,6 +1229,15 @@ class WebTests(DBCase):
         self.assertEqual((await self.http.get('/api/tgchats/556')).status, 403)  # сделка другого менеджера
         self.assertEqual((await link(560, '79990000004')).status, 403)  # клиент другого менеджера
         self.assertEqual((await link(560, '79990000003')).status, 200)
+        # Телефон сделки сам по себе не даёт доступ к чужой папке или старому чату без владельца.
+        for peer, ext, verified in ((561, '102', True), (562, None, False), (563, '101', False)):
+            await self.pool.execute(
+                """INSERT INTO tg_chats(client_id,peer_id,kind,phone,folders,extension,folder_owner_verified,analysis,last_message_at)
+                   VALUES(1,$1,'user','79990000003',ARRAY['Другая папка'],$2,$3,'{"link":{"by":"manual"}}',now())""",
+                peer, ext, verified)
+            await self.pool.execute("INSERT INTO tg_messages VALUES(1,$1,1,now(),false,'Другая переписка',NULL)", peer)
+            self.assertEqual((await self.http.get(f'/api/tgchats/{peer}')).status, 403)
+            self.assertEqual((await link(peer, '79990000003')).status, 403)
         timeline = (await (await self.http.get('/api/deals/79990000003')).json())['timeline']
         self.assertEqual([t['id'] for t in timeline if t['type'] == 'chat'], [555, 560])
 
@@ -1279,6 +1292,45 @@ class WebTests(DBCase):
         with patch.dict(os.environ, {'CRM_TEST_KEY': TEST_KEY}):
             await self.enter('manager', ext='101')
         self.assertEqual((await reg(type='ops')).status, 403)
+
+    async def test_staff_lead_outcomes_are_separate_and_scoped(self):
+        await self.director()
+        await self.pool.execute("""
+            INSERT INTO employees(client_id,extension,role,full_name)
+              VALUES(1,'13','manager','Робот'),(1,'14','manager','Ольга'),(1,'15','manager','Оксана');
+            WITH attempts AS (
+              INSERT INTO calls(client_id,extension,external_id,status)
+                VALUES(1,'14','test-lead','analyzed'),(1,'14','test-callback','analyzed'),
+                      (1,'14','test-no-answer','skipped') RETURNING id,extension,external_id
+            )
+            INSERT INTO lead_attempts(call_id,client_id,extension,status)
+              SELECT id,1,extension,CASE external_id
+                WHEN 'test-lead' THEN 'interested' WHEN 'test-callback' THEN 'callback' ELSE 'ndz' END FROM attempts;
+            WITH failed AS (
+              INSERT INTO calls(client_id,extension,external_id,status)
+                VALUES(1,'14','test-failed','new') RETURNING id,external_id
+            )
+            INSERT INTO tasks(type,client_id,dedup_key,input,status)
+              SELECT 'analyze_call',1,external_id,jsonb_build_object('call_id',id),'failed' FROM failed;
+            INSERT INTO calls(client_id,extension,status) VALUES(1,'14','awaiting_record'),(1,'15','skipped');
+            TRUNCATE robot_calls;
+            INSERT INTO robot_calls(call_id,owner,at,outcome,data) VALUES
+              ('test-robot-lead','',now(),'interested','{}'),
+              ('test-robot-error','',now(),'callback','{"error":"no_result"}'),
+              ('test-robot-other','#2',now(),'interested','{}'),
+              ('test-robot-client','another_client',now(),'interested','{}');
+        """)
+        with patch.dict(os.environ, {'CRM_HOME_COMPANY': '1', 'KITCHEN_EXTENSIONS': '14'}):
+            response = await self.http.get('/api/staff')
+            self.assertEqual(response.status, 200, await response.text())
+            results = {r['ext']: r for r in (await response.json())['lead_qualification']['items']}
+            self.assertEqual(results['14'], {'ext': '14', 'mode': 'script', 'lead': 1, 'no_lead': 1,
+                                             'no_answer': 1, 'error': 1, 'unresolved': 1})
+            self.assertEqual(results['15']['mode'], 'unconfigured')
+            self.assertEqual(results['13'], {'ext': '13', 'mode': 'robot', 'lead': 1, 'no_lead': 0,
+                                             'no_answer': 0, 'error': 1, 'unresolved': 0})
+        with patch.dict(os.environ, {'CRM_HOME_COMPANY': '2'}):
+            self.assertIsNone((await (await self.http.get('/api/staff')).json())['lead_qualification'])
 
     async def test_staff_invite_unlink_and_copies(self):
         import invites
@@ -1338,6 +1390,39 @@ class WebTests(DBCase):
             d = await (await self.http.get('/api/staff')).json()
             self.assertEqual(d['copies_source'], 'crm')
             self.assertEqual(next(p['copies'] for p in d['items'] if p['ext'] == 'head:ivan'), True)
+
+    async def test_personal_notifications_are_independent_of_director_access(self):
+        from tools import report_chat_ids, technical_recipients
+
+        await self.pool.execute("""INSERT INTO employees(client_id,extension,telegram_user_id,role,full_name)
+                                  VALUES(1,'',900,'owner','Владелец')""")
+        await self.director()
+        headers = {'X-CRM': '1'}
+
+        async def save(kind, on):
+            return await self.http.post('/api/staff/notification', json={'kind': kind, 'on': on}, headers=headers)
+
+        self.assertEqual((await save('sales', False)).status, 403)
+        await self.login(900)
+        with patch.dict(os.environ, {'REVIEW_COPY_TO': '900, 555'}):
+            self.assertEqual((await save('sales', 'false')).status, 400)
+            self.assertEqual((await save('sales', False)).status, 200)
+            self.assertEqual(await report_chat_ids(self.pool, 1), [901])
+            self.assertEqual(await review_store.copy_chat_ids(self.pool, 1), [555])
+            self.assertEqual(await technical_recipients(self.pool, 1), ([900], True))
+            self.assertEqual((await save('technical', False)).status, 200)
+            self.assertEqual(await technical_recipients(self.pool, 1), ([], True))
+            r = await self.http.get('/api/person')
+            self.assertEqual(r.status, 200, await r.text())
+            access = (await r.json())['access']
+            self.assertTrue(access['linked'] and access['can_manage_notifications'])
+            self.assertFalse(access['sales_reports_enabled'] or access['technical_reports_enabled'])
+            self.assertEqual((await save('sales', True)).status, 200)
+            self.assertIn(900, await report_chat_ids(self.pool, 1))
+            self.assertEqual(await technical_recipients(self.pool, 1), ([], True))
+
+        await self.login(901)
+        self.assertEqual((await save('technical', True)).status, 403)
 
     async def test_director_link_bound_to_telegram_and_prompts(self):
         from review import prompts

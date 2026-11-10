@@ -122,11 +122,22 @@ VIEWS.summary = async view => {
       {key: 'meet', label: 'Встречи и КП', value: c.meet, delta: hasPrev ? delta(c.meet, p.meet) : '', vs},
     ];
     html.push(`<div class="kpis" data-learning-target="summary-kpis">${kpis.map(k => kpiHtml(k, i++)).join('')}</div>`);
+    const ms = data.managers;
+    const progress = ms.filter(m => m.analysis_progress);
+    if (progress.length) {
+      const columns = [['processed', 'Разобрано'], ['queued', 'В очереди'], ['awaiting_record', 'Ждут запись'],
+        ['no_recording', 'Нет записи'], ['failed', 'Сбой'], ['unqueued', 'Вне очереди']];
+      html.push(`<section class="card blk" data-css="--i:${i++}"><div class="card-h"><h2>Разбор звонков</h2>
+        ${help('Исходящие звонки, отобранные для анализа за выбранный период. Вне очереди — разбор не завершён и активной задачи нет.')}</div>
+        <div class="tbl-wrap"><table class="tbl"><thead><tr><th scope="col">Менеджер</th>
+        ${columns.map(([, label]) => `<th scope="col" class="n">${label}</th>`).join('')}</tr></thead>
+        <tbody>${progress.map(m => `<tr><th scope="row">${esc(m.name || `Доб. ${m.ext}`)}</th>
+        ${columns.map(([key]) => `<td class="n">${fmt(m.analysis_progress[key])}</td>`).join('')}</tr>`).join('')}</tbody></table></div></section>`);
+    }
     const rows = chartRows(data);
     const cut = !data.hourly && rows.length < data.series.length;
     html.push(`<section class="card blk" data-css="--i:${i++}"><div class="card-h"><h2>${data.hourly ? 'Сегодня по часам' : 'По дням'}</h2>
       <span class="hint">${data.hourly ? `сейчас ${esc(data.now)}` : cut ? 'воскресенья без звонков не показаны' : ''}</span></div><div class="chart" data-chart></div></section>`);
-    const ms = data.managers;
     if (!S.f.ext && ms.length) {
       html.push(`<section class="card blk" data-css="--i:${i++}"><div class="card-h"><h2>Менеджеры</h2><span class="hint">нажмите на строку, чтобы открыть карточку</span></div>
         <div class="tbl-wrap"><table class="tbl anim"><thead><tr><th>Менеджер</th><th class="n">Наборов</th><th class="n">Дозвон</th><th class="n hide-m">На линии</th>

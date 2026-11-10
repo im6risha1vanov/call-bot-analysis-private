@@ -3,6 +3,8 @@
 *.db
 *.sqlite3
 *.sqlite
+*.session
+*.session-journal
 *.bak-*
 __pycache__/
 *.py[cod]

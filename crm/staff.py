@@ -65,10 +65,14 @@ def matches(person: dict, token: str) -> bool:
 
 async def _people(pool, client_id: int) -> list[dict]:
     rows = await pool.fetch(
-        """SELECT extension, role, full_name, telegram_user_id, telegram_username FROM employees
+        """SELECT extension, role, full_name, telegram_user_id, telegram_username,
+                  COALESCE((to_jsonb(e)->>'sales_reports_enabled')::boolean, true) AS sales_reports_enabled,
+                  COALESCE((to_jsonb(e)->>'technical_reports_enabled')::boolean, true) AS technical_reports_enabled
+           FROM employees e
            WHERE client_id=$1 AND archived_at IS NULL""", client_id)
     people = [{'ext': r['extension'], 'role': r['role'], 'name': r['full_name'] or '', 'tg': r['telegram_user_id'],
-               'username': r['telegram_username']} for r in rows]
+               'username': r['telegram_username'], 'sales_reports_enabled': r['sales_reports_enabled'],
+               'technical_reports_enabled': r['technical_reports_enabled']} for r in rows]
     people.sort(key=lambda p: (ORDER.get(p['role'], 3), int(p['ext']) if p['ext'].isdigit() else 10**9, p['ext']))
     return people
 
@@ -92,6 +96,9 @@ async def listing(pool, actor) -> dict:
             'reviewed': (p['ext'] in [str(x) for x in sales]) if isinstance(sales, list) and p['role'] == 'manager' else None,
             'can_unlink': p['tg'] is not None and p['role'] != 'owner' and p['tg'] != actor.telegram_user_id,
             'can_copy': p['role'] in ('head', 'owner'),
+            'can_manage_notifications': p['role'] in ('head', 'owner') and bool(p['tg']) and p['tg'] == actor.telegram_user_id,
+            'sales_reports_enabled': p['sales_reports_enabled'],
+            'technical_reports_enabled': p['technical_reports_enabled'] if p['role'] == 'owner' else None,
         })
     unknown = [t for t in tokens if not any(matches(p, t) for p in people)]
     return {'items': items, 'copies_source': source, 'copies_other': len(unknown)}
@@ -217,3 +224,19 @@ async def set_copies(pool, actor, ext, on: bool) -> None:
         """INSERT INTO review_copy_lists(client_id, tokens, updated_by) VALUES($1,$2,$3)
            ON CONFLICT(client_id) DO UPDATE SET tokens=EXCLUDED.tokens, updated_by=EXCLUDED.updated_by, updated_at=now()""",
         actor.client_id, tokens, actor.telegram_user_id or None)
+
+
+async def set_notification(pool, actor, kind, enabled) -> None:
+    """Сотрудник управляет только своими подписками."""
+    if not actor.telegram_user_id or actor.role not in ('head', 'owner') or (kind == 'technical' and actor.role != 'owner'):
+        raise Forbidden('Эта настройка уведомлений недоступна.')
+    columns = {'sales': 'sales_reports_enabled', 'technical': 'technical_reports_enabled'}
+    if not isinstance(kind, str) or kind not in columns or type(enabled) is not bool:
+        raise ValueError('Укажите подписку и состояние.')
+    column = columns[kind]
+    saved = await pool.fetchval(
+        f"""UPDATE employees SET {column}=$1
+            WHERE client_id=$2 AND telegram_user_id=$3 AND role=$4 AND archived_at IS NULL
+            RETURNING true""", enabled, actor.client_id, actor.telegram_user_id, actor.role)
+    if not saved:
+        raise Forbidden('Личная учётная запись не найдена.')
