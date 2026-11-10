@@ -826,6 +826,12 @@ async def _lead_index(pool, client_id: int) -> tuple[dict, bool]:
     return index, reference
 
 
+# Публичные имена этих же проверок для других разделов CRM: без копий и без второй трактовки.
+has_table = _has_table
+robot_owner = _robot_owner
+lead_index = _lead_index
+
+
 async def counts(pool, who, operator_id: str, start, end) -> dict:
     """Звонки и связанные с CRM лиды выбранного оператора за период."""
     if not can_manage(who):
