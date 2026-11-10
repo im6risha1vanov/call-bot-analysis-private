@@ -86,31 +86,9 @@ def tariffs(p: dict) -> list[dict]:
 class DbSource:
     """Колл-центр компании в базе с тем же видом, что таблица: summary() и rows(имя клиента)."""
     mode = 'db'
-    operator_field = True  # автор звонка лежит в cc_leads.attempts[].by: добавочный Mango
 
     def __init__(self, pool, client_id: int):
         self.pool, self.client_id = pool, client_id
-
-    async def records(self, name: str) -> list[dict]:
-        """Лиды клиента записями: попытка = результат, дата и добавочный того, кто звонил."""
-        prices_now = await prices(self.pool, self.client_id)
-        rows = await self.pool.fetch(
-            """SELECT l.* FROM cc_leads l JOIN cc_clients c ON c.id=l.cc_client_id
-               WHERE c.client_id=$1 AND c.name=$2 ORDER BY l.id""", self.client_id, name)
-        out = []
-        for r in rows:
-            a = attempts_of(r)
-            out.append({
-                'id': str(r['id']), 'project': '', 'tag': r['tag'], 'phone': r['phone'], 'remind': r['remind'],
-                'note': r['note'], 'comment': r['comment'], 'base': r['base_date'].isoformat() if r['base_date'] else '',
-                'sum': lead_sum(a, prices_now),
-                'attempts': [{'result': x['r'], 'date': x['d'], 'by': x.get('by') or ''} for x in a],
-            })
-        return out
-
-    async def sum_prices(self) -> dict:
-        """Цены звонков компании: по ним сумма среза считается по попыткам."""
-        return await prices(self.pool, self.client_id)
 
     async def summary(self) -> dict:
         p = await prices(self.pool, self.client_id)
