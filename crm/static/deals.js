@@ -58,21 +58,24 @@ VIEWS.deals = async (view, arg) => {
 
   function render(focusedStage) {
     const fn = d.funnel;
-    const maxReached = Math.max(1, ...fn.stages.map(stage => stage.reached));
     const list = d.deals.filter(x => (f.show === 'all' || (f.show === 'stalled' ? x.stalled_days != null : x.status === f.show))
       && (!f.stage || x.stage_no === f.stage));
     const picked = f.stage ? fn.stages[f.stage - 1] : null;
-    const stageScroll = $('.stages', view)?.scrollLeft || 0;
     let i = 0;
     view.innerHTML = `<div class="page">${dealTabs('')}
       <section class="card funnel-card blk" data-css="--i:${i++}" aria-labelledby="funnel-title">
         <div class="card-h"><h2 id="funnel-title">Воронка продаж</h2></div>
-        <div class="funnel-direction"><span>Первый контакт</span><span class="funnel-arrow" aria-hidden="true"></span><span>Оплата</span></div>
         <p class="hint">Число показывает, сколько сделок дошло до этапа. Нажмите на этап, чтобы отфильтровать список.</p>
-      <div class="stages" role="group" aria-label="Этапы воронки">${fn.stages.map((st, k) => `<button type="button" class="stage" data-stage="${k + 1}" aria-pressed="${f.stage === k + 1}"
-        title="${esc(st.reasons.map(([r, n]) => `${r}: ${n}`).join('\n'))}">
-        <span class="nm">${k + 1}. ${esc(st.name)}</span><b>${fmt(st.reached)}</b><span class="ls">${st.lost ? `отказ ${fmt(st.lost)}` : ''}</span>
-        <i class="fill" data-css="--w:${Math.max(0, st.reached / maxReached * 100)}%;--k:${k}"></i></button>`).join('')}</div></section>
+        <ol class="stages" role="list" aria-label="Этапы воронки">${fn.stages.map((st, k) => `
+          <li class="stage-cell">
+            <button type="button" class="stage" data-stage="${k + 1}" aria-pressed="${f.stage === k + 1}"
+              title="${esc(st.reasons.map(([r, n]) => `${r}: ${n}`).join('\n'))}">
+              <span class="nm">${k + 1}. ${esc(st.name)}</span>
+              <b>${fmt(st.reached)}</b><span class="ls">${st.lost ? `отказ ${fmt(st.lost)}` : ''}</span>
+            </button>
+            ${k < fn.stages.length - 1 ? `<span class="stage-join" aria-hidden="true">${svg('chev')}</span>` : ''}
+          </li>`).join('')}</ol>
+      </section>
       ${picked && picked.lost ? `<p class="hint blk" data-css="--i:${i++};margin:-6px 0 0">Почему отказываются на этапе «${esc(picked.name)}»: ${picked.reasons.map(([r, n]) => `${esc(r)} · ${n}`).join('; ')}</p>` : ''}
       ${d.unlinked?.length ? `<div class="alert acc blk" data-css="--i:${i++}"><span class="pdot"></span><p><b>${plainItems(d.unlinked.length, 'презентация', 'презентации', 'презентаций')} без клиента</b>: шли не через Mango, бот не знает номер.</p>
         <button class="btn small" type="button" data-unlinked>Привязать</button></div>` : ''}
@@ -87,7 +90,6 @@ VIEWS.deals = async (view, arg) => {
         : '<div class="empty">Таких сделок нет.</div>'}</section>
       ${moreBlock('Как считаются сделки', '', `<p class="lead">Клиент — это номер телефона. Звонки, презентации и переписку в рабочем Telegram CRM разбирает сама; переписка попадает в сделку по номеру клиента (из его контакта или сообщения) или кнопкой «Привязать». Почту, договор и отказ отмечает менеджер в карточке сделки, оплату — директор. Отказ на холодном звонке CRM ставит сама, если последний разговор без результата и перезвона нет; причина берётся из разбора.</p>`, i++)}</div>`;
     bindDealTabs(view);
-    $('.stages', view).scrollLeft = stageScroll;
     $$('[data-stage]', view).forEach(b => b.addEventListener('click', () => {
       const stage = +b.dataset.stage;
       f.stage = f.stage === stage ? 0 : stage;

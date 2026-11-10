@@ -552,16 +552,34 @@ audio.rec{display:block;width:100%;max-width:420px;height:36px;margin-top:6px}
 .toggle-row{display:flex;gap:10px;align-items:center;padding:6px 0}
 
 /* сделки */
-.stages{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(136px,1fr);gap:6px;overflow-x:auto;padding:3px 3px 7px;
-  scrollbar-width:thin;scrollbar-color:var(--accent) var(--surface-2)}
-.stage{position:relative;overflow:hidden;border:1px solid var(--line);background:var(--surface);border-radius:11px;padding:10px 12px 9px;text-align:left;display:flex;flex-direction:column;gap:2px;transition:border-color .2s, background .2s, transform .12s;min-width:0}
+.funnel-card{container:deal-funnel / inline-size}
+.funnel-card .hint{margin:0 0 12px}
+.stages{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:2px;list-style:none;margin:0;padding:0}
+.stage-cell{position:relative;min-width:0}
+.stage{display:grid;grid-template-rows:minmax(30px,auto) auto minmax(16px,auto);align-content:start;
+  width:100%;height:100%;min-width:0;padding:9px 10px;text-align:left;color:var(--fg);
+  border:1px solid var(--line);background:var(--surface-2);border-radius:3px;transition:border-color .2s,background .2s}
+.stage-cell:first-child .stage{border-radius:9px 3px 3px 9px}
+.stage-cell:last-child .stage{border-radius:3px 9px 9px 3px}
 .stage:hover{border-color:color-mix(in oklab, var(--accent) 45%, var(--line))}
-.stage:active{transform:scale(.98)}
 .stage[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-soft)}
+.stage:focus-visible{outline:2px solid var(--accent-text);outline-offset:-4px}
 .stage .nm{font-size:12px;color:var(--muted);font-weight:500;overflow-wrap:anywhere}
 .stage b{font-size:22px;font-weight:650;font-variant-numeric:tabular-nums;line-height:1.15}
-.stage .ls{font-size:11.5px;color:var(--bad-text);min-height:16px}
-.stage .fill{position:absolute;left:0;bottom:0;height:3px;border-radius:0 0 0 11px;background:var(--accent);width:clamp(0%,var(--w),100%);transform-origin:left;animation:growx .8s var(--ease) both;animation-delay:calc(150ms + var(--k) * 60ms)}
+.stage .ls{font-size:11.5px;color:var(--bad-text)}
+.stage-join{position:absolute;z-index:1;top:50%;left:calc(100% + 1px);transform:translate(-50%,-50%);
+  display:grid;place-items:center;width:16px;height:16px;pointer-events:none;
+  border:1px solid var(--line);border-radius:50%;background:var(--surface);color:var(--accent-text)}
+.stage-join .ico{width:12px;height:12px}
+@container deal-funnel (max-width:590px){
+  .stages{grid-auto-flow:row;grid-auto-columns:auto}
+  .stage{grid-template-columns:minmax(0,1fr) auto;grid-template-rows:auto auto;column-gap:10px;min-height:48px;padding:7px 12px}
+  .stage b{grid-column:2;grid-row:1 / span 2;align-self:center}
+  .stage-cell:first-child .stage{border-radius:9px 9px 3px 3px}
+  .stage-cell:last-child .stage{border-radius:3px 3px 9px 9px}
+  .stage-join{top:calc(100% + 1px);left:50%}
+  .stage-join .ico{transform:rotate(90deg)}
+}
 .deal-steps{display:flex;flex-wrap:wrap;gap:4px}
 .deal-steps span{flex:1 1 90px;font-size:12px;text-align:center;padding:6px 4px;border-radius:7px;background:var(--surface-2);color:var(--muted)}
 .deal-steps span.done{background:var(--good-soft);color:var(--good-text)}
@@ -693,11 +711,6 @@ audio.rec{display:block;width:100%;max-width:420px;height:36px;margin-top:6px}
 .account-switch-row > [data-acc]{width:100%;min-width:0}
 .account-switch-row > [data-acc] span{min-width:0;overflow-wrap:anywhere}
 .sheet-list .account-switch-row > [data-account-edit]{font-size:13px;padding-inline:12px}
-.funnel-card .hint{margin:0 0 8px}
-.funnel-direction{display:flex;align-items:center;gap:12px;margin-bottom:8px;color:var(--muted);font-weight:600}
-.funnel-arrow{position:relative;flex:1;min-width:20px;height:2px;background:var(--accent)}
-.funnel-arrow::after{content:"";position:absolute;right:0;top:50%;width:8px;height:8px;border:solid var(--accent);border-width:2px 2px 0 0;transform:translateY(-50%) rotate(45deg)}
-.funnel-card .stage .fill{height:5px}
 #rb-numbers{scroll-margin-top:125px}
 @media(max-width:640px){
   .head-actions{flex:1 0 100%;margin:0}
