@@ -25,7 +25,7 @@ import mango_client  # noqa: E402
 from tools import Forbidden, home_client_id, is_privileged  # noqa: E402
 from . import activity, economics, lead_import, lead_qualification
 from . import learning, tour
-from . import accounts, ask as asking, auth, automation_agent, automations, cabinet, callcenter_db, company, contracts, deals, donor_agent, gpt, journal, overview, people, platform, recording, reviews, sources, staff, store, training  # noqa: E402
+from . import accounts, ask as asking, auth, automation_agent, automations, cabinet, call_analysis, callcenter_db, company, contracts, deals, donor_agent, gpt, journal, overview, people, platform, recording, reviews, sources, staff, store, training  # noqa: E402
 from . import prompts as prompt_mode, robot, webphone, robot_api, robot_prices, robot_runner, robot_store  # noqa: E402
 from .dial import dial  # noqa: E402
 
@@ -466,6 +466,61 @@ async def api_cc_export(request):
     text = await callcenter_db.export_csv(request.app[POOL], who.company, name)
     return web.Response(body=text.encode('utf-8'), content_type='text/csv', charset='utf-8', headers={
         'Content-Disposition': "attachment; filename*=UTF-8''" + urllib.parse.quote(name + '.csv')})
+
+
+def analysis_forbidden(exc: Exception) -> Forbidden:
+    return Forbidden(str(exc) or 'Раздел директора.')
+
+
+async def api_call_analysis(request):
+    who = await viewer(request)
+    try:
+        return web.json_response(await call_analysis.overview(request.app[POOL], who))
+    except PermissionError as exc:
+        raise analysis_forbidden(exc)
+
+
+async def api_call_analysis_counts(request):
+    who = await viewer(request)
+    try:
+        return web.json_response(await call_analysis.counts(
+            request.app[POOL], who, str(request.query.get('operator') or ''),
+            request.query.get('start'), request.query.get('end')))
+    except PermissionError as exc:
+        raise analysis_forbidden(exc)
+
+
+async def api_call_analysis_start(request):
+    who = await viewer(request)
+    try:
+        return web.json_response(await call_analysis.start(request.app[POOL], who, await body(request)))
+    except PermissionError as exc:
+        raise analysis_forbidden(exc)
+
+
+async def api_call_analysis_one(request):
+    who = await viewer(request)
+    try:
+        return web.json_response(await call_analysis.one(request.app[POOL], who, int_id(request.match_info['id'])))
+    except PermissionError as exc:
+        raise analysis_forbidden(exc)
+
+
+async def api_call_analysis_save(request):
+    who = await viewer(request)
+    try:
+        return web.json_response(await call_analysis.save(request.app[POOL], who, int_id(request.match_info['id'])))
+    except PermissionError as exc:
+        raise analysis_forbidden(exc)
+
+
+async def api_call_analysis_telegram(request):
+    who = await viewer(request)
+    try:
+        return web.json_response(await call_analysis.send_telegram(
+            request.app[POOL], who, int_id(request.match_info['id'])))
+    except PermissionError as exc:
+        raise analysis_forbidden(exc)
 
 
 async def api_recording(request):
@@ -1486,6 +1541,12 @@ def build(pool) -> web.Application:
     app.router.add_post('/api/callcenter/leads', api_cc_leads_add)
     app.router.add_post('/api/callcenter/leads/{id}/attempt', api_cc_attempt)
     app.router.add_post('/api/callcenter/prices', api_cc_prices)
+    app.router.add_get('/api/callcenter/analysis', api_call_analysis)
+    app.router.add_get('/api/callcenter/analysis/counts', api_call_analysis_counts)
+    app.router.add_post('/api/callcenter/analysis', api_call_analysis_start)
+    app.router.add_get(r'/api/callcenter/analysis/{id:\d+}', api_call_analysis_one)
+    app.router.add_post(r'/api/callcenter/analysis/{id:\d+}/save', api_call_analysis_save)
+    app.router.add_post(r'/api/callcenter/analysis/{id:\d+}/telegram', api_call_analysis_telegram)
     app.router.add_get('/api/recording/{id}', api_recording)
     app.router.add_get('/api/review/{id}', api_review)
     app.router.add_get('/api/reports', api_reports)
@@ -1602,6 +1663,8 @@ async def make_app() -> web.Application:
             tasks.append(asyncio.create_task(automations.loop(pool)))
         if os.getenv('DONOR_AGENT', 'on') != 'off':  # агент доноров: прогоны поиска по очереди
             tasks.append(asyncio.create_task(donor_agent.loop(pool)))
+        if os.getenv('CALL_ANALYSIS_WORKER', 'on') != 'off':  # разбор звонков операторов и робота
+            tasks.append(asyncio.create_task(call_analysis.loop(pool)))
         yield
         for task in tasks:
             task.cancel()

@@ -10,12 +10,12 @@ READS={
  '/api/me','/api/learning/guide','/api/learning/context','/api/summary','/api/journal','/api/callbacks','/api/queue','/api/card','/api/tasks','/api/calls','/api/stats',
  '/api/reports','/api/person','/api/staff','/api/access','/api/platform/companies','/api/activity','/api/economics','/api/trainings','/api/ask','/api/gpt','/api/docs',
  '/api/deals','/api/contracts','/api/contracts/config','/api/contracts/next-number',
- '/api/prompts','/api/leads','/api/sources/selections','/api/donors','/api/callcenter','/api/callcenter/work','/api/automations',
+ '/api/prompts','/api/leads','/api/sources/selections','/api/donors','/api/callcenter','/api/callcenter/work','/api/callcenter/analysis','/api/callcenter/analysis/counts','/api/automations',
  '/api/robot','/api/robot/calls','/api/robot/cab','/api/robot/cab/known-clients','/api/robot/cab/contacts','/api/robot/cab/contacts/tabs','/api/robot/cab/stop','/api/robot/cab/campaigns','/api/robot/cab/calls','/api/robot/cab/analytics',
 }
 READ_PATTERNS=[re.compile(p) for p in (
  r'/api/deals/[^/]+',r'/api/review/[^/]+',r'/api/recording/[^/]+',r'/api/trainings/[^/]+',r'/api/tgchats/[^/]+',
- r'/api/sources/selections/[0-9]+',r'/api/donors/[0-9]+',r'/api/automations/[0-9]+/runs',
+ r'/api/sources/selections/[0-9]+',r'/api/donors/[0-9]+',r'/api/callcenter/analysis/[0-9]+',r'/api/automations/[0-9]+/runs',
  r'/api/prompts/(?:version/[0-9]+|[a-z_]+)',r'/api/robot/cab/operators/[0-9]+',r'/api/robot/cab/campaigns/[0-9]+/targets',r'/api/robot/cab/recording/[^/]+',
 )]
 AUTH_POSTS={'/api/learning/mode','/api/login','/api/logout','/api/test/login'}

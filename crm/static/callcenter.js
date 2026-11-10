@@ -33,12 +33,14 @@ function longList(list, render, first = 10) {
 VIEWS.callcenter = async (view, arg) => {
   if (S.me.role === 'manager' || arg === ':work') return ccWork(view);
   if (arg === ':setup') return ccSetup(view);
+  if (arg === ':analysis' || arg?.startsWith(':analysis:')) return callAnalysisView(view, arg);
   if (arg) return cabinetView(view, arg);
   const db = S.me.callcenter_mode === 'db';
-  if (db) {
-    setHead({actions: `<button class="btn primary" type="button" data-go="callcenter" data-arg=":work">Прозвон</button>
-      ${S.me.readonly ? '' : '<button class="btn" type="button" data-go="callcenter" data-arg=":setup">Клиенты и номера</button>'}`});
-  }
+  const actions = [];
+  if (db) actions.push('<button class="btn primary" type="button" data-go="callcenter" data-arg=":work">Прозвон</button>');
+  if (db && !S.me.readonly) actions.push('<button class="btn" type="button" data-go="callcenter" data-arg=":setup">Клиенты и номера</button>');
+  if (S.me.role === 'director' && !S.me.readonly) actions.push('<button class="btn" type="button" data-go="callcenter" data-arg=":analysis">Разобрать звонки</button>');
+  if (actions.length) setHead({actions: actions.join('')});
   const d = await loading(view, api('/api/callcenter'), 'page');
   const t = d.total;
   let i = 0;
