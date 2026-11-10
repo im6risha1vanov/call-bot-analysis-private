@@ -10,7 +10,7 @@ import json
 import logging
 import os
 import urllib.parse
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -25,7 +25,7 @@ import mango_client  # noqa: E402
 from tools import Forbidden, home_client_id, is_privileged  # noqa: E402
 from . import activity, economics, lead_import, lead_qualification
 from . import learning, tour
-from . import accounts, ask as asking, auth, automation_agent, automations, cabinet, call_analysis, callcenter_db, company, contracts, deals, donor_agent, gpt, journal, overview, people, platform, recording, reviews, sources, staff, store, training  # noqa: E402
+from . import accounts, ask as asking, auth, automation_agent, automations, cabinet, call_analysis, callcenter_access, callcenter_db, company, contracts, deals, donor_agent, gpt, journal, overview, people, platform, recording, reviews, sources, staff, store, training  # noqa: E402
 from . import prompts as prompt_mode, robot, webphone, robot_api, robot_prices, robot_runner, robot_store  # noqa: E402
 from .dial import dial  # noqa: E402
 
@@ -295,6 +295,7 @@ async def api_me(request):
         'ext': a.extension if str(a.extension or '').isdigit() else None,
         'can_dial': can_dial, 'privileged': privileged, 'readonly': who.test,
         'economics': await can_view_economics(pool, who),
+        'callcenter_filters': await callcenter_access.allowed(pool, who),
         'webphone': not tour.active(request) and can_dial and await webphone.account(pool, a.client_id, a.extension) is not None,
         'team': await store.team(pool, a.client_id) if privileged else [],
         'outcomes': store.OUTCOMES, 'needs_date': sorted(store.NEEDS_DATE), 'lead_status': store.LEAD_STATUS, **firm,
@@ -408,8 +409,22 @@ async def api_cabinet(request):
 
 async def api_callcenter(request):
     who = await director(request)
+    pool = request.app[POOL]
+    period = str(request.query.get('period') or '').strip()
+    operator = str(request.query.get('operator') or '').strip()
+    # Фильтры — отдельное право: без него раздел работает как раньше, но период и
+    # сотрудника не принимает. Проверка серверная, интерфейс её лишь отражает.
+    if period or operator:
+        access = await callcenter_access.check(pool, who)
+        if not access['allowed']:
+            raise Forbidden(access['reason'])
     try:
-        return web.json_response(await cabinet.callcenter(await cabinet.source_of(request.app[POOL], who.company)))
+        src = await cabinet.source_of(pool, who.company)
+        # «Сегодня» — по часовому поясу компании, а не сервера.
+        today = datetime.now(timezone.utc).astimezone(await store.zone(pool, who.company)).date()
+        return web.json_response(await cabinet.callcenter(src, period=period or None, operator=operator or None,
+                                                          operators=await call_analysis.operators(pool, who.company),
+                                                          today=today))
     except LookupError as exc:
         raise ValueError(str(exc))
 

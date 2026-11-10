@@ -19,6 +19,10 @@ function repeatInsight(reachedFirst, reached, called) {
   if (!called || reached <= reachedFirst) return '';
   return `<p class="insight">Повторные звонки подняли дозвон с <b>${pctOf(reachedFirst, called)}</b> до <b>${pctOf(reached, called)}</b>: ещё ${plainItems(reached - reachedFirst, 'человек взял', 'человека взяли', 'человек взяли')} трубку со второй или третьей попытки.</p>`;
 }
+// Сумма, которую нельзя посчитать: показываем прочерк с пояснением, а не выдуманное число.
+const rubOrDash = v => v == null ? '<span class="muted">—</span>' : rub(v);
+const kpiDash = (k, i) => `<div class="kpi blk" data-css="--i:${i}"><span class="lab">${esc(k.label)}${k.help ? ' ' + help(k.help) : ''}</span>
+  <span class="val" data-kind="n">—</span>${k.sub ? `<span class="foot">${k.sub}</span>` : ''}</div>`;
 const leadRows = (list, withClient, withRemind) => `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Телефон</th>${withClient ? '<th class="hide-m">Клиент</th>' : ''}<th>Звонок</th>
   ${withRemind ? '<th>Напоминание</th>' : ''}<th class="hide-m">Источник</th><th>Комментарий оператора</th></tr></thead><tbody>
   ${list.map(l => `<tr><td class="num nw">${esc(phone(l.phone) || l.phone)}</td>${withClient ? `<td class="hide-m">${esc(l.client)}</td>` : ''}
@@ -40,38 +44,83 @@ VIEWS.callcenter = async (view, arg) => {
   if (db) actions.push('<button class="btn primary" type="button" data-go="callcenter" data-arg=":work">Прозвон</button>');
   if (db && !S.me.readonly) actions.push('<button class="btn" type="button" data-go="callcenter" data-arg=":setup">Клиенты и номера</button>');
   if (S.me.role === 'director' && !S.me.readonly) actions.push('<button class="btn" type="button" data-go="callcenter" data-arg=":analysis">Разобрать звонки</button>');
-  if (actions.length) setHead({actions: actions.join('')});
-  const d = await loading(view, api('/api/callcenter'), 'page');
-  const t = d.total;
-  let i = 0;
-  view.innerHTML = `<div class="page">
-    <div class="kpis">${[
+  // Период и сотрудник — как в «Сводке». Фильтры показываем только тем, кому разрешил сервер.
+  const canFilter = !!S.me.callcenter_filters;
+  S.cc = S.cc || {period: '', operator: ''};
+  let seq = 0, data = null;
+  const head = () => {
+    const f = data?.filters || {};
+    const ops = (f.operators || []).filter(o => o.available);
+    const who = f.operator_available && ops.length
+      ? seg('ccop', [['', 'Весь отдел'], ...ops.map(o => [o.id, shortName(o.name)])], S.cc.operator, 'Сотрудник') : '';
+    setHead({actions: actions.join(''), filters: canFilter
+      ? seg('period', [['', 'Всё время'], ...PERIOD_OPTS], S.cc.period, 'Период') + who : ''});
+  };
+  const bind = () => bindSeg($('#top'), {
+    period: v => { S.cc.period = v; draw(); },
+    ccop: v => { S.cc.operator = v; draw(); },
+  });
+
+  async function draw() {
+    const my = ++seq;
+    let d;
+    try {
+      d = await loading(view, api('/api/callcenter' + qs(canFilter ? {period: S.cc.period, operator: S.cc.operator} : {})), 'page');
+    } catch (e) {
+      if (S.cc.operator) { S.cc.operator = ''; return draw(); }  // сервер не принял сотрудника: остаёмся на «Весь отдел»
+      throw e;
+    }
+    if (my !== seq || !view.isConnected) return;
+    data = d;
+    const f = d.filters || {};
+    if (canFilter && f.operator_available === false && S.cc.operator) { S.cc.operator = ''; return draw(); }
+    head(); bind();
+    const t = d.total;
+    let i = 0;
+    // Что источник не хранит — так и пишем: прочерк и причина лучше выдуманного числа.
+    const notes = [];
+    if (canFilter && f.operator_available === false) notes.push(esc(f.operator_reason || 'Разрез по сотрудникам недоступен.'));
+    if (canFilter && f.sum_available === false) notes.push(esc(f.sum_reason || 'Сумма за период недоступна.'));
+    const off = (f.operators || []).filter(o => !o.available);
+    if (canFilter && f.operator_available && off.length) notes.push('Разрез недоступен: ' + off.map(o => `<b>${esc(o.name)}</b> — ${esc(o.reason)}`).join('; '));
+    if (canFilter && f.operator_available && f.unattributed) notes.push(`Без подтверждённого оператора: ${plainItems(f.unattributed, 'попытка', 'попытки', 'попыток')} — они входят только в «Весь отдел».`);
+    if (canFilter && f.undated) notes.push(`Без даты звонка: ${plainItems(f.undated, 'попытка', 'попытки', 'попыток')} — в выбранный период они не попали.`);
+    const sumHelp = f.sum_available
+      ? (db ? 'Первичные и повторные звонки и заинтересованные по ценам из «Клиенты и номера».' : 'Первичные и повторные звонки и заинтересованные по ценам из листа «Сводка».')
+      : (f.sum_reason || '');
+    const kpis = [
       {key: 'cc-called', label: 'Лидов обзвонено', value: t.called || 0, sub: `из ${fmt(t.total)} переданных`},
       {key: 'cc-rate', label: 'Дозвон', value: t.called ? t.reached / t.called * 100 : 0, kind: 'pct', sub: `${fmt(t.reached)} взяли трубку`},
-      {key: 'cc-int', label: 'Заинтересованных', value: t.interested || 0},
-      {key: 'cc-sum', label: 'Сумма по тарифу', value: t.sum || 0, kind: 'rub', help: db ? 'Первичные и повторные звонки и заинтересованные по ценам из «Клиенты и номера».' : 'Первичные и повторные звонки и заинтересованные по ценам из листа «Сводка».'}].map(k => kpiHtml(k, i++)).join('')}</div>
-    ${repeatInsight(t.reached_first || 0, t.reached || 0, t.called || 0).replace('class="insight"', `class="insight blk" data-css="--i:${i++}"`)}
-    <section class="card blk" data-css="--i:${i++}"><div class="card-h"><h2>По клиентам</h2><span class="hint">нажмите, чтобы открыть кабинет так, как его видит клиент</span></div>
-      ${d.clients.length ? `<div class="tbl-wrap"><table class="tbl anim"><thead><tr><th>Клиент</th><th class="n">Лидов</th><th class="n">Дозвон</th><th class="n">Заинтересованы</th>
-        <th class="n hide-m">Перезвон</th><th class="n hide-m">Ждут попытки ${help('Не взяли трубку, а третьей попытки ещё не было.')}</th><th class="n">Сумма</th><th></th></tr></thead><tbody>
-        ${d.clients.map((c, r) => `<tr class="click" tabindex="0" data-name="${esc(c.name)}" data-css="--r:${r}"><td><div class="t">${esc(c.name)}</div>${c.since ? `<div class="s">с ${esc(ddmm(c.since))}</div>` : ''}</td>
-          <td class="n">${fmt(c.leads)}</td><td class="n">${pctOf(c.reached, c.called)}</td><td class="n">${fmt(c.interested)}</td><td class="n hide-m">${fmt(c.callback)}</td>
-          <td class="n hide-m">${fmt(c.waiting)}</td><td class="n nw">${rub(c.sum)}</td><td>${svg('chev', 'go')}</td></tr>`).join('')}</tbody></table></div>`
-        : `<div class="empty">${db ? 'Клиентов пока нет: добавьте их в «Клиенты и номера».' : 'В таблице колл-центра пока нет клиентов.'}</div>`}</section>
-    ${d.days.length > 1 ? `<section class="card blk" data-css="--i:${i++}"><div class="card-h"><h2>Звонки по дням</h2><span class="hint">последние ${d.days.length} ${plural(d.days.length, 'день', 'дня', 'дней')} со звонками</span></div><div class="chart" data-chart></div></section>` : ''}
-    <section class="card blk" data-css="--i:${i++}"><div class="card-h"><h2>${db ? 'Кому перезвонить' : 'Кому Ольге перезвонить'}</h2><span class="hint">${fmt(d.callbacks.length)}</span></div>
-      ${d.callbacks.length ? longList(d.callbacks, l => leadRows(l, true, true)) : '<div class="empty">Перезвонов нет.</div>'}</section>
-    ${moreBlock('Подробнее', 'по базам и источникам', `
-      <h3>По базам</h3>${d.bases.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Клиент</th><th>База от</th><th class="n">Номеров</th><th class="n">Обзвонено</th><th class="n">Дозвон</th><th class="n">Заинтерес.</th></tr></thead><tbody>
-        ${d.bases.map(b => `<tr><td>${esc(b.client)}</td><td class="nw">${yearDate(b.date)}</td><td class="n">${fmt(b.total)}</td><td class="n">${fmt(b.called)}</td><td class="n">${pctOf(b.reached || 0, b.called || 0)}</td><td class="n">${fmt(b.interested)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="hint">Дат баз в таблице нет.</p>'}
-      <h3>Источники</h3>${d.sources.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Клиент</th><th>Источник</th><th class="n">Номеров</th><th class="n">Дозвон</th><th class="n">Заинтерес.</th></tr></thead><tbody>
-        ${d.sources.map(s => `<tr><td>${esc(s.client)}</td><td>${esc(s.name || 'без тега')}</td><td class="n">${fmt(s.total)}</td><td class="n">${pctOf(s.reached, s.total)}</td><td class="n">${fmt(s.interested)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="hint">Источников нет.</p>'}`, i++)}
-  </div>`;
-  if ($('[data-chart]', view)) daysChart($('[data-chart]', view), d.days);
-  countUp(view);
-  const open = tr => go('callcenter', tr.dataset.name);
-  $('tbody', view)?.addEventListener('click', e => { const tr = e.target.closest('[data-name]'); if (tr) open(tr); });
-  $('tbody', view)?.addEventListener('keydown', e => { const tr = e.target.closest('[data-name]'); if (tr && e.key === 'Enter') open(tr); });
+      {key: 'cc-int', label: 'Заинтересованных', value: t.interested || 0}];
+    const sumKpi = t.sum == null ? kpiDash({label: 'Сумма по тарифу', help: sumHelp}, i++)
+      : kpiHtml({key: 'cc-sum', label: 'Сумма по тарифу', value: t.sum || 0, kind: 'rub', help: sumHelp}, i++);
+    view.innerHTML = `<div class="page">
+      ${notes.filter(Boolean).map(n => `<p class="hint blk" data-css="--i:${i++}">${n}</p>`).join('')}
+      <div class="kpis">${kpis.map(k => kpiHtml(k, i++)).join('')}${sumKpi}</div>
+      ${repeatInsight(t.reached_first || 0, t.reached || 0, t.called || 0).replace('class="insight"', `class="insight blk" data-css="--i:${i++}"`)}
+      <section class="card blk" data-css="--i:${i++}"><div class="card-h"><h2>По клиентам</h2><span class="hint">нажмите, чтобы открыть кабинет так, как его видит клиент</span></div>
+        ${d.clients.length ? `<div class="tbl-wrap"><table class="tbl anim"><thead><tr><th>Клиент</th><th class="n">Лидов</th><th class="n">Дозвон</th><th class="n">Заинтересованы</th>
+          <th class="n hide-m">Перезвон</th><th class="n hide-m">Ждут попытки ${help('Не взяли трубку, а третьей попытки ещё не было.')}</th><th class="n">Сумма</th><th></th></tr></thead><tbody>
+          ${d.clients.map((c, r) => `<tr class="click" tabindex="0" data-name="${esc(c.name)}" data-css="--r:${r}"><td><div class="t">${esc(c.name)}</div>${c.since ? `<div class="s">с ${esc(ddmm(c.since))}</div>` : ''}</td>
+            <td class="n">${fmt(c.leads)}</td><td class="n">${pctOf(c.reached, c.called)}</td><td class="n">${fmt(c.interested)}</td><td class="n hide-m">${fmt(c.callback)}</td>
+            <td class="n hide-m">${fmt(c.waiting)}</td><td class="n nw">${rubOrDash(c.sum)}</td><td>${svg('chev', 'go')}</td></tr>`).join('')}</tbody></table></div>`
+          : `<div class="empty">${db ? 'Клиентов пока нет: добавьте их в «Клиенты и номера».' : 'В таблице колл-центра пока нет клиентов.'}</div>`}</section>
+      ${d.days.length > 1 ? `<section class="card blk" data-css="--i:${i++}"><div class="card-h"><h2>Звонки по дням</h2><span class="hint">последние ${d.days.length} ${plural(d.days.length, 'день', 'дня', 'дней')} со звонками</span></div><div class="chart" data-chart></div></section>` : ''}
+      <section class="card blk" data-css="--i:${i++}"><div class="card-h"><h2>${db ? 'Кому перезвонить' : 'Кому Ольге перезвонить'}</h2><span class="hint">${fmt(d.callbacks.length)}</span></div>
+        ${d.callbacks.length ? longList(d.callbacks, l => leadRows(l, true, true)) : '<div class="empty">Перезвонов нет.</div>'}</section>
+      ${moreBlock('Подробнее', 'по базам и источникам', `
+        <h3>По базам</h3>${d.bases.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Клиент</th><th>База от</th><th class="n">Номеров</th><th class="n">Обзвонено</th><th class="n">Дозвон</th><th class="n">Заинтерес.</th></tr></thead><tbody>
+          ${d.bases.map(b => `<tr><td>${esc(b.client)}</td><td class="nw">${yearDate(b.date)}</td><td class="n">${fmt(b.total)}</td><td class="n">${fmt(b.called)}</td><td class="n">${pctOf(b.reached || 0, b.called || 0)}</td><td class="n">${fmt(b.interested)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="hint">Дат баз в таблице нет.</p>'}
+        <h3>Источники</h3>${d.sources.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Клиент</th><th>Источник</th><th class="n">Номеров</th><th class="n">Дозвон</th><th class="n">Заинтерес.</th></tr></thead><tbody>
+          ${d.sources.map(s => `<tr><td>${esc(s.client)}</td><td>${esc(s.name || 'без тега')}</td><td class="n">${fmt(s.total)}</td><td class="n">${pctOf(s.reached, s.total)}</td><td class="n">${fmt(s.interested)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="hint">Источников нет.</p>'}`, i++)}
+    </div>`;
+    if ($('[data-chart]', view)) daysChart($('[data-chart]', view), d.days);
+    countUp(view);
+    const open = tr => go('callcenter', tr.dataset.name);
+    $('tbody', view)?.addEventListener('click', e => { const tr = e.target.closest('[data-name]'); if (tr) open(tr); });
+    $('tbody', view)?.addEventListener('keydown', e => { const tr = e.target.closest('[data-name]'); if (tr && e.key === 'Enter') open(tr); });
+  }
+  await draw();
 };
 
 // Кабинет клиента: у клиента — свой, у директора — любой из колл-центра.
