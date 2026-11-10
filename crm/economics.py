@@ -22,12 +22,9 @@ PROVIDER_TIMEOUT = 5
 MANGO_DOC = ('https://developers.mango-office.ru/support/5_api-i-razrabotka/1_api-mango-office/'
              '5_opisanie_metodov_api_virtualnoy_ats_mango/7_7_api_konfiguratsiya/3_7_6_poluchenie_balansa/')
 ELEVEN_DOC = 'https://elevenlabs.io/docs/api-reference/user/subscription/get'
-OPENROUTER_DOC = 'https://openrouter.ai/docs/api/api-reference/api-keys/get-current-key'
-OPENROUTER_BALANCE_DOC = 'https://openrouter.ai/docs/api/api-reference/credits/get-remaining-credits'
 DEEPGRAM_DOC = 'https://developers.deepgram.com/reference/manage/billing/list'
 STARIMG_SITE = 'https://ai.starimg.ru/'
 YANDEX_DOC = 'https://yandex.cloud/ru/docs/billing/api-ref/BillingAccount/get'
-OCTAV_DOC = 'https://octavapi.shop/docs/start'
 EXPENSES = (
     ('AveronGPT', 'RUB', 'crm_questions', 'cost_rub', 'created_at', 'Расчёт CRM по использованию модели'),
     ('Агент доноров', 'RUB', 'donor_runs', 'rub', 'created_at', 'Расчёт CRM по запускам, включая поиск'),
@@ -43,9 +40,6 @@ GUIDES = {
     'ElevenLabs': ('Синтез речи для голосов ElevenLabs в голосовом роботе.',
                    'Робот не сможет озвучивать реплики выбранными голосами ElevenLabs.',
                    'Для автоматического чтения квоты действующему ключу нужен доступ User → Read.'),
-    'OpenRouter': ('Альтернативные модели и голоса, когда выбран OpenRouter.',
-                   'Вызовы через OpenRouter остановятся, когда закончатся кредиты счёта или исчерпается лимит ключа.',
-                   'Если будете использовать OpenRouter, добавьте рабочий ключ для лимита и отдельный Management Key для остатка счёта.'),
     'AI Star': ('Разборы звонков и переписок, агент РОПа, тренажёр и модели Starimg в AveronGPT и поиске доноров.',
                 'Остановятся запросы на модели AI Star.',
                 'Остаток доступен в кабинете AI Star.'),
@@ -55,9 +49,6 @@ GUIDES = {
     'Yandex Cloud': ('YandexGPT, синтез и распознавание речи SpeechKit, поиск Yandex Search.',
                      'Эти функции могут остановиться, если облако потеряет доступ к платёжному аккаунту.',
                      'Укажите ID платёжного аккаунта и выдайте существующему сервисному аккаунту роль billing.accounts.viewer на нём.'),
-    'Octav API': ('Резервная модель агента доноров.',
-                  'Если резерв включён, он не подхватит запросы после сбоя основной модели.',
-                  'Если нужен этот резерв, подключите его рабочий ключ. Для автообновления остатка нужен подтверждённый Octav способ чтения баланса.'),
 }
 
 
@@ -118,12 +109,11 @@ async def mango(pool, client_id: int) -> dict:
     return item
 
 
-async def get_json(url: str, headers: dict, *, accepted_errors: tuple[int, ...] = ()) -> dict:
+async def get_json(url: str, headers: dict) -> dict:
     async def fetch():
         async with httpx.AsyncClient(timeout=PROVIDER_TIMEOUT, follow_redirects=False, trust_env=False) as http:
             response = await http.get(url, headers=headers)
-            if response.status_code not in accepted_errors:
-                response.raise_for_status()
+            response.raise_for_status()
             data = response.json()
             return data if isinstance(data, dict) else {}
 
@@ -145,36 +135,6 @@ async def eleven() -> dict:
     remaining = max(0, limit - used)
     return measured(item, [metric('Остаток квоты', remaining, 'credits'),
                            metric('Использовано', used, 'credits'), metric('Лимит', limit, 'credits')], available(remaining))
-
-
-async def openrouter() -> dict:
-    key = configured('OPENROUTER_API_KEY')
-    management = configured('OPENROUTER_MANAGEMENT_KEY')
-    item = provider('OpenRouter', key or management, source=OPENROUTER_BALANCE_DOC if management else OPENROUTER_DOC,
-                    note='Расход и лимит ключа. Остаток счёта требует доступа к биллингу.')
-    if not (key or management):
-        return item
-    data, balance = await asyncio.gather(
-        get_json('https://openrouter.ai/api/v1/key', {'Authorization': 'Bearer ' + key}) if key else empty_json(),
-        get_json('https://openrouter.ai/api/v1/credits', {'Authorization': 'Bearer ' + management}) if management else empty_json(),
-    )
-    key_data = data.get('data') if isinstance(data.get('data'), dict) else {}
-    credits = balance.get('data') if isinstance(balance.get('data'), dict) else {}
-    total, used = number(credits.get('total_credits')), number(credits.get('total_usage'))
-    fields = (('Расход за месяц', 'usage_monthly'), ('Остаток лимита ключа', 'limit_remaining'), ('Лимит ключа', 'limit'))
-    metrics = [metric(label, value, 'USD') for label, field in fields if (value := number(key_data.get(field))) is not None]
-    funding = None
-    if total is not None and used is not None:
-        remaining = total - used
-        metrics.insert(0, metric('Остаток счёта', remaining, 'USD'))
-        funding = available(remaining)
-    if funding != 'depleted' and (key_remaining := number(key_data.get('limit_remaining'))) is not None and key_remaining <= 0:
-        funding = 'limit'
-    return measured(item, metrics, funding) if metrics else item
-
-
-async def empty_json() -> dict:
-    return {}
 
 
 async def deepgram() -> dict:
@@ -308,12 +268,9 @@ async def overview(pool, client_id: int, days: int = 30) -> dict:
     # Mango хранится в записи компании. Общие ключи из .env видны только домашней компании.
     if client_id == await home_client_id(pool):
         robot, *providers = await asyncio.gather(
-            robot_expense(pool, start, end), mango(pool, client_id), analysis_provider(), yandex(), deepgram(), eleven(),
-            openrouter())
+            robot_expense(pool, start, end), mango(pool, client_id), analysis_provider(), yandex(), deepgram(), eleven())
         if robot is not None:
             expenses.append(robot)
-        providers.append(provider('Octav API', configured('OCTAV_API_KEY'), source=OCTAV_DOC,
-                                  note='Резерв для агента доноров.'))
     else:
         providers = [await mango(pool, client_id)]
     return {'from': first.isoformat(), 'to': today.isoformat(), 'days': days, 'expenses': expenses,

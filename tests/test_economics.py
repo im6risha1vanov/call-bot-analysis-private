@@ -47,31 +47,6 @@ class ProviderEconomicsTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result['metrics'], [])
             self.assertNotIn('synthetic', json.dumps(result))
 
-    async def test_openrouter_allowlists_only_numbers_and_treats_null_limit_as_unknown(self):
-        response = {'data': {'usage_monthly': 7.45, 'limit': None, 'limit_remaining': None, 'label': 'synthetic-key'}}
-        with (
-            patch.dict(os.environ, {'OPENROUTER_API_KEY': 'synthetic-key'}),
-            patch.object(economics, 'get_json', new_callable=AsyncMock, return_value=response),
-        ):
-            result = await economics.openrouter()
-        self.assertEqual(result['metrics'], [{'name': 'Расход за месяц', 'amount': 7.45, 'unit': 'USD'}])
-        self.assertNotIn('synthetic', json.dumps(result))
-
-    async def test_openrouter_reads_account_balance_with_separate_key(self):
-        responses = [
-            {'data': {'usage_monthly': 4, 'limit_remaining': 0}},
-            {'data': {'total_credits': 10, 'total_usage': 4}},
-        ]
-        with (
-            patch.dict(os.environ, {'OPENROUTER_API_KEY': 'synthetic-app', 'OPENROUTER_MANAGEMENT_KEY': 'synthetic-admin'}),
-            patch.object(economics, 'get_json', new_callable=AsyncMock, side_effect=responses) as get,
-        ):
-            result = await economics.openrouter()
-        self.assertEqual(result['funding'], 'limit')
-        self.assertEqual(result['metrics'][0], {'name': 'Остаток счёта', 'amount': 6, 'unit': 'USD'})
-        self.assertEqual(get.await_args_list[-1].args, ('https://openrouter.ai/api/v1/credits',
-                                                       {'Authorization': 'Bearer synthetic-admin'}))
-
     async def test_starimg_provider_links_to_dashboard_without_exposing_credentials(self):
         settings = {'CVC_BASE_URL': 'https://ai.starimg.ru/v1', 'CVC_API_KEY': 'synthetic-starimg-key'}
         with patch.dict(os.environ, settings, clear=True):
