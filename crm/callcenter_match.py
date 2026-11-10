@@ -214,11 +214,40 @@ async def mango_counts(pool, client_id: int, extensions, start: date | None, end
     start_at = datetime.combine(start, time.min, tz) if start else None
     end_at = datetime.combine(end + timedelta(days=1), time.min, tz) if end else None
     rows = await pool.fetch(
-        """SELECT extension, count(*) AS n FROM calls
+        """SELECT extension, count(*) AS n,
+                  count(DISTINCT NULLIF(right(regexp_replace(coalesce(client_number,''), '[^0-9]', '', 'g'), 10), '')) AS contacted,
+                  count(DISTINCT NULLIF(right(regexp_replace(coalesce(client_number,''), '[^0-9]', '', 'g'), 10), ''))
+                    FILTER (WHERE coalesce(duration_seconds,0)>0) AS connected
+           FROM calls
            WHERE client_id=$1 AND direction=2 AND extension = ANY($2::text[])
              AND ($3::timestamptz IS NULL OR call_started_at >= $3)
              AND ($4::timestamptz IS NULL OR call_started_at < $4)
            GROUP BY extension""", client_id, extensions, start_at, end_at)
+    return {str(row['extension']): {'calls': int(row['n']), 'contacted': int(row['contacted']),
+                                    'connected': int(row['connected'])} for row in rows}
+
+
+async def crm_lead_counts(pool, client_id: int, extensions, start: date | None, end: date | None, tz: ZoneInfo) -> dict:
+    """Count distinct CRM contacts explicitly marked as interested by this operator."""
+    extensions = [str(e) for e in extensions or [] if e]
+    if not extensions:
+        return {}
+    start_at = datetime.combine(start, time.min, tz) if start else None
+    end_at = datetime.combine(end + timedelta(days=1), time.min, tz) if end else None
+    rows = await pool.fetch(
+        """SELECT extension, count(DISTINCT phone) AS n FROM (
+              SELECT extension, NULLIF(right(regexp_replace(coalesce(number,''), '[^0-9]', '', 'g'), 10), '') AS phone
+              FROM crm_leads
+              WHERE client_id=$1 AND extension=ANY($2::text[]) AND lower(status) IN ('interested','proposal','meeting')
+                AND ($3::timestamptz IS NULL OR created_at >= $3)
+                AND ($4::timestamptz IS NULL OR created_at < $4)
+              UNION ALL
+              SELECT extension, NULLIF(right(regexp_replace(coalesce(number,''), '[^0-9]', '', 'g'), 10), '') AS phone
+              FROM crm_outcomes
+              WHERE client_id=$1 AND extension=ANY($2::text[]) AND lower(outcome) IN ('interested','proposal','meeting')
+                AND ($3::timestamptz IS NULL OR created_at >= $3)
+                AND ($4::timestamptz IS NULL OR created_at < $4)
+           ) marked GROUP BY extension""", client_id, extensions, start_at, end_at)
     return {str(row['extension']): int(row['n']) for row in rows}
 
 

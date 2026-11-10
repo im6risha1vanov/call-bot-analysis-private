@@ -202,8 +202,8 @@ class SheetCallcenterTests(unittest.IsolatedAsyncioTestCase):
     async def test_mango_calls_include_unmatched_calls(self):
         calls = {'items': [], 'truncated': False}
         result = await self.call(operator='oksana', operators=specs(), calls=calls,
-                                 mango_counts={'15': 106})
-        self.assertEqual(result['filters']['mango_calls'], 106)
+                                 mango_counts={'15': {'calls': 106, 'contacted': 104, 'connected': 80}})
+        self.assertEqual(result['filters']['mango_stats'], {'calls': 106, 'contacted': 104, 'connected': 80})
         self.assertEqual(result['total']['called'], 0)
 
     async def call(self, **kwargs):

@@ -376,7 +376,7 @@ def keep_attempts(start: date | None, end: date | None, operator: dict | None):
 async def callcenter(src, period: str | None = None, operator: str | None = None,
                      operators: list[dict] | None = None, today: date | None = None,
                      calls: dict | None = None, tz=None, robot: dict | None = None,
-                     mango_counts: dict | None = None) -> dict:
+                     mango_counts: dict | None = None, crm_lead_counts: dict | None = None) -> dict:
     """Колл-центр целиком для директора: все клиенты колл-центра в одном ответе.
 
     Без периода и сотрудника ответ тот же, что раньше. С фильтрами числа считаются
@@ -509,8 +509,12 @@ async def callcenter(src, period: str | None = None, operator: str | None = None
             'operators': states, 'unattributed': unattributed, 'undated': undated,
             'sum_available': sum_available, 'sum_reason': '' if sum_available else NO_SUM,
             'matching': matching, 'robot': robot,
-            'mango_calls': (mango_counts.get(str(chosen.get('extension') or ''), 0)
+            'mango_stats': (mango_counts.get(str(chosen.get('extension') or ''),
+                                             {'calls': 0, 'contacted': 0, 'connected': 0})
                             if mango_counts is not None and chosen and chosen.get('kind') != 'robot'
                             and chosen.get('configured') else None),
+            'crm_marked_leads': (crm_lead_counts.get(str(chosen.get('extension') or ''), 0)
+                                 if crm_lead_counts is not None and chosen and chosen.get('kind') != 'robot'
+                                 and chosen.get('configured') else None),
         },
     }

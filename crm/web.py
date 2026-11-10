@@ -424,12 +424,13 @@ async def api_callcenter(request):
         tz = await store.zone(pool, who.company)
         today = datetime.now(timezone.utc).astimezone(tz).date()
         operators = await call_analysis.operators(pool, who.company)
-        calls = robot = mango_counts = None
+        calls = robot = mango_counts = crm_lead_counts = None
         if period or operator:
             start, end = cabinet.period_range(period, today) if period else (None, None)
             extensions = [op['extension'] for op in operators
                           if op.get('kind') != 'robot' and op.get('extension') and op.get('configured')]
             mango_counts = await callcenter_match.mango_counts(pool, who.company, extensions, start, end, tz)
+            crm_lead_counts = await callcenter_match.crm_lead_counts(pool, who.company, extensions, start, end, tz)
             if getattr(src, 'mode', 'db') == 'sheet':
                 # Автор попытки в таблице не записан: сверяем звонки Mango по телефону, дню и кампании.
                 calls = await callcenter_match.mango_calls(pool, who.company, extensions, start, end, tz)
@@ -437,7 +438,8 @@ async def api_callcenter(request):
             robot = await callcenter_robot.slice(pool, who.company, start, end, tz, robot_spec)
         return web.json_response(await cabinet.callcenter(src, period=period or None, operator=operator or None,
                                                           operators=operators, today=today, calls=calls,
-                                                          tz=tz, robot=robot, mango_counts=mango_counts))
+                                                          tz=tz, robot=robot, mango_counts=mango_counts,
+                                                          crm_lead_counts=crm_lead_counts))
     except LookupError as exc:
         raise ValueError(str(exc))
 

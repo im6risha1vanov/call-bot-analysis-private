@@ -117,12 +117,20 @@ VIEWS.callcenter = async (view, arg) => {
     const sumHelp = f.sum_available
       ? (db ? 'Первичные и повторные звонки и заинтересованные по ценам из «Клиенты и номера».' : 'Первичные и повторные звонки и заинтересованные по ценам из листа «Сводка».')
       : (f.sum_reason || '');
+    const ms = f.mango_stats;
+    const mangoKpis = ms ? [
+      {key: 'cc-mango', label: 'Звонков Mango', value: ms.calls, sub: 'Исходящие, включая повторные'},
+      {key: 'cc-mango-contacted', label: 'Обзвонено номеров', value: ms.contacted, sub: 'Уникальные номера в Mango'},
+      {key: 'cc-mango-connected', label: 'Дозвон Mango', value: ms.contacted ? ms.connected / ms.contacted * 100 : 0,
+       kind: 'pct', sub: `${fmt(ms.connected)} номеров с ненулевой длительностью; возможны автоответчики`},
+      ...(f.crm_marked_leads != null ? [{key: 'cc-crm-leads', label: 'Лидов отмечено в CRM', value: f.crm_marked_leads,
+        sub: 'Уникальные номера, отмеченные сотрудником за период'}] : []),
+    ] : [];
     const kpis = [
-      ...(f.mango_calls != null ? [{key: 'cc-mango', label: 'Исходящих звонков Mango', value: f.mango_calls,
-        sub: 'Все звонки сотрудника за период, включая не связанные с таблицей'}] : []),
-      {key: 'cc-called', label: 'Лидов обзвонено', value: t.called || 0, sub: `из ${fmt(t.total)} переданных`},
-      {key: 'cc-rate', label: 'Дозвон', value: t.called ? t.reached / t.called * 100 : 0, kind: 'pct', sub: `${fmt(t.reached)} взяли трубку`},
-      {key: 'cc-int', label: 'Заинтересованных', value: t.interested || 0}];
+      ...mangoKpis,
+      {key: 'cc-called', label: ms ? 'Лидов обзвонено (таблица)' : 'Лидов обзвонено', value: t.called || 0, sub: `из ${fmt(t.total)} переданных`},
+      {key: 'cc-rate', label: ms ? 'Дозвон (таблица)' : 'Дозвон', value: t.called ? t.reached / t.called * 100 : 0, kind: 'pct', sub: `${fmt(t.reached)} взяли трубку`},
+      {key: 'cc-int', label: ms ? 'Заинтересованных (таблица)' : 'Заинтересованных', value: t.interested || 0}];
     const sumKpi = t.sum == null ? kpiDash({label: 'Сумма по тарифу', help: sumHelp}, i++)
       : kpiHtml({key: 'cc-sum', label: 'Сумма по тарифу', value: t.sum || 0, kind: 'rub', help: sumHelp}, i++);
     // Робот — из своей вкладки: попытки и лиды считаются по разным определениям и не смешиваются с листом.
