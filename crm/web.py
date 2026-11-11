@@ -400,6 +400,12 @@ async def api_cabinet(request):
             name = who.client_key
         else:
             name = request.query.get('client')
+            if request.query.get('operator') == 'oksana':
+                if not await callcenter_access.allowed(request.app[POOL], who):
+                    raise Forbidden('Кабинет оператора недоступен.')
+                sheet = await cabinet.oksana_sheet_of(request.app[POOL], who.company)
+                if sheet is None:
+                    raise LookupError('Таблица Оксаны не подключена.')
             if not name:
                 return web.json_response({'clients': (await cabinet.summary(sheet))['clients']})
         return web.json_response(await cabinet.cabinet(sheet, name))
@@ -420,12 +426,16 @@ async def api_callcenter(request):
             raise Forbidden(access['reason'])
     try:
         src = await cabinet.source_of(pool, who.company)
+        oksana_sheet = await cabinet.oksana_sheet_of(pool, who.company)
+        dedicated = operator == 'oksana' and oksana_sheet is not None
+        if dedicated:
+            src = oksana_sheet
         # «Сегодня» — по часовому поясу компании, а не сервера.
         tz = await store.zone(pool, who.company)
         today = datetime.now(timezone.utc).astimezone(tz).date()
         operators = await call_analysis.operators(pool, who.company)
         calls = robot = mango_counts = crm_lead_counts = None
-        if period or operator:
+        if (period or operator) and not dedicated:
             start, end = cabinet.period_range(period, today) if period else (None, None)
             extensions = [op['extension'] for op in operators
                           if op.get('kind') != 'robot' and op.get('extension') and op.get('configured')]
@@ -439,7 +449,8 @@ async def api_callcenter(request):
         return web.json_response(await cabinet.callcenter(src, period=period or None, operator=operator or None,
                                                           operators=operators, today=today, calls=calls,
                                                           tz=tz, robot=robot, mango_counts=mango_counts,
-                                                          crm_lead_counts=crm_lead_counts))
+                                                          crm_lead_counts=crm_lead_counts,
+                                                          oksana_sheet_available=oksana_sheet is not None))
     except LookupError as exc:
         raise ValueError(str(exc))
 

@@ -91,7 +91,7 @@ VIEWS.callcenter = async (view, arg) => {
     try {
       d = await loading(view, api('/api/callcenter' + qs(canFilter ? {period: S.cc.period, operator: S.cc.operator} : {})), 'page');
     } catch (e) {
-      if (S.cc.operator) { S.cc.operator = ''; return draw(); }  // сервер не принял сотрудника: остаёмся на «Весь отдел»
+      if (S.cc.operator && S.cc.operator !== 'oksana') { S.cc.operator = ''; return draw(); }
       throw e;
     }
     if (my !== seq || !view.isConnected) return;
@@ -105,6 +105,7 @@ VIEWS.callcenter = async (view, arg) => {
     const rob = f.robot || {};
     // Что источник не хранит — так и пишем: прочерк и причина лучше выдуманного числа.
     const notes = [];
+    if (f.operator_sheet) notes.push(`Источник статистики — таблица «${esc(f.operator_sheet)}».`);
     if (canFilter && f.operator_available === false) notes.push(esc(f.operator_reason || 'Разрез по сотрудникам недоступен.'));
     if (canFilter && f.sum_available === false) notes.push(esc(f.sum_reason || 'Сумма за период недоступна.'));
     const off = (f.operators || []).filter(o => !o.available && (o.kind !== 'robot' || filtering));
@@ -151,7 +152,7 @@ VIEWS.callcenter = async (view, arg) => {
       <div class="kpis">${kpis.map(k => kpiHtml(k, i++)).join('')}${sumKpi}</div>
       ${robotCard}
       ${repeatInsight(t.reached_first || 0, t.reached || 0, t.called || 0).replace('class="insight"', `class="insight blk" data-css="--i:${i++}"`)}
-      <section class="card blk" data-css="--i:${i++}"><div class="card-h"><h2>По клиентам</h2><span class="hint">нажмите, чтобы открыть кабинет так, как его видит клиент</span></div>
+      <section class="card blk" data-css="--i:${i++}"><div class="card-h"><h2>По клиентам</h2><span class="hint">${f.operator_sheet ? 'нажмите, чтобы открыть статистику клиента' : 'нажмите, чтобы открыть кабинет так, как его видит клиент'}</span></div>
         ${d.clients.length ? `<div class="tbl-wrap"><table class="tbl anim"><thead><tr><th>Клиент</th><th class="n">Лидов</th><th class="n">Дозвон</th><th class="n">Заинтересованы</th>
           <th class="n hide-m">Перезвон</th><th class="n hide-m">Ждут попытки ${help('Не взяли трубку, а третьей попытки ещё не было.')}</th><th class="n">Сумма</th><th></th></tr></thead><tbody>
           ${d.clients.map((c, r) => `<tr class="click" tabindex="0" data-name="${esc(c.name)}" data-css="--r:${r}"><td><div class="t">${esc(c.name)}</div>${c.since ? `<div class="s">с ${esc(ddmm(c.since))}</div>` : ''}</td>
@@ -180,10 +181,11 @@ VIEWS.callcenter = async (view, arg) => {
 // Кабинет клиента: у клиента — свой, у директора — любой из колл-центра.
 async function cabinetView(view, name) {
   const dir = S.me.role === 'director';
+  const operator = dir && S.me.callcenter_filters && S.cc?.operator === 'oksana' ? 'oksana' : '';
   setHead({title: dir ? name : 'Кабинет', back: dir ? () => go('callcenter') : null,
-    actions: dir && !S.me.readonly ? '<button class="btn" type="button" data-cl-link>Ссылка для клиента</button>' : ''});
+    actions: dir && !S.me.readonly && !operator ? '<button class="btn" type="button" data-cl-link>Ссылка для клиента</button>' : ''});
   $('[data-cl-link]', $('#top'))?.addEventListener('click', e => clientLink(e.currentTarget, name));
-  const c = await loading(view, api('/api/cabinet' + qs({client: dir ? name : ''})), 'page');
+  const c = await loading(view, api('/api/cabinet' + qs({client: dir ? name : '', operator})), 'page');
   if (!dir) setHead({title: c.name || 'Кабинет', sub: c.since ? `данные с ${esc(yearDate(c.since))}` : ''});
   else $('#top .sub-t')?.remove();
   const k = c.counts, s = c.summary;

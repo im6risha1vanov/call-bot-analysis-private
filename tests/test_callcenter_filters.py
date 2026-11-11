@@ -199,6 +199,15 @@ class MatchTests(unittest.TestCase):
 
 
 class SheetCallcenterTests(unittest.IsolatedAsyncioTestCase):
+    async def test_dedicated_sheet_counts_attempts_without_an_operator_column(self):
+        with patch.dict(os.environ, {'KITCHEN_SHEET_ID': 'leads'}), patch.object(gsheets, 'values', fake_values):
+            result = await cabinet.callcenter(
+                cabinet.SheetSource('leads', operator_id='oksana'), period='today', operator='oksana',
+                operators=specs(), today=TODAY, tz=TZ)
+        self.assertEqual(result['filters']['operator_sheet'], 'Оксана')
+        self.assertEqual(result['total']['called'], 2)
+        self.assertEqual(result['total']['reached'], 1)
+
     async def test_mango_calls_include_unmatched_calls(self):
         calls = {'items': [], 'truncated': False}
         result = await self.call(operator='oksana', operators=specs(), calls=calls,

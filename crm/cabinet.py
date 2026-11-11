@@ -251,8 +251,9 @@ class SheetSource:
     """Таблица «Прозвон лидов»: лист «Сводка» и по листу на клиента."""
     mode = 'sheet'
 
-    def __init__(self, sheet: str):
+    def __init__(self, sheet: str, operator_id: str = ''):
         self.sheet = sheet
+        self.operator_id = operator_id
         self.operator_field = False  # колонку «Оператор» ищем в шапке листа, а не выдумываем
 
     async def summary(self) -> dict:
@@ -271,6 +272,16 @@ class SheetSource:
     async def sum_prices(self) -> None:
         """Сумма листа считается по лиду, а не по звонку: цен для среза периода нет."""
         return None
+
+
+async def oksana_sheet_of(pool, client_id: int | None) -> SheetSource | None:
+    from . import company
+    firm = await company.info(pool, client_id)
+    if firm['home'] and 'callcenter' in firm['modules']:
+        sheet = '1Jt7w7AhHtz8D3Q12hyPA98P6c9Cne1kr831oFZKhtE4'
+        gsheets.allow(sheet)
+        return SheetSource(sheet, operator_id='oksana')
+    return None
 
 
 async def source_of(pool, client_id: int | None):
@@ -376,7 +387,8 @@ def keep_attempts(start: date | None, end: date | None, operator: dict | None):
 async def callcenter(src, period: str | None = None, operator: str | None = None,
                      operators: list[dict] | None = None, today: date | None = None,
                      calls: dict | None = None, tz=None, robot: dict | None = None,
-                     mango_counts: dict | None = None, crm_lead_counts: dict | None = None) -> dict:
+                     mango_counts: dict | None = None, crm_lead_counts: dict | None = None,
+                     oksana_sheet_available: bool = False) -> dict:
     """Колл-центр целиком для директора: все клиенты колл-центра в одном ответе.
 
     Без периода и сотрудника ответ тот же, что раньше. С фильтрами числа считаются
@@ -394,7 +406,8 @@ async def callcenter(src, period: str | None = None, operator: str | None = None
     sheets = await asyncio.gather(*(src.records(c['name']) for c in info['clients']), return_exceptions=True)
     mode = getattr(src, 'mode', 'db')
     has_column = bool(getattr(src, 'operator_field', False))
-    filtered = bool(period or operator)
+    dedicated = bool(operator and operator == getattr(src, 'operator_id', ''))
+    filtered = bool(period or (operator and not dedicated))
     prices = await src.sum_prices() if filtered and hasattr(src, 'sum_prices') else None
 
     pairs = []
@@ -406,7 +419,10 @@ async def callcenter(src, period: str | None = None, operator: str | None = None
         pairs.append((row, records))
 
     # Автор попытки: колонка листа, добавочный в базе или подтверждённая сверка с Mango.
-    if mode == 'db':
+    if dedicated:
+        matching = callcenter_match.empty()
+        matching['source'] = 'sheet'
+    elif mode == 'db':
         matching = callcenter_match.empty('Колл-центр ведётся в базе: автор попытки уже записан добавочным Mango.')
         matching['source'] = 'db'
     elif has_column:
@@ -431,9 +447,13 @@ async def callcenter(src, period: str | None = None, operator: str | None = None
         chosen = by_id.get(operator)
         if chosen is None:
             raise ValueError('Неизвестный сотрудник.')
-    states, operator_available = [], mode == 'db' or has_column or matched or bool(robot.get('available'))
+    states, operator_available = [], mode == 'db' or has_column or matched or bool(robot.get('available')) or oksana_sheet_available
     for op in operators or []:
         available, reason = operator_state(op, mode, has_column, matched, robot)
+        if op['id'] == 'oksana' and (oksana_sheet_available or dedicated):
+            available, reason = True, ''
+        elif dedicated and op.get('configured'):
+            available, reason = True, ''
         item = {'id': op['id'], 'name': op.get('short') or op['name'], 'available': available,
                 'reason': reason, 'attempts': 0, 'extension': op.get('extension') or '',
                 'source': op.get('source') or '', 'kind': op.get('kind') or 'operator'}
@@ -445,7 +465,7 @@ async def callcenter(src, period: str | None = None, operator: str | None = None
         state = next(s for s in states if s['id'] == chosen['id'])
         if not state['available']:
             raise ValueError(state['reason'] or 'Сотрудник не сопоставлен.')
-    keep = keep_attempts(start, end, chosen) if filtered else None
+    keep = keep_attempts(start, end, None if dedicated else chosen) if filtered else None
 
     clients, callbacks, sources = [], [], defaultdict(lambda: defaultdict(int))
     days = defaultdict(lambda: defaultdict(int))
@@ -464,7 +484,7 @@ async def callcenter(src, period: str | None = None, operator: str | None = None
                 if filtered and not keep(attempt):
                     continue
                 found = next((s for s in states if s['available'] and
-                              attempt_belongs(attempt, by_id[s['id']])), None)
+                              (s['id'] == operator if dedicated else attempt_belongs(attempt, by_id[s['id']]))), None)
                 if found is not None:
                     found['attempts'] += 1
                 elif operator_available:
@@ -509,6 +529,7 @@ async def callcenter(src, period: str | None = None, operator: str | None = None
             'operators': states, 'unattributed': unattributed, 'undated': undated,
             'sum_available': sum_available, 'sum_reason': '' if sum_available else NO_SUM,
             'matching': matching, 'robot': robot,
+            'operator_sheet': 'Оксана' if dedicated else '',
             'mango_stats': (mango_counts.get(str(chosen.get('extension') or ''),
                                              {'calls': 0, 'contacted': 0, 'connected': 0})
                             if mango_counts is not None and chosen and chosen.get('kind') != 'robot'
