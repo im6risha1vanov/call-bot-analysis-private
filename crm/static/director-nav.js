@@ -87,7 +87,7 @@ window.CRMWorkspaceNav = (() => {
         <button class="director-find" type="button" data-director-directory aria-haspopup="dialog">${svg('search')}Все разделы</button>
       </nav>
       <div class="workspace-account">
-      ${window.gptButton && hasModule('gpt') ? gptButton(true) : ''}
+      ${window.gptButton && hasModule('gpt') ? gptButton() : ''}
       <details class="director-profile">
         <summary aria-label="Профиль">${ava(S.me.name)}<span class="workspace-profile-text"><strong>${esc(S.me.name || (isDirector() ? 'Директор' : 'Менеджер'))}</strong><small>${isDirector() ? 'Директор' : 'Менеджер'}${S.me.ext ? ' · доб. ' + esc(S.me.ext) : ''}</small></span>${svg('chev')}</summary>
         <div class="director-profile-menu card"><button class="ghost" type="button" data-theme-btn>${themeLabel()}</button>${switchBtn()}${exitLink()}</div>

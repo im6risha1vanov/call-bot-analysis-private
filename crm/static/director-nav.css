@@ -53,8 +53,18 @@
 .director-nav .director-find { border-color: var(--line); color: var(--fg); }
 .director-find .ico, .director-profile .ico { width: 15px; height: 15px; }
 .workspace-account { display: flex; align-items: center; gap: 10px; }
-.workspace-account .gpt-compact { width: 44px; height: 44px; padding: 0; border-radius: 50%; }
-.workspace-account .gpt-compact[aria-expanded="true"] { background: var(--accent-soft); border-color: var(--accent); }
+.workspace-account .gpt-btn {
+  width: auto;
+  min-height: 44px;
+  margin: 0;
+  padding: 0 12px;
+  border-color: var(--line);
+  border-radius: 999px;
+  gap: 8px;
+  white-space: nowrap;
+  color: var(--fg);
+}
+.workspace-account .gpt-btn[aria-expanded="true"] { border-color: var(--accent); }
 .director-profile { position: relative; min-width: 0; }
 .director-profile summary {
   display: flex;
