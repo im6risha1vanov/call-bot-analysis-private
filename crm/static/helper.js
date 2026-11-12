@@ -27,7 +27,7 @@ function gptChips() {
 }
 
 function gptButton(compact = false) {
-  return `<button type="button" class="${compact ? 'btn ghost gpt-compact' : 'gpt-btn'}" data-gpt aria-label="AveronGPT" aria-expanded="${GPT.open}" aria-controls="gpt">${GPT_ORB}${compact ? '' : '<span>AveronGPT</span>'}</button>`;
+  return `<button type="button" class="${compact ? 'btn ghost gpt-compact' : 'gpt-btn'}" data-gpt aria-label="AveronGPT" title="AveronGPT" aria-expanded="${GPT.open}" aria-controls="gpt">${GPT_ORB}${compact ? '' : '<span>AveronGPT</span>'}</button>`;
 }
 
 function gptShell() {
@@ -180,7 +180,7 @@ const TOUR = {
     ['#view .card', 'Перезвоны', 'Все договорённости перезвонить и встречи по датам, просроченные сверху. Перезвон можно перенести, закрыть или отменить.'],
   ],
   deals: () => [
-    ['#view .tabs', 'Сделки и договоры', 'Во вкладке «Договоры» журнал договоров и генератор договора по ИНН.'],
+    ['[data-director-subnav], #view .tabs', 'Сделки и договоры', 'Во вкладке «Договоры» журнал договоров и генератор договора по ИНН.'],
     ['.stages', 'Этапы сделки', 'Путь клиента от базы номеров до оплаты. Нажмите на этап, чтобы увидеть сделки только на нём.'],
     ['#view section.card', 'Список сделок', 'Сделки с фильтром: в работе, зависшие, отказ, оплачено. Сделка зависает, если долго без движения. Нажмите на сделку, чтобы открыть карточку.'],
     ['details.more', 'Как считаются сделки', 'Что CRM отмечает сама по звонкам и презентациям, а что менеджер отмечает руками.'],

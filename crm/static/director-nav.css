@@ -1,4 +1,4 @@
-.director-app {
+.workspace-app {
   --work-width: 1280px;
   --work-gutter: clamp(16px, 3vw, 40px);
   grid-template-columns: minmax(0, 1fr);
@@ -52,6 +52,9 @@
 }
 .director-nav .director-find { border-color: var(--line); color: var(--fg); }
 .director-find .ico, .director-profile .ico { width: 15px; height: 15px; }
+.workspace-account { display: flex; align-items: center; gap: 10px; }
+.workspace-account .gpt-compact { width: 44px; height: 44px; padding: 0; border-radius: 50%; }
+.workspace-account .gpt-compact[aria-expanded="true"] { background: var(--accent-soft); border-color: var(--accent); }
 .director-profile { position: relative; min-width: 0; }
 .director-profile summary {
   display: flex;
@@ -84,14 +87,14 @@
 }
 .director-profile-menu .ghost { text-align: left; text-decoration: none; }
 
-.director-app .top { position: static; }
-.director-app .top-in { padding-block: 10px 14px; gap: 12px; }
-.director-app .title-row h1 {
+.workspace-app .top { position: static; }
+.workspace-app .top-in { padding-block: 10px 14px; gap: 12px; }
+.workspace-app .title-row h1 {
   font-size: clamp(25px, 3vw, 38px);
   font-weight: 600;
   letter-spacing: -.035em;
 }
-.director-app .top-in[data-page="summary"] h1 {
+.workspace-app .top-in[data-page="summary"] h1 {
   color: var(--accent-text);
   background: var(--accent-soft);
   padding: 2px 8px;
@@ -133,7 +136,7 @@
 }
 .director-attention-in .link { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; }
 .director-attention-in .ico { width: 14px; height: 14px; }
-.director-app .content { padding-bottom: 48px; }
+.workspace-app .content { padding-bottom: 48px; }
 
 .director-summary [data-learning-target="summary-kpis"] { background: none; border: 0; gap: 10px; }
 .director-summary [data-learning-target="summary-kpis"] .kpi {
@@ -195,10 +198,12 @@
   .director-header { position: static; }
   .director-header-in { gap: 4px 8px; }
   .director-nav button, .director-subnav button { min-height: 44px; padding-inline: 7px; }
-  .director-app .head-actions > :is(button,a) { max-width: 100%; white-space: normal; }
+  .workspace-app .head-actions > :is(button,a) { max-width: 100%; white-space: normal; }
   .director-attention-in .link, .director-summary .summary-team .link { min-height: 44px; }
 }
 @media (max-width: 640px) {
+  .workspace-profile-text { display: none; }
+  .workspace-account { gap: 6px; }
   .director-directory.rvm.rvm-wide { width: 100%; }
   .director-directory .field input { font-size: 16px; }
   .director-directory-grid { grid-template-columns: minmax(0, 1fr); gap: 14px; }

@@ -24,7 +24,7 @@ function dealSteps(d) {
     return `<span class="${cls}">${esc(st.name)}</span>`;
   }).join('')}</div>`;
 }
-const dealTabs = cur => tabsHtml([['', 'Сделки'], ...(hasModule('contracts') ? [['contracts', 'Договоры']] : [])], cur);
+const dealTabs = cur => workspaceNav() ? '' : tabsHtml([['', 'Сделки'], ...(hasModule('contracts') ? [['contracts', 'Договоры']] : [])], cur);
 function bindDealTabs(view) {
   $$('[data-tab]', view).forEach(b => b.addEventListener('click', () => go('deals', b.dataset.tab || null)));
 }
@@ -287,7 +287,7 @@ const contractTitle = c => `${c.type_title}${c.num ? ' № ' + c.num : c.base_nu
 async function contractsView(view) {
   const deal = S.contractDeal || (S.me.learning ? window.AveronLearningWorkspace?.classroom?.restoreContractDeal() : null) || null;
   S.contractDeal = null;
-  setHead({title: directorNav() ? 'Договоры' : 'Сделки'});
+  setHead({title: workspaceNav() ? 'Договоры' : 'Сделки'});
   const first = await loading(view, api('/api/contracts'), 'table');
   view.innerHTML = `<div class="page">${dealTabs('contracts')}<div data-gen></div><section class="card blk" data-learning-target="contract-journal" data-css="--i:1" data-log></section></div>`;
   bindDealTabs(view);

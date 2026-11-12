@@ -440,7 +440,7 @@ const menu = () => {
   const m = MENU[S.me.role];
   return {nav: m.nav.filter(allowed), more: m.more.filter(allowed), tabs: m.tabs.filter(allowed)};
 };
-const brand = '<div class="logo"><span class="logo-mark" aria-hidden="true">A</span><span>Averon <b>CRM</b></span></div>';
+const brand = '<div class="logo"><span>Averon <b>CRM</b></span></div>';
 
 function showLogin() {
   window.closePageHelp?.();window.CRMGuideGuard?.setMode(false);
@@ -470,13 +470,14 @@ const exitLink = () => S.me.learning ? '<a class="ghost" href="/learning/exit">�
   : S.me.test ? '<a class="ghost" href="/test-exit">Сменить вход</a>' : '<button class="ghost" type="button" data-logout>Выйти</button>';
 // «Сменить учётку» без пароля: только у наших учёток с отметкой platform (crm/platform.py), окно в companies.js
 const switchBtn = () => S.me.switcher && window.switchAccount ? '<button class="ghost" type="button" data-switch>Сменить учётку</button>' : '';
-const directorNav = () => S.me?.role === 'director' && !S.me.learning && !S.me.learning_mode ? window.CRMDirectorNav : null;
+const workspaceNav = () => ['director', 'manager'].includes(S.me?.role) && !S.me.learning && !S.me.learning_mode ? window.CRMWorkspaceNav : null;
+const directorNav = () => S.me?.role === 'director' ? workspaceNav() : null;
 function shell() {
   const m = menu();
   moreOpen = m.more.includes(S.page);
-  const director = directorNav();
-  root.innerHTML = `<div class="app${director ? ' director-app' : ''}">
-    ${director ? director.header() : `<aside class="side">
+  const workspace = workspaceNav();
+  root.innerHTML = `<div class="app${workspace ? ' workspace-app' : ''}">
+    ${workspace ? workspace.header() : `<aside class="side">
       ${brand}
       <nav class="nav" id="nav" aria-label="Разделы"></nav>
       ${window.gptButton && hasModule('gpt') ? gptButton() : ''}
@@ -490,7 +491,7 @@ function shell() {
         : S.me.support ? `<div class="banner"><b>Просмотр компании «${esc(S.me.company || '')}»</b><span>Глазами директора, только смотреть.</span><a href="/support-exit">Вернуться к себе</a></div>`
         : S.me.test ? `<div class="banner"><b>Просмотр · ${esc(ROLE_NAME[S.me.role] || '')}</b><span data-readonly-notice>Только смотреть: звонки и изменения работают под своим логином.</span><a href="/test-exit">Сменить вход</a></div>` : ''}
       <header class="top"><div class="top-in" id="top"></div></header>
-      ${director ? director.attention() : ''}
+      ${directorNav()?.attention() || ''}
       <main class="content" id="view"></main>
     </div></div>
     <nav class="tabbar" id="tabbar" aria-label="Разделы"></nav>
@@ -504,8 +505,8 @@ function navButton(id) {
   return `<button type="button" data-go="${id}"${(S.page === id || (id === 'queue' && S.me.role === 'manager' && S.page === 'callbacks')) ? ' aria-current="page"' : ''}>${svg(p.icon)}<span>${esc(p.name)}</span><span class="count" data-count="${id}">${S.counts?.[id] || ''}</span></button>`;
 }
 function renderNav() {
-  const director = directorNav();
-  if (director) { director.render(); return; }
+  const workspace = workspaceNav();
+  if (workspace) { workspace.render(); return; }
   const m = menu();
   if (m.nav.length + m.more.length < 2) { $('#nav').innerHTML = ''; $('#tabbar').innerHTML = ''; $('#tabbar').hidden = true; return; }
   $('#nav').innerHTML = m.nav.map(navButton).join('') + (m.more.length ? `<button type="button" class="more" aria-expanded="${moreOpen}">${svg('dots')}<span>Ещё</span>${svg('chev', 'chev')}</button>
@@ -532,14 +533,14 @@ function setCount(page, n) {
 // Шапка страницы: заголовок, «назад», фильтры. Страница вызывает её сама, когда знает, что показать.
 function setHead({title = '', sub = '', filters = '', back = null, actions = ''} = {}) {
   const top = $('#top');
-  const director = directorNav();
-  if (director) top.dataset.page = S.page;
+  const workspace = workspaceNav();
+  if (workspace) top.dataset.page = S.page;
   const helpButton = ['manager','director'].includes(S.me?.role)
     ? `<button class="btn ghost" type="button" data-page-help aria-label="Справка" aria-controls="page-help" aria-expanded="false">${svg('help')}<span>Справка</span></button>`
     : '';
-  top.innerHTML = `${director ? director.subnav() : ''}<div class="title-row">${back ? `<button class="back" type="button" aria-label="Назад">${svg('back')}</button>` : ''}
-    <h1>${esc(title || director?.title() || PAGES[S.page]?.name || '')}</h1>${sub ? `<span class="sub-t">${sub}</span>` : ''}<div class="head-actions">${actions}${helpButton}
-      ${!director && window.gptButton && hasModule('gpt') ? gptButton(true) : ''}</div></div>
+  top.innerHTML = `${workspace ? workspace.subnav() : ''}<div class="title-row">${back ? `<button class="back" type="button" aria-label="Назад">${svg('back')}</button>` : ''}
+    <h1>${esc(title || workspace?.title() || PAGES[S.page]?.name || '')}</h1>${sub ? `<span class="sub-t">${sub}</span>` : ''}<div class="head-actions">${actions}${helpButton}
+      ${!workspace && window.gptButton && hasModule('gpt') ? gptButton(true) : ''}</div></div>
     <div class="bar-f">${filters}</div>`;
   if (back) $('.back', top).onclick = back;
   return top;
@@ -581,10 +582,10 @@ async function go(target, arg = null, opts = {}) {
   view.className = 'content'; view.id = 'view';
   old.replaceWith(view);
   const seq = ++navSeq;
-  if ((!same || (directorNav() && routeChanged)) && !opts.keepScroll) scrollTo({top: 0});
+  if ((!same || (workspaceNav() && routeChanged)) && !opts.keepScroll) scrollTo({top: 0});
   try {
     await VIEWS[page](view, a);
-    if (seq === navSeq && trackVisit) directorNav()?.recordVisit();
+    if (seq === navSeq && trackVisit) workspaceNav()?.recordVisit();
     if (seq === navSeq && window.learningPageChanged) learningPageChanged();
     if(seq===navSeq&&window.pageHelpChanged)pageHelpChanged();
   } catch (e) {
@@ -601,7 +602,7 @@ const m = menu;
 const reload = () => go(S.page, S.arg, {push: false, keepScroll: true});
 
 document.addEventListener('click', e => {
-  if (e.target.closest('[data-director-directory]')) { directorNav()?.openDirectory(); return; }
+  if (e.target.closest('[data-director-directory]')) { workspaceNav()?.openDirectory(); return; }
   const attention = e.target.closest('[data-director-overdue]');
   if (attention) { S.f.ext = ''; saveFilters(); go('callbacks', 'late', {focus: true}); return; }
   const more = e.target.closest('.nav .more');

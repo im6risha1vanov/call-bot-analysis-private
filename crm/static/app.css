@@ -72,8 +72,7 @@ code{font-family:var(--mono);font-size:.92em;background:var(--surface-2);padding
   display:grid;grid-template-columns:clamp(200px,16vw,232px) minmax(0,1fr);min-height:100vh;min-height:100dvh}
 .side{background:var(--surface);border-right:1px solid var(--line);padding-block:20px 16px;padding-right:14px;padding-left:max(14px, env(safe-area-inset-left, 0px));
   display:flex;flex-direction:column;gap:20px;position:sticky;top:0;height:100vh;height:100dvh;overflow-y:auto}
-.logo{font-weight:700;font-size:17px;display:flex;align-items:center;gap:9px;padding:0 7px;letter-spacing:-.02em}
-.logo-mark{display:grid;place-items:center;width:30px;height:30px;border-radius:8px;background:var(--accent);color:var(--accent-ink);font-size:18px}
+.logo{font-weight:700;font-size:17px;display:flex;align-items:center;padding:0 7px;letter-spacing:-.02em}
 .logo b{color:var(--accent-text);font-weight:700}
 .nav{display:flex;flex-direction:column;gap:2px}
 .nav button{position:relative;display:flex;align-items:center;gap:10px;min-height:38px;padding:8px 10px;border-radius:8px;border:0;background:none;text-align:left;width:100%;color:var(--muted);transition:background .15s, color .15s}
