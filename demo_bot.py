@@ -8,6 +8,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, ReplyKeyboardMarkup, KeyboardButton
 from dotenv import load_dotenv
+from telegram_polling import IPv4PollingSession
 
 ROOT=Path(__file__).parent
 load_dotenv(ROOT/'.env')
@@ -625,7 +626,7 @@ async def main():
     # из Bot(token, parse_mode=...) в DefaultBotProperties, и при обновлении
     # библиотеки настройка потерялась — теги <b> стали уезжать в чат текстом.
     # Динамические куски по всему файлу экранируются html.escape/esc.
-    bot=Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode='HTML'))
+    bot=Bot(BOT_TOKEN, session=IPv4PollingSession(), default=DefaultBotProperties(parse_mode='HTML'))
     dp=Dispatcher(); dp.include_router(router)
     # Переписка рабочего Telegram через Telegram Business: только сохраняем, ничего не отправляем.
     from review import tgbusiness

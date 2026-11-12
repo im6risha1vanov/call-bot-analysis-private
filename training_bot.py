@@ -29,6 +29,7 @@ from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import (BufferedInputFile, CallbackQuery, InlineKeyboardButton,
                             InlineKeyboardMarkup, Message)
 from dotenv import load_dotenv
+from telegram_polling import IPv4PollingSession
 
 ROOT = Path(__file__).parent
 load_dotenv(ROOT / '.env')
@@ -492,7 +493,7 @@ async def owner_only(handler, event, data):
 
 async def main() -> None:
     global PG_POOL
-    bot = Bot(BOT_TOKEN)
+    bot = Bot(BOT_TOKEN, session=IPv4PollingSession())
     dp = Dispatcher()
     router.message.outer_middleware(owner_only)
     router.callback_query.outer_middleware(owner_only)
