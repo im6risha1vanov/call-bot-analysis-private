@@ -22,8 +22,38 @@ class AlertTests(unittest.TestCase):
         ]
         stdout = '\n'.join(json.dumps({'__REALTIME_TIMESTAMP': '110000000', **row}) for row in rows)
         with patch.object(alerts.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, stdout)) as run:
-            self.assertEqual(alerts.read_journal(100, 120), Counter({'log:callbot-crm.service': 2}))
+            self.assertEqual(alerts.read_journal(100, 150), Counter({'log:callbot-crm.service': 2}))
             self.assertEqual(run.call_args.kwargs['timeout'], 15)
+
+    def test_poll_reset_requires_prompt_recovery_in_the_same_process(self):
+        bot = 'callbot-astra.service'
+        trainer = 'callbot-astra-trainer.service'
+        reset = ('ERROR Failed to fetch updates - TelegramNetworkError: HTTP Client says - '
+                 'ClientOSError: [Errno 104] Connection reset by peer')
+        recovery = 'INFO Connection established (tryings = 1, bot id = 42)'
+
+        def row(second, message, unit=bot, pid='100', invocation='a'):
+            return json.dumps({'__REALTIME_TIMESTAMP': str(second * 1_000_000),
+                               '_SYSTEMD_UNIT': unit, '_PID': pid, 'PRIORITY': '6',
+                               '_SYSTEMD_INVOCATION_ID': invocation,
+                               'MESSAGE': f'2026-11-12 16:42:02,009 {message}'})
+
+        for followup, expected in (
+            (row(126, recovery), Counter()),
+            (row(126, recovery, unit=trainer), Counter({f'log:{bot}': 1})),
+            (row(126, recovery, pid='101'), Counter({f'log:{bot}': 1})),
+            (row(126, recovery, invocation='b'), Counter({f'log:{bot}': 1})),
+            (row(146, recovery), Counter({f'log:{bot}': 1})),
+        ):
+            with self.subTest(followup=followup):
+                stdout = '\n'.join([row(115, reset), followup])
+                with patch.object(alerts.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, stdout)):
+                    self.assertEqual(alerts.read_journal(100, 146), expected)
+
+        stdout = '\n'.join([row(119, reset, unit=trainer), row(120, 'ERROR Another failure', unit=trainer),
+                            row(122, reset, unit=trainer), row(130, recovery, unit=trainer)])
+        with patch.object(alerts.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, stdout)):
+            self.assertEqual(alerts.read_journal(100, 150), Counter({f'log:{trainer}': 1}))
 
     def test_state_aggregates_retries_and_debounces(self):
         issue = 'log:callbot-crm.service'
@@ -33,11 +63,12 @@ class AlertTests(unittest.TestCase):
               patch.object(alerts, 'send', side_effect=[False, True, True]) as send):
             state = {}
             alerts.poll(state, 1000, 8095)
-            read.assert_called_with(940, 1000)
+            read.assert_called_with(910, 1000)
+            self.assertEqual(state['checked_until'], 970)
             self.assertEqual(state['pending'], {issue: 2})
             self.assertFalse(alerts.deliver(state, 1000, 'synthetic', 42))
             alerts.poll(state, 1060, 8095)
-            read.assert_called_with(1000, 1060)
+            read.assert_called_with(970, 1060)
             self.assertEqual(state['pending'], {issue: 2, 'http': 1})
             self.assertTrue(alerts.deliver(state, 1060, 'synthetic', 42))
             self.assertEqual(send.call_count, 1)

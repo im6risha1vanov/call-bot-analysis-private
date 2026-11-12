@@ -27,7 +27,17 @@ ISSUES = {
     'journal_limit': 'Мониторинг — за один проход обработана только часть журнала',
     'systemd': 'Мониторинг — ошибка проверки служб systemd',
 }
-ERROR_LINE = re.compile(r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:[,.]\d+)? (?:ERROR|CRITICAL)\b')
+LOG_TIME = r'^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:[,.]\d+)? '
+ERROR_LINE = re.compile(LOG_TIME + r'(?:ERROR|CRITICAL)\b')
+TELEGRAM_POLL_UNITS = {'callbot-astra.service', 'callbot-astra-trainer.service'}
+TELEGRAM_POLL_RESET = re.compile(
+    LOG_TIME + r'ERROR Failed to fetch updates - TelegramNetworkError: HTTP Client says - '
+    r'ClientOSError: \[Errno 104\] Connection reset by peer$'
+)
+TELEGRAM_POLL_RECOVERY = re.compile(
+    LOG_TIME + r'INFO Connection established \(tryings = [1-9]\d*, bot id = \d+\)$'
+)
+RECOVERY_WINDOW = 30  # seconds to confirm that polling recovered after a connection reset
 JOURNAL_LIMIT = 3000
 JOURNAL_TIMEOUT = 15  # оставляем время на остальные проверки и отправку в пределах 35 секунд systemd
 COOLDOWN = 15 * 60
@@ -43,10 +53,13 @@ HTTP = build_opener(ProxyHandler({}), NoRedirect())
 
 
 def read_journal(start: int, end: int) -> Counter:
+    cutoff = (end - RECOVERY_WINDOW) * 1_000_000
+    recovery_window = RECOVERY_WINDOW * 1_000_000
     units = [arg for unit in UNITS for arg in ('--unit', unit)]
     result = subprocess.run(
         ['journalctl', '--no-pager', '--quiet', '--output=json',
-         '--output-fields=_SYSTEMD_UNIT,UNIT,PRIORITY,MESSAGE', f'--since=@{start}', f'--until=@{end}',
+         '--output-fields=_SYSTEMD_UNIT,UNIT,PRIORITY,MESSAGE,_PID,_BOOT_ID,_SYSTEMD_INVOCATION_ID',
+         f'--since=@{start}', f'--until=@{end}',
          f'--lines={JOURNAL_LIMIT}', *units],
         check=True, capture_output=True, text=True, encoding='utf-8', timeout=JOURNAL_TIMEOUT,
     )
@@ -54,14 +67,27 @@ def read_journal(start: int, end: int) -> Counter:
     lines = result.stdout.splitlines()
     if len(lines) >= JOURNAL_LIMIT:
         counts['journal_limit'] = 1
-    for line in lines:
+    recoveries = {}
+    # Newest entries first so an error can be matched to the next successful poll.
+    for line in reversed(lines):
         row = json.loads(line)
-        if int(row['__REALTIME_TIMESTAMP']) <= start * 1_000_000:
+        timestamp = int(row['__REALTIME_TIMESTAMP'])
+        if timestamp <= start * 1_000_000:
             continue
         unit = row.get('UNIT') if row.get('_SYSTEMD_UNIT') == 'init.scope' else row.get('_SYSTEMD_UNIT')
         if not isinstance(unit, str) or unit not in UNITS:
             continue
         message, priority = row.get('MESSAGE'), row.get('PRIORITY')
+        if unit in TELEGRAM_POLL_UNITS and isinstance(message, str) and isinstance(row.get('_PID'), str):
+            process = (unit, row.get('_BOOT_ID'), row.get('_SYSTEMD_INVOCATION_ID'), row['_PID'])
+            if TELEGRAM_POLL_RECOVERY.fullmatch(message):
+                recoveries[process] = timestamp
+            recovery = recoveries.get(process)
+            if (recovery is not None and 0 <= recovery - timestamp <= recovery_window
+                    and TELEGRAM_POLL_RESET.fullmatch(message)):
+                continue
+        if timestamp > cutoff:
+            continue
         if priority in ('0', '1', '2', '3') or isinstance(message, str) and ERROR_LINE.match(message):
             counts[f'log:{unit}'] += 1
     return counts
@@ -107,13 +133,14 @@ def send(token: str, chat: int, message: str) -> bool:
 
 
 def poll(state: dict, now: int, port: int) -> None:
-    start = min(state.get('checked_until', now - 60), now)
+    cutoff = now - RECOVERY_WINDOW
+    start = state.get('checked_until', cutoff - 60)
     start = max(start, now - 24 * 60 * 60)
     pending = Counter(state.get('pending', {}))
-    if start < now:
+    if start < cutoff:
         try:
             pending.update(read_journal(start, now))
-            state['checked_until'] = now
+            state['checked_until'] = cutoff
         except (OSError, subprocess.SubprocessError, ValueError) as error:
             print(f'CRM journal check failed ({type(error).__name__}).', file=sys.stderr)
             pending['journal'] += 1
