@@ -124,6 +124,7 @@ const ICON = {
   report: '<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h7M9 17h5"/>',
   gear: '<circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8"/>',
   search: '<circle cx="11" cy="11" r="6.5"/><path d="m20 20-4-4"/>',
+  help: '<circle cx="12" cy="12" r="8.5"/><path d="M9.5 9.5a2.5 2.5 0 1 1 4 2c-1 .7-1.5 1.1-1.5 2.5m0 2.5h.01"/>',
   x: '<path d="M6 6l12 12M18 6 6 18"/>',
   in: '<path d="M17 7 7 17M7 9v8h8"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6 7 7M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4"/>',
@@ -254,7 +255,14 @@ function niceMax(v) { v = Math.max(v, 2); const p = Math.pow(10, Math.floor(Math
 function drawChart(box, data, {bands, tipRows, aria}) {
   if (!box) return;
   const n = data.length;
-  if (!n) { box.innerHTML = '<div class="empty">Пока нет данных.</div>'; return; }
+  if (!n) {
+    box.innerHTML = '<div class="empty">Пока нет данных.</div>';
+    box.removeAttribute('role');
+    box.removeAttribute('aria-label');
+    box.classList.remove('hov');
+    box.onpointermove = box.onpointerdown = box.onpointerleave = null;
+    return;
+  }
   const gap = n > 20 ? 2 : n > 10 ? 4 : 8;
   const cols = `repeat(${n},minmax(0,1fr))`;
   const every = n > 20 ? 5 : n > 12 ? 2 : 1;
@@ -390,7 +398,7 @@ const PAGES = {
   me: {name: 'Моя карточка', icon: 'person', roles: ['manager']},
   callcenter: {name: 'Колл-центр', icon: 'head', roles: ['director', 'manager']},
   robot: {name: 'Робот', icon: 'bot', roles: ['director', 'client']},
-  sources: {name: 'Источники', icon: 'source', roles: ['director', 'manager']},
+  sources: {name: 'База номеров', icon: 'source', roles: ['manager']},
   reports: {name: 'Отчёты', icon: 'report', roles: ['director', 'manager']},
   logs: {name: 'Журнал действий', icon: 'report', roles: ['director']},
   economics: {name: 'Экономика', icon: 'report', roles: ['director']},
@@ -401,7 +409,7 @@ const PAGES = {
   companies: {name: 'Компании', icon: 'building', roles: ['director']},
 };
 const MENU = {
-  director: {nav: ['summary', 'calls', 'callbacks', 'deals', 'staff', 'callcenter', 'robot'], more: ['learning', 'sources', 'reports', 'logs', 'economics', 'auto', 'settings', 'companies'], tabs: ['summary', 'calls', 'callbacks', 'deals']},
+  director: {nav: ['summary', 'calls', 'callbacks', 'deals', 'staff', 'callcenter', 'robot'], more: ['learning', 'reports', 'logs', 'economics', 'auto', 'settings', 'companies'], tabs: ['summary', 'calls', 'callbacks', 'deals']},
   manager: {nav: ['queue', 'deals', 'calls'], more: ['me', 'learning', 'callcenter', 'sources', 'reports'], tabs: ['queue', 'deals', 'calls']},
   client: {nav: ['cab', 'robot'], more: [], tabs: ['cab', 'robot']},
 };
@@ -432,11 +440,12 @@ const menu = () => {
   const m = MENU[S.me.role];
   return {nav: m.nav.filter(allowed), more: m.more.filter(allowed), tabs: m.tabs.filter(allowed)};
 };
+const brand = '<div class="logo"><span class="logo-mark" aria-hidden="true">A</span><span>Averon <b>CRM</b></span></div>';
 
 function showLogin() {
   window.closePageHelp?.();window.CRMGuideGuard?.setMode(false);
   root.innerHTML = `<form class="login panel" autocomplete="on">
-    <div class="logo"><span>Averon <b>CRM</b></span></div>
+    ${brand}
     <h1>Вход в CRM</h1>
     <label class="field">Логин<input name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>
     <label class="field">Пароль<input name="password" type="password" autocomplete="current-password" required></label>
@@ -461,23 +470,27 @@ const exitLink = () => S.me.learning ? '<a class="ghost" href="/learning/exit">�
   : S.me.test ? '<a class="ghost" href="/test-exit">Сменить вход</a>' : '<button class="ghost" type="button" data-logout>Выйти</button>';
 // «Сменить учётку» без пароля: только у наших учёток с отметкой platform (crm/platform.py), окно в companies.js
 const switchBtn = () => S.me.switcher && window.switchAccount ? '<button class="ghost" type="button" data-switch>Сменить учётку</button>' : '';
+const directorNav = () => S.me?.role === 'director' && !S.me.learning && !S.me.learning_mode ? window.CRMDirectorNav : null;
 function shell() {
   const m = menu();
   moreOpen = m.more.includes(S.page);
-  root.innerHTML = `<div class="app">
-    <aside class="side">
-      <div class="logo"><span>Averon <b>CRM</b></span></div>
+  const director = directorNav();
+  root.innerHTML = `<div class="app${director ? ' director-app' : ''}">
+    ${director ? director.header() : `<aside class="side">
+      ${brand}
       <nav class="nav" id="nav" aria-label="Разделы"></nav>
       ${window.gptButton && hasModule('gpt') ? gptButton() : ''}
-      <div class="side-foot"><span>${esc(S.me.name || '')} · ${esc(ROLE_NAME[S.me.role] || '')}${S.me.ext ? ', доб. ' + esc(S.me.ext) : ''}</span>
+      <div class="side-foot"><div class="side-account">${ava(S.me.name)}<div><strong>${esc(S.me.name || '')}</strong>
+        <span>${esc(ROLE_NAME[S.me.role] || '')}${S.me.ext ? ' · доб. ' + esc(S.me.ext) : ''}</span></div></div>
         <div class="row"><button class="ghost" type="button" data-theme-btn>${themeLabel()}</button>
         ${exitLink()}${switchBtn()}</div></div>
-    </aside>
+    </aside>`}
     <div class="main">
       ${S.me.learning_mode?'<div class="banner" data-guide-banner><b>Режим обучения</b><span>Ваши реальные данные доступны для просмотра. Звонки, отправки и изменения отключены.</span><button class="ghost small" type="button" data-guide-resume>Показать подсказки</button><button class="ghost small" type="button" data-guide-disable>Выключить режим обучения</button></div>':S.me.learning ? '<div class="banner"><b>Учебная учётка</b><span>Все записи вымышленные. Изменения сохраняются в браузере до нового входа.</span><a href="/learning/exit">Выйти</a></div>' : S.me.support && !S.me.test ? `<div class="banner"><b>Вы вошли как ${esc(S.me.name || '')} · ${esc(ROLE_NAME[S.me.role] || '')} · «${esc(S.me.company || '')}»</b><span>Всё, что делаете, идёт от имени этой учётки.</span>${switchBtn().replace('class="ghost"', 'class="linkish"')}<a href="/support-exit">Вернуться к себе</a></div>`
         : S.me.support ? `<div class="banner"><b>Просмотр компании «${esc(S.me.company || '')}»</b><span>Глазами директора, только смотреть.</span><a href="/support-exit">Вернуться к себе</a></div>`
         : S.me.test ? `<div class="banner"><b>Просмотр · ${esc(ROLE_NAME[S.me.role] || '')}</b><span data-readonly-notice>Только смотреть: звонки и изменения работают под своим логином.</span><a href="/test-exit">Сменить вход</a></div>` : ''}
       <header class="top"><div class="top-in" id="top"></div></header>
+      ${director ? director.attention() : ''}
       <main class="content" id="view"></main>
     </div></div>
     <nav class="tabbar" id="tabbar" aria-label="Разделы"></nav>
@@ -491,10 +504,12 @@ function navButton(id) {
   return `<button type="button" data-go="${id}"${(S.page === id || (id === 'queue' && S.me.role === 'manager' && S.page === 'callbacks')) ? ' aria-current="page"' : ''}>${svg(p.icon)}<span>${esc(p.name)}</span><span class="count" data-count="${id}">${S.counts?.[id] || ''}</span></button>`;
 }
 function renderNav() {
+  const director = directorNav();
+  if (director) { director.render(); return; }
   const m = menu();
   if (m.nav.length + m.more.length < 2) { $('#nav').innerHTML = ''; $('#tabbar').innerHTML = ''; $('#tabbar').hidden = true; return; }
   $('#nav').innerHTML = m.nav.map(navButton).join('') + (m.more.length ? `<button type="button" class="more" aria-expanded="${moreOpen}">${svg('dots')}<span>Ещё</span>${svg('chev', 'chev')}</button>
-    <div class="sub${moreOpen ? ' open' : ''}"><div>${m.more.map(id => `<button type="button" data-go="${id}"${S.page === id ? ' aria-current="page"' : ''}>${esc(PAGES[id].name)}</button>`).join('')}</div></div>` : '');
+    <div class="sub${moreOpen ? ' open' : ''}"><div>${m.more.map(id => `<button type="button" data-go="${id}"${id === 'sources' ? ' data-arg="base"' : ''}${S.page === id ? ' aria-current="page"' : ''}>${esc(PAGES[id].name)}</button>`).join('')}</div></div>` : '');
   const rest = [...m.nav, ...m.more].filter(id => !m.tabs.includes(id));
   const inTabs = m.tabs.includes(S.page) || (S.me.role === 'manager' && S.page === 'callbacks');
   $('#tabbar').hidden = false;
@@ -504,7 +519,7 @@ function renderNav() {
 function moreSheet() {
   const m = menu();
   const rest = [...m.nav, ...m.more].filter(id => !m.tabs.includes(id));
-  openDrawer({title: 'Ещё', html: `<div class="sheet-list">${rest.map(id => `<button type="button" data-go="${id}"${S.page === id ? ' aria-current="page"' : ''}>${svg(PAGES[id].icon)}<span>${esc(PAGES[id].name)}</span>${svg('chev')}</button>`).join('')}</div>
+  openDrawer({title: 'Ещё', html: `<div class="sheet-list">${rest.map(id => `<button type="button" data-go="${id}"${id === 'sources' ? ' data-arg="base"' : ''}${S.page === id ? ' aria-current="page"' : ''}>${svg(PAGES[id].icon)}<span>${esc(PAGES[id].name)}</span>${svg('chev')}</button>`).join('')}</div>
     <div class="row"><button class="ghost" type="button" data-theme-btn>${themeLabel()}</button>${exitLink()}${switchBtn()}</div>
     <p class="hint">${esc(S.me.name || '')} · ${esc(ROLE_NAME[S.me.role] || '')}</p>`});
 }
@@ -517,8 +532,14 @@ function setCount(page, n) {
 // Шапка страницы: заголовок, «назад», фильтры. Страница вызывает её сама, когда знает, что показать.
 function setHead({title = '', sub = '', filters = '', back = null, actions = ''} = {}) {
   const top = $('#top');
-  top.innerHTML = `<div class="title-row">${back ? `<button class="back" type="button" aria-label="Назад">${svg('back')}</button>` : ''}
-    <h1>${esc(title || PAGES[S.page]?.name || '')}</h1>${sub ? `<span class="sub-t">${sub}</span>` : ''}<div class="head-actions">${actions}${['manager','director'].includes(S.me?.role)?'<button class="btn" type="button" data-page-help aria-controls="page-help" aria-expanded="false">Справка</button>':''}</div></div>
+  const director = directorNav();
+  if (director) top.dataset.page = S.page;
+  const helpButton = ['manager','director'].includes(S.me?.role)
+    ? `<button class="btn ghost" type="button" data-page-help aria-label="Справка" aria-controls="page-help" aria-expanded="false">${svg('help')}<span>Справка</span></button>`
+    : '';
+  top.innerHTML = `${director ? director.subnav() : ''}<div class="title-row">${back ? `<button class="back" type="button" aria-label="Назад">${svg('back')}</button>` : ''}
+    <h1>${esc(title || director?.title() || PAGES[S.page]?.name || '')}</h1>${sub ? `<span class="sub-t">${sub}</span>` : ''}<div class="head-actions">${actions}${helpButton}
+      ${!director && window.gptButton && hasModule('gpt') ? gptButton(true) : ''}</div></div>
     <div class="bar-f">${filters}</div>`;
   if (back) $('.back', top).onclick = back;
   return top;
@@ -527,9 +548,16 @@ function setHead({title = '', sub = '', filters = '', back = null, actions = ''}
 // ---------- переходы ----------
 let navSeq = 0;
 async function go(target, arg = null, opts = {}) {
-  window.stopQueueAutodial?.();
   const [page, a] = resolve(target, arg);
+  if (opts.push !== false && directorNav() && S.page === 'settings' && S.arg !== 'access'
+      && (page !== 'settings' || a === 'access') && S.pm?.body !== S.pm?.start) {
+    if (!await askConfirm('Перейти без сохранения инструкций?', 'Перейти')) return;
+    S.pm = {kind: S.pm.kind};
+  }
+  window.stopQueueAutodial?.();
   const same = page === S.page;
+  const routeChanged = !same || a !== S.arg;
+  const trackVisit = routeChanged && !opts.keepScroll && opts.track !== false;
   S.page = page; S.arg = a;
   if (window.AveronLearningWorkspace?.classroom) {
     const classroom = AveronLearningWorkspace.classroom;
@@ -546,19 +574,26 @@ async function go(target, arg = null, opts = {}) {
   renderNav();
   closeDrawer();
   $('.pop')?.remove();
+  const previousFocus = opts.focus ? document.activeElement : null;
   setHead();
   const old = $('#view');
   const view = document.createElement('main');
   view.className = 'content'; view.id = 'view';
   old.replaceWith(view);
   const seq = ++navSeq;
-  if (!same && !opts.keepScroll) scrollTo({top: 0});
+  if ((!same || (directorNav() && routeChanged)) && !opts.keepScroll) scrollTo({top: 0});
   try {
     await VIEWS[page](view, a);
+    if (seq === navSeq && trackVisit) directorNav()?.recordVisit();
     if (seq === navSeq && window.learningPageChanged) learningPageChanged();
     if(seq===navSeq&&window.pageHelpChanged)pageHelpChanged();
   } catch (e) {
     if (seq === navSeq) view.innerHTML = errCard(e.message);
+  }
+  if (seq === navSeq && previousFocus && (document.activeElement === previousFocus || document.activeElement === document.body)) {
+    const heading = $('#top h1');
+    heading?.setAttribute('tabindex', '-1');
+    heading?.focus({preventScroll: true});
   }
 }
 const m = menu;
@@ -566,13 +601,16 @@ const m = menu;
 const reload = () => go(S.page, S.arg, {push: false, keepScroll: true});
 
 document.addEventListener('click', e => {
+  if (e.target.closest('[data-director-directory]')) { directorNav()?.openDirectory(); return; }
+  const attention = e.target.closest('[data-director-overdue]');
+  if (attention) { S.f.ext = ''; saveFilters(); go('callbacks', 'late', {focus: true}); return; }
   const more = e.target.closest('.nav .more');
   if (more) { moreOpen = !moreOpen; more.setAttribute('aria-expanded', moreOpen); more.nextElementSibling.classList.toggle('open', moreOpen); return; }
   const g = e.target.closest('[data-go]');
   if (g) {
     e.preventDefault();
     if ('fext' in g.dataset) { S.f.ext = g.dataset.fext; saveFilters(); }
-    go(g.dataset.go, g.dataset.arg || null); return;
+    go(g.dataset.go, g.dataset.arg || null, {focus: !!g.closest('.director-directory,.director-subnav')}); return;
   }
   if (e.target.closest('[data-sheet]')) { moreSheet(); return; }
   if (e.target.closest('[data-switch]')) { window.switchAccount?.(); return; }
@@ -598,12 +636,16 @@ function nextTheme() {
 applyTheme(store.get('crm-theme', ''));
 
 // Цифры на кнопках меню: перезвоны на сегодня и просроченные, у менеджера ещё очередь.
+function setCallbackCounts(items, today) {
+  setCount('callbacks', today ? items.filter(t => t.due_date && t.due_date <= today).length : 0);
+  directorNav()?.setOverdue(items, today);
+}
 async function refreshCounts() {
   if (S.me.role === 'client') return;
   try {
     const cb = await api('/api/callbacks');
     S.today = cb.today || S.today;
-    setCount('callbacks', cb.items.filter(t => t.due_date <= cb.today).length);
+    setCallbackCounts(cb.items, cb.today);
   } catch (e) { /* счётчик подождёт */ }
   if (S.me.role === 'manager') {
     try { setCount('queue', (await api('/api/queue')).items.length); } catch (e) { /* счётчик подождёт */ }
@@ -632,7 +674,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const [page, arg] = fromHash();
   S.page = page && resolve(page, arg)[0];
   shell();
-  go(page || store.get('crm-page', '') || HOME[S.me.role], arg, {replace: true});
+  go(page || store.get('crm-page', '') || HOME[S.me.role], arg, {replace: true, track: false});
   addEventListener('popstate', () => { const [p, a] = fromHash(); go(p || HOME[S.me.role], a, {push: false}); });
   refreshCounts();
   if (!S.me.learning && window.gptFirstVisit && hasModule('gpt')) gptFirstVisit();

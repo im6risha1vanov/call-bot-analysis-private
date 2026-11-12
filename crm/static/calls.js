@@ -18,11 +18,13 @@ function bindManager(scope, onChange) {
 // ---------- журнал звонков ----------
 S.calls = {result: '', kind: '', q: ''};
 
-function callRow(c, r) {
+function callRow(c) {
   const [cls, label] = CALL_CHIP[c.result] || ['', 'Итог не указан'];
   const chip = c.result === 'none' && !c.reviewed ? '<span class="chip">Без разбора</span>' : `<span class="chip ${cls}">${label}</span>`;
-  return `<tr class="click" tabindex="0" data-id="${c.id}" data-css="--r:${r % 50}">
-    <td class="nw">${esc(when(c.at))}<div class="s">${c.incoming ? 'входящий' : 'исходящий'}${c.kind ? ' · ' + esc(CRMText.label(c.kind,null,'Другой тип')) : ''}</div></td>
+  const direction = c.incoming ? 'Входящий' : 'Исходящий';
+  const kind = c.kind ? CRMText.label(c.kind, null, 'Другой тип') : '';
+  return `<tr class="click" tabindex="0" data-id="${c.id}">
+    <td class="nw">${esc(when(c.at))}<div class="s">${direction}${kind && kind.toLowerCase() !== direction.toLowerCase() ? ' · ' + esc(kind) : ''}</div></td>
     ${isDir() ? `<td class="hide-m nw">${esc(c.manager || '—')}</td>` : ''}
     <td><div class="num t">${esc(phone(c.number) || '—')}</div>${c.company ? `<div class="s">${esc(c.company)}</div>` : ''}</td>
     <td class="n hide-m">${c.seconds ? dur(c.seconds) : '—'}</td>
@@ -55,13 +57,14 @@ VIEWS.calls = async view => {
     const results = [['', 'Все'], ...Object.entries(data.results)];
     const kinds = Object.entries(data.kinds);
     view.innerHTML = `<div class="page">
-      <div class="row blk" data-css="--i:0"><div class="filters">${results.map(([k, t]) => `<button type="button" data-r="${k}" aria-pressed="${st.result === k}">${esc(t)}</button>`).join('')}</div>
-        <span class="sp"></span><select class="inp" data-kind aria-label="Тип звонка"><option value="">Любой тип</option>${kinds.map(([k, t]) =>
+      <section class="card calls-list"${items.length ? ' data-learning-target="call-list"' : ''}>
+      <div class="row calls-toolbar"><div class="filters" role="group" aria-label="Итог звонка">${results.map(([k, t]) => `<button type="button" data-r="${k}" aria-pressed="${st.result === k}">${esc(t)}</button>`).join('')}</div>
+        <select class="inp" data-kind aria-label="Тип звонка"><option value="">Любой тип</option>${kinds.map(([k, t]) =>
           `<option value="${k}"${st.kind === k ? ' selected' : ''}>${esc(t[0].toUpperCase() + t.slice(1))}</option>`).join('')}</select></div>
-      ${items.length ? `<section class="card blk" data-learning-target="call-list" data-css="--i:1"><div class="tbl-wrap"><table class="tbl anim"><thead><tr><th>Когда</th>${isDir() ? '<th class="hide-m">Менеджер</th>' : ''}
+      ${items.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Когда</th>${isDir() ? '<th class="hide-m">Менеджер</th>' : ''}
         <th>Клиент</th><th class="n hide-m">Длит.</th><th>Итог</th><th></th></tr></thead><tbody>${items.map(callRow).join('')}</tbody></table></div>
-        ${data.more ? '<div class="empty" data-more><div class="sk line" data-css="max-width:240px;margin:0 auto"></div></div>' : ''}</section>`
-        : emptyCard(st.q || st.result || st.kind ? 'Таких звонков нет. Попробуйте другой фильтр.' : 'За этот период звонков нет.', 1)}</div>`;
+        ${data.more ? '<div class="empty" data-more><div class="sk line" data-css="max-width:240px;margin:0 auto"></div></div>' : ''}`
+        : `<div class="empty">${st.q || st.result || st.kind ? 'Таких звонков нет. Попробуйте другой фильтр.' : 'За этот период звонков нет.'}</div>`}</section></div>`;
     $$('[data-r]', view).forEach(b => b.addEventListener('click', () => { st.result = b.dataset.r; load(); }));
     $('[data-kind]', view).addEventListener('change', e => { st.kind = e.target.value; load(); });
     bindRows($('tbody', view));
@@ -127,40 +130,74 @@ function callbackMove(row, t, today) {
   $('.move input', row).focus();
 }
 
-VIEWS.callbacks = async view => {
-  setHead({filters: isDir() ? managerSelect(S.f.ext) : queueTabs('callbacks')});
-  bindManager($('#top'), () => reload());
+const CALLBACK_FILTERS = [['late', 'Просрочены'], ['today', 'Сегодня'], ['all', 'Все']];
+const CALLBACK_EMPTY = {
+  late: 'Просроченных перезвонов нет.',
+  today: 'На сегодня перезвонов нет.',
+  all: '<b>Открытых перезвонов нет.</b><br>Они появляются сами: бот ставит их из разговоров, а менеджер — из итога звонка в CRM.',
+};
+
+VIEWS.callbacks = async (view, arg) => {
+  let filter = arg === 'late' || arg === 'today' ? arg : 'all';
+  const top = setHead({filters: (isDir() ? managerSelect(S.f.ext) : queueTabs('callbacks')) +
+    `<div class="callback-filters" role="group" aria-label="Срок перезвона">${CALLBACK_FILTERS.map(([id, label]) =>
+      `<button class="btn" type="button" data-callback-filter="${id}" aria-pressed="${filter === id}">${label}</button>`).join('')}</div>`});
+  bindManager(top, () => reload());
+  const filterButtons = $$('[data-callback-filter]', top);
+  function selectFilter(next) {
+    filter = next;
+    S.arg = filter === 'all' ? null : filter;
+    const hash = '#callbacks' + (S.arg ? '/' + S.arg : '');
+    if (location.hash !== hash) history.pushState(null, '', hash);
+    filterButtons.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.callbackFilter === filter)));
+    updateFilter();
+  }
+  function updateFilter() {
+    const list = $('[data-learning-target="callback-list"]', view);
+    if (!list) return;
+    const groups = $$('[data-callback-group]', list);
+    groups.forEach(group => { group.hidden = filter !== 'all' && group.dataset.callbackGroup !== filter; });
+    list.hidden = !groups.some(group => !group.hidden);
+    $('[data-callback-time]', view).hidden = list.hidden;
+    const empty = $('[data-callback-empty]', view);
+    empty.hidden = !list.hidden;
+    empty.innerHTML = list.hidden ? CALLBACK_EMPTY[filter] : '';
+  }
+  filterButtons.forEach(button => button.addEventListener('click', () => selectFilter(button.dataset.callbackFilter)));
   const data = await loading(view, api('/api/callbacks' + qs({ext: isDir() ? S.f.ext : ''})), 'cards');
+  if (!view.isConnected) return;
   const today = data.today;
   S.today = today || S.today;
   const items = data.items;
-  const dueNow = () => items.filter(t => t.due_date <= today).length;
-  if (!isDir() || !S.f.ext) setCount('callbacks', dueNow());
-  if (!items.length) {
-    view.innerHTML = `<div class="page">${emptyCard('<b>Открытых перезвонов нет.</b><br>Они появляются сами: бот ставит их из разговоров, а менеджер — из итога звонка в CRM.')}</div>`;
-    return;
-  }
+  if (!isDir() || !S.f.ext) setCallbackCounts(items, today);
   const groups = [['late', 'Просрочено', t => t.due_date < today], ['today', 'Сегодня', t => t.due_date === today], ['next', 'Дальше', t => t.due_date > today]];
   let n = 0;
-  view.innerHTML = `<div class="page"><p class="hint time-caption">${esc(timeCaption())}</p><section class="card blk" data-learning-target="callback-list">${groups.map(([k, name, test]) => {
+  view.innerHTML = `<div class="page"><p class="hint time-caption" data-callback-time>${esc(timeCaption())}</p><section class="card blk" data-learning-target="callback-list">${groups.map(([k, name, test]) => {
     const list = items.filter(test);
-    return list.length ? `<div class="group${k === 'late' ? ' late' : ''}" data-g="${k}">${name}<span class="count">${list.length}</span></div>
-      <div class="list">${list.map(t => cbRow({...t, _i: n++}, today)).join('')}</div>` : '';
-  }).join('')}</section></div>`;
+    return list.length ? `<section data-callback-group="${k}"><div class="group${k === 'late' ? ' late' : ''}" data-g="${k}">${name}<span class="count">${list.length}</span></div>
+      <div class="list">${list.map(t => cbRow({...t, _i: n++}, today)).join('')}</div></section>` : '';
+  }).join('')}</section><div class="card empty" role="status" data-callback-empty hidden></div></div>`;
+  updateFilter();
   const byId = Object.fromEntries(items.map(t => [String(t.id), t]));
   const change = (t, body) => api(`/api/tasks/${t.id}`, {method: 'POST', body: {...body, ext: isDir() ? t.ext : undefined}});
   // Строка уезжает, счётчики группы и меню обновляются без перезагрузки.
   const drop = row => {
     const t = byId[row.dataset.id];
-    items.splice(items.indexOf(t), 1);
+    const index = items.indexOf(t);
+    if (index < 0 || !view.isConnected) return;
+    items.splice(index, 1);
     row.classList.add('gone');
     setTimeout(() => {
-      const list = row.parentElement; row.remove();
-      const g = list.previousElementSibling;
-      if (!list.children.length) { g.remove(); list.remove(); } else $('.count', g).textContent = list.children.length;
-      if (!items.length) reload();
+      if (!view.isConnected) return;
+      const list = row.parentElement;
+      const group = row.closest('[data-callback-group]');
+      if (row.contains(document.activeElement)) filterButtons.find(button => button.dataset.callbackFilter === filter)?.focus();
+      row.remove();
+      if (list.children.length) $('.count', group).textContent = list.children.length;
+      else group.remove();
+      updateFilter();
     }, 380);
-    if (!isDir() || !S.f.ext) setCount('callbacks', dueNow());
+    if (!isDir() || !S.f.ext) setCallbackCounts(items, today);
   };
   view.addEventListener('click', async e => {
     const row = e.target.closest('.cb'); if (!row) return;

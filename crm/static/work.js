@@ -2,8 +2,6 @@
 // Карточка открывается и на странице «Очередь», и в выдвижной панели из любого списка.
 'use strict';
 
-const OUT_CLASS = {meeting: 'o-good', proposal: 'o-good', callback: 'o-mid', interested: 'o-mid',
-  no_answer: '', not_interested: 'o-bad', bad_number: 'o-bad'};
 const OUT_ORDER = ['no_answer', 'callback', 'meeting', 'proposal', 'interested', 'not_interested', 'bad_number'];
 const OPTIONAL_DATE = new Set(['proposal', 'interested']);
 
@@ -34,7 +32,6 @@ function workCard(el, item, onDone, opts = {}) {
     ${inDrawer ? '' : `<div class="phone"><a href="tel:+${esc(item.number)}">${esc(phone(item.number))}</a></div>
     ${item.title ? `<div class="title">${esc(item.title)}</div>` : ''}`}
     ${item.note ? `<div class="note">${esc(item.note)}</div>` : ''}
-    <p class="hint time-caption">${esc(timeCaption())}</p>
     <div class="actions">
       <button class="btn primary big" type="button" data-act="dial" ${canDial ? '' : 'disabled'}>${svg('phone', '')}Позвонить</button>
       <button class="btn" type="button" data-act="copy">Скопировать номер</button>
@@ -44,11 +41,12 @@ function workCard(el, item, onDone, opts = {}) {
     <div class="ringing hidden" data-ring></div>
     <div class="outs${ro ? ' hidden' : ''}">
       <h3>Итог звонка</h3>
-      <div class="outgrid" data-learning-target="outcome-grid">${OUT_ORDER.map(k => `<button type="button" data-out="${k}" class="${OUT_CLASS[k]}" aria-pressed="false">${esc(S.me.outcomes[k])}</button>`).join('')}</div>
+      <div class="outgrid" data-learning-target="outcome-grid">${OUT_ORDER.map(k => `<button type="button" data-out="${k}" aria-pressed="false">${esc(S.me.outcomes[k])}</button>`).join('')}</div>
       <div class="outform hidden">
         <div class="quick"></div>
         <label class="field">Дата<input type="date" data-f="date" min="${isoToday()}"></label>
         <label class="field">Время<input type="time" data-f="time" step="300"></label>
+        <p class="hint time-caption wide">${esc(timeCaption())}</p>
         <label class="field wide">Комментарий<textarea data-f="comment" maxlength="1000" placeholder="Что важно помнить к следующему звонку"></textarea></label>
         <div class="row wide"><button class="btn primary" type="button" data-act="save">Сохранить${inDrawer || S.me.learning ? '' : ' и дальше'}</button><button class="btn" type="button" data-act="cancel">Отмена</button></div>
       </div>
@@ -114,6 +112,7 @@ function workCard(el, item, onDone, opts = {}) {
     form.classList.remove('hidden');
     field('date').parentElement.classList.toggle('hidden', !dated);
     field('time').parentElement.classList.toggle('hidden', !dated);
+    $('.time-caption', form).hidden = !dated;
     const quick = $('.quick', el);
     quick.innerHTML = dated ? [['Завтра', 1], ['Через 2 дня', 2], ['Через неделю', 7]].map(([t, n]) =>
       `<button type="button" data-days="${n}">${t}</button>`).join('') : '';
@@ -254,7 +253,7 @@ async function refreshQueueInBackground(){
   }catch(error){return false;/* Keep the visible data and the current exercise on a transient refresh failure. */}
   finally{queueRefreshBusy=false;}
 }
-const queueTabs = current => `<div class="links" aria-label="Работа с очередью">
+const queueTabs = current => `<div class="links queue-tabs" role="group" aria-label="Работа с очередью">
   <button class="btn" type="button" data-go="queue"${current === 'queue' ? ' aria-current="page"' : ''}>К обзвону</button>
   <button class="btn" type="button" data-go="callbacks"${current === 'callbacks' ? ' aria-current="page"' : ''}>Перезвоны</button>
 </div>`;
@@ -272,7 +271,7 @@ VIEWS.queue = async (view, arg, refresh={}) => {
   const ext = director ? (arg || S.f.ext || S.me.team[0]?.ext) : null;
   const person = director ? S.me.team.find(p => p.ext === ext) : null;
   setHead({title: director ? `Очередь · ${person?.name || 'доб. ' + ext}` : 'Очередь', filters: director ? '' : queueTabs('queue'), back: director ? () => go('staff', ext) : null,
-    actions: canManage ? '<button class="btn" type="button" data-go="queue" data-arg="manage">Управлять очередью</button>' : ''});
+    actions: canManage ? '<button class="btn" type="button" data-go="queue" data-arg="manage" aria-label="Управлять очередью">Управлять</button>' : ''});
   const q = refresh.data||await loading(view, api('/api/queue' + qs({ext})), 'cards');
   if(!view.isConnected)return;
   queueRefreshState={view,arg,ext,snapshot:viewSnapshot(q)};
@@ -286,12 +285,14 @@ VIEWS.queue = async (view, arg, refresh={}) => {
   let pos = Math.max(0, q.items.findIndex(i => i.number === S.qnum));
   const tasksN = q.items.filter(i => i.kind === 'task').length;
   view.innerHTML = `<div class="page">
-    <div class="qline blk"><span>В очереди <b>${fmt(q.items.length)}</b>${tasksN ? `, из них <b>${fmt(tasksN)}</b> ${plural(tasksN, 'перезвон', 'перезвона', 'перезвонов')}` : ''}</span>
-      ${q.later ? `<span class="hint">ещё ${fmt(q.later)} ${q.later % 10 === 1 && q.later % 100 !== 11 ? 'вернётся' : 'вернутся'} позже ${help('Перезвоны на другие дни и номера, которые не взяли трубку: они возвращаются через 2 часа, до 3 попыток.')}</span>` : ''}</div>
-    ${canManage && S.me.can_dial ? `<div class="row">
-      <button class="btn" type="button" data-auto-queue${S.me.webphone && !S.me.learning_mode ? '' : ' disabled'}>Начать автонабор</button>
-      <span class="hint" role="status" data-auto-status>${S.me.learning_mode ? 'В режиме обучения автонабор отключён.' : S.me.webphone ? 'Следующий номер после завершения звонка. Итоги можно отметить после остановки.' : 'Для автонабора подключите телефон в браузере.'}</span>
-    </div>` : ''}
+    <div class="queue-toolbar">
+      <div class="qline"><span>В очереди <b>${fmt(q.items.length)}</b>${tasksN ? `, из них <b>${fmt(tasksN)}</b> ${plural(tasksN, 'перезвон', 'перезвона', 'перезвонов')}` : ''}</span>
+        ${q.later ? `<span class="hint">ещё ${fmt(q.later)} ${q.later % 10 === 1 && q.later % 100 !== 11 ? 'вернётся' : 'вернутся'} позже ${help('Перезвоны на другие дни и номера, которые не взяли трубку: они возвращаются через 2 часа, до 3 попыток.')}</span>` : ''}</div>
+      ${canManage && S.me.can_dial ? `<div class="queue-autodial">
+        <button class="btn small" type="button" data-auto-queue aria-describedby="queue-auto-status"${S.me.webphone && !S.me.learning_mode ? '' : ' disabled'}>Начать автонабор</button>
+        <span class="hint" role="status" id="queue-auto-status" data-auto-status>${S.me.learning_mode ? 'В режиме обучения автонабор отключён.' : S.me.webphone ? 'Следующий номер после завершения звонка. Итоги можно отметить после остановки.' : 'Для автонабора подключите телефон в браузере.'}</span>
+      </div>` : ''}
+    </div>
     <div class="grid2"><div class="stack" data-work></div>
       <div class="card blk" data-css="--i:3"><div class="card-h"><h2>Дальше по очереди</h2><span class="hint">${fmt(q.items.length)}</span></div><div class="list" data-next></div></div></div></div>`;
   const autoButton = $('[data-auto-queue]', view);

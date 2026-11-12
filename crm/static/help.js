@@ -22,6 +22,11 @@
   };
   function content(){
     if(S.page==='deals'&&S.arg==='contracts')return [['Подготовить договор','Начните из нужной сделки кнопкой «Составить договор». Сверьте реквизиты, тип документа и дату.'],['Журнал документов','Создание, скачивание и отправка клиенту — разные действия. Проверьте связь записи журнала с нужной сделкой. В режиме обучения документ не создаётся и не получает рабочий номер.']];
+    if(directorNav()&&S.page==='settings')return S.arg==='access'
+      ? [['Управление доступом','Здесь видны роли, логины и последние входы. Чтобы выдать доступ, нажмите «Новая учётная запись». Смена пароля и удаление завершают сеансы этой учётной записи.']]
+      : [['Инструкции для ИИ','Выберите, какой итог или разбор нужно изменить. Посмотрите пример по новому тексту перед сохранением. Для общего разбора звонков также требуется проверка на последних звонках.']];
+    if(directorNav()&&S.page==='summary')return [...sections.summary,
+      ['Все показатели менеджера','Нажмите «Все показатели», чтобы раскрыть полную таблицу. Строка менеджера открывает его карточку.']];
     if(S.page==='queue'&&S.me.role==='manager')return [...sections.queue,
       ['Управлять очередью','Здесь можно добавить номера списком или из Excel/CSV и исправить существующие записи. Обещанные клиентам звонки находятся рядом, в «Перезвонах».'],
       ['Автонабор из браузера','На подключённом добавочном выберите первый номер и нажмите «Начать автонабор». После отбоя CRM наберёт следующий. Чтобы сделать паузу и отметить итоги, нажмите «Остановить автонабор».']];
@@ -30,6 +35,7 @@
   }
   // References to existing local lesson media; no copies, requests or lesson state.
   function examplesFor(section){
+    if(directorNav()&&S.page==='settings')return [];
     const director=S.me.role==='director';
     const groups={
       queue:[[['select_client','Открыть нужного клиента']],[['save_outcome_no_answer','Сохранить недозвон'],['save_outcome_callback','Назначить перезвон']]],
@@ -65,7 +71,7 @@
   }
   function draw(){
     if(!panel)return;
-    const title=S.page==='deals'&&S.arg==='contracts'?'Договоры':S.page==='staff'&&S.arg==='accounts'?'Учётные записи':PAGES[S.page]?.name||'Текущая вкладка';
+    const title=S.page==='deals'&&S.arg==='contracts'?'Договоры':S.page==='staff'&&S.arg==='accounts'?'Учётные записи':directorNav()?.title()||PAGES[S.page]?.name||'Текущая вкладка';
     const markup=`<header class="page-help-head"><h2 tabindex="-1" data-help-heading>Справка: ${esc(title)}</h2><button class="ghost small" type="button" data-page-help-close aria-label="Закрыть справку">×</button></header><div class="page-help-body">${content().map(([h,t],index)=>`<section><h3>${esc(h)}</h3><p>${esc(t)}</p>${examplesFor(index).map(([key,title])=>exampleMarkup(key,title)).join('')}</section>`).join('')}<p class="hint">В разделе «Обучение» можно пройти обзор CRM без звонков и сохранения изменений.</p></div>`;
     if(signature===markup)return;signature=markup;panel.innerHTML=markup;
     $('[data-page-help-close]',panel).onclick=close;

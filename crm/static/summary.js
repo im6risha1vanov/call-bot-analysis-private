@@ -80,6 +80,8 @@ async function managerDrawer(m, data) {
 
 VIEWS.summary = async view => {
   let seq = 0, team = null;
+  const director = directorNav();
+  let expandedMetrics = false;
   const head = () => setHead({filters: seg('period', PERIOD_OPTS, S.f.period, 'Период') +
     (team && team.length > 1 ? seg('ext', [['', 'Весь отдел'], ...team.map(p => [p.ext, shortName(p.name)])], S.f.ext, 'Менеджер') : '')});
   const bind = () => bindSeg($('#top'), {
@@ -136,25 +138,33 @@ VIEWS.summary = async view => {
     }
     const rows = chartRows(data);
     const cut = !data.hourly && rows.length < data.series.length;
-    html.push(`<section class="card blk" data-css="--i:${i++}"><div class="card-h"><h2>${data.hourly ? 'Сегодня по часам' : 'По дням'}</h2>
+    html.push(`<section class="card blk summary-chart" data-css="--i:${i++}"><div class="card-h"><h2>${data.hourly ? 'Сегодня по часам' : 'По дням'}</h2>
       <span class="hint">${data.hourly ? `сейчас ${esc(data.now)}` : cut ? 'воскресенья без звонков не показаны' : ''}</span></div><div class="chart" data-chart></div></section>`);
     if (!S.f.ext && ms.length) {
-      html.push(`<section class="card blk" data-css="--i:${i++}"><div class="card-h"><h2>Менеджеры</h2><span class="hint">нажмите на строку, чтобы открыть карточку</span></div>
-        <div class="tbl-wrap"><table class="tbl anim"><thead><tr><th>Менеджер</th><th class="n">Наборов</th><th class="n">Дозвон</th><th class="n hide-m">На линии</th>
-          <th class="n">С результатом</th><th class="n hide-m">Встречи и КП</th><th class="n">Потеряно с шансом ${help('Разговор без результата, в котором, по разбору бота, шанс был.')}</th><th class="hide-m">Частая ошибка</th><th></th></tr></thead>
+      html.push(`<section class="card blk summary-team" data-css="--i:${i++}"><div class="card-h"><h2>Менеджеры</h2>${director
+        ? `<button class="link" type="button" data-summary-expand aria-expanded="${expandedMetrics}">${expandedMetrics ? 'Свернуть таблицу' : 'Все показатели'}</button>`
+        : '<span class="hint">нажмите на строку, чтобы открыть карточку</span>'}</div>
+        <div class="tbl-wrap"><table class="tbl anim"><thead><tr><th>Менеджер</th><th class="n">Наборов</th><th class="n">Дозвон</th><th class="n hide-m summary-extra">На линии</th>
+          <th class="n">С результатом</th><th class="n hide-m summary-extra">Встречи и КП</th><th class="n summary-extra">Потеряно с шансом ${help('Разговор без результата, в котором, по разбору бота, шанс был.')}</th><th class="hide-m summary-extra">Частая ошибка</th><th class="summary-extra"></th></tr></thead>
         <tbody>${ms.map((m, r) => `<tr class="click" tabindex="0" data-ext="${esc(m.ext)}" data-css="--r:${r}">
           <td><span class="who">${ava(m.name)}<span>${esc(m.name)}<small>доб. ${esc(m.ext)}</small></span></span></td>
-          <td class="n">${fmt(m.dials)}</td><td class="n">${pctOf(m.live, m.dials)}</td><td class="n hide-m">${hm(m.seconds)}</td>
-          <td class="n">${fmt(m.result)}</td><td class="n hide-m">${fmt(m.meet)}</td>
-          <td class="n">${m.lost ? '<span class="dot"></span>' : ''}${fmt(m.lost)}</td>
-          <td class="hide-m wrap">${m.mistake ? esc(m.mistake.label) : '<span class="muted">—</span>'}</td>
-          <td>${svg('chev', 'go')}</td></tr>`).join('')}</tbody></table></div></section>`);
+          <td class="n">${fmt(m.dials)}</td><td class="n">${pctOf(m.live, m.dials)}</td><td class="n hide-m summary-extra">${hm(m.seconds)}</td>
+          <td class="n">${fmt(m.result)}</td><td class="n hide-m summary-extra">${fmt(m.meet)}</td>
+          <td class="n summary-extra">${m.lost ? '<span class="dot"></span>' : ''}${fmt(m.lost)}</td>
+          <td class="hide-m wrap summary-extra">${m.mistake ? esc(m.mistake.label) : '<span class="muted">—</span>'}</td>
+          <td class="summary-extra">${svg('chev', 'go')}</td></tr>`).join('')}</tbody></table></div></section>`);
     } else if (S.f.ext && ms.length) {
       html.push(`<section class="card blk" data-css="--i:${i++}" data-one><div class="card-h"><h2>Где теряем · 30 дней</h2></div><div data-loss><div class="sk line"></div></div>
         <div data-css="margin-top:14px">${personLinks(ms[0].ext)}</div></section>`);
     }
     html.push(moreBlock('Подробнее', 'когда лучше дозваниваться', heatHtml(data), i++));
-    view.innerHTML = `<div class="page">${html.join('')}</div>`;
+    view.innerHTML = `<div class="page${director ? ' director-summary' : ''}${expandedMetrics ? ' summary-expanded' : ''}">${html.join('')}</div>`;
+    $('[data-summary-expand]', view)?.addEventListener('click', e => {
+      expandedMetrics = !expandedMetrics;
+      $('.director-summary', view).classList.toggle('summary-expanded', expandedMetrics);
+      e.currentTarget.setAttribute('aria-expanded', String(expandedMetrics));
+      e.currentTarget.textContent = expandedMetrics ? 'Свернуть таблицу' : 'Все показатели';
+    });
     drawChart($('[data-chart]', view), rows, {
       bands: [{key: 'dials', label: 'Наборы', color: 'var(--s1)'}, {key: 'result', label: 'Разговоры с результатом', color: 'var(--s2)'}],
       tipRows: d => [['Наборов', 'var(--s1)', fmt(d.dials)], ['Дозвон', '', pctOf(d.live, d.dials)], ['С результатом', 'var(--s2)', fmt(d.result)]],

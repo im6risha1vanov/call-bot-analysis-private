@@ -365,7 +365,14 @@ class ExistingSurfaceTests(unittest.TestCase):
             process=subprocess.run(['git','show',base+':'+name],cwd=ROOT,capture_output=True,text=True)
             if process.returncode:
                 self.skipTest('Pinned Git baseline unavailable for source regression check')
-            if name in {'crm/gpt.py', 'crm/static/helper.js', 'crm/static/people.js'}:
+            if name == 'crm/static/summary.js':
+                # The director redesign intentionally changes the view. Keep the
+                # summary calculations and chart helpers on the workflow baseline.
+                process=subprocess.run(['git','show','5cd3561:'+name],cwd=ROOT,capture_output=True,text=True,check=True)
+                current=(ROOT/name).read_text().split('VIEWS.summary =',1)[0]
+                self.assertEqual(current,process.stdout.split('VIEWS.summary =',1)[0],name+' changed summary helpers')
+                continue
+            elif name in {'crm/gpt.py', 'crm/static/helper.js', 'crm/static/people.js'}:
                 # Verify the guide release separately from later CRM access and workspace changes.
                 current=subprocess.check_output(['git','show',guide_release+':'+name],cwd=ROOT,text=True)
             else:
@@ -373,7 +380,8 @@ class ExistingSurfaceTests(unittest.TestCase):
             current=re.sub(r' data-learning-target="[^"]+"','',current)
             if name.endswith('/review.js'):
                 current=current.replace("      if(box.dataset.learningLoaded)document.dispatchEvent(new CustomEvent('crm-review-closed',{detail:{id}}));\n",'').replace("    box.dataset.learningLoaded='true';\n",'').replace("    if (!box.isConnected) return;\n",'')
-            self.assertEqual(current,process.stdout,name+' changed functional code')
+            expected = re.sub(r' data-learning-target="[^"]+"', '', process.stdout)
+            self.assertEqual(current,expected,name+' changed functional code')
 
     def test_learning_does_not_run_automatically_or_call_gpt(self):
         script=(ROOT/'crm/static/learning/learning.js').read_text()

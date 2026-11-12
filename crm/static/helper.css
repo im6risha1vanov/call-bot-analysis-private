@@ -1,13 +1,12 @@
 /* AveronGPT: кнопка внизу меню, круглая кнопка на телефоне, окно чата справа. Цвета из токенов app.css. */
-.gpt-orb{width:22px;height:22px;border-radius:50%;flex:none;display:inline-block;
-  background:radial-gradient(circle at 34% 30%, color-mix(in oklab, var(--accent-ink) 70%, var(--accent)) 0 14%, var(--accent) 55%, color-mix(in oklab, var(--accent) 60%, var(--s1)) 100%);
+.gpt-orb{width:16px;height:16px;border-radius:50%;flex:none;display:inline-block;background:var(--accent);
   box-shadow:0 0 0 3px var(--accent-soft)}
-.gpt-btn{display:flex;align-items:center;gap:11px;width:100%;padding:11px 12px;border-radius:12px;border:1px solid var(--line);background:var(--surface-2);color:var(--fg);font-weight:650;font-size:14px;text-align:left;margin-top:auto;transition:background .15s, transform .12s, border-color .2s}
-.gpt-btn:hover{border-color:var(--accent)}
+.gpt-btn{display:flex;align-items:center;gap:11px;width:100%;padding:9px 12px;border-radius:8px;border:1px solid transparent;background:none;color:var(--muted);font-weight:600;font-size:13.5px;text-align:left;margin-top:auto;transition:background .15s}
+.gpt-btn:hover{background:var(--surface-2);color:var(--fg)}
 .gpt-btn:active{transform:scale(.98)}
 .gpt-btn[aria-expanded="true"]{background:var(--accent-soft);border-color:var(--accent)}
 .gpt-btn+.side-foot{margin-top:0}
-.gpt-fab{display:none}
+.head-actions .gpt-compact{display:none}
 
 .gpt{position:fixed;z-index:19;top:12px;right:12px;bottom:12px;width:min(400px, calc(100% - 24px));background:var(--surface);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow-lg);
   display:flex;flex-direction:column;animation:gpt-in .35s var(--ease) both}
@@ -65,11 +64,7 @@
 @keyframes tour-pulse{0%{opacity:.9;transform:scale(1)}70%,100%{opacity:0;transform:scale(1.04)}}
 
 @media (max-width: 900px){
-  .gpt-fab{display:grid;place-items:center;position:fixed;z-index:16;right:max(16px, env(safe-area-inset-right, 0px));bottom:calc(72px + env(safe-area-inset-bottom,0px));
-    width:52px;height:52px;border-radius:50%;border:1px solid var(--line);background:var(--surface);box-shadow:var(--shadow-lg)}
-  .gpt-fab .gpt-orb{width:28px;height:28px}
-  .tabbar[hidden]~.gpt-fab{bottom:calc(16px + env(safe-area-inset-bottom,0px))}
-  body.gpt-on .gpt-fab{display:none}
+  .head-actions .gpt-compact{display:inline-flex;min-width:44px;padding-inline:0}
   .gpt{inset:0;width:auto;border-radius:0;border:0;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);z-index:22}
   .gpt-h{padding-left:max(16px, env(safe-area-inset-left, 0px));padding-right:max(12px, env(safe-area-inset-right, 0px))}
 }

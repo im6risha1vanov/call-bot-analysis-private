@@ -168,7 +168,8 @@ VIEWS.reports = async view => {
 // ---------- настройки: промты и доступы ----------
 VIEWS.settings = async (view, arg) => {
   const tab = arg === 'access' ? 'access' : 'prompts';
-  view.innerHTML = `<div class="page">${tabsHtml([['prompts', 'Промты'], ['access', 'Доступы']], tab)}<div class="page" data-body></div></div>`;
+  const director = directorNav();
+  view.innerHTML = `<div class="page">${director ? '' : tabsHtml([['prompts', 'Промты'], ['access', 'Доступы']], tab)}<div class="page" data-body></div></div>`;
   $$('[data-tab]', view).forEach(b => b.addEventListener('click', async () => {
     if (b.dataset.tab === tab) return;
     if (S.pm && S.pm.body !== S.pm.start && !await askConfirm('Несохранённые правки промта пропадут. Перейти?', 'Перейти')) return;

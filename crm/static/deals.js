@@ -287,7 +287,7 @@ const contractTitle = c => `${c.type_title}${c.num ? ' № ' + c.num : c.base_nu
 async function contractsView(view) {
   const deal = S.contractDeal || (S.me.learning ? window.AveronLearningWorkspace?.classroom?.restoreContractDeal() : null) || null;
   S.contractDeal = null;
-  setHead({title: 'Сделки'});
+  setHead({title: directorNav() ? 'Договоры' : 'Сделки'});
   const first = await loading(view, api('/api/contracts'), 'table');
   view.innerHTML = `<div class="page">${dealTabs('contracts')}<div data-gen></div><section class="card blk" data-learning-target="contract-journal" data-css="--i:1" data-log></section></div>`;
   bindDealTabs(view);

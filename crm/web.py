@@ -293,6 +293,7 @@ async def api_me(request):
         'name': name or (await pool.fetchval('SELECT name FROM crm_invites WHERE id=$1', who.invite_id) if who.invite_id else None)
         or ('Директор' if who.role == 'director' else ''), 'role': who.role, 'test': who.test,
         'ext': a.extension if str(a.extension or '').isdigit() else None,
+        'account_id': who.invite_id if who.role == 'director' and not who.test and not who.support else None,
         'can_dial': can_dial, 'privileged': privileged, 'readonly': who.test,
         'economics': await can_view_economics(pool, who),
         'callcenter_filters': await callcenter_access.allowed(pool, who),

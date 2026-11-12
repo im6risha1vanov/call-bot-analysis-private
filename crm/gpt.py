@@ -47,7 +47,7 @@ PAGES = {
     'summary': ('Сводка', {'director'}), 'calls': ('Звонки', {'director', 'manager'}),
     'callbacks': ('Перезвоны', {'director', 'manager'}), 'deals': ('Сделки', {'director', 'manager'}),
     'staff': ('Сотрудники', {'director'}), 'callcenter': ('Колл-центр', {'director'}),
-    'robot': ('Робот', {'director', 'client'}), 'sources': ('Источники', {'director', 'manager'}),
+    'robot': ('Робот', {'director', 'client'}), 'sources': ('База номеров', {'manager'}),
     'reports': ('Отчёты', {'director', 'manager'}), 'settings': ('Настройки', {'director'}),
     'queue': ('Очередь', {'director', 'manager'}), 'me': ('Моя карточка', {'manager'}), 'cab': ('Кабинет', {'client'}),
 }
