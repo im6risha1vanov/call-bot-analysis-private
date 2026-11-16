@@ -24,7 +24,7 @@ from aiohttp import BodyPartReader, web  # noqa: E402
 import mango_client  # noqa: E402
 from tools import Forbidden, home_client_id, is_privileged  # noqa: E402
 from . import activity, economics, lead_import, lead_qualification
-from . import learning, tour
+from . import learning, tour, personal
 from . import accounts, ask as asking, auth, automation_agent, automations, cabinet, call_analysis, callcenter_access, callcenter_db, callcenter_match, callcenter_robot, company, contracts, deals, donor_agent, gpt, journal, overview, people, platform, recording, reviews, sources, staff, store, training  # noqa: E402
 from . import prompts as prompt_mode, robot, webphone, robot_api, robot_prices, robot_runner, robot_store  # noqa: E402
 from .dial import dial  # noqa: E402
@@ -276,7 +276,8 @@ async def api_me(request):
     owner = await is_home_owner(pool, who)
     firm = {'manage_accounts': owner, 'trainer': training.bot() if owner else None, 'company': firm['name'], 'modules': firm['modules'], 'support': who.support, 'callcenter_mode': cc_mode,
             'platform': who.platform and not who.support and firm['home'], 'switcher': await can_switch(pool, who),
-            'learning_mode':tour.active(request) and who.role in {'manager','director'}}
+            'learning_mode':tour.active(request) and who.role in {'manager','director'},
+            'personal_agent_enabled': not tour.active(request) and await personal.identity(pool, who) is not None}
     if who.role == 'client':
         return web.json_response({'name': who.client_key, 'role': 'client', 'test': who.test, 'client': who.client_key,
                                   'privileged': False, 'can_dial': False, 'team': [], **firm,
@@ -1564,6 +1565,7 @@ def build(pool) -> web.Application:
     app.router.add_static('/static/', STATIC, show_index=False)
     app.router.add_post('/api/logout', api_logout)
     app.router.add_get('/api/me', api_me)
+    app.router.add_routes(personal.routes(viewer, body, POOL))
     app.router.add_get('/api/learning/context', api_learning_context)
     app.router.add_get('/api/learning/guide', api_learning_guide)
     app.router.add_post('/api/learning/mode', api_learning_mode)

@@ -1,0 +1,12 @@
+.personal-panel { max-width: 1000px; }
+.personal-tabs, .personal-actions { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
+.personal-tabs { margin-bottom: 1.5rem; }
+.personal-actions h2 { flex: 1; }
+.personal-form { display: grid; gap: .8rem; max-width: 650px; margin: 1rem 0; }
+.personal-form textarea { min-height: 70px; }
+.personal-list { list-style: none; padding: 0; margin: 1rem 0; }
+.personal-list li { padding: .8rem 0; border-bottom: 1px solid #e5e7eb; }
+.personal-task { display: flex; justify-content: space-between; gap: 1rem; width: 100%; text-align: left; background: none; border: 0; cursor: pointer; color: inherit; }
+.personal-task span { color: #64748b; }
+.personal-error:not(:empty) { margin: .8rem 0; }
+@media (max-width: 600px) { .personal-task { flex-direction: column; gap: .3rem; } .personal-tabs .btn { flex: 1 1 40%; } }

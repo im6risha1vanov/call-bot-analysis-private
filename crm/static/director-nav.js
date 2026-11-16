@@ -2,6 +2,7 @@
 
 window.CRMWorkspaceNav = (() => {
   const directorGroups = [
+    {id: 'personal', label: 'Личный агент', links: [{page: 'personal', description: 'Личные задачи и проекты'}]},
     {id: 'analytics', label: 'Аналитика', links: [
       {page: 'summary', description: 'Показатели отдела и менеджеров'},
       {page: 'reports', description: 'Итоги дня и отчёты бота'},
@@ -46,6 +47,7 @@ window.CRMWorkspaceNav = (() => {
       {page: 'callcenter', description: 'Прозвон клиентов колл-центра'},
     ]},
     {id: 'my-work', label: 'Моя работа', links: [
+      {page: 'personal', description: 'Личные задачи и проекты'},
       {page: 'me', description: 'Ваши показатели и тренировки'},
       {page: 'reports', description: 'Итоги дня и отчёты бота'},
       {page: 'learning', description: 'Подсказки по работе в CRM'},

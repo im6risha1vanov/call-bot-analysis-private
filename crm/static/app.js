@@ -389,6 +389,7 @@ function linkBox(out, link, note) {
 
 // ---------- разделы и меню ----------
 const PAGES = {
+  personal: {name: 'Личный агент', icon: 'person', roles: ['director', 'manager']},
   summary: {name: 'Сводка', icon: 'home', roles: ['director']},
   queue: {name: 'Очередь', icon: 'queue', roles: ['manager', 'director']},
   calls: {name: 'Звонки', icon: 'phone', roles: ['director', 'manager']},
@@ -409,8 +410,8 @@ const PAGES = {
   companies: {name: 'Компании', icon: 'building', roles: ['director']},
 };
 const MENU = {
-  director: {nav: ['summary', 'calls', 'callbacks', 'deals', 'staff', 'callcenter', 'robot'], more: ['learning', 'reports', 'logs', 'economics', 'auto', 'settings', 'companies'], tabs: ['summary', 'calls', 'callbacks', 'deals']},
-  manager: {nav: ['queue', 'deals', 'calls'], more: ['me', 'learning', 'callcenter', 'sources', 'reports'], tabs: ['queue', 'deals', 'calls']},
+  director: {nav: ['summary', 'calls', 'callbacks', 'deals', 'staff', 'callcenter', 'robot'], more: ['personal', 'learning', 'reports', 'logs', 'economics', 'auto', 'settings', 'companies'], tabs: ['summary', 'calls', 'callbacks', 'deals']},
+  manager: {nav: ['queue', 'deals', 'calls'], more: ['personal', 'me', 'learning', 'callcenter', 'sources', 'reports'], tabs: ['queue', 'deals', 'calls']},
   client: {nav: ['cab', 'robot'], more: [], tabs: ['cab', 'robot']},
 };
 const HOME = {director: 'summary', manager: 'queue', client: 'cab'};
@@ -425,6 +426,7 @@ const ALIAS = {
 const hasModule = m => !S.me.modules || S.me.modules.includes(m);
 const PAGE_MODULE = {callcenter: 'callcenter', robot: 'robot', sources: 'sources', auto: 'automations'};
 const allowed = p => !!PAGES[p] && PAGES[p].roles.includes(S.me.role) && (!PAGE_MODULE[p] || hasModule(PAGE_MODULE[p]))
+  && (p !== 'personal' || !!S.me.personal_agent_enabled)
   && (p !== 'companies' || !!S.me.platform) && (p !== 'callcenter' || S.me.role !== 'manager' || S.me.callcenter_mode === 'db')
   && (p !== 'logs' || (!S.me.readonly && !S.me.support))
   && (p !== 'economics' || !!S.me.economics)
