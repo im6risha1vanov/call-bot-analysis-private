@@ -64,6 +64,8 @@ def head_menu(tg_id: int) -> ReplyKeyboardMarkup:
     rows = [[KeyboardButton(text=PROMPT_MENU)]] if is_editor(tg_id) else []
     if tg_id in __import__('crm.personal', fromlist=['pilot_ids']).pilot_ids():
         rows.append([KeyboardButton(text='📋 Личные задачи')])
+    if tg_id in __import__('crm.personal', fromlist=['pilot_ids']).pilot_ids():
+        rows.append([KeyboardButton(text='🤖 Личный агент')])
     rows += [[KeyboardButton(text='↩️ Старая методика'), KeyboardButton(text='🔄 Вернуть сохранённую версию')],
              [KeyboardButton(text='ℹ️ Версия анализа')]]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True)
@@ -559,6 +561,9 @@ install_unified(router, lambda: PG_POOL)
 from review.ui import install as install_review
 install_review(router, lambda: PG_POOL)
 # Режим промта: свободный текст ловится только при открытой правке, остальное идёт агенту РОПа ниже.
+from personal_executor_telegram import install as install_personal_executor
+install_personal_executor(router, lambda: PG_POOL)
+
 from personal_voice import install as install_personal_voice
 install_personal_voice(router, lambda: PG_POOL)
 
@@ -644,10 +649,12 @@ async def main():
     tgbusiness.POOL = PG_POOL
     from personal_reminders import run as run_personal_reminders
     reminder_task = asyncio.create_task(run_personal_reminders(PG_POOL, bot))
+    from personal_executor import run as run_personal_executor
+    executor_task = asyncio.create_task(run_personal_executor(PG_POOL, bot))
     try: await dp.start_polling(bot,allowed_updates=dp.resolve_used_update_types())
     finally:
-        reminder_task.cancel()
-        await asyncio.gather(reminder_task, return_exceptions=True)
+        reminder_task.cancel(); executor_task.cancel()
+        await asyncio.gather(reminder_task, executor_task, return_exceptions=True)
         await bot.session.close(); await PG_POOL.close()
 
 if __name__=='__main__': asyncio.run(main())

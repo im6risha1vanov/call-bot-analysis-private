@@ -22,7 +22,7 @@ class EndTurnToolUseTests(unittest.IsolatedAsyncioTestCase):
         create = AsyncMock(side_effect=[first, final])
         pool = MagicMock()
         pool.fetchrow = AsyncMock(return_value={'timezone': 'Europe/Moscow'})
-        actor = SimpleNamespace(client_id=1)
+        actor = SimpleNamespace(client_id=1, role='owner')
         with patch.object(rop_agent.claude.messages, 'create', create), \
                 patch.object(rop_agent, '_over_daily_limit', AsyncMock(return_value=False)), \
                 patch.object(rop_agent, '_add_spend', AsyncMock()), \

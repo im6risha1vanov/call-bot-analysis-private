@@ -1566,6 +1566,8 @@ def build(pool) -> web.Application:
     app.router.add_post('/api/logout', api_logout)
     app.router.add_get('/api/me', api_me)
     app.router.add_routes(personal.routes(viewer, body, POOL))
+    from crm import personal_executor_api
+    app.router.add_routes(personal_executor_api.routes(viewer, body, POOL))
     app.router.add_get('/api/learning/context', api_learning_context)
     app.router.add_get('/api/learning/guide', api_learning_guide)
     app.router.add_post('/api/learning/mode', api_learning_mode)

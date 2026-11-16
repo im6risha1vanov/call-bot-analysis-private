@@ -1,0 +1,31 @@
+const assert = require('assert');
+const fs = require('fs');
+const vm = require('vm');
+const listeners = {}, result = {innerHTML:''}, notice = {textContent:''};
+const root = {isConnected:true, innerHTML:'', addEventListener:(n,f)=>listeners[n]=f,
+  querySelector:q => q==='[data-agent-results]' ? result : q==='.personal-error' ? notice : q==='.personal-panel' ? {} : null};
+const detail = {job:{id:7,request:'<опасный текст>',status:'needs_confirmation',updated_at:'2026-11-16T12:00:00Z'},steps:[{tool:'create_task',status:'ok',evidence:{id:42,version:2,title:'Тест'},created_at:'2026-11-16T12:00:00Z'}],action:{recipient:12,recipient_name:'Получатель',sender_name:'Отправитель',content:'<проверка>',status:'proposed',token:'abc'}};
+const api = async path => path.endsWith('/profile') ? {profile:{timezone:'Europe/Moscow'}} : path.endsWith('/projects') ? {projects:[]} : path.endsWith('/tasks') ? {tasks:[]} : path.endsWith('/jobs') ? {jobs:[detail.job]} : detail;
+const context={VIEWS:{},S:{me:{account_id:1,name:'Тест'}},esc:x=>String(x).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'),api,Intl,Date,JSON,Number,String,Array,crypto:require('crypto').webcrypto,sessionStorage:{getItem:()=>null,setItem:()=>{}},document:{hidden:false},window:{addEventListener:()=>{},removeEventListener:()=>{}},setInterval:()=>1,clearInterval:()=>{}};
+vm.runInNewContext(fs.readFileSync('crm/static/personal.js','utf8'),context);
+(async()=>{
+ await context.VIEWS.personal(root);
+ await listeners.click({target:{closest:()=>({dataset:{tab:'agent'}})}});
+ assert(result.innerHTML.includes('Ожидает подтверждения'));
+ await listeners.click({target:{closest:()=>({dataset:{agent:'7'}})}});
+ assert(result.innerHTML.includes('Задача №42, версия 2'));
+ assert(result.innerHTML.includes('Получатель · ID 12'));
+ assert(result.innerHTML.includes('Поручение от Отправитель:'));
+ assert(result.innerHTML.includes('&lt;проверка&gt;'));
+ assert(!result.innerHTML.includes('<проверка>'));
+ assert(result.innerHTML.includes('Подтвердить отправку'));
+ detail.steps[0].status='uncertain';
+ await listeners.click({target:{closest:()=>({dataset:{agent:'7'}})}});
+ assert(result.innerHTML.includes('Результат не подтверждён, проверьте задачу перед повтором'));
+ assert(!result.innerHTML.includes('Задача №42, версия 2'));
+ detail.action.status='sent'; detail.action.message_id=null;
+ await listeners.click({target:{closest:()=>({dataset:{agent:'7'}})}});
+ assert(result.innerHTML.includes('Доставка не подтверждена'));
+ assert(!result.innerHTML.includes('Подтвердить отправку'));
+ console.log('personal agent UI checks passed');
+})().catch(e=>{console.error(e);process.exitCode=1});

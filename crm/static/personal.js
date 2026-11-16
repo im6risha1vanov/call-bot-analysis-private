@@ -1,14 +1,17 @@
 /* The personal workspace uses only the authenticated user's own API. */
 VIEWS.personal = async function personalView(root) {
   const viewToken = {}; root._personalViewToken = viewToken;
-  let tab = 'day', selected = null, projects = [], tasks = [], profile = null, history = null;
+  let tab = 'day', selected = null, projects = [], tasks = [], profile = null, history = null, agentJobs = [], agentDetail = null;
   const statusLabels = {planned: 'Запланировано', in_progress: 'В работе', done: 'Готово', cancelled: 'Отменено'};
   const h = value => esc(value == null ? '' : String(value));
   // The browser interprets entered date-times in its own zone; show that zone explicitly.
   const browserTime = value => value ? new Date(value).toISOString() : null;
   const browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'часовой пояс устройства';
   const localTime = value => value ? new Date(value).toLocaleString('ru-RU') : '—';
-  let saving = false;
+  let saving = false, agentBusy = false, agentDraft = '', agentPending = null, agentEpoch = 0;
+  const agentStorageKey = 'personal-agent-draft:' + String(S.me.account_id || S.me.name || '');
+  try { const stored = JSON.parse(sessionStorage.getItem(agentStorageKey) || 'null'); if (stored) { agentDraft = stored.text || ''; agentPending = stored.id || null; } } catch (_) {}
+  function saveAgentDraft() { try { sessionStorage.setItem(agentStorageKey, JSON.stringify({text:agentDraft, id:agentPending})); } catch (_) {} }
   async function load() {
     profile = (await api('/api/personal/profile')).profile;
     if (profile) {
@@ -41,15 +44,74 @@ VIEWS.personal = async function personalView(root) {
     const today = new Intl.DateTimeFormat('en-CA', {timeZone: profile.timezone, year:'numeric', month:'2-digit', day:'2-digit'}).format(new Date());
     const visible = tab === 'day' ? tasks.filter(t => t.planned_day === today && !['done','cancelled'].includes(t.status)) : tasks;
     let content = '';
-    if (tab === 'profile') content = `<h2>Профиль</h2>${formProfile()}`;
+    if (tab === 'agent') {
+      content = `<h2>Поручения агенту</h2><p>Поручите работу с задачами, поиск материалов или подготовку сообщения. Внешняя отправка требует подтверждения.</p><form data-form="agent" class="personal-form"><label class="field">Поручение<textarea name="request" maxlength="4000" required>${h(agentDraft)}</textarea></label><button class="btn primary">Отправить поручение</button></form><button type="button" class="btn" data-action="agent-refresh">Обновить</button><div data-agent-results></div>`;
+    }
+    else if (tab === 'profile') content = `<h2>Профиль</h2>${formProfile()}`;
     else if (tab === 'projects') content = `<h2>Проекты</h2><form data-form="project" class="personal-actions"><input name="title" required maxlength="300" placeholder="Название проекта"><button class="btn primary">Добавить</button></form><ul class="personal-list">${projects.map(p => `<li>${h(p.title)}</li>`).join('') || '<li>Проектов пока нет.</li>'}</ul>`;
     else content = `<div class="personal-actions"><h2>${tab === 'day' ? 'Мой день' : 'Задачи'}</h2><button class="btn primary" data-action="new">Новая задача</button></div>${selected ? taskForm(selected === 'new' ? {} : selected) : ''}<ul class="personal-list">${visible.map(t => `<li><button type="button" class="personal-task" data-task="${t.id}"><strong>${h(t.title)}</strong><span>${h(statusLabels[t.status])}${t.planned_day ? ' · ' + h(t.planned_day) : ''}</span></button></li>`).join('') || '<li>Задач пока нет.</li>'}</ul>${selected && selected !== 'new' ? `<button type="button" class="btn" data-action="history">История</button>${history ? `<ul class="personal-list">${history.map(x => { const t = x.snapshot; const project = projects.find(p => p.id === t.project_id); return `<li><strong>Версия ${x.version} · ${h(localTime(x.created_at))}</strong><div>Название: ${h(t.title)} · Статус: ${h(statusLabels[t.status])}</div><div>Проект: ${h(project?.title || 'Без проекта')}</div><div>Ожидаемый результат: ${h(t.expected_result || '—')}</div><div>Результат: ${h(t.result_note || '—')}</div><div>Что мешает: ${h(t.blocker || '—')}</div><div>План на день: ${h(t.planned_day || '—')} · Срок: ${h(localTime(t.due_at))} · Напомнить: ${h(localTime(t.reminder_at))}</div></li>`; }).join('')}</ul>` : ''}` : ''}`;
-    root.innerHTML = `<section class="panel personal-panel"><div class="personal-tabs" role="navigation" aria-label="Личный агент">${[['day','Мой день'],['tasks','Задачи'],['projects','Проекты'],['profile','Профиль']].map(([key,label]) => `<button type="button" class="btn ${tab === key ? 'primary' : ''}" data-tab="${key}">${label}</button>`).join('')}</div><div class="personal-error bad-text" role="alert"></div>${content}</section>`;
+    root.innerHTML = `<section class="panel personal-panel"><div class="personal-tabs" role="navigation" aria-label="Личный агент">${[['agent','Поручения'],['day','Мой день'],['tasks','Задачи'],['projects','Проекты'],['profile','Профиль']].map(([key,label]) => `<button type="button" class="btn ${tab === key ? 'primary' : ''}" data-tab="${key}">${label}</button>`).join('')}</div><div class="personal-error bad-text" role="alert"></div>${content}</section>`;
   }
+  const agentStates = {queued:'В очереди',transcribing:'Распознаётся',running:'Выполняется',prepared:'Материал подготовлен',needs_input:'Нужно уточнение',needs_connection:'Нужно подключение',needs_confirmation:'Ожидает подтверждения',completed:'Завершено',failed:'Ошибка',cancelled:'Отменено'};
+  const actionStates = {proposed:'Ожидает вашего решения',approved:'Подтверждено, ожидает отправки',sending:'Отправляется',sent:'Отправлено',uncertain:'Доставка не подтверждена',failed:'Отправить не удалось',cancelled:'Отменено'};
+  const toolNames = {list_tasks:'Список задач',get_task:'Просмотр задачи',create_task:'Создание задачи',update_task:'Изменение задачи',analyze_calls:'Анализ звонков',search_web:'Поиск материалов',needs_connection:'Подключение сервиса',ask_owner:'Уточнение',contacts:'Проверка получателей',prepare_telegram_message:'Подготовка сообщения'};
+  function evidenceText(step) {
+    let e = step.evidence;
+    if (typeof e === 'string') { try { e=JSON.parse(e); } catch (_) { return e; } }
+    if (!e || typeof e !== 'object') return '';
+    if (step.status === 'failed') return e.error || 'Действие не выполнено.';
+    if (step.status !== 'ok') return '';
+    if (['create_task','update_task','get_task'].includes(step.tool) && (!Number.isInteger(e.id) || !Number.isInteger(e.version))) return 'Нет подтверждённого номера и версии задачи.';
+    if (step.tool === 'create_task' || step.tool === 'update_task') return `Задача №${e.id}, версия ${e.version}${e.title ? ': '+e.title : ''}`;
+    if (step.tool === 'get_task') return `Задача №${e.id}, версия ${e.version}${e.title ? ': '+e.title : ''}`;
+    if (step.tool === 'list_tasks') return `Найдено задач: ${(e.tasks || []).length}${e.more ? '; есть ещё' : ''}.`;
+    if (step.tool === 'search_web' && Array.isArray(e)) return e.map(x => [x.title, x.url, x.snippet].filter(Boolean).join(' — ')).join('\n');
+    if (step.tool === 'needs_connection') return [e.service ? 'Требуется подключение: '+e.service : '', e.prepared_text].filter(Boolean).join('\n');
+    if (step.tool === 'ask_owner') return e.question || '';
+    if (step.tool === 'analyze_calls') return e.answer || '';
+    if (step.tool === 'prepare_telegram_message') return 'Сообщение подготовлено; для отправки требуется ваше подтверждение.';
+    if (step.tool === 'contacts') return 'Доступные получатели проверены.';
+    return '';
+  }
+  function renderAgentResults() {
+    const out = root.querySelector('[data-agent-results]'); if (!out) return;
+    const list = agentJobs.map(j => `<li><button class="personal-task" type="button" data-agent="${h(j.id)}"><strong>${h(j.request)}</strong><span>${h(agentStates[j.status] || 'Неизвестное состояние')} · ${h(localTime(j.created_at))}</span></button></li>`).join('') || '<li>Поручений пока нет.</li>';
+    let detail = '';
+    if (agentDetail) {
+      const job=agentDetail.job, action=agentDetail.action;
+      const steps=(agentDetail.steps || []).map(step => `<li><strong>${h(toolNames[step.tool] || 'Шаг поручения')}</strong> · ${h(step.status === 'ok' ? 'выполнен' : step.status === 'failed' ? 'не выполнен' : step.status === 'uncertain' ? 'Результат не подтверждён, проверьте задачу перед повтором' : 'выполняется')} · ${h(localTime(step.created_at))}<div style="white-space:pre-wrap">${h(evidenceText(step))}</div></li>`).join('') || '<li>Шагов пока нет.</li>';
+      let actionHtml = '';
+      if (action) {
+        const actual = `Поручение от ${action.sender_name || ''}:\n\n${action.content || ''}`;
+        const ready = action.status === 'proposed' && action.sender_name && action.recipient_name && action.token;
+        const state = action.status === 'sent' && !action.message_id ? 'Доставка не подтверждена' : (actionStates[action.status] || 'Неизвестное состояние');
+        actionHtml = `<h4>Сообщение в Telegram</h4><p>Получатель: ${h(action.recipient_name || 'Имя не подтверждено')} · ID ${h(action.recipient)}</p><p>Точный текст сообщения:</p><p style="white-space:pre-wrap">${h(actual)}</p><p>${h(state)}${action.status === 'sent' && action.message_id ? ' · ID сообщения '+h(action.message_id) : ''}</p>${ready ? '<button type="button" class="btn primary" data-action="agent-confirm">Подтвердить отправку</button> <button type="button" class="btn" data-action="agent-decline">Отменить отправку</button>' : ''}`;
+      }
+      detail = `<h3>Поручение №${h(job.id)}</h3><p style="white-space:pre-wrap">${h(job.request)}</p><p>Состояние: ${h(agentStates[job.status] || 'Неизвестное состояние')} · обновлено ${h(localTime(job.updated_at))}</p>${job.result ? `<h4>Материал / пояснение</h4><p style="white-space:pre-wrap">${h(job.result)}</p>` : ''}${job.error ? `<h4>Ошибка</h4><p style="white-space:pre-wrap">${h(job.error)}</p>` : ''}<h4>Ход поручения</h4><ul>${steps}</ul>${actionHtml}`;
+    }
+    out.innerHTML = `<ul class="personal-list">${list}</ul>${detail}`;
+  }
+  async function refreshAgent() {
+    if (agentBusy || tab !== 'agent') return;
+    const epoch=agentEpoch, selectedId=agentDetail?.job.id;
+    const jobs=(await api('/api/personal/agent/jobs')).jobs;
+    const detail=selectedId ? await api(`/api/personal/agent/jobs/${selectedId}`) : null;
+    if (!root.isConnected || tab !== 'agent' || epoch !== agentEpoch) return;
+    agentJobs=jobs; if (selectedId && agentDetail?.job.id === selectedId) agentDetail=detail;
+    renderAgentResults();
+  }
+  root.addEventListener('input', e => {
+    if (e.target.matches('form[data-form="agent"] textarea[name="request"]')) {
+      agentDraft=e.target.value; agentPending=null; saveAgentDraft();
+    }
+  });
   root.addEventListener('click', async e => {
     const btn = e.target.closest('button'); if (!btn) return;
     try {
-      if (btn.dataset.tab) { tab = btn.dataset.tab; selected = null; history = null; render(); }
+      if (btn.dataset.tab) { tab = btn.dataset.tab; selected = null; history = null; agentEpoch++; render(); if (tab==='agent') await refreshAgent(); }
+      else if (btn.dataset.agent) { const id=Number(btn.dataset.agent); if (!Number.isSafeInteger(id) || id <= 0) return; agentEpoch++; const epoch=agentEpoch, detail=await api(`/api/personal/agent/jobs/${id}`); if (tab === 'agent' && epoch === agentEpoch) { agentDetail=detail; renderAgentResults(); } }
+      else if (btn.dataset.action === 'agent-refresh') { await refreshAgent(); }
+      else if (['agent-confirm','agent-decline'].includes(btn.dataset.action)) { if (agentBusy || !agentDetail?.action || agentDetail.action.status !== 'proposed' || !agentDetail.action.recipient_name || !agentDetail.action.sender_name) return; agentBusy=true; btn.disabled=true; const id=agentDetail.job.id; try { await api(`/api/personal/agent/jobs/${id}/confirm`,{method:'POST',body:{token:agentDetail.action.token,approve:btn.dataset.action==='agent-confirm'}}); agentDetail=await api(`/api/personal/agent/jobs/${id}`); } finally { agentBusy=false; } await refreshAgent(); }
       else if (btn.dataset.action === 'new') { selected = 'new'; history = null; render(); }
       else if (btn.dataset.action === 'cancel') { selected = null; history = null; render(); }
       else if (btn.dataset.task) { selected = tasks.find(t => t.id === Number(btn.dataset.task)); history = null; render(); }
@@ -61,7 +123,9 @@ VIEWS.personal = async function personalView(root) {
     e.preventDefault(); if (saving) return;
     const form = e.target, data = Object.fromEntries(new FormData(form));
     saving = true; form.querySelectorAll('button[type=submit], button:not([type])').forEach(button => { button.disabled = true; });
+    const agentInput = form.dataset.form === 'agent' ? form.querySelector('textarea[name=request]') : null; if (agentInput) agentInput.readOnly = true;
     try {
+      if (form.dataset.form === 'agent') { agentDraft=data.request; agentPending ||= crypto.randomUUID(); saveAgentDraft(); const response=await api('/api/personal/agent/jobs',{method:'POST',body:{request:agentDraft,request_id:agentPending}}); const jobs=(await api('/api/personal/agent/jobs')).jobs; const job=response.job || jobs.find(j => String(j.event_key || '').endsWith(':'+agentPending)); if (!job) throw new Error('Поручение принято ранее, но не найдено в последних записях.'); agentJobs=jobs; agentDetail=await api(`/api/personal/agent/jobs/${job.id}`); agentEpoch++; agentDraft=''; agentPending=null; saveAgentDraft(); render(); renderAgentResults(); return; }
       if (form.dataset.form === 'profile') await api('/api/personal/profile', {method:'PUT', body:data});
       if (form.dataset.form === 'project') await api('/api/personal/projects', {method:'POST', body:data});
       if (form.dataset.form === 'task') {
@@ -74,7 +138,7 @@ VIEWS.personal = async function personalView(root) {
       }
       await load(); render();
     } catch (err) { const out = root.querySelector('.personal-error'); if (out) out.textContent = err.message; else alert(err.message); }
-    finally { saving = false; form.querySelectorAll('button[type=submit], button:not([type])').forEach(button => { button.disabled = false; }); }
+    finally { saving = false; if (agentInput) agentInput.readOnly = false; form.querySelectorAll('button[type=submit], button:not([type])').forEach(button => { button.disabled = false; }); }
   });
   await load(); render();
   let refreshing = false, pendingRender = false;
@@ -83,6 +147,7 @@ VIEWS.personal = async function personalView(root) {
     if (refreshing || saving || document.hidden || !profile) return;
     refreshing = true;
     try {
+      if (tab === 'agent') { await refreshAgent(); return; }
       const fresh = (await api('/api/personal/tasks')).tasks;
       if (!root.isConnected || root._personalViewToken !== viewToken || !root.querySelector('.personal-panel')) return;
       if (selected && selected !== 'new') {
@@ -103,7 +168,7 @@ VIEWS.personal = async function personalView(root) {
       // Never redraw an open editor or a form the user has begun filling in.
       const input = root.querySelector('form input:focus, form textarea:focus, form select:focus');
       const projectInput = root.querySelector('form[data-form="project"] input');
-      if (pendingRender && !selected && tab !== 'profile' && !input && !(projectInput && projectInput.value)) { render(); pendingRender = false; }
+      if (pendingRender && !selected && tab !== 'profile' && tab !== 'agent' && !input && !(projectInput && projectInput.value)) { render(); pendingRender = false; }
     } catch (_) { /* Keep the current view if the connection is temporarily unavailable. */ }
     finally { refreshing = false; }
   }
