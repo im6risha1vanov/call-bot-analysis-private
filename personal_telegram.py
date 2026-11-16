@@ -10,7 +10,7 @@ from crm.personal import pilot_ids, parse_task, save_task
 from tools import resolve_actor
 
 LABELS = {'planned':'Запланировано', 'in_progress':'В работе', 'done':'Готово', 'cancelled':'Отменено'}
-FIELDS = {'title':'Название', 'expected_result':'Ожидаемый результат', 'result_note':'Результат', 'blocker':'Что мешает', 'planned_day':'План на день', 'due_at':'Срок'}
+FIELDS = {'title':'Название', 'expected_result':'Ожидаемый результат', 'result_note':'Результат', 'blocker':'Что мешает', 'planned_day':'План на день', 'due_at':'Срок', 'reminder_at':'Напомнить'}
 
 def keyboard(rows):
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=t, callback_data=d) for t, d in row] for row in rows])
@@ -44,7 +44,8 @@ async def show_list(message, pool, profile, page=0):
     if more: navigation.append(('Далее →', f'pt:page:{page+1}'))
     if navigation: buttons.append(navigation)
     buttons.append([('➕ Новая задача', 'pt:new')])
-    await message.answer('Личные задачи' if rows else 'Задач пока нет.', reply_markup=keyboard(buttons), parse_mode=None)
+    heading = 'Личные задачи' if rows else 'Задач пока нет.'
+    await message.answer(heading + '\n\nМожно отправить голосовое: одна запись — одна задача. Например: «Завтра в 10 утра подготовить план встречи». Напоминание по сроку по умолчанию в 09:00, либо раньше — в момент срока. Часовой пояс: ' + profile['timezone'], reply_markup=keyboard(buttons), parse_mode=None)
 
 async def show_task(message, pool, profile, task_id):
     task = await pool.fetchrow('SELECT * FROM crm_personal_tasks WHERE owner_id=$1 AND id=$2', profile['id'], task_id)
@@ -54,10 +55,11 @@ async def show_task(message, pool, profile, task_id):
     details = [task['title'], 'Статус: ' + LABELS[task['status']]]
     for field, label in FIELDS.items():
         if field != 'title' and task[field]:
-            value = task[field].astimezone(ZoneInfo(profile['timezone'])).strftime('%Y-%m-%d %H:%M %Z') if field == 'due_at' else task[field]
+            value = task[field].astimezone(ZoneInfo(profile['timezone'])).strftime('%Y-%m-%d %H:%M %Z') if field in ('due_at', 'reminder_at') else task[field]
             details.append(f'{label}: {value}')
     rows = [[(label, f'pt:edit:{field}:{task_id}:{version}')] for field, label in FIELDS.items()]
     rows += [[(label, f'pt:status:{status}:{task_id}:{version}')] for status, label in LABELS.items() if status != task['status']]
+    rows.append([('🔔 Выключить напоминания' if task['reminders_enabled'] else '🔔 Включить напоминания', f"pt:reminders:{int(not task['reminders_enabled'])}:{task_id}:{version}")])
     rows.append([('← К задачам', 'pt:list')])
     await message.answer('\n'.join(details)[:3900], reply_markup=keyboard(rows), parse_mode=None)
 
@@ -72,6 +74,20 @@ async def set_state(pool, user_id, action, task_id=None, version=None, event_key
     return True
 
 
+async def ensure_profile(pool, user, actor):
+    profile = await pool.fetchrow('SELECT * FROM crm_personal_profiles WHERE telegram_user_id=$1', user.id)
+    if not profile:
+        employee = await pool.fetchrow('SELECT full_name FROM employees WHERE telegram_user_id=$1 AND client_id=$2 AND archived_at IS NULL LIMIT 1', user.id, actor.client_id)
+        name = (employee['full_name'] or user.first_name or 'Пользователь').strip()[:200]
+        zone = await pool.fetchval("SELECT to_jsonb(c)->>'timezone' FROM clients c WHERE id=$1", actor.client_id) or 'Europe/Moscow'
+        try: ZoneInfo(zone)
+        except Exception: zone = 'Europe/Moscow'
+        profile = await pool.fetchrow('INSERT INTO crm_personal_profiles(telegram_user_id,display_name,timezone) VALUES($1,$2,$3) ON CONFLICT(telegram_user_id) DO NOTHING RETURNING *', user.id, name, zone)
+        if profile: pass
+        else: profile = await pool.fetchrow('SELECT * FROM crm_personal_profiles WHERE telegram_user_id=$1', user.id)
+    return profile
+
+
 def install(router, get_pool):
     @router.message(Command('tasks'))
     @router.message(F.text == '📋 Личные задачи')
@@ -80,16 +96,7 @@ def install(router, get_pool):
         actor = await authorized(pool, message.from_user, message.chat)
         if not actor:
             await message.answer('Личный раздел недоступен. Если доступ выдан, сначала заполните личный профиль в CRM.', parse_mode=None); return
-        profile = await pool.fetchrow('SELECT * FROM crm_personal_profiles WHERE telegram_user_id=$1', message.from_user.id)
-        if not profile:
-            employee = await pool.fetchrow('SELECT full_name FROM employees WHERE telegram_user_id=$1 AND client_id=$2 AND archived_at IS NULL LIMIT 1', message.from_user.id, actor.client_id)
-            name = (employee['full_name'] or message.from_user.first_name or 'Пользователь').strip()[:200]
-            zone = await pool.fetchval("SELECT to_jsonb(c)->>'timezone' FROM clients c WHERE id=$1", actor.client_id) or 'Europe/Moscow'
-            try: ZoneInfo(zone)
-            except Exception: zone = 'Europe/Moscow'
-            profile = await pool.fetchrow('INSERT INTO crm_personal_profiles(telegram_user_id,display_name,timezone) VALUES($1,$2,$3) ON CONFLICT(telegram_user_id) DO NOTHING RETURNING *', message.from_user.id, name, zone)
-            if profile: await message.answer('Личный профиль готов. Часовой пояс: ' + zone + '. Изменить его можно в CRM.', parse_mode=None)
-            else: profile = await pool.fetchrow('SELECT * FROM crm_personal_profiles WHERE telegram_user_id=$1', message.from_user.id)
+        profile = await ensure_profile(pool, message.from_user, actor)
         await set_state(pool, message.from_user.id, 'idle')
         await show_list(message, pool, profile)
 
@@ -120,8 +127,11 @@ def install(router, get_pool):
                 if not current or current['version'] != version: raise ValueError('Кнопка устарела. Откройте задачу снова через /tasks.')
                 if not await set_state(pool, cq.from_user.id, bits[2], task_id, version, 'callback:' + cq.id):
                     await cq.answer(); return
-                extra = ' Дата: ГГГГ-ММ-ДД.' if bits[2] == 'planned_day' else (' Укажите ГГГГ-ММ-ДД ЧЧ:ММ в часовом поясе профиля.' if bits[2] == 'due_at' else '')
+                extra = ' Дата: ГГГГ-ММ-ДД.' if bits[2] == 'planned_day' else (' Укажите ГГГГ-ММ-ДД ЧЧ:ММ в часовом поясе профиля.' if bits[2] in ('due_at','reminder_at') else '')
                 await message.answer('Введите: ' + FIELDS[bits[2]] + '.' + extra + ' Для отмены отправьте /tasks.', parse_mode=None)
+            elif action == 'reminders' and len(bits) == 5 and bits[2] in ('0','1'):
+                row = await save_task(pool, profile['id'], {'reminders_enabled':bits[2] == '1'}, int(bits[3]), int(bits[4]), 'callback:' + cq.id)
+                if row: await show_task(message, pool, profile, row['id'])
             elif action == 'status' and len(bits) == 5 and bits[2] in LABELS:
                 row = await save_task(pool, profile['id'], {'status':bits[2]}, int(bits[3]), int(bits[4]), 'callback:' + cq.id)
                 if row: await show_task(message, pool, profile, row['id'])
@@ -141,8 +151,11 @@ def install(router, get_pool):
             await message.answer('Для отмены отправьте /tasks.', parse_mode=None); return
         try:
             action = state['action']; value = message.text.strip()
+            if action.startswith('voice_'):
+                await message.answer('Используйте кнопки под голосовым черновиком или /tasks для отмены.', parse_mode=None)
+                return
             if value == '-' and action != 'create' and action != 'title': value = ''
-            if action == 'due_at' and value:
+            if action in ('due_at', 'reminder_at') and value:
                 value = datetime.strptime(value, '%Y-%m-%d %H:%M').replace(tzinfo=ZoneInfo(profile['timezone'])).isoformat()
             field = 'title' if action == 'create' else action
             values = parse_task({field:value}, partial=action != 'create')

@@ -58,6 +58,8 @@ class PersonalHTTPTests(DBCase):
         from aiohttp.test_utils import TestClient, TestServer
         from crm import web
         await self.pool.execute((Path(__file__).resolve().parents[1] / 'migrations/045_crm_personal_agent.sql').read_text(encoding='utf-8'))
+        for migration in ('046_crm_personal_telegram.sql', '047_crm_personal_voice_reminders.sql'):
+            await self.pool.execute((Path(__file__).resolve().parents[1] / 'migrations' / migration).read_text(encoding='utf-8-sig'))
         await self.pool.execute('TRUNCATE crm_personal_profiles CASCADE')
         self.enterContext(patch.dict(os.environ, {'CRM_PERSONAL_PILOT_TELEGRAM_IDS': '123,124'}))
         web.SECURE_COOKIE = False

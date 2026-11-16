@@ -559,6 +559,9 @@ install_unified(router, lambda: PG_POOL)
 from review.ui import install as install_review
 install_review(router, lambda: PG_POOL)
 # Режим промта: свободный текст ловится только при открытой правке, остальное идёт агенту РОПа ниже.
+from personal_voice import install as install_personal_voice
+install_personal_voice(router, lambda: PG_POOL)
+
 from personal_telegram import install as install_personal_telegram
 install_personal_telegram(router, lambda: PG_POOL)
 
@@ -639,8 +642,12 @@ async def main():
     dp.include_router(tgbusiness.router)
     PG_POOL = await asyncpg.create_pool(os.environ['DATABASE_URL'], min_size=1, max_size=5)
     tgbusiness.POOL = PG_POOL
+    from personal_reminders import run as run_personal_reminders
+    reminder_task = asyncio.create_task(run_personal_reminders(PG_POOL, bot))
     try: await dp.start_polling(bot,allowed_updates=dp.resolve_used_update_types())
     finally:
+        reminder_task.cancel()
+        await asyncio.gather(reminder_task, return_exceptions=True)
         await bot.session.close(); await PG_POOL.close()
 
 if __name__=='__main__': asyncio.run(main())

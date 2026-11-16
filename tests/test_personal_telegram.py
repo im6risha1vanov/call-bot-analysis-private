@@ -141,6 +141,7 @@ class PersonalTelegramTests(PersonalHTTPTests):
         from review import prompts
         dp = Dispatcher()
         dp.include_router(demo_bot.router)
+        self.addCleanup(setattr, demo_bot.router, '_parent_router', None)
         self.dp = dp
         fake_draft = {'kind':'review', 'body':'Черновик', 'history':[], 'start_body':'Черновик'}
         with patch.object(demo_bot, 'PG_POOL', self.pool), \

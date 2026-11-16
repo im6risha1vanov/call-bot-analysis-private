@@ -8,7 +8,7 @@ from aiohttp import web
 from tools import Forbidden
 
 STATUSES = {'planned', 'in_progress', 'done', 'cancelled'}
-FIELDS = ('title', 'project_id', 'expected_result', 'result_note', 'blocker', 'status', 'due_at', 'planned_day', 'reminder_at')
+FIELDS = ('title', 'project_id', 'expected_result', 'result_note', 'blocker', 'status', 'due_at', 'planned_day', 'reminder_at', 'reminders_enabled')
 
 
 def pilot_ids():
@@ -51,6 +51,9 @@ def parse_task(data, partial=False):
         value = data[field]
         if field in ('title', 'expected_result', 'result_note', 'blocker'):
             value = clean_text(value, field, field == 'title', 300 if field == 'title' else 4000)
+        elif field == 'reminders_enabled':
+            if type(value) is not bool:
+                raise ValueError('Неверная настройка напоминаний.')
         elif field == 'status':
             if not isinstance(value, str) or value not in STATUSES:
                 raise ValueError('Неверный статус.')
@@ -76,7 +79,7 @@ def serial(row):
     return {k: v.isoformat() if isinstance(v, (date, datetime)) else v for k, v in dict(row).items()}
 
 
-async def save_task(pool, owner_id, values, task_id=None, version=None, event_key=None, state_identity=None):
+async def save_task(pool, owner_id, values, task_id=None, version=None, event_key=None, state_identity=None, voice_token=None):
     creating = task_id is None
     async with pool.acquire() as conn, conn.transaction():
         if event_key is not None:
@@ -85,9 +88,15 @@ async def save_task(pool, owner_id, values, task_id=None, version=None, event_ke
                 return None
         if state_identity is not None:
             user_id, token = state_identity
-            consumed = await conn.fetchval("DELETE FROM crm_personal_telegram_state WHERE telegram_user_id=$1 AND token=$2 AND action <> 'idle' AND updated_at > now() - interval '1 day' RETURNING 1", user_id, token)
+            consumed = await conn.fetchval("DELETE FROM crm_personal_telegram_state WHERE telegram_user_id=$1 AND token=$2 AND action <> 'idle' AND ($3::boolean IS FALSE OR action='voice_preview') AND updated_at > now() - interval '1 day' RETURNING 1", user_id, token, voice_token is not None)
             if not consumed:
+                if voice_token is not None: raise web.HTTPConflict(reason='Черновик устарел или редактируется.')
                 return None
+        if voice_token is not None:
+            saved = await conn.fetchrow("UPDATE crm_personal_voice_drafts SET status='saved',updated_at=now() WHERE token=$1 AND telegram_user_id=$2 AND status='preview' RETURNING *", voice_token, user_id)
+            if not saved:
+                raise web.HTTPConflict(reason='Черновик устарел. Запишите задачу заново.')
+            values = {'title':saved['title'], 'expected_result':saved['transcript'], 'due_at':saved['due_at'], 'reminder_at':saved['reminder_at'], 'planned_day':saved['planned_day']}
         if 'project_id' in values and values['project_id'] is not None:
             if not await conn.fetchval('SELECT 1 FROM crm_personal_projects WHERE id=$1 AND owner_id=$2', values['project_id'], owner_id):
                 raise web.HTTPNotFound(reason='Проект не найден.')
@@ -156,7 +165,7 @@ def routes(viewer, body, pool_key):
 
     async def task_list(request):
         pool, _, profile = await owner(request)
-        rows = await pool.fetch('SELECT * FROM crm_personal_tasks WHERE owner_id=$1 ORDER BY id DESC', profile['id'])
+        rows = await pool.fetch("SELECT t.*, d.status AS reminder_delivery_status FROM crm_personal_tasks t LEFT JOIN crm_personal_reminder_delivery d ON d.task_id=t.id AND d.revision=t.reminder_revision WHERE t.owner_id=$1 ORDER BY t.id DESC", profile['id'])
         return web.json_response({'tasks': [serial(r) for r in rows]})
 
     async def task_save(request):

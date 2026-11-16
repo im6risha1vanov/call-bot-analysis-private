@@ -20,6 +20,7 @@ VIEWS.personal = async function personalView(root) {
     return `<form data-form="profile" class="personal-form"><label class="field">Имя<input name="display_name" required maxlength="200" value="${h(profile?.display_name || S.me.name || '')}"></label><label class="field">Часовой пояс<input name="timezone" required value="${h(profile?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/Moscow')}"></label><button class="btn primary">Сохранить профиль</button></form>`;
   }
   function taskForm(task = {}) {
+    const deliveryLabels = {pending:'ожидает отправки', sending:'отправляется', sent:'отправлено', uncertain:'доставка не подтверждена', blocked:'отправка недоступна', cancelled:'отменено'};
     return `<form data-form="task" class="personal-form"><h3>${task.id ? 'Редактирование задачи' : 'Новая задача'}</h3>
       <label class="field">Название<input name="title" required maxlength="300" value="${h(task.title)}"></label>
       <label class="field">Проект<select name="project_id"><option value="">Без проекта</option>${projects.map(p => `<option value="${p.id}" ${p.id === task.project_id ? 'selected' : ''}>${h(p.title)}</option>`).join('')}</select></label>
@@ -30,7 +31,9 @@ VIEWS.personal = async function personalView(root) {
       <label class="field">План на день<input type="date" name="planned_day" value="${h(task.planned_day)}"></label>
       <label class="field">Срок<input type="datetime-local" name="due_at" value="${h(task.due_at ? new Date(task.due_at).toLocaleString('sv-SE').replace(' ', 'T').slice(0,16) : '')}"></label>
       <label class="field">Напомнить<input type="datetime-local" name="reminder_at" value="${h(task.reminder_at ? new Date(task.reminder_at).toLocaleString('sv-SE').replace(' ', 'T').slice(0,16) : '')}"></label>
-      <p class="hint">Время вводится в часовом поясе устройства: ${h(browserZone)}. Отправка напоминаний пока не подключена; дата сохраняется.</p>
+      ${task.reminder_delivery_status ? `<p>Напоминание: ${h(deliveryLabels[task.reminder_delivery_status] || '—')}</p>` : ''}
+      <label><input type="checkbox" name="reminders_enabled" ${task.reminders_enabled !== false ? 'checked' : ''}> Напоминания включены</label>
+      <p class="hint">Время вводится в часовом поясе устройства: ${h(browserZone)}. По умолчанию напоминание приходит в 09:00 в часовом поясе профиля в день срока, а если срок раньше — в момент срока. Указанное время напоминания заменяет это правило.</p>
       <div class="personal-actions"><button class="btn primary">Сохранить</button><button type="button" class="btn" data-action="cancel">Отмена</button></div></form>`;
   }
   function render() {
@@ -62,6 +65,7 @@ VIEWS.personal = async function personalView(root) {
       if (form.dataset.form === 'profile') await api('/api/personal/profile', {method:'PUT', body:data});
       if (form.dataset.form === 'project') await api('/api/personal/projects', {method:'POST', body:data});
       if (form.dataset.form === 'task') {
+        data.reminders_enabled = form.elements.reminders_enabled.checked;
         data.project_id = data.project_id ? Number(data.project_id) : null;
         data.planned_day ||= null; data.due_at = browserTime(data.due_at); data.reminder_at = browserTime(data.reminder_at);
         const editing = selected && selected !== 'new'; if (editing) data.version = selected.version;
