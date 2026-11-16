@@ -1,5 +1,6 @@
 /* The personal workspace uses only the authenticated user's own API. */
 VIEWS.personal = async function personalView(root) {
+  const viewToken = {}; root._personalViewToken = viewToken;
   let tab = 'day', selected = null, projects = [], tasks = [], profile = null, history = null;
   const statusLabels = {planned: 'Запланировано', in_progress: 'В работе', done: 'Готово', cancelled: 'Отменено'};
   const h = value => esc(value == null ? '' : String(value));
@@ -29,7 +30,7 @@ VIEWS.personal = async function personalView(root) {
       <label class="field">План на день<input type="date" name="planned_day" value="${h(task.planned_day)}"></label>
       <label class="field">Срок<input type="datetime-local" name="due_at" value="${h(task.due_at ? new Date(task.due_at).toLocaleString('sv-SE').replace(' ', 'T').slice(0,16) : '')}"></label>
       <label class="field">Напомнить<input type="datetime-local" name="reminder_at" value="${h(task.reminder_at ? new Date(task.reminder_at).toLocaleString('sv-SE').replace(' ', 'T').slice(0,16) : '')}"></label>
-      <p class="hint">Время вводится в часовом поясе устройства: ${h(browserZone)}. Напоминания подключим на этапе Telegram; сейчас дата только сохраняется.</p>
+      <p class="hint">Время вводится в часовом поясе устройства: ${h(browserZone)}. Отправка напоминаний пока не подключена; дата сохраняется.</p>
       <div class="personal-actions"><button class="btn primary">Сохранить</button><button type="button" class="btn" data-action="cancel">Отмена</button></div></form>`;
   }
   function render() {
@@ -49,6 +50,7 @@ VIEWS.personal = async function personalView(root) {
       else if (btn.dataset.action === 'new') { selected = 'new'; history = null; render(); }
       else if (btn.dataset.action === 'cancel') { selected = null; history = null; render(); }
       else if (btn.dataset.task) { selected = tasks.find(t => t.id === Number(btn.dataset.task)); history = null; render(); }
+      else if (btn.dataset.action === 'reload-task') { selected = tasks.find(t => t.id === selected.id) || null; history = null; render(); }
       else if (btn.dataset.action === 'history') { history = (await api(`/api/personal/tasks/${selected.id}/history`)).history; render(); }
     } catch (err) { (root.querySelector('.personal-error') || root).textContent = err.message; }
   });
@@ -71,4 +73,36 @@ VIEWS.personal = async function personalView(root) {
     finally { saving = false; form.querySelectorAll('button[type=submit], button:not([type])').forEach(button => { button.disabled = false; }); }
   });
   await load(); render();
+  let refreshing = false, pendingRender = false;
+  async function refreshPersonal() {
+    if (!root.isConnected || root._personalViewToken !== viewToken || !root.querySelector('.personal-panel')) { clearInterval(timer); window.removeEventListener('focus', refreshPersonal); return; }
+    if (refreshing || saving || document.hidden || !profile) return;
+    refreshing = true;
+    try {
+      const fresh = (await api('/api/personal/tasks')).tasks;
+      if (!root.isConnected || root._personalViewToken !== viewToken || !root.querySelector('.personal-panel')) return;
+      if (selected && selected !== 'new') {
+        const current = fresh.find(t => t.id === selected.id);
+        if (!current || current.version !== selected.version) {
+          const notice = root.querySelector('.personal-error');
+          if (notice && !notice.querySelector('[data-action="reload-task"]')) {
+            notice.textContent = 'Задача изменилась. Перед обновлением скопируйте несохранённый текст. ';
+            const reload = document.createElement('button');
+            reload.type = 'button'; reload.className = 'btn small'; reload.dataset.action = 'reload-task';
+            reload.textContent = 'Обновить задачу'; notice.appendChild(reload);
+          }
+        }
+      }
+      const changed = JSON.stringify(tasks) !== JSON.stringify(fresh);
+      pendingRender ||= changed;
+      tasks = fresh;
+      // Never redraw an open editor or a form the user has begun filling in.
+      const input = root.querySelector('form input:focus, form textarea:focus, form select:focus');
+      const projectInput = root.querySelector('form[data-form="project"] input');
+      if (pendingRender && !selected && tab !== 'profile' && !input && !(projectInput && projectInput.value)) { render(); pendingRender = false; }
+    } catch (_) { /* Keep the current view if the connection is temporarily unavailable. */ }
+    finally { refreshing = false; }
+  }
+  const timer = setInterval(refreshPersonal, 2000);
+  window.addEventListener('focus', refreshPersonal);
 };

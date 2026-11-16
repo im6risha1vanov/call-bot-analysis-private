@@ -62,6 +62,8 @@ def head_menu(tg_id: int) -> ReplyKeyboardMarkup:
     /compare_analysis и /combined_analysis остаются). «Режим промта» — тем, кто в PROMPT_EDITORS."""
     from review.prompt_ui import MENU as PROMPT_MENU
     rows = [[KeyboardButton(text=PROMPT_MENU)]] if is_editor(tg_id) else []
+    if tg_id in __import__('crm.personal', fromlist=['pilot_ids']).pilot_ids():
+        rows.append([KeyboardButton(text='📋 Личные задачи')])
     rows += [[KeyboardButton(text='↩️ Старая методика'), KeyboardButton(text='🔄 Вернуть сохранённую версию')],
              [KeyboardButton(text='ℹ️ Версия анализа')]]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True)
@@ -557,6 +559,10 @@ install_unified(router, lambda: PG_POOL)
 from review.ui import install as install_review
 install_review(router, lambda: PG_POOL)
 # Режим промта: свободный текст ловится только при открытой правке, остальное идёт агенту РОПа ниже.
+from personal_telegram import install as install_personal_telegram
+install_personal_telegram(router, lambda: PG_POOL)
+
+
 from review.prompt_ui import install as install_prompt_mode
 install_prompt_mode(router, lambda: PG_POOL)
 

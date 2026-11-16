@@ -148,6 +148,9 @@ def install(router, pool_getter):
         except Forbidden as exc:
             await message.answer(str(exc), parse_mode=None)
             return
+        # Switching to prompt editing cancels only the pending personal-task input.
+        if await pool.fetchval("SELECT to_regclass('crm_personal_telegram_state') IS NOT NULL"):
+            await pool.execute('DELETE FROM crm_personal_telegram_state WHERE telegram_user_id=$1', message.from_user.id)
         await prompts.seed(pool)
         await message.answer('Какой промт правим?', parse_mode=None, reply_markup=kinds_keyboard())
 
@@ -161,6 +164,10 @@ def install(router, pool_getter):
             return False
         if message.chat.type != 'private':
             return False
+        # A personal task session pauses the prompt draft without deleting it.
+        if await pool.fetchval("SELECT to_regclass('crm_personal_telegram_state') IS NOT NULL"):
+            if await pool.fetchval("SELECT 1 FROM crm_personal_telegram_state WHERE telegram_user_id=$1 AND updated_at > now() - interval '1 day'", message.from_user.id):
+                return False
         return await prompts.draft(pool, message.from_user.id) is not None
 
     @router.message(F.text, in_session)
@@ -211,6 +218,8 @@ def install(router, pool_getter):
             actor = await editor_actor(pool, tg)
             bits = (cq.data or '').split(':')
             action = bits[1] if len(bits) > 1 else ''
+            if await pool.fetchval("SELECT to_regclass('crm_personal_telegram_state') IS NOT NULL"):
+                await pool.execute('DELETE FROM crm_personal_telegram_state WHERE telegram_user_id=$1', tg)
             if action == 'k' and len(bits) == 3 and bits[2] in prompts.KINDS:
                 await prompts.open_draft(pool, tg, bits[2])
                 await bot.send_message(tg, await status_text(pool, tg, bits[2]), parse_mode='HTML',

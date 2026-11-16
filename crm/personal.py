@@ -76,6 +76,41 @@ def serial(row):
     return {k: v.isoformat() if isinstance(v, (date, datetime)) else v for k, v in dict(row).items()}
 
 
+async def save_task(pool, owner_id, values, task_id=None, version=None, event_key=None, state_identity=None):
+    creating = task_id is None
+    async with pool.acquire() as conn, conn.transaction():
+        if event_key is not None:
+            claimed = await conn.fetchval('INSERT INTO crm_personal_telegram_events(event_key) VALUES($1) ON CONFLICT DO NOTHING RETURNING 1', event_key)
+            if not claimed:
+                return None
+        if state_identity is not None:
+            user_id, token = state_identity
+            consumed = await conn.fetchval("DELETE FROM crm_personal_telegram_state WHERE telegram_user_id=$1 AND token=$2 AND action <> 'idle' AND updated_at > now() - interval '1 day' RETURNING 1", user_id, token)
+            if not consumed:
+                return None
+        if 'project_id' in values and values['project_id'] is not None:
+            if not await conn.fetchval('SELECT 1 FROM crm_personal_projects WHERE id=$1 AND owner_id=$2', values['project_id'], owner_id):
+                raise web.HTTPNotFound(reason='Проект не найден.')
+        if creating:
+            keys = list(values)
+            cols = ','.join(keys)
+            slots = ','.join('$' + str(i + 2) for i in range(len(keys)))
+            row = await conn.fetchrow(f'INSERT INTO crm_personal_tasks(owner_id,{cols}) VALUES($1,{slots}) RETURNING *', owner_id, *values.values())
+        else:
+            current = await conn.fetchrow('SELECT * FROM crm_personal_tasks WHERE id=$1 AND owner_id=$2 FOR UPDATE', task_id, owner_id)
+            if not current:
+                raise web.HTTPNotFound(reason='Задача не найдена.')
+            if current['version'] != version:
+                raise web.HTTPConflict(reason='Задача уже изменена. Обновите страницу.')
+            assignments = ','.join(f'{key}=${i+3}' for i, key in enumerate(values))
+            row = await conn.fetchrow(f'UPDATE crm_personal_tasks SET {assignments},version=version+1,updated_at=now() WHERE id=$1 AND owner_id=$2 RETURNING *', task_id, owner_id, *values.values())
+        if state_identity is not None:
+            await conn.execute("INSERT INTO crm_personal_telegram_state(telegram_user_id,action,token) VALUES($1,'idle',$2) ON CONFLICT(telegram_user_id) DO UPDATE SET action='idle', task_id=NULL, version=NULL, token=excluded.token, updated_at=now()", user_id, token)
+        snapshot = json.dumps(serial(row), ensure_ascii=False)
+        await conn.execute('INSERT INTO crm_personal_task_history(task_id,owner_id,version,snapshot) VALUES($1,$2,$3,$4::jsonb)', row['id'], owner_id, row['version'], snapshot)
+    return row
+
+
 def routes(viewer, body, pool_key):
     async def owner(request, required=True):
         pool = request.app[pool_key]
@@ -133,31 +168,12 @@ def routes(viewer, body, pool_key):
             raise ValueError('Укажите версию и изменения задачи.')
         if creating and 'version' in data:
             raise ValueError('Версия создаётся автоматически.')
-        async with pool.acquire() as conn, conn.transaction():
-            if 'project_id' in values and values['project_id'] is not None:
-                if not await conn.fetchval('SELECT 1 FROM crm_personal_projects WHERE id=$1 AND owner_id=$2', values['project_id'], profile['id']):
-                    raise web.HTTPNotFound(reason='Проект не найден.')
-            if creating:
-                keys = list(values)
-                cols = ','.join(keys)
-                slots = ','.join('$' + str(i + 2) for i in range(len(keys)))
-                row = await conn.fetchrow(f'INSERT INTO crm_personal_tasks(owner_id,{cols}) VALUES($1,{slots}) RETURNING *', profile['id'], *values.values())
-            else:
-                try:
-                    task_id = int(request.match_info['id'])
-                    if task_id <= 0:
-                        raise ValueError()
-                except ValueError:
-                    raise web.HTTPNotFound(reason='Задача не найдена.')
-                current = await conn.fetchrow('SELECT * FROM crm_personal_tasks WHERE id=$1 AND owner_id=$2 FOR UPDATE', task_id, profile['id'])
-                if not current:
-                    raise web.HTTPNotFound(reason='Задача не найдена.')
-                if current['version'] != data['version']:
-                    raise web.HTTPConflict(reason='Задача уже изменена. Обновите страницу.')
-                assignments = ','.join(f'{key}=${i+3}' for i, key in enumerate(values))
-                row = await conn.fetchrow(f'UPDATE crm_personal_tasks SET {assignments},version=version+1,updated_at=now() WHERE id=$1 AND owner_id=$2 RETURNING *', task_id, profile['id'], *values.values())
-            snapshot = json.dumps(serial(row), ensure_ascii=False)
-            await conn.execute('INSERT INTO crm_personal_task_history(task_id,owner_id,version,snapshot) VALUES($1,$2,$3,$4::jsonb)', row['id'], profile['id'], row['version'], snapshot)
+        try:
+            task_id = None if creating else int(request.match_info['id'])
+            if task_id is not None and task_id <= 0: raise ValueError()
+        except ValueError:
+            raise web.HTTPNotFound(reason='Задача не найдена.')
+        row = await save_task(pool, profile['id'], values, task_id, data.get('version'))
         return web.json_response({'task': serial(row)}, status=201 if creating else 200)
 
     async def history(request):
