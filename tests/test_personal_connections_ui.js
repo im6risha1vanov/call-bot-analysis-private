@@ -1,0 +1,6 @@
+const assert=require('assert'),fs=require('fs'),vm=require('vm');
+const handlers={},root={isConnected:true,innerHTML:'',addEventListener:(n,f)=>handlers[n]=f,querySelector:q=>q==='.personal-panel'?{}:null};
+const api=async path=>path.endsWith('/profile')?{profile:{timezone:'Europe/Moscow'}}:path.endsWith('/projects')?{projects:[]}:path.endsWith('/tasks')?{tasks:[]}:{connections:{}};
+const ctx={VIEWS:{},S:{me:{account_id:1}},esc:x=>String(x).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;'),api,Intl,Date,JSON,Number,String,Array,sessionStorage:{getItem:()=>null},document:{hidden:false},window:{addEventListener:()=>{},removeEventListener:()=>{}},setInterval:()=>1,clearInterval:()=>{}};
+vm.runInNewContext(fs.readFileSync('crm/static/personal.js','utf8'),ctx);
+(async()=>{await ctx.VIEWS.personal(root);await handlers.click({target:{closest:()=>({dataset:{tab:'connections'}})}});assert(root.innerHTML.includes('Почта'));assert(root.innerHTML.includes('Календарь'));assert(root.innerHTML.includes('Авторизация ещё не настроена'));assert(root.innerHTML.includes('Не подключено'));assert(!root.innerHTML.includes('type="password"'));assert(root.innerHTML.includes('<option value="">Выберите сервис</option>'));console.log('connections UI checks passed')})().catch(e=>{console.error(e);process.exitCode=1});
