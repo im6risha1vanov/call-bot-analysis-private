@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import time
@@ -147,7 +148,9 @@ def main():
         asyncio.run(migrate((package / 'files/migrations/045_crm_personal_agent.sql').read_text(encoding='utf-8')))
         for name in FILES:
             target = PROJECT / name; target.parent.mkdir(parents=True, exist_ok=True)
+            mode = stat.S_IMODE(target.stat().st_mode) if target.exists() else 0o644
             shutil.copy2(package / 'files' / name, target)
+            os.chmod(target, mode)
         DROPIN.parent.mkdir(parents=True, exist_ok=True)
         DROPIN.write_text(DROPIN_CONTENT, encoding='utf-8'); os.chmod(DROPIN, 0o644)
         command('systemctl', 'daemon-reload')
