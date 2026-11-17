@@ -31,7 +31,7 @@ import re
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from . import call_analysis_schema, callcenter_monitor, callcenter_quality
+from . import call_analysis_schema
 
 log = logging.getLogger(__name__)
 
@@ -872,7 +872,7 @@ async def overview(pool, who) -> dict:
     client_id = company_of(who)
     specs = await operators(pool, client_id)
     rows = await pool.fetch(
-        """SELECT id, operator, extension, kind, source, period_start, period_end, status, stage, dedup_key,
+        """SELECT id, operator, extension, kind, source, period_start, period_end, status, stage,
                   total_calls, processed, saved_at, telegram_at, created_at, finished_at
            FROM call_analysis_runs WHERE client_id=$1 ORDER BY created_at DESC LIMIT 30""", client_id) \
         if await _has_table(pool, 'call_analysis_runs') else []
@@ -883,7 +883,6 @@ async def overview(pool, who) -> dict:
                       'kind': row['kind'], 'source': row['source'], 'status': row['status'], 'stage': row['stage'],
                       'period': period_label(row['period_start'], row['period_end']),
                       'total': row['total_calls'], 'processed': row['processed'],
-                      'automatic': callcenter_monitor.script_for(row['dedup_key']) is not None,
                       'saved': bool(row['saved_at']), 'telegram': bool(row['telegram_at']),
                       'created_at': row['created_at'].isoformat(),
                       'finished_at': row['finished_at'].isoformat() if row['finished_at'] else None} for row in rows],
@@ -1039,13 +1038,6 @@ async def _process_item(pool, run, item, lead_index: dict, has_reference: bool) 
             status = 'audio_missing' if not call.get('recording_id') and not call.get('recording_path') else 'transcript_failed'
     else:
         status = 'done'
-    monitored_script = callcenter_monitor.script_for(run['dedup_key'])
-    if monitored_script:
-        check = callcenter_quality.assess(split_lines(text), monitored_script, call['duration'],
-                                          confidence is not None and confidence < 0.55)
-        return {'status': status, 'phone': call.get('phone'), 'duration_s': call['duration'],
-                'transcript_source': source, 'transcript_confidence': confidence,
-                'stages': {'script_check': check}}
     scenario = str(call.get('scenario') or '')
     roles = {'Робот': 'operator', 'Клиент': 'client'} if run['kind'] == 'robot' else None
     result = classify_transcript(text, duration=call.get('duration') or 0, confidence=confidence,
@@ -1073,9 +1065,8 @@ async def _process_item(pool, run, item, lead_index: dict, has_reference: bool) 
 
 async def process(pool, run) -> None:
     run_id = run['id']
-    monitored_script = callcenter_monitor.script_for(run['dedup_key'])
     await pool.execute("UPDATE call_analysis_runs SET status='running', started_at=coalesce(started_at,now()), stage='Читаю звонки' WHERE id=$1", run_id)
-    lead_index, has_reference = ({}, False) if monitored_script else await _lead_index(pool, run['client_id'])
+    lead_index, has_reference = await _lead_index(pool, run['client_id'])
     items = await pool.fetch('SELECT * FROM call_analysis_items WHERE run_id=$1 AND status=$2 ORDER BY id', run_id, 'pending')
     processed = int(run['processed'] or 0)
     total = int(run['total_calls'] or 0)
@@ -1104,7 +1095,7 @@ async def process(pool, run) -> None:
         processed += 1
         await pool.execute('UPDATE call_analysis_runs SET processed=$2, stage=$3 WHERE id=$1', run_id, processed,
                            f'Обработано {processed} из {total}' if total else 'Готово')
-    rows = await pool.fetch('SELECT stages, evidence, status, transcript_source, transcript_confidence, phone, duration_s, '
+    rows = await pool.fetch('SELECT stages, evidence, status, transcript_source, transcript_confidence, phone, '
                             'unknown_attribution, break_code, model_lead_hint FROM call_analysis_items WHERE run_id=$1', run_id)
     items_summary = []
     for row in rows:
@@ -1122,20 +1113,13 @@ async def process(pool, run) -> None:
         operator = _public_operator(operator_by_id(specs, run['operator']))
     except ValueError:
         operator = {'id': run['operator'], 'name': run['operator'], 'display': run['operator']}
-    period = period_label(run['period_start'], run['period_end'])
-    if monitored_script:
-        summary = {'operator': operator, 'period': period, 'total': len(rows), 'empty': not rows,
-                   'quality': callcenter_quality.summarize([
-                       {'phone': row['phone'], 'duration_s': row['duration_s'],
-                        'script_check': _json(row['stages'], {}).get('script_check')} for row in rows
-                   ], monitored_script, _phone_key)}
-    else:
-        summary = summarize(items_summary, operator=operator, period=period)
+    summary = summarize(items_summary, operator=operator,
+                        period=period_label(run['period_start'], run['period_end']))
     await pool.execute(
         """UPDATE call_analysis_runs SET status='done', stage=$2, processed=$3, total_calls=$3,
-             result=$4::jsonb, finished_at=now(), saved_at=CASE WHEN $5 THEN now() ELSE saved_at END WHERE id=$1""",
+             result=$4::jsonb, finished_at=now() WHERE id=$1""",
         run_id, f'Готово: звонков {summary["total"]}', summary['total'],
-        json.dumps(summary, ensure_ascii=False), bool(monitored_script))
+        json.dumps(summary, ensure_ascii=False))
 
 
 async def take(pool):
@@ -1148,7 +1132,6 @@ async def take(pool):
 async def loop(pool) -> None:
     """Фоновый разбор. После перезапуска продолжает незавершённые прогоны."""
     recovered, warned = False, False
-    next_scan = 0.0
     while True:
         row = None
         try:
@@ -1164,13 +1147,6 @@ async def loop(pool) -> None:
                 await pool.execute("""UPDATE call_analysis_runs SET status='queued', stage='Продолжаю после перезапуска'
                                       WHERE status='running'""")
                 recovered = True
-            now = asyncio.get_running_loop().time()
-            if now >= next_scan:
-                next_scan = now + callcenter_monitor.INTERVAL
-                try:
-                    await callcenter_monitor.enqueue(pool)
-                except Exception:
-                    log.exception('авторазбор колл-центра: постановка звонков в очередь')
             row = await take(pool)
             if row is not None:
                 await process(pool, row)
@@ -1208,7 +1184,6 @@ async def one(pool, who, run_id: int) -> dict:
         result['empty'] = True
     target = await run_telegram_target(pool, row)
     return {'id': row['id'], 'operator': operator, 'status': row['status'], 'stage': row['stage'],
-            'automatic': callcenter_monitor.script_for(row['dedup_key']) is not None,
             'source': row['source'], 'error': row['error'], 'period': period_label(row['period_start'], row['period_end']),
             'start': row['period_start'].isoformat(), 'end': row['period_end'].isoformat(),
             'total': row['total_calls'], 'processed': row['processed'], 'result': result,
@@ -1216,7 +1191,7 @@ async def one(pool, who, run_id: int) -> dict:
             'telegram': bool(row['telegram_at']), 'telegram_at': row['telegram_at'].isoformat() if row['telegram_at'] else None,
             'can_telegram': bool(target), 'author': row['author_name'],
             'created_at': row['created_at'].isoformat(), 'finished_at': row['finished_at'].isoformat() if row['finished_at'] else None,
-            'items': [{'id': item['id'], 'call_id': item['call_id'], 'phone': item['phone'], 'at': item['at'].isoformat() if item['at'] else None,
+            'items': [{'id': item['id'], 'phone': item['phone'], 'at': item['at'].isoformat() if item['at'] else None,
                        'status': item['status'], 'source': item['transcript_source'],
                        'low_confidence': item['transcript_confidence'] is not None and float(item['transcript_confidence']) < 0.55,
                        'stages': _json(item['stages'], {}), 'break': {'code': item['break_code'],

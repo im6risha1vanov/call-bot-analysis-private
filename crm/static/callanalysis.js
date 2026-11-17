@@ -6,11 +6,6 @@
 const CA_STATUS = {queued: 'Ждёт обработки', running: 'Идёт разбор', done: 'Готов', failed: 'Ошибка'};
 const CA_SOURCE = {existing: 'Сохранённая расшифровка', deepgram: 'Новая расшифровка Deepgram', robot: 'Расшифровка робота', none: 'Нет'};
 const CA_WEAK = ['audio_missing', 'transcript_failed', 'failed', 'missing_call'];
-const CA_SCRIPT_STATES = {
-  complete: 'Все шаги найдены', review: 'Проверить пропуски', stopped: 'Разговор остановлен',
-  not_reached: 'Недозвон', answering_machine: 'Автоответчик', unknown: 'Недостаточно данных',
-  other_topic: 'Тема скрипта не подтверждена', unsupported: 'Скрипт не настроен'
-};
 
 function caOperatorName(list, id) {
   const x = (list || []).find(o => o.id === id);
@@ -69,39 +64,8 @@ function caItems(run) {
     }).join('')}</tbody></table></div>${weak.length > 80 ? `<p class="hint">Показаны первые 80 из ${fmt(weak.length)}.</p>` : ''}`;
 }
 
-function caAutomaticResult(run) {
-  const result = run.result;
-  const {script, states, gaps, base} = result.quality;
-  const full = states.complete || 0;
-  const review = states.review || 0;
-  const metrics = [
-    ['Уникальных номеров прозвонено', base.contacts], ['Есть подтверждённый разговор', base.reached],
-    ['Дозвона не было', base.not_reached], ['Исход неясен по записи', base.technical],
-    ['Повторный недозвон', base.repeated_no_contact], ['Неверный номер', base.wrong_number],
-    ['Клиент отрицает заявку', base.no_request], ['Явно неактуально', base.not_relevant]
-  ];
-  const examples = (run.items || []).filter(item => ['complete', 'review'].includes(item.stages?.script_check?.state));
-  return `<section class="card blk"><div class="card-h"><h2>Соблюдение скрипта</h2><span class="hint">${esc(script)}</span></div>
-    <p>Все шаги найдены в ${fmt(full)} из ${fmt(full + review)} звонков, пригодных для проверки. Всего звонков ${fmt(result.total)}.</p>
-    <p class="hint">${Object.entries(states).map(([key, n]) => `${esc(CA_SCRIPT_STATES[key] || key)} — ${fmt(n)}`).join(' · ')}</p>
-    ${review ? `<ul>${Object.entries(gaps).sort((a, b) => b[1] - a[1]).map(([step, n]) => `<li>${esc(step)} · не найдено в ${fmt(n)} звонках</li>`).join('')}</ul>` : ''}
-    </section>
-    <section class="card blk"><div class="card-h"><h2>Качество прозвоненной базы</h2></div>
-    ${base.reach_pct == null ? '' : `<p>Подтверждённая доля дозвона — ${esc(base.reach_pct)} % от прозвоненных номеров.</p>`}
-    <div class="tbl-wrap"><table class="tbl"><tbody>${metrics.map(([name, n]) => `<tr><td>${esc(name)}</td><td class="n">${fmt(n)}</td></tr>`).join('')}</tbody></table></div>
-    <p class="hint">Повторные попытки объединены по номеру внутри дня. Для одного номера могут быть отмечены несколько признаков.</p></section>
-    ${examples.length ? `<section class="card blk"><div class="card-h"><h2>Звонки и подтверждения</h2></div>
-    ${examples.map(item => {
-      const check = item.stages.script_check;
-      const evidence = check.found.map(step => `<li>${step.at == null ? '' : `${Math.floor(step.at / 60)}:${String(step.at % 60).padStart(2, '0')} · `}${esc(step.label)} · ${esc(step.quote)}</li>`).join('');
-      return `<details><summary>Звонок №${esc(item.call_id)} · ${esc(CA_SCRIPT_STATES[check.state])}</summary>
-        ${check.missing.length ? `<p>Проверить ${esc(check.missing.join(', '))}</p>` : ''}${evidence ? `<ul>${evidence}</ul>` : ''}</details>`;
-    }).join('')}</section>` : ''}`;
-}
-
 function caResult(run) {
   const r = run.result || {};
-  if (r.quality) return caAutomaticResult(run);
   if (r.empty) return `<div class="empty">${esc(r.empty === true ? 'За выбранный период звонков нет.' : r.empty || 'За выбранный период звонков нет.')}</div>`;
   const c = r.coverage || {};
   const done = (c.existing_transcripts || 0) + (c.transcribed || 0) + (c.robot_transcripts || 0);
@@ -165,7 +129,7 @@ async function callAnalysisView(view, arg) {
     </section>
     <section class="card blk" data-css="--i:1"><div class="card-h"><h2>Сохранённые разборы</h2><span class="hint">${fmt((d.runs || []).length)}</span></div>
       ${(d.runs || []).length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Оператор</th><th>Период</th><th>Состояние</th><th class="n hide-m">Звонков</th><th class="hide-m">Создан</th><th></th></tr></thead><tbody>
-        ${d.runs.map(r => `<tr><td>${esc(caOperatorName(d.operators, r.operator))}${r.automatic ? '<div class="s">Авторазбор</div>' : ''}</td><td class="nw">${esc(r.period)}</td>
+        ${d.runs.map(r => `<tr><td>${esc(caOperatorName(d.operators, r.operator))}</td><td class="nw">${esc(r.period)}</td>
           <td>${esc(CA_STATUS[r.status] || r.status)}${r.stage ? `<div class="s">${esc(r.stage)}</div>` : ''}</td>
           <td class="n hide-m">${fmt(r.total)}</td><td class="hide-m nw">${esc(fmtWhen(r.created_at))}</td>
           <td class="nw"><button class="btn small" type="button" data-ca-open="${r.id}">Открыть</button></td></tr>`).join('')}</tbody></table></div>`
