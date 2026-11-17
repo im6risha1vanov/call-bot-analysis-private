@@ -104,7 +104,12 @@ async def fetch_records(pool, client_id, start=None, end=None, phone=None, snaps
         conditions.append("(regexp_replace(coalesce(i.phone,''), '[^0-9]', '', 'g') = $%d OR "
                           "regexp_replace(coalesce(i.phone,''), '[^0-9]', '', 'g') IN ('7'||$%d, '8'||$%d))" % ((len(params),) * 3))
     extra = (' AND ' + ' AND '.join(conditions)) if conditions else ''
-    rows = await pool.fetch("""SELECT i.*,r.operator,r.id AS analysis_run_id,
+    rows = await pool.fetch("""SELECT i.*,r.operator,r.id AS analysis_run_id,c.direction AS mango_direction,
+        jsonb_build_object('context_status',c.raw_summary::jsonb->>'context_status',
+          'talk_duration',c.raw_summary::jsonb->>'talk_duration',
+          'answers',(SELECT jsonb_agg(leg->>'call_answer_time') FROM jsonb_array_elements(
+            CASE WHEN jsonb_typeof(c.raw_summary::jsonb->'context_calls')='array'
+                 THEN c.raw_summary::jsonb->'context_calls' ELSE '[]'::jsonb END) leg)) AS mango_result,
         CASE WHEN (i.stages #> '{script_check,signals}') ? 'wrong_number' THEN c.transcript END AS source_transcript""" + source_fields + """
         FROM call_analysis_items i JOIN call_analysis_runs r ON r.id=i.run_id AND r.client_id=i.client_id
         LEFT JOIN calls c ON c.id=i.call_id AND c.client_id=i.client_id
@@ -134,7 +139,8 @@ async def fetch_records(pool, client_id, start=None, end=None, phone=None, snaps
         rec = {'phone': phone, 'operator': row['operator'], 'at': at.isoformat() if at else None,
                'run_id': row['analysis_run_id'], 'call_id': row['call_id'], 'item_id': row['id'],
                'status': row['status'], 'semantic': stages.get('semantic') or {}, 'duration_s': row['duration_s'] or 0, 'check': check,
-               'source': row['transcript_source'], 'error': row['error'], 'sheet_checked_at': checked_at}
+               'source': row['transcript_source'], 'error': row['error'], 'sheet_checked_at': checked_at,
+               'mango_direction': row['mango_direction'], 'mango_result': _json(row['mango_result'])}
         rec.update(_attribute(index, row['operator'], phone, _day(at) if at else ''))
         rec['sheet_competitor'] = (callcenter_base.sheet_competitor(competitor_index, row['operator'], phone, _day(at))
                                    if at and phone and books.get(row['operator']) is not None else None)
@@ -194,6 +200,93 @@ def build_cards(records):
 
 async def cards(pool, client_id, snapshot_data=None):
     return build_cards(await fetch_records(pool, client_id, snapshot_data=snapshot_data))
+
+
+def _positive(value):
+    try:
+        return value is not None and not isinstance(value, bool) and float(value) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def contact_outcome(record):
+    """Mango context status is authoritative; missing or conflicting data stays unknown."""
+    data = record.get('mango_result') or {}
+    raw_status = data.get('context_status')
+    status = str(raw_status).strip() if raw_status is not None and not isinstance(raw_status, bool) else ''
+    talk = _positive(data.get('talk_duration'))
+    answers = data.get('answers') if isinstance(data.get('answers'), list) else []
+    answered = any(_positive(value) for value in answers)
+    check = record.get('check') or {}
+    live = check.get('live') is True
+    machine = check.get('state') == 'answering_machine'
+    if status == '0':
+        return 'unknown' if talk or answered or live or machine else 'no_answer'
+    if status == '1':
+        return 'automated' if machine and not live else ('unknown' if machine and live else 'connected')
+    return 'unknown'
+
+
+def contact_stats(records):
+    """Exclusive outcomes for unique outgoing phone numbers in one exact scope."""
+    phones = defaultdict(list)
+    for row in records:
+        phone = callcenter_base._phone_key(row.get('phone'))
+        if phone and row.get('mango_direction') == 2:
+            phones[phone].append(row)
+    result = {'dialed': len(phones), 'reached': 0, 'no_answer_only': 0, 'automated_only': 0,
+              'unknown': 0, 'attempted_calls': 0, 'repeat_attempts': 0, 'reached_after_no_answer': 0}
+    for calls in phones.values():
+        result['attempted_calls'] += len(calls)
+        result['repeat_attempts'] += max(0, len(calls) - 1)
+        states = [contact_outcome(row) for row in calls]
+        if 'connected' in states or 'automated' in states:
+            result['reached'] += 1
+            if 'automated' in states and 'connected' not in states and 'unknown' not in states:
+                result['automated_only'] += 1
+        elif 'unknown' in states:
+            result['unknown'] += 1
+        else:
+            result['no_answer_only'] += 1
+        no_answers = [r.get('at') for r, state in zip(calls, states) if state == 'no_answer' and r.get('at')]
+        connected = [r.get('at') for r, state in zip(calls, states) if state in ('connected', 'automated') and r.get('at')]
+        ordered_states = [(r, state) for r, state in zip(calls, states) if state in ('no_answer', 'connected', 'automated')]
+        if no_answers and connected and all(r.get('at') for r, _ in ordered_states):
+            try:
+                # Different offsets and equal timestamps must not imply a false ordering.
+                def dt(value):
+                    parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+                    return parsed if parsed.tzinfo else None
+                before = [parsed for x in no_answers if (parsed := dt(x)) is not None]
+                after = [parsed for x in connected if (parsed := dt(x)) is not None]
+                if len(before) == len(no_answers) and len(after) == len(connected) and min(before) < min(after):
+                    result['reached_after_no_answer'] += 1
+            except (ValueError, TypeError):
+                pass
+    result['reached_denominator'] = result['dialed']
+    result['source'] = 'Mango: исходящие вызовы, статус контекста; соединение не обязательно разговор с человеком, автоответчики входят в соединения'
+    return result
+
+
+def contact_stats_by_base(selected, previous):
+    """A number contributes to a source only when its attribution is unique."""
+    def groups(rows):
+        per_phone = defaultdict(set)
+        for row in rows:
+            phone = callcenter_base._phone_key(row.get('phone'))
+            if phone and row.get('mango_direction') == 2 and row.get('attribution') == 'matched' and row.get('tab') and row.get('project'):
+                per_phone[phone].add((row['tab'], row['project']))
+        out = defaultdict(list)
+        for row in rows:
+            phone = callcenter_base._phone_key(row.get('phone'))
+            key = (row.get('tab'), row.get('project'))
+            if row.get('attribution') == 'matched' and len(per_phone.get(phone, ())) == 1 and key in per_phone[phone]:
+                out[key].append(row)
+        return out
+    current, prior = groups(selected), groups(previous)
+    return [{'project': key[0], 'name': key[1], **contact_stats(rows),
+             'previous': contact_stats(prior[key]) if key in prior else None}
+            for key, rows in sorted(current.items())]
 
 
 def _metrics(records):
@@ -326,7 +419,7 @@ def summarize(records, start, end, project="", base="", operator=""):
                 for k, v in friction.items()]
     findings.sort(key=lambda f: (-f['leads'], f['project_name'], f['step'], f['issue']))
     recurring = [item for item in findings if item['leads'] >= 2]
-    return {'start': start.isoformat(), 'end': end.isoformat(), 'previous_start': prev_start.isoformat(),
+    result = {'start': start.isoformat(), 'end': end.isoformat(), 'previous_start': prev_start.isoformat(),
             'previous_end': prev_end.isoformat(), 'current': _metrics(selected), 'previous': _metrics(previous), 'daily': daily,
             'projects': _breakdown(selected, _campaign), 'bases': _breakdown(selected, _base_name),
             'operators': _breakdown(selected, _operator_name), 'options': options,
@@ -335,6 +428,10 @@ def summarize(records, start, end, project="", base="", operator=""):
                          'previous': len({e['phone'] for e in previous_reasons.get(k, [])}),
                          'evidence': reasons.get(k, [])} for k in sorted(set(reasons) | set(previous_reasons))],
             'findings': findings, 'friction': recurring, 'coaching': coaching, 'attempts': selected}
+    if operator:
+        result['contact_stats'] = {**contact_stats(selected), 'previous': contact_stats(previous),
+                                   'by_base': contact_stats_by_base(selected, previous)}
+    return result
 
 
 async def historical_findings(pool, client_id, project='', base='', operator=''):

@@ -144,8 +144,8 @@ def test_personal_candidates_are_scoped_and_independent():
     out=advisor.validate_personal(payload,packet,sources)
     assert out['status']=='ready' and out['operator_review']['script']['status']=='supported'
     assert out['operator_review']['script']['evidence'][0]['step']=='Начало разговора'
-    assert 'привязка' in out['operator_review']['base']['observation'].lower()
-    assert 'в этой базе' not in out['operator_review']['base']['observation'].lower()
+    assert 'привязка' in out['operator_review']['base']['contact_fact']['observation'].lower()
+    assert 'в этой базе' not in out['operator_review']['base']['contact_fact']['observation'].lower()
     payload['operator_review']['script']['refs']=[base[0]['ref']]
     with pytest.raises(advisor.SynthesisError): advisor.validate_personal(payload,packet,sources)
 
@@ -159,7 +159,7 @@ def test_refusal_and_late_callback_are_not_base_defects():
     assert packet['operator_base_candidates']==[]
     out=advisor.validate_personal({'operator_review':{}},packet,sources)
     assert out['operator_review']['base']['status']=='insufficient'
-    assert 'Привязка' in out['operator_review']['base']['observation']
+    assert 'статистика' in out['operator_review']['base']['observation'].lower()
 
 
 def test_one_dialog_personal_call_not_blocked(monkeypatch):
@@ -188,7 +188,7 @@ def test_product_mismatch_is_direct_not_wrong_number_or_whole_base():
     ref=next(x['ref'] for x in mismatch if sources[x['ref']]['quote']==e2['quote'])
     payload={'operator_review':{'base':{'status':'supported','observation':'Клиент закупает на 5000 рублей в месяц.',
         'action':'Уточнять закупку.', 'test':'Проверить отбор.', 'refs':[ref]}}}
-    out=advisor.validate_personal(payload,packet,sources)['operator_review']['base']
+    out=advisor.validate_personal(payload,packet,sources)['operator_review']['base']['contact_fact']
     assert out['status']=='supported' and out['observation']=='Клиент закупает на 5000 рублей в месяц.'
     assert out['evidence'][0]['quote']==e2['quote'] and out['evidence'][0]['kind']=='product_mismatch'
     assert out['evidence'][0]['base']=='Картон'
@@ -219,7 +219,7 @@ def test_other_campaigns_and_client_quote_are_supported_without_ambiguous_hh():
     item=next(x for x in candidates if sources[x['ref']]['quote']=='Нужен тентовый ангар')
     data={'operator_review':{'base':{'status':'supported','observation':'Клиенту нужен тентовый ангар.',
          'action':'Уточнять конструкцию.', 'test':'Проверить разметку.', 'refs':[item['ref']]}}}
-    out=advisor.validate_personal(data,packet,sources)['operator_review']['base']
+    out=advisor.validate_personal(data,packet,sources)['operator_review']['base']['contact_fact']
     assert out['observation']=='Клиенту нужен тентовый ангар.'
     assert out['action']=='Уточнять конструкцию.' and out['evidence'][0]['base']=='База B1_79991234567'
 
@@ -318,3 +318,117 @@ def test_unverified_trailing_quote_removed_without_dangling_phrase():
     brief['operator_review']['script']['observation']='Оператор сказал: «1000 штук — это самосборные».'
     out=advisor.clean_personal_brief(brief)
     assert out['operator_review']['script']['observation']=='В доказательстве приведена исходная реплика.'
+
+
+def phone_stats(**overrides):
+    values={'dialed':10,'reached':4,'no_answer_only':4,'automated_only':1,'unknown':2,
+            'attempted_calls':16,'repeat_attempts':6,'reached_after_no_answer':2}
+    values.update(overrides); return values
+
+
+def test_telephony_stats_work_without_a_single_transcript():
+    r=personal_report(); r['attempts']=[]; r['contact_stats']=phone_stats()
+    packet,sources=advisor.evidence_packet(r)
+    assert not sources and packet['contact_stats']==r['contact_stats']
+    brief=asyncio.run(advisor.advise_packet(packet,sources))
+    base=brief['operator_review']['base']
+    assert base['status']=='supported' and base['evidence']==[]
+    assert 'Контактов в работе: 10' in base['observation'] and 'подтверждено: 4 (40%)' in base['observation']
+    assert 'неуспешные попытки — 4' in base['observation'] and 'не установлен — 2' in base['observation']
+    assert 'номерам: 2' in base['observation']
+    assert 'не всегда означает подтверждённый разговор' in base['observation']
+    assert base['contact_fact']['status']=='insufficient'
+
+
+def test_unknown_only_and_invalid_stats_do_not_invent_reachability():
+    packet,sources=advisor.evidence_packet(personal_report())
+    packet['contact_stats']=phone_stats(dialed=2,reached=0,no_answer_only=0,automated_only=0,unknown=2,attempted_calls=2,repeat_attempts=0,reached_after_no_answer=0)
+    out=advisor.validate_personal({'operator_review':{}},packet,sources)['operator_review']['base']
+    assert out['status']=='insufficient' and 'Исход соединения по ним не установлен' in out['observation'] and '%' not in out['observation']
+    packet['contact_stats']['unknown']=3
+    out=advisor.validate_personal({'operator_review':{}},packet,sources)['operator_review']['base']
+    assert out['status']=='insufficient' and 'недоступна' in out['observation']
+
+
+def test_statistics_and_specific_contact_fact_remain_separate():
+    r=personal_report();r['contact_stats']=phone_stats()
+    packet,sources=advisor.evidence_packet(r); ref=packet['operator_base_candidates'][0]['ref']
+    data={'operator_review':{'base':{'status':'supported','observation':'Собеседник сообщил о неверном номере.',
+            'action':'Проверить карточку.', 'test':'Сверить контакт.', 'refs':[ref]}}}
+    base=advisor.validate_personal(data,packet,sources)['operator_review']['base']
+    assert 'Контактов в работе: 10' in base['observation'] and 'неверном номере' not in base['observation']
+    assert 'неверном номере' in base['contact_fact']['observation'] and base['contact_fact']['evidence']
+
+
+def test_small_sample_and_no_contact_fact_is_clean():
+    r=personal_report();r['attempts']=[];r['contact_stats']=phone_stats(dialed=3,reached=1,no_answer_only=2,automated_only=0,unknown=0,attempted_calls=3,repeat_attempts=0,reached_after_no_answer=0)
+    packet,sources=advisor.evidence_packet(r)
+    base=asyncio.run(advisor.advise_packet(packet,sources))['operator_review']['base']
+    assert '33,3%' in base['observation'] and 'предварительный' in base['observation']
+    assert base['contact_fact']['status']=='insufficient'
+
+
+def test_refresh_existing_personal_brief_preserves_verified_fact_and_script():
+    evidence={'call_id':42,'run_id':9,'phone':'9992223344','at':14,
+              'quote':'Я покупаю в месяц на 5000 рублей коробки', 'base':'B1'}
+    existing={'status':'ready','summary':'старый вывод','operator_review':{
+       'script':{'status':'supported','observation':'Задала составной вопрос.', 'action':'Разделить вопросы.',
+                 'test':'Проверить беседы.', 'evidence':[{'quote':'Размер и тираж?', 'step':'Параметры'}]},
+       'base':{'status':'supported','observation':'Закупка — 5000 рублей в месяц.',
+               'action':'Уточнить объём.', 'test':'Проверить карточку.', 'evidence':[evidence]}}}
+    out=advisor.apply_contact_stats(existing,phone_stats())
+    assert out['operator_review']['script']==existing['operator_review']['script']
+    base=out['operator_review']['base']
+    assert 'Контактов в работе: 10' in base['observation'] and 'неуспешные попытки' in base['observation']
+    assert base['contact_fact']['observation']=='Закупка — 5000 рублей в месяц.'
+    assert base['contact_fact']['evidence']==[evidence]
+    assert existing['operator_review']['base']['evidence']==[evidence]
+    assert advisor.apply_contact_stats(out,phone_stats())==out
+
+
+def test_reach_includes_answered_machine_in_mango_denominator():
+    s=phone_stats(dialed=219,reached=198,no_answer_only=21,automated_only=1,unknown=0,
+                  attempted_calls=229,repeat_attempts=10,reached_after_no_answer=10)
+    out=advisor._contact_stat_section(s)
+    assert 'подтверждено: 198 (90,4%)' in out['observation']
+    assert 'Из соединений только автоответчик — 1' in out['observation']
+    assert 'не всегда означает подтверждённый разговор' in out['observation']
+
+
+def test_actions_distinguish_failed_calls_repeat_benefit_and_zero_values():
+    zero=advisor._contact_stat_section(phone_stats(dialed=10,reached=10,no_answer_only=0,automated_only=0,unknown=0,attempted_calls=10,repeat_attempts=0,reached_after_no_answer=0))
+    assert 'неуспешн' not in zero['action'].lower()
+    assert 'автоответчик' not in zero['observation'] and 'не установлен' not in zero['observation']
+    unknown=advisor._contact_stat_section(phone_stats(dialed=10,reached=3,no_answer_only=3,automated_only=0,unknown=4,attempted_calls=10,repeat_attempts=0,reached_after_no_answer=0))
+    assert 'Сначала проверить заполнение исходов' in unknown['action']
+    assert 'повтор' not in unknown['action'].lower()
+    case=advisor._contact_stat_section(phone_stats(dialed=219,reached=198,no_answer_only=21,automated_only=1,unknown=0,attempted_calls=229,repeat_attempts=10,reached_after_no_answer=10))
+    assert 'вызовами: 21' in case['action'] and 'в другое время' in case['action']
+    assert 'номерам: 10' in case['observation']
+
+
+def test_largest_attributed_source_is_selected_and_personal_model_has_no_stats(monkeypatch):
+    stats=phone_stats(by_base=[{'name':'Север','project':'Картон','dialed':5,'no_answer_only':2},
+                                {'name':'Юг','project':'Картон','dialed':7,'no_answer_only':4}])
+    section=advisor._contact_stat_section(stats)
+    assert '«Юг»' in section['action'] and 'контактов 4' in section['action']
+    monkeypatch.setenv('CVC_API_KEY','synthetic-test')
+    analysis=importlib.import_module('analysis'); calls=[]
+    packet,sources=advisor.evidence_packet(personal_report());packet['contact_stats']=stats
+    ref=packet['operator_script_candidates'][0]['ref']
+    async def fake(*args,**kwargs):
+        calls.append(args[1]);return {'operator_review':{'script':{'status':'supported','observation':'Оператор назвал заявку.',
+          'action':'Проверить источник.', 'test':'Проверить реплики.', 'refs':[ref]}, 'base':{'status':'insufficient'}}},0
+    monkeypatch.setattr(analysis,'_call',fake)
+    out=asyncio.run(advisor.advise_packet(packet,sources))
+    assert out['operator_review']['base']['status']=='supported'
+    assert 'contact_stats' not in calls[0] and 'by_base' not in calls[0] and 'Север' not in calls[0]
+    assert packet['contact_stats']==stats
+
+
+def test_hidden_source_does_not_appear_in_action():
+    stats=phone_stats(by_base=[{'name':'B1_[скрыто]','project':'Картон','dialed':7,'no_answer_only':4},
+                                {'name':'Юг','project':'Картон','dialed':5,'no_answer_only':2}])
+    section=advisor._contact_stat_section(stats)
+    assert '[скрыто]' not in section['action'] and 'источник' not in section['action'].lower()
+    assert 'вызовами: 4' in section['action']

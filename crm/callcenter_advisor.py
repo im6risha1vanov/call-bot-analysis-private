@@ -124,6 +124,8 @@ def evidence_packet(report):
         return key
     if requested_operator:
         packet.update(operator_script_candidates=[], operator_base_candidates=[], ambiguous_attribution=False)
+        if isinstance(report.get('contact_stats'), dict):
+            packet['contact_stats'] = copy.deepcopy(report['contact_stats'])
         script_pool, base_pool = [], []
         for row in selected.values():
             check = row.get('check') or {}
@@ -305,8 +307,9 @@ def clean_personal_brief(brief):
     if not isinstance(brief, dict) or not isinstance(brief.get('operator_review'), dict): return brief
     result = copy.deepcopy(brief)
     review = result['operator_review']
-    for section in review.values():
-        if not isinstance(section, dict): continue
+    sections = [section for section in review.values() if isinstance(section, dict)]
+    sections += [section['contact_fact'] for section in list(sections) if isinstance(section.get('contact_fact'), dict)]
+    for section in sections:
         evidence = section.get('evidence') if isinstance(section.get('evidence'), list) else []
         if 'observation' in section:
             section['observation'] = _clean_personal_observation(section['observation'], evidence)
@@ -412,16 +415,103 @@ def _personal_section(raw, kind, packet, sources):
     return {'status': 'supported', **fields, 'evidence': evidence}
 
 
+def _contact_stat_section(raw):
+    """Build the reachability observation entirely from verified aggregate counts."""
+    if not isinstance(raw, dict): return None
+    keys = ('dialed', 'reached', 'no_answer_only', 'automated_only', 'unknown',
+            'attempted_calls', 'repeat_attempts', 'reached_after_no_answer')
+    if any(not isinstance(raw.get(k), int) or isinstance(raw.get(k), bool) or raw[k] < 0 for k in keys): return None
+    n = raw['dialed']; reached = raw['reached']; missed = raw['no_answer_only']
+    automated, unknown = raw['automated_only'], raw['unknown']
+    if reached + missed + unknown != n or automated > reached or raw['reached_after_no_answer'] > reached: return None
+    if raw.get('reached_denominator', n) != n: return None
+    if raw['repeat_attempts'] > raw['attempted_calls'] or raw['attempted_calls'] < n: return None
+    if not n: return None
+    known = reached + missed
+    if not known:
+        return {'status': 'insufficient', 'observation': f'Номеров в обзвоне: {n}. Исход соединения по ним не установлен.',
+                'action': 'Проверить исходы звонков в телефонии.',
+                'test': 'Повторно оценить достижимость, когда исходы будут подтверждены.', 'evidence': []}
+    percent = f'{100 * reached / n:.1f}'.rstrip('0').rstrip('.').replace('.', ',')
+    observation = f'Контактов в работе: {n}. Соединение подтверждено: {reached} ({percent}%).'
+    if missed:
+        observation += f' Только неуспешные попытки — {missed}.'
+    if raw['reached_after_no_answer']:
+        observation += f' После неуспешного вызова повтор впервые дал соединение по номерам: {raw["reached_after_no_answer"]}.'
+    if automated:
+        observation += f' Из соединений только автоответчик — {automated}.'
+    if unknown:
+        observation += f' Исход не установлен — {unknown}.'
+    observation += ' Соединение не всегда означает подтверждённый разговор.'
+    if n < 10: observation += ' Контактов немного, поэтому вывод предварительный.'
+    elif unknown: observation += ' Неизвестные исходы ограничивают оценку.'
+
+    groups = [g for g in raw.get('by_base', []) if isinstance(g, dict)
+              and isinstance(g.get('no_answer_only'), int) and not isinstance(g.get('no_answer_only'), bool)
+              and isinstance(g.get('dialed'), int) and 0 < g['no_answer_only'] <= g['dialed']]
+    groups.sort(key=lambda g: (-g['no_answer_only'], str(g.get('project') or ''), str(g.get('name') or '')))
+    source_note = ''
+    if len(groups) > 1:
+        first = groups[0]
+        project, name = str(first.get('project') or '').strip(), str(first.get('name') or '').strip()
+        if project and name and '[скрыто]' not in project + name:
+            source_note = f' Начать с источника «{name}» проекта «{project}»: в нём таких контактов {first["no_answer_only"]}.'
+    if unknown >= 3 and unknown * 5 >= n:
+        action = f'Сначала проверить заполнение исходов: неизвестно — {unknown}. После этого оценить достижимость.'
+        test = 'Проверить, сколько неизвестных исходов удалось подтвердить, затем пересчитать долю соединений.'
+    elif missed and raw['reached_after_no_answer']:
+        action = f'Выделить список контактов с одними неуспешными вызовами: {missed}. Проверить для них следующую попытку в другое время.' + source_note
+        test = 'Отследить, сколько контактов из этого списка впервые получат техническое соединение после следующей попытки.'
+    elif missed:
+        action = f'Проверить список контактов с одними неуспешными вызовами: {missed}. Сравнить результаты попыток в разное время.' + source_note
+        test = 'Отследить долю новых технических соединений среди проверенных контактов после следующей попытки.'
+    elif unknown:
+        action = f'Проверить заполнение исходов: неизвестно — {unknown}. После этого сделать выводы о достижимости.'
+        test = 'Уточнить неизвестные исходы и пересчитать долю соединений.'
+    else:
+        action = 'Сохранить текущий порядок работы с контактами и следить за достижимостью следующей выборки.'
+        test = 'Сравнить долю технических соединений в сопоставимом периоде по тому же проекту и источнику.'
+    return {'status': 'supported', 'observation': observation, 'action': action, 'test': test, 'evidence': []}
+
+
+def apply_contact_stats(brief, contact_stats, ambiguous=False):
+    """Refresh only reachability using verified counts, retaining any existing contact fact."""
+    if not isinstance(brief, dict) or not isinstance(brief.get('operator_review'), dict): return brief
+    result = copy.deepcopy(brief)
+    review = result['operator_review']
+    old = review.get('base') or {}
+    fact = old.get('contact_fact')
+    if not isinstance(fact, dict):
+        if old.get('status') == 'supported' and old.get('evidence'):
+            fact = {key: copy.deepcopy(old.get(key)) for key in ('status', 'observation', 'action', 'test', 'evidence')}
+        else:
+            fact = _empty_section('base', ambiguous)
+    stats = _contact_stat_section(contact_stats)
+    if stats is None:
+        stats = {'status': 'insufficient',
+                 'observation': 'Достоверная статистика соединений по выбранным контактам пока недоступна.',
+                 'action': 'Проверить исходы звонков и привязку контактов к источникам.',
+                 'test': 'Рассчитать долю соединений после проверки исходов.', 'evidence': []}
+    if ambiguous and 'источник' in stats.get('action', '').lower():
+        stats['action'] += ' Сравнение источников не включает контакты с неподтверждённой привязкой.'
+    if fact.get('status') == 'supported' and stats['status'] == 'insufficient':
+        stats['status'] = 'supported'
+    stats['contact_fact'] = fact
+    review['base'] = stats
+    result['status'] = 'ready' if any(isinstance(section, dict) and section.get('status') == 'supported'
+                                     for section in review.values()) else 'insufficient'
+    return clean_personal_brief(result)
+
+
 def validate_personal(payload, packet, sources):
     if not isinstance(payload, dict): raise SynthesisError('Ожидался JSON-объект')
     review = payload.get('operator_review')
     if not isinstance(review, dict): raise SynthesisError('Не получены независимые разделы по оператору и базе')
-    sections = {key: _personal_section(review.get(key), key, packet, sources) for key in ('script', 'base')}
-    ready = any(x['status'] == 'supported' for x in sections.values())
-    summaries = [x['observation'] for x in sections.values() if x['status'] == 'supported']
-    summary = ' '.join(summaries) if summaries else 'Недостаточно подтверждений для персональных выводов.'
-    return clean_personal_brief({'status': 'ready' if ready else 'insufficient', 'summary': summary,
-            'actions': [], 'limitations': [], 'operator_review': sections})
+    script = _personal_section(review.get('script'), 'script', packet, sources)
+    fact = _personal_section(review.get('base'), 'base', packet, sources)
+    brief = {'status': 'insufficient', 'summary': 'Недостаточно подтверждений для персональных выводов.',
+             'actions': [], 'limitations': [], 'operator_review': {'script': script, 'base': fact}}
+    return apply_contact_stats(brief, packet.get('contact_stats'), bool(packet.get('ambiguous_attribution')))
 
 
 async def advise_packet(packet, sources):
@@ -433,7 +523,8 @@ async def advise_packet(packet, sources):
         return {'status': 'insufficient', 'summary': 'Недостаточно разговоров с подтверждёнными примерами для выводов.',
                 'actions': [], 'limitations': ['Выводы появятся после накопления подходящих диалогов.']}
     import analysis
-    request = 'Верни JSON по инструкции.\n' + json.dumps(packet, ensure_ascii=False)
+    model_packet = {k: v for k, v in packet.items() if k != 'contact_stats'} if personal else packet
+    request = 'Верни JSON по инструкции.\n' + json.dumps(model_packet, ensure_ascii=False)
     last_error = None
     for attempt in range(2):
         correction = ('\nИсправь прошлый ответ: ' + str(last_error) + '. Дай короткие поля без цифр в выводах, реальные refs и проверку на одной базе/проекте.') if attempt else ''
@@ -442,6 +533,14 @@ async def advise_packet(packet, sources):
             return validate_personal(data, packet, sources) if personal else validate(data, packet, sources)
         except (SynthesisError, json.JSONDecodeError) as exc:
             last_error = exc
+    if personal and _contact_stat_section(packet.get('contact_stats')) is not None:
+        fallback = validate_personal({'operator_review': {}}, packet, sources)
+        fallback['limitations'] = ['Анализ примеров временно недоступен.']
+        if packet.get('operator_script_candidates'):
+            fallback['operator_review']['script']['observation'] = 'Анализ примеров сценария временно недоступен.'
+        if packet.get('operator_base_candidates'):
+            fallback['operator_review']['base']['contact_fact']['observation'] = 'Анализ примеров контактов временно недоступен.'
+        return fallback
     raise SynthesisError('Не удалось получить корректный синтез после повторной попытки') from last_error
 
 

@@ -64,6 +64,7 @@ function ccHighlightCard(id, item, start, end) {
   const route = `:analysis:operator:${id}${dates ? ':' + start + ':' + end : ''}`;
   const review = item?.status === 'ready' ? item.brief?.operator_review : null;
   const script = review?.script, base = review?.base;
+  const fact = base?.contact_fact?.status === 'supported' ? base.contact_fact : null;
   const show = part => part?.status === 'supported' && part.observation;
   const status = item?.status === 'error' ? 'Не удалось подготовить вывод. Откройте полный разбор, чтобы проверить состояние.'
     : item?.status === 'stale' ? 'Обновляем выводы по новым разговорам.'
@@ -71,7 +72,9 @@ function ccHighlightCard(id, item, start, end) {
   return `<article class="cc-highlight-card"><div class="cc-highlight-name">${esc(name)}</div>
     ${review ? `<div class="cc-highlight-row"><h3>Работа по скрипту</h3><p>${esc(show(script) ? script.observation : script?.observation || 'Недостаточно подтверждённых данных.')}</p>
       ${show(script) && script.action ? `<p class="cc-highlight-action"><b>Что исправить:</b> ${esc(script.action)}</p>` : ''}</div>
-      <div class="cc-highlight-row"><h3>Качество базы</h3><p>${esc(show(base) ? base.observation : base?.observation || 'Недостаточно подтверждённых данных.')}</p></div>`
+      <div class="cc-highlight-row"><h3>Качество базы</h3><p>${esc(base?.observation || 'Недостаточно подтверждённых данных.')}</p>
+      ${show(base) && base.action ? `<p class="cc-highlight-action"><b>Что сделать:</b> ${esc(base.action)}</p>` : ''}
+      ${fact ? `<div class="cc-contact-fact"><b>Факт из разговора:</b> ${esc(fact.observation || '')}${fact.action ? `<br><b>Что проверить:</b> ${esc(fact.action)}` : ''}</div>` : ''}</div>`
       : `<p class="cc-highlight-wait">${esc(item?.status === 'ready' ? 'Недостаточно подтверждённых данных для персонального вывода.' : status)}</p>`}
     <a class="cc-highlight-link" href="#callcenter/${esc(route)}" data-go="callcenter" data-arg="${esc(route)}">Полный разбор →</a></article>`;
 }

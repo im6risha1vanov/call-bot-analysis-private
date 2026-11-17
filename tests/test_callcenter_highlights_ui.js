@@ -14,6 +14,11 @@ assert.ok(context.ccHighlights(data,'oksana').includes('Оксана') && !conte
 assert.equal(context.ccHighlights(data,'robot'),'');
 assert.ok(context.ccHighlightCard('olga',{status:'stale',brief:item('СТАРЫЙ','действие').brief},data.start,data.end).includes('Обновляем'));
 assert.ok(!context.ccHighlightCard('olga',{status:'stale',brief:item('СТАРЫЙ','действие').brief},data.start,data.end).includes('СТАРЫЙ'));
+const contact = {status:'supported', observation:'Нужен <тонкий> картон', action:'Проверить'};
+const stats = context.ccHighlightCard('olga',{status:'ready',brief:{operator_review:{script:{status:'insufficient'},base:{status:'supported',observation:'5 из 20 номеров',action:'Повторить звонки',contact_fact:contact}}}},'2026-11-11','2026-11-17');
+assert.ok(stats.includes('5 из 20 номеров') && stats.includes('Повторить звонки') && stats.includes('Факт из разговора') && stats.includes('&lt;тонкий&gt;'));
+const partial = context.ccHighlightCard('olga',{status:'ready',brief:{operator_review:{script:{status:'insufficient'},base:{status:'insufficient',observation:'Нет статистики',contact_fact:contact}}}},'2026-11-11','2026-11-17');
+assert.ok(partial.includes('Нет статистики') && partial.includes('Факт из разговора'));
 (async()=>{
   const high = {innerHTML:''}, stats = {innerHTML:''}, requests = [], calls = [];
   let binds;

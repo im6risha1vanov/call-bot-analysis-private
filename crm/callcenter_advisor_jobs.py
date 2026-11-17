@@ -13,9 +13,9 @@ from . import callcenter_advisor
 
 log = logging.getLogger(__name__)
 VERSION = 'executive-v2'
-OPERATOR_VERSION = 'operator-v2'
+OPERATOR_VERSION = 'operator-v3'
 FIELDS = ('start', 'end', 'previous_start', 'previous_end', 'filters', 'current', 'previous',
-          'combinations', 'reasons', 'findings', 'coaching', 'attempts')
+          'combinations', 'reasons', 'findings', 'coaching', 'attempts', 'contact_stats')
 
 
 def _dump(value):
@@ -62,7 +62,11 @@ async def operator_highlights(pool, client_id):
                 'action',result#>>'{operator_review,script,action}'),
             'base',jsonb_build_object('status',result#>>'{operator_review,base,status}',
                 'observation',result#>>'{operator_review,base,observation}',
-                'action',result#>>'{operator_review,base,action}'))) ELSE NULL END AS result
+                'action',result#>>'{operator_review,base,action}',
+                'contact_fact',CASE WHEN jsonb_typeof(result#>'{operator_review,base,contact_fact}')='object'
+                  THEN jsonb_build_object('status',result#>>'{operator_review,base,contact_fact,status}',
+                       'observation',result#>>'{operator_review,base,contact_fact,observation}',
+                       'action',result#>>'{operator_review,base,contact_fact,action}') ELSE NULL END))) ELSE NULL END AS result
         FROM callcenter_advisor_jobs WHERE client_id=$1 AND scope_id=ANY($2::text[])''',
         int(client_id), list(ids.values()))
     by_id = {row['scope_id']: row for row in rows}
@@ -74,6 +78,10 @@ async def operator_highlights(pool, client_id):
                 value['brief'] = {'operator_review': {
                     name: {field: (review.get(name) or {}).get(field) for field in ('status', 'observation', 'action')}
                     for name in ('script', 'base') if isinstance(review.get(name), dict)}}
+                fact = (review.get('base') or {}).get('contact_fact') if isinstance(review.get('base'), dict) else None
+                if isinstance(fact, dict) and 'base' in value['brief']['operator_review']:
+                    value['brief']['operator_review']['base']['contact_fact'] = {
+                        field: fact.get(field) for field in ('status', 'observation', 'action')}
             else:
                 value['brief'] = None
         if value['brief'] is None and value['status'] == 'ready':

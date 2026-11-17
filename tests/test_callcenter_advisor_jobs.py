@@ -184,7 +184,7 @@ async def test_highlights_are_read_only_scoped_and_redacted():
              'result_at':datetime(2026,11,18,tzinfo=timezone.utc),
              'result': {'operator_review':{'script':{'status':'supported','observation':'Пример',
                            'action':'Уточнить','evidence':[{'phone':'79990000000'}], 'test':'лишнее'},
-                           'base':{'status':'insufficient','observation':'','action':''}}, 'history':['секрет']}}]
+                           'base':{'status':'insufficient','observation':'','action':'', 'contact_fact':{'status':'supported','observation':'Неверный номер','action':'Проверить','evidence':[{'phone':'79991111111'}]}}}, 'history':['секрет']}}]
     class Pool:
         async def fetchval(self, sql): return True
         async def fetch(self, sql, tenant, ids):
@@ -201,6 +201,9 @@ async def test_highlights_are_read_only_scoped_and_redacted():
     assert out['operators']['oksana']['status'] == 'waiting'
     assert out['operators']['olga']['brief']['operator_review']['script'] == {
         'status':'supported','observation':'Пример','action':'Уточнить'}
+    fact = out['operators']['olga']['brief']['operator_review']['base']['contact_fact']
+    assert fact == {'status':'supported','observation':'Неверный номер','action':'Проверить'}
+    assert '79991111111' not in json.dumps(out)
     assert '79990000000' not in json.dumps(out)
     assert jobs.scope_id(8, start.isoformat(), end.isoformat(), filters) != key
     assert jobs.scope_id(7, '2026-11-11', end.isoformat(), filters) != key

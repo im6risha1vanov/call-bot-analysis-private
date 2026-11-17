@@ -346,7 +346,7 @@ def test_wrong_number_proof_is_attached_without_transcript(monkeypatch):
     from unittest.mock import AsyncMock
     row = dict(id=1, call_id=2, phone='79991234567', at=datetime(2026, 11, 18, tzinfo=timezone.utc),
                stages={'script_check':{'signals':['wrong_number']}}, operator='olga', analysis_run_id=3,
-               status='done', duration_s=8, transcript_source='existing', error=None,
+               status='done', duration_s=8, transcript_source='existing', error=None, mango_direction=2, mango_result={},
                source_transcript='[00:01 Оператор] Здравствуйте.\n[00:03 Клиент] Вы ошиблись номером.')
     class Pool:
         fetchval = AsyncMock(return_value=False)
@@ -356,3 +356,56 @@ def test_wrong_number_proof_is_attached_without_transcript(monkeypatch):
     result = asyncio.run(ci.fetch_records(Pool(), 1))
     assert result[0]['check']['client_evidence'][0]['quote'] == 'Вы ошиблись номером'
     assert 'source_transcript' not in result[0]
+
+
+def test_contact_stats_use_mango_and_unique_phones_without_inventing_no_answer():
+    def call(phone, stamp, status, *, talk='0', answer=None, check=None):
+        return {'phone': phone, 'at': stamp, 'mango_direction': 2, 'check': check or {},
+                'mango_result': {'context_status':status, 'talk_duration':talk, 'answers':[answer]}}
+    rows = [call('79990000001','2026-11-18T08:00:00+03:00','0'),
+            call('89990000001','2026-11-18T09:00:00+03:00','1',answer='123'),
+            call('9990000002','2026-11-18T08:00:00+03:00','1',talk='15',check={'state':'answering_machine'}),
+            call('9990000003','2026-11-18T08:00:00+03:00','0'),
+            call('9990000004','2026-11-18T08:00:00+03:00',None),
+            call('9990000005','2026-11-18T08:00:00+03:00','0',talk='9'),
+            call('9990000006','2026-11-18T08:00:00+03:00','1',talk='0',answer='123')]
+    stats = ci.contact_stats(rows)
+    assert stats['dialed'] == 6 and stats['attempted_calls'] == 7
+    assert stats['reached'] == 3 and stats['automated_only'] == 1
+    assert stats['no_answer_only'] == 1 and stats['unknown'] == 2
+    assert stats['repeat_attempts'] == 1 and stats['reached_after_no_answer'] == 1
+    assert stats['reached'] + stats['no_answer_only'] + stats['unknown'] == stats['dialed']
+
+
+def test_contact_stats_only_outgoing_and_never_order_equal_timestamps():
+    def call(status, direction=2):
+        return {'phone':'9990000001','at':'2026-11-18T10:00:00+03:00','mango_direction':direction,
+                'mango_result':{'context_status':status},'check':{}}
+    stats = ci.contact_stats([call('0'), call('1'), call('1', 1)])
+    assert stats['attempted_calls'] == 2 and stats['repeat_attempts'] == 1
+    assert stats['reached'] == 1 and stats['reached_after_no_answer'] == 0
+
+
+def test_base_comparison_requires_unique_matching_source():
+    def call(phone, project, tab='Упаковка', attribution='matched'):
+        return {'phone':phone,'mango_direction':2,'mango_result':{'context_status':'0'},
+                'check':{},'tab':tab,'project':project,'attribution':attribution}
+    current = [call('9990000001','B1'),call('9990000002','B1'),call('9990000002','B2'),
+               call('9990000003','B1',attribution='unmatched')]
+    previous = [call('9990000004','B1')]
+    groups = ci.contact_stats_by_base(current, previous)
+    assert len(groups) == 1 and groups[0]['name'] == 'B1' and groups[0]['dialed'] == 1
+    assert groups[0]['previous']['dialed'] == 1
+    assert ci.contact_stats_by_base(current, [call('9990000004','other')])[0]['previous'] is None
+
+
+def test_reached_after_no_answer_only_if_first_success_follows_first_failure():
+    def call(stamp, status):
+        return {'phone':'9990000001', 'at':stamp, 'mango_direction':2,
+                'mango_result':{'context_status':status}, 'check':{}}
+    earlier = '2026-11-18T09:00:00+03:00'
+    middle = '2026-11-18T10:00:00+03:00'
+    later = '2026-11-18T11:00:00+03:00'
+    assert ci.contact_stats([call(earlier,'1'),call(middle,'0'),call(later,'1')])['reached_after_no_answer'] == 0
+    assert ci.contact_stats([call(earlier,'0'),call(middle,'1'),call(later,'1')])['reached_after_no_answer'] == 1
+    assert ci.contact_stats([call(None,'1'),call(middle,'0'),call(later,'1')])['reached_after_no_answer'] == 0

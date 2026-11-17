@@ -321,11 +321,15 @@ function caAdviceIntro(operator) {
   return `<p>Анализ разговоров колл-центра</p><h2>${name ? `Работа ${name}` : 'Что улучшить в работе'}</h2><span>${name ? 'Персональный разбор за выбранный период' : 'Рекомендации по выбранному периоду и команде'}</span>`;
 }
 function caPersonalSection(title, part, kind) {
-  if (!part || part.status !== 'supported') return `<section class="ca-advice-panel ca-personal-panel"><h2>${esc(title)}</h2><p class="ca-advice-why">${esc(part?.observation || 'Недостаточно подтверждённых данных для вывода по этому разделу.')}</p></section>`;
-  return `<section class="ca-advice-panel ca-personal-panel"><h2>${esc(title)}</h2>
-    <p><b>Что произошло</b><br>${esc(part.observation || '')}</p>
-    <p><b>Что исправить</b><br>${esc(part.action || '')}</p>
-    <p><b>Как проверить</b><br>${esc(part.test || '')}</p>${caAdviceSources(part.evidence, kind)}</section>`;
+  const fact = kind === 'base' && part?.contact_fact?.status === 'supported' ? part.contact_fact : null;
+  const main = part?.status === 'supported' ? `<p><b>${kind === 'base' && part.contact_fact ? 'По звонкам' : 'Что произошло'}</b><br>${esc(part.observation || '')}</p>
+    ${part.action ? `<p><b>Что исправить</b><br>${esc(part.action)}</p>` : ''}
+    ${part.test ? `<p><b>Как проверить</b><br>${esc(part.test)}</p>` : ''}${caAdviceSources(part.evidence, kind)}`
+    : `<p class="ca-advice-why">${esc(part?.observation || 'Недостаточно подтверждённых данных для вывода по этому разделу.')}</p>`;
+  return `<section class="ca-advice-panel ca-personal-panel"><h2>${esc(title)}</h2>${main}
+    ${fact ? `<div class="ca-contact-fact"><h3>Факт из разговора</h3><p>${esc(fact.observation || '')}</p>
+      ${fact.action ? `<p><b>Что проверить</b><br>${esc(fact.action)}</p>` : ''}
+      ${fact.test ? `<p><b>Как проверить</b><br>${esc(fact.test)}</p>` : ''}${caAdviceSources(fact.evidence, 'base')}</div>` : ''}</section>`;
 }
 function caAdviceSources(evidence, kind = '') {
   const list = Array.isArray(evidence) ? evidence : [];

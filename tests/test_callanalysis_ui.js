@@ -50,6 +50,15 @@ assert.ok(baseEvidence.includes('Источник базы не подтверж
 const scriptEvidence = ctx.caAdviceSources([{project:'Картон',step:'Выяснение потребности',quote:'Пример',call_id:8,run_id:2}], 'script');
 assert.ok(scriptEvidence.includes('Картон') && scriptEvidence.includes('Выяснение потребности'));
 assert.ok(ctx.caAdviceIntro('olga').includes('Работа Ольги') && ctx.caAdviceIntro('oksana').includes('Работа Оксаны'));
+const independentFact = {status:'supported',observation:'Нужен <однослойный> картон',action:'Проверить критерий',test:'Сравнить',
+  evidence:[{attribution:'matched',project:'Упаковка',base:'B1_42',phone:'9000000001',call_id:41,run_id:2,quote:'Нужен однослойный'}]};
+const baseWithStats = ctx.caPersonalSection('Качество базы', {status:'supported',observation:'5 из 20 номеров',action:'Повторить звонки',test:'Сравнить дозвон',evidence:[],contact_fact:independentFact}, 'base');
+assert.ok(baseWithStats.includes('5 из 20 номеров') && baseWithStats.includes('Повторить звонки') && baseWithStats.includes('Факт из разговора'));
+assert.ok(baseWithStats.includes('&lt;однослойный&gt;') && baseWithStats.includes('B1_42') && baseWithStats.includes(':call:41'));
+const factWithoutStats = ctx.caPersonalSection('Качество базы', {status:'insufficient',observation:'Нет данных по дозвону',contact_fact:independentFact}, 'base');
+assert.ok(factWithoutStats.includes('Нет данных по дозвону') && factWithoutStats.includes('Факт из разговора') && factWithoutStats.includes(':call:41'));
+const noFact = ctx.caPersonalSection('Качество базы', {status:'supported',observation:'Старый вывод',action:'Проверить',evidence:[]}, 'base');
+assert.ok(noFact.includes('Старый вывод') && !noFact.includes('Факт из разговора'));
 const invalidPersonal = ctx.caAdviceBody({advisor:record,historical_findings:[]},'olga');
 assert.ok(invalidPersonal.includes('Персональный разбор пока недоступен') && !invalidPersonal.includes('Первое'));
 (async () => {
