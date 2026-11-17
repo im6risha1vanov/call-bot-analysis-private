@@ -38,7 +38,7 @@ def test_accounting_uses_the_business_checklist():
 
 def test_quality_counts_contacts_instead_of_calls_and_preserves_unknown():
     bad_number = assess(split_lines('Оператор: Меня зовут Ольга.\nКлиент: Вы не туда попали.'), 'kitchen', 19, False)
-    assert bad_number == {'state': 'stopped', 'signals': ['wrong_number']}
+    assert bad_number['state'] == 'stopped' and bad_number['signals'] == ['wrong_number']
     rows = [
         {'phone': '+7 900 100 00 01', 'duration_s': 19, 'script_check': bad_number},
         {'phone': '89001000001', 'duration_s': 0, 'script_check': {'state': 'not_reached'}},
@@ -50,3 +50,12 @@ def test_quality_counts_contacts_instead_of_calls_and_preserves_unknown():
     assert (base['contacts'], base['reached'], base['not_reached'], base['technical']) == (3, 1, 1, 1)
     assert base['repeated_no_contact'] == base['wrong_number'] == 1
     assert base['reach_pct'] == 33.3
+
+
+def test_auto_classifies_packaging_without_applying_accounting_steps():
+    text = ('Клиент: Добрый день.\nОператор: Это Ольга, производство картонной упаковки. '
+            'Подготовим для вас расчёт. Какие коробки нужны?\nКлиент: Самосборные.')
+    check = assess(split_lines(text), 'auto', 40, False)
+    assert check['script'] == 'packaging' and check['state'] == 'needs_script'
+    assert check['live'] and 'missing' not in check
+    assert summarize([{'script_check': check}], 'auto', _phone_key)['topics'] == {'Картонная упаковка': 1}

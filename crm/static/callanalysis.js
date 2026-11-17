@@ -9,7 +9,7 @@ const CA_WEAK = ['audio_missing', 'transcript_failed', 'failed', 'missing_call']
 const CA_SCRIPT_STATES = {
   complete: 'Все шаги найдены', review: 'Проверить пропуски', stopped: 'Разговор остановлен',
   not_reached: 'Недозвон', answering_machine: 'Автоответчик', unknown: 'Недостаточно данных',
-  other_topic: 'Тема скрипта не подтверждена', unsupported: 'Скрипт не настроен'
+  other_topic: 'Тема скрипта не подтверждена', needs_script: 'Нужен скрипт проекта'
 };
 
 function caOperatorName(list, id) {
@@ -83,10 +83,13 @@ function caAutomaticResult(run) {
   const examples = (run.items || []).filter(item => ['complete', 'review'].includes(item.stages?.script_check?.state));
   return `<section class="card blk"><div class="card-h"><h2>Соблюдение скрипта</h2><span class="hint">${esc(script)}</span></div>
     <p>Все шаги найдены в ${fmt(full)} из ${fmt(full + review)} звонков, пригодных для проверки. Всего звонков ${fmt(result.total)}.</p>
+    ${result.quality.topics ? `<p class="hint">${Object.entries(result.quality.topics).map(([name, n]) => `${esc(name)} — ${fmt(n)}`).join(' · ')}</p>` : ''}
+    ${result.quality.packaging_pending ? `<p>Для проверки звонков по картонной упаковке нужен скрипт проекта. Распознано звонков по теме ${fmt(result.quality.packaging_pending)}.</p>` : ''}
     <p class="hint">${Object.entries(states).map(([key, n]) => `${esc(CA_SCRIPT_STATES[key] || key)} — ${fmt(n)}`).join(' · ')}</p>
     ${review ? `<ul>${Object.entries(gaps).sort((a, b) => b[1] - a[1]).map(([step, n]) => `<li>${esc(step)} · не найдено в ${fmt(n)} звонках</li>`).join('')}</ul>` : ''}
     </section>
     <section class="card blk"><div class="card-h"><h2>Качество прозвоненной базы</h2></div>
+    ${base.talk_recorded == null ? '' : `<p>Mango зафиксировал время разговора по ${fmt(base.talk_recorded)} номерам.</p>`}
     ${base.reach_pct == null ? '' : `<p>Подтверждённая доля дозвона — ${esc(base.reach_pct)} % от прозвоненных номеров.</p>`}
     <div class="tbl-wrap"><table class="tbl"><tbody>${metrics.map(([name, n]) => `<tr><td>${esc(name)}</td><td class="n">${fmt(n)}</td></tr>`).join('')}</tbody></table></div>
     <p class="hint">Повторные попытки объединены по номеру внутри дня. Для одного номера могут быть отмечены несколько признаков.</p></section>

@@ -9,7 +9,7 @@ from . import callcenter_quality
 
 
 PREFIX = 'callcenter-monitor:'
-OPERATORS = {'olga': ('ольга', 'accounting'), 'oksana': ('оксана', 'hh_ru')}
+OPERATORS = {'olga': 'ольга', 'oksana': 'оксана'}
 INTERVAL = 60
 LOOKBACK = timedelta(minutes=45)
 
@@ -34,13 +34,13 @@ async def enqueue(pool) -> None:
     for operator in call_analysis.operator_specs(employees=employees):
         if not operator['configured'] or operator['id'] not in OPERATORS:
             continue
-        first_name, default_script = OPERATORS[operator['id']]
+        first_name = OPERATORS[operator['id']]
         extension = operator['extension']
         if not any(e['extension'] == extension and not e['archived_at']
                    and first_name in (e['full_name'] or '').casefold().split() for e in employees):
             continue
-        script = os.getenv(f'CALLCENTER_MONITOR_{operator["id"].upper()}_SCRIPT', default_script)
-        if script not in callcenter_quality.SCRIPTS:
+        script = os.getenv(f'CALLCENTER_MONITOR_{operator["id"].upper()}_SCRIPT', 'auto')
+        if script != 'auto' and script not in callcenter_quality.SCRIPTS:
             raise ValueError(f'Unknown call center script for {operator["id"]}')
         operators.append((operator['id'], extension, script))
 
@@ -71,19 +71,28 @@ async def enqueue(pool) -> None:
 
 async def _enqueue_day(conn, client_id, operator, extension, script, day, start, end) -> None:
     key = f'{PREFIX}{operator}:{extension}:{day.isoformat()}:{script}'
+    run = await conn.fetchrow(
+        """SELECT id,dedup_key FROM call_analysis_runs WHERE client_id=$1 AND operator=$2 AND extension=$3
+             AND period_start=$4 AND dedup_key LIKE $5 ORDER BY id DESC LIMIT 1 FOR UPDATE""",
+        client_id, operator, extension, day, PREFIX + '%')
+    if run and run['dedup_key'] != key:
+        await conn.execute(
+            """UPDATE call_analysis_runs SET dedup_key=$2, status='queued', stage='Обновляю проверку скрипта',
+                 processed=0, result=NULL, error=NULL, saved_at=NULL, finished_at=NULL WHERE id=$1""", run['id'], key)
+        await conn.execute("UPDATE call_analysis_items SET status='pending', processed_at=NULL WHERE run_id=$1", run['id'])
+
     # Не отбираем свежую запись у основного бота, который уже поставил её на расшифровку.
     ready = """c.client_id=$1 AND c.extension=$2 AND c.direction=2
         AND c.call_started_at >= $3 AND c.call_started_at < $4
         AND (nullif(btrim(c.transcript),'') IS NOT NULL OR
              c.status NOT IN ('new','processing','awaiting_record') OR
              c.updated_at <= now() - interval '20 minutes')"""
-    await conn.execute(
+    run_id = run['id'] if run else await conn.fetchval(
         f"""INSERT INTO call_analysis_runs(client_id, operator, extension, kind, source, period_start, period_end,
              period_start_at, period_end_at, dedup_key, status, stage, author_name)
              SELECT $1,$5,$2,'operator','calls',$6,$6,$3,$4,$7,'queued','Ждёт обработки','Авторазбор колл-центра'
              WHERE EXISTS (SELECT 1 FROM calls c WHERE {ready})
-             ON CONFLICT (client_id, dedup_key) DO NOTHING""", client_id, extension, start, end, operator, day, key)
-    run_id = await conn.fetchval('SELECT id FROM call_analysis_runs WHERE client_id=$1 AND dedup_key=$2', client_id, key)
+             ON CONFLICT (client_id, dedup_key) DO NOTHING RETURNING id""", client_id, extension, start, end, operator, day, key)
     if run_id is None:
         return
     changed = await conn.fetchval(
@@ -93,6 +102,7 @@ async def _enqueue_day(conn, client_id, operator, extension, script, day, start,
              FROM calls c LEFT JOIN call_analysis_items old ON old.run_id=$5 AND old.call_id=c.id
              WHERE {ready} AND (old.id IS NULL OR (
                   old.status <> 'pending' AND (
+                    (old.status NOT IN ('failed','missing_call') AND NOT (old.stages ? 'script_check')) OR
                     old.duration_s IS DISTINCT FROM coalesce(c.duration_seconds,0) OR
                     old.phone IS DISTINCT FROM c.client_number OR
                     ((old.transcript_source IN ('none','transcript_failed') OR old.status='failed')
@@ -129,18 +139,24 @@ async def telegram_summary(pool, client_id: int) -> str:
         if row['status'] != 'done':
             stage = 'Ошибка разбора' if row['status'] == 'failed' else 'Разбор в процессе'
             lines.append(f'{stage}. Обработано {row["processed"]} из {row["total_calls"]}.')
-        if not result:
+        if not result or 'quality' not in result:
             continue
         quality = result['quality']
         base, states = quality['base'], quality['states']
         full, review = states.get('complete', 0), states.get('review', 0)
-        lines.append(f'Скрипт «{quality["script"]}» · все шаги найдены в {full} из {full + review}, '
+        lines.append(f'Скрипт · все шаги найдены в {full} из {full + review}, '
                      f'проверить {review}. Всего звонков {result["total"]}.')
+        if quality.get('topics'):
+            lines.append('Темы · ' + ', '.join(f'{name} {count}' for name, count in quality['topics'].items()) + '.')
+        if quality.get('packaging_pending'):
+            lines.append(f'Упаковка · {quality["packaging_pending"]} звонков, нужен скрипт для проверки.')
         skipped = states.get('other_topic', 0) + states.get('unknown', 0)
         if skipped:
             lines.append(f'Без оценки из-за темы или качества записи: {skipped}.')
         lines.append(f'База · контактов {base["contacts"]}, живой разговор подтверждён по {base["reached"]}, '
                      f'без дозвона {base["not_reached"]}, неясный исход {base["technical"]}.')
+        if base.get('talk_recorded') is not None:
+            lines.append(f'Mango зафиксировал время разговора по {base["talk_recorded"]} номерам.')
         if base['reach_pct'] is not None:
             lines.append(f'Подтверждённая доля дозвона: {base["reach_pct"]:g} % от прозвоненных номеров.')
         lines.append(f'Повторный недозвон {base["repeated_no_contact"]}, неверный номер {base["wrong_number"]}, '
