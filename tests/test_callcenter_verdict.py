@@ -155,12 +155,13 @@ def test_semantic_reasoning_is_configurable(monkeypatch):
     analysis = importlib.import_module('analysis')
     captured = []
     async def fake_call(*args, **kwargs):
-        captured.append(kwargs); return {}, 0
+        captured.append((args, kwargs)); return {}, 0
     monkeypatch.setattr(analysis, '_call', fake_call)
     lines = sample(); check = q.assess(lines, 'packaging', 30, False)
     monkeypatch.delenv('CALLCENTER_SEMANTIC_REASONING_EFFORT', raising=False)
     asyncio.run(v.assess_semantic(lines, check))
     monkeypatch.setenv('CALLCENTER_SEMANTIC_REASONING_EFFORT', 'medium')
     asyncio.run(v.assess_semantic(lines, check))
-    assert [x['reasoning_effort'] for x in captured] == ['low', 'medium']
-    assert all(x['json_object'] is True for x in captured)
+    assert [kwargs['reasoning_effort'] for _, kwargs in captured] == ['low', 'medium']
+    assert all(kwargs['json_object'] is True for _, kwargs in captured)
+    assert all(args[1].startswith('Верни JSON по инструкции.\n') for args, _ in captured)
