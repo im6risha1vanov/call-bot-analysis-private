@@ -179,7 +179,7 @@ def _check_direction(key, caller, client, accounting_declined, combined):
     return 'review' if missing or warnings else 'complete', found, missing, lead, warnings
 
 
-def assess(lines: list[dict], script: str, duration: int, low_confidence: bool) -> dict:
+def _assess(lines: list[dict], script: str, duration: int, low_confidence: bool) -> dict:
     if not lines:
         return {'state': 'unknown' if duration else 'not_reached', 'signals': []}
     if low_confidence:
@@ -216,7 +216,7 @@ def assess(lines: list[dict], script: str, duration: int, low_confidence: bool) 
         return dict(result, state='stopped')
     if not chosen:
         return dict(result, state='other_topic')
-    if not combined and 'not_relevant' in signals and chosen[0] in ('kitchen', 'accounting'):
+    if not combined and 'not_relevant' in signals:
         return dict(result, state='stopped')
     found, missing, lead, warnings, states = [], [], [], [], {}
     for key in chosen:
@@ -229,6 +229,25 @@ def assess(lines: list[dict], script: str, duration: int, low_confidence: bool) 
         warnings.extend(cautions)
     state = next(name for name in ('review', 'complete', 'stopped') if name in states.values())
     return dict(result, state=state, directions=states, found=found, missing=missing, lead=lead, warnings=warnings)
+
+
+def assess(lines: list[dict], script: str, duration: int, low_confidence: bool) -> dict:
+    """Conservative local assessment; semantic conclusions require assess_semantic."""
+    result = _assess(lines, script, duration, low_confidence)
+    projects = result.get('scripts') or ([script] if script in SCRIPTS else [])
+    result['decisions'] = [{'project': key, 'category': 'pending',
+                            'reason': 'Недостаточно проверенных данных для классификации',
+                            'evidence': [], 'next_step': False, 'product_qualified': False} for key in projects]
+    result['friction'] = []
+    result['coaching'] = []
+    explicit = {line.get('speaker') for line in lines if re.match(r'^(оператор|менеджер)\b', str(line.get('speaker') or ''), re.I)}
+    roles = explicit or {line.get('speaker') for line in lines if line.get('speaker') and INTRO.search(str(line.get('text') or ''))}
+    operator = next(iter(roles)) if len(roles) == 1 else None
+    result['stop_contact'] = bool(result.get('live') and operator and any(
+        DECLINE.search(str(line.get('text', ''))) for line in lines
+        if line.get('speaker') and line.get('speaker') != operator))
+    from .callcenter_verdict import fallback
+    return fallback(lines, result)
 
 
 def summarize(rows, script: str, phone_key) -> dict:

@@ -1190,6 +1190,53 @@ async def loop(pool) -> None:
         await asyncio.sleep(POLL_SECONDS)
 
 
+async def semantic_loop(pool) -> None:
+    """Independent, bounded semantic retries; never hold up the base analysis."""
+    from . import callcenter_verdict
+    while True:
+        try:
+            client = os.getenv('CALLCENTER_MONITOR_CLIENT_ID', '').strip()
+            if client.isdigit():
+                await call_analysis_schema.ensure(pool)
+                rows = await pool.fetch("""SELECT i.id,i.stages,c.transcript FROM call_analysis_items i
+                    JOIN call_analysis_runs r ON r.id=i.run_id AND r.client_id=i.client_id
+                    JOIN calls c ON c.id=i.call_id AND c.client_id=i.client_id
+                    WHERE i.client_id=$1 AND r.dedup_key LIKE $2 AND i.status <> 'pending'
+                      AND i.stages #>> '{script_check,live}' = 'true'
+                      AND coalesce(i.stages #>> '{semantic,status}','') NOT IN ('done','failed')
+                      AND (i.stages #>> '{semantic,retry_at}' IS NULL OR
+                           (i.stages #>> '{semantic,retry_at}')::timestamptz <= now())
+                      AND nullif(c.transcript,'') IS NOT NULL ORDER BY i.id LIMIT 20""",
+                    int(client), callcenter_monitor.PREFIX + '%')
+                for row in rows:
+                    stages = _json(row['stages'], {})
+                    meta = stages.get('semantic') or {}
+                    retry_at = meta.get('retry_at')
+                    if retry_at and datetime.fromisoformat(retry_at) > datetime.now(timezone.utc):
+                        continue
+                    old = json.dumps(stages, ensure_ascii=False)
+                    try:
+                        check = await asyncio.wait_for(callcenter_verdict.assess_semantic(
+                            split_lines(row['transcript']), stages['script_check']), timeout=90)
+                        stages['script_check'] = check
+                        stages['semantic'] = {'status': 'done'}
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        attempts = int(meta.get('attempts') or 0) + 1
+                        stages['semantic'] = {'status': 'failed' if attempts >= 3 else 'retry',
+                            'attempts': attempts, 'error': type(exc).__name__,
+                            'retry_at': (datetime.now(timezone.utc) + timedelta(minutes=5 * attempts)).isoformat()}
+                    await pool.execute("""UPDATE call_analysis_items SET stages=$2::jsonb
+                        WHERE id=$1 AND status <> 'pending' AND stages=$3::jsonb""",
+                        row['id'], json.dumps(stages, ensure_ascii=False), old)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception('фоновая смысловая проверка звонков')
+        await asyncio.sleep(60)
+
+
 async def one(pool, who, run_id: int) -> dict:
     if not can_manage(who):
         raise PermissionError('Раздел директора.')
@@ -1198,7 +1245,7 @@ async def one(pool, who, run_id: int) -> dict:
     row = await pool.fetchrow('SELECT * FROM call_analysis_runs WHERE id=$1 AND client_id=$2', run_id, client_id)
     if row is None:
         raise ValueError('Такого разбора нет.')
-    items = await pool.fetch('SELECT * FROM call_analysis_items WHERE run_id=$1 ORDER BY id LIMIT 500', run_id)
+    items = await pool.fetch('SELECT * FROM call_analysis_items WHERE run_id=$1 ORDER BY id', run_id)
     result = _json(row['result'], None)
     specs = await operators(pool, client_id)
     try:

@@ -8,6 +8,7 @@ import os
 import time
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -87,6 +88,10 @@ async def snapshot(folder):
                         continue
                     try:
                         books[operator] = await _workbook(http, ids[0])
+                        for tab, records in books[operator].items():
+                            for record in records:
+                                record['source_sheet_id'] = ids[0]
+                                record['source_tab'] = tab
                     except (httpx.HTTPError, ValueError) as exc:
                         log.warning('lead sheet unavailable for %s (%s)', operator, type(exc).__name__)
         except Exception as exc:
@@ -155,6 +160,7 @@ async def refresh_latest(pool, client_id, prefix):
     if not folder or not all(c.isascii() and (c.isalnum() or c in '-_') for c in folder):
         return
     checked_at, books = await snapshot(folder)
+    await attach_sources(pool, client_id, prefix, books)
     latest = await pool.fetch(
         """SELECT * FROM (
              SELECT DISTINCT ON (operator) id, operator, period_start, result, finished_at
@@ -170,3 +176,41 @@ async def refresh_latest(pool, client_id, prefix):
         await pool.execute("""UPDATE call_analysis_runs SET result=jsonb_set(result,'{quality,sheet_base}',$2::jsonb)
                              WHERE id=$1 AND status='done' AND finished_at=$3""",
                            run['id'], json.dumps(result, ensure_ascii=False), run['finished_at'])
+
+
+async def attach_sources(pool, client_id, prefix, books):
+    """Persist only an unambiguous source; never erase an earlier attribution on failure."""
+    if any(books.get(operator) is None for operator in TITLES):
+        return
+    await pool.execute("""CREATE TABLE IF NOT EXISTS callcenter_call_sources (
+        client_id INTEGER NOT NULL, call_id BIGINT NOT NULL, sheet_id TEXT NOT NULL,
+        tab TEXT NOT NULL, project TEXT NOT NULL, base TEXT NOT NULL DEFAULT '', tag TEXT NOT NULL DEFAULT '',
+        attached_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(client_id,call_id))""")
+    lookup = {}
+    for operator, book in books.items():
+        index = defaultdict(list)
+        for tab, records in book.items():
+            for record in records:
+                phone = _phone_key(record.get('phone'))
+                if phone and record.get('source_sheet_id'):
+                    index[phone].append((tab, record))
+        lookup[operator] = index
+    calls = await pool.fetch("""SELECT DISTINCT r.operator,i.call_id,i.phone,i.at
+        FROM call_analysis_items i JOIN call_analysis_runs r ON r.id=i.run_id
+        LEFT JOIN callcenter_call_sources s ON s.client_id=i.client_id AND s.call_id=i.call_id
+        WHERE i.client_id=$1 AND r.dedup_key LIKE $2 AND i.call_id IS NOT NULL AND s.call_id IS NULL""",
+        client_id, prefix + '%')
+    for call in calls:
+        candidates = lookup.get(call['operator'], {}).get(_phone_key(call['phone']), [])
+        at = call['at']
+        day = at.astimezone(ZoneInfo('Europe/Moscow')).date().isoformat() if at else ''
+        dated = [(tab, record) for tab, record in candidates
+                 if any(a.get('date') == day for a in record.get('attempts', []))]
+        choices = dated or candidates
+        identities = {(r['source_sheet_id'], tab, str(r.get('project') or tab),
+                       str(r.get('base') or ''), str(r.get('tag') or '')) for tab, r in choices}
+        if len(identities) == 1:
+            sheet, tab, project, base, tag = identities.pop()
+            await pool.execute("""INSERT INTO callcenter_call_sources(client_id,call_id,sheet_id,tab,project,base,tag)
+                VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(client_id,call_id) DO NOTHING""",
+                client_id, call['call_id'], sheet, tab, project, base, tag)

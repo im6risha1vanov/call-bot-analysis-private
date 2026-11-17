@@ -167,6 +167,7 @@ async function caCounts(view) {
 
 async function callAnalysisView(view, arg) {
   clearTimeout(S.caTimer);
+  if (arg?.startsWith(':analysis:lead:')) return caLeadHistory(view, arg.slice(15));
   const runId = arg && arg.startsWith(':analysis:') ? Number(arg.slice(10)) : 0;
   if (runId) return caRun(view, runId);
   const d = await loading(view, api('/api/callcenter/analysis'), 'page');
@@ -174,6 +175,7 @@ async function callAnalysisView(view, arg) {
   const initial = (d.operators || []).find(o => o.configured) || (d.operators || [])[0] || {};
   setHead({title: 'Разбор звонков', back: () => go('callcenter')});
   view.innerHTML = `<div class="page">
+    <div data-ca-dashboard></div>
     <section class="card blk"><div class="card-h"><h2>Разобрать звонки</h2><span class="hint">период по Москве</span></div>
       <div class="row">
         <label class="field">Оператор<select data-ca-op>${(d.operators || []).map(o => `<option value="${esc(o.id)}"${o.id === initial.id ? ' selected' : ''}${o.configured ? '' : ' data-empty="1"'}>${esc(o.display || o.name)}${o.configured ? '' : ' — не настроен'}</option>`).join('')}</select></label>
@@ -206,7 +208,7 @@ async function callAnalysisView(view, arg) {
       go('callcenter', ':analysis:' + r.id);
     } catch (err) { busy(btn, false); toast(err.message, true); }
   });
-  await caCounts(view);
+  await Promise.all([caCounts(view), caDashboard(view)]);
 }
 
 async function caRun(view, id) {
@@ -253,4 +255,77 @@ async function caRun(view, id) {
     catch (err) { busy(e.currentTarget, false); toast(err.message, true); }
   });
   if (live) S.caTimer = setTimeout(() => caRun(view, id), 2500);
+}
+
+
+function caMetric(m) {
+  return `${m.percent == null ? '—' : esc(m.percent) + ' %'} (${fmt(m.count)} из ${fmt(m.denominator)})`;
+}
+function caEvidenceTime(n) {
+  if (n == null) return '';
+  if (!Number.isFinite(Number(n))) return esc(String(n)) + ' · ';
+  const t = Math.floor(Number(n)); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')} · `;
+}
+function caAttempt(r, focused = false) {
+  const check = r.check || {};
+  const evidence = (check.decisions || []).flatMap(d => (d.evidence || []).map(e => `<li>${esc(d.project || '')} · ${esc(d.reason || '')} · ${caEvidenceTime(e.at)}${esc(e.quote || '')}</li>`)).join('');
+  const coaching = (check.coaching || []).map(c => `<li>${esc(c.step || '')}: ${esc(c.advice || '')} · ${caEvidenceTime(c.at)}${esc(c.quote || '')}</li>`).join('');
+  const outcomes = (check.decisions || []).map(d => `<li>${esc(d.project || '')}: ${esc({qualified: 'Квалифицирован', reusable: 'Для повторного использования', competitor: 'Конкурент', pending: 'Ожидает проверки'}[d.category] || d.category || 'ожидает проверки')} · ${esc(d.reason || '')}${d.next_step ? ' · ' + esc(d.next_step_text || 'согласован следующий шаг') : ''}</li>`).join('');
+  return `<details id="ca-call-${esc(r.call_id || r.item_id)}"${focused ? ' open' : ''}><summary>${esc(fmtWhen(r.at))} · ${esc({olga:'Ольга',oksana:'Оксана'}[r.operator] || r.operator)} · звонок №${esc(r.call_id || '—')} · ${esc(CA_SCRIPT_STATES[check.state] || r.status)}</summary>
+    <p>${esc(r.tab || 'Проект не установлен')} · база ${esc(r.project || 'не установлена')}${r.base ? ' · дата базы ' + esc(r.base) : ''} · ${esc(CA_SOURCE[r.source] || r.source || 'нет расшифровки')} ${r.error ? ' · ' + esc(r.error) : ''}${r.semantic?.status === 'failed' ? ' · смысловая проверка недоступна' : r.semantic?.status === 'retry' ? ' · смысловая проверка ожидает повтора' : r.semantic?.status === 'done' ? ' · смысловая проверка завершена' : ' · смысловая проверка ожидается или недоступна'}</p>
+    ${r.phone ? `<a href="#callcenter/:analysis:lead:${encodeURIComponent(r.phone)}" data-go="callcenter" data-arg=":analysis:lead:${encodeURIComponent(r.phone)}">История номера ${esc(phone(r.phone) || r.phone)}</a> · ` : ''}<a href="#callcenter/:analysis:${r.run_id}" data-go="callcenter" data-arg=":analysis:${r.run_id}">Открыть разбор №${r.run_id}</a>
+    ${outcomes ? `<p>Решения по направлениям:</p><ul>${outcomes}</ul>` : ''}${evidence ? `<p>Подтверждения:</p><ul>${evidence}</ul>` : ''}${coaching ? `<p>Рекомендации оператору:</p><ul>${coaching}</ul>` : ''}</details>`;
+}
+function caBreakdown(rows) {
+  return `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Группа</th><th>Попыток</th><th>Номеров</th><th>Дозвон</th><th>Квалификация</th><th>Следующий шаг</th></tr></thead><tbody>${rows.map(r => `<tr><td>${esc(r.name)}</td><td>${fmt(r.attempts)}</td><td>${fmt(r.phones)}</td><td>${caMetric(r.reached)}</td><td>${caMetric(r.qualified)}</td><td>${caMetric(r.next_step)}</td></tr>`).join('')}</tbody></table></div>`;
+}
+async function caDashboard(view, start, end, project, base, operator) {
+  const box = $('[data-ca-dashboard]', view); if (!box) return;
+  try {
+    const d = await api('/api/callcenter/analysis/insights' + qs({start, end, project, base, operator}));
+    if (!box.isConnected) return;
+    box.innerHTML = `<section class="card blk"><div class="card-h"><h2>Автоматический мониторинг · Ольга и Оксана</h2></div>
+      <div class="row"><label class="field">С<input type="date" data-ci-start value="${esc(d.start)}"></label><label class="field">По<input type="date" data-ci-end value="${esc(d.end)}"></label></div><div class="row">
+        <label class="field">Проект<select data-ci-project><option value="">Все проекты</option>${d.options.projects.map(x => `<option value="${esc(x)}"${d.filters.project === x ? ' selected' : ''}>${esc(x)}</option>`).join('')}</select></label>
+        <label class="field">База<select data-ci-base><option value="">Все базы</option>${d.options.bases.map(x => `<option value="${esc(x)}"${d.filters.base === x ? ' selected' : ''}>${esc(x)}</option>`).join('')}</select></label>
+        <label class="field">Оператор<select data-ci-operator><option value="">Оба оператора</option>${d.options.operators.map(x => `<option value="${esc(x.id)}"${d.filters.operator === x.id ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label><button class="btn" data-ci-apply>Показать</button></div>
+      ${d.export_status ? `<p>Выгрузка карточек: ${esc(d.export_status.status)} · ${esc(d.export_status.message || "")} ${d.export_status.checked_at ? "· " + esc(fmtWhen(d.export_status.checked_at)) : ""}</p>` : ""}
+      <p>За период ${fmt(d.current.attempts)} попыток, ${fmt(d.current.phones)} уникальных номеров; без номера ${fmt(d.current.no_phone)}.</p>
+      <p>Дозвон ${caMetric(d.current.reached)} · соответствуют критериям продукта ${caMetric(d.current.qualified)} · согласован следующий шаг ${caMetric(d.current.next_step)}.</p><p class="hint">Категории карточек: квалифицированных ${fmt(d.current.category_counts.qualified)}, для повторной работы ${fmt(d.current.category_counts.reusable)}, конкурентов ${fmt(d.current.category_counts.competitor)}, ожидают проверки ${fmt(d.current.category_counts.pending)}. Один номер может относиться к нескольким направлениям.</p>
+      <p class="hint">Дозвон — от уникальных номеров; квалификация — от номеров с подтверждённым живым разговором, следующий шаг — от квалифицированных номеров по тому же направлению. Данные по расшифровке, а не отметки лидов в CRM. Повторные звонки одному номеру не увеличивают число номеров.</p>
+      <p>Предыдущий сопоставимый период ${esc(d.previous_start)} — ${esc(d.previous_end)}: ${fmt(d.previous.attempts)} попыток, ${fmt(d.previous.phones)} номеров; дозвон ${caMetric(d.previous.reached)}, квалификация ${caMetric(d.previous.qualified)}, следующий шаг ${caMetric(d.previous.next_step)}.</p>
+      <p class="hint">Неподтверждённые разговоры и отсутствующие записи не считаются отказом. Привязка к таблице при неоднозначности не выполняется.</p></section>
+      <section class="card blk"><h2>Проекты</h2>${caBreakdown(d.projects)}<h2>Базы</h2>${caBreakdown(d.bases)}<h2>Операторы</h2>${caBreakdown(d.operators)}<h2>Проект · база · оператор</h2>${caBreakdown(d.combinations.map(x => ({...x, name: `${x.project} · ${x.base} · ${x.operator}`})))}</section>
+      <section class="card blk"><h2>Наблюдаемые причины</h2>${d.reasons.length ? `<ul>${d.reasons.map(r => `<li>${esc(r.reason)} · ${fmt(r.leads)} номеров; ранее ${fmt(r.previous)} ${r.evidence.map(e => `<a href="#callcenter/:analysis:lead:${encodeURIComponent(e.phone)}:call:${e.call_id}" data-go="callcenter" data-arg=":analysis:lead:${encodeURIComponent(e.phone)}:call:${e.call_id}">звонок ${e.call_id}</a> ${e.quote ? caEvidenceTime(e.quote_at) + esc(e.quote) : ''}`).join(' · ')}</li>`).join('')}</ul>` : '<p>Подтверждённых причин пока нет.</p>'}</section>
+      <section class="card blk"><h2>Повторяющиеся затруднения</h2><p class="hint">Гипотезы по нескольким клиентам, а не доказанные дефекты скрипта. Изменение следует проверить на новых разговорах и сравнить показатели до и после.</p>${d.friction.length ? d.friction.map(f => `<details><summary>${esc(f.project)} · ${esc(f.step)} · ${esc(f.issue)} (${fmt(f.leads)} номеров)</summary><p>Предложение: ${esc(f.proposal)}</p>${f.measure ? `<p>Как измерить: ${esc(f.measure)}</p>` : ''}<ul>${f.evidence.map(e => `<li>${caEvidenceTime(e.at)}${esc(e.quote)} · <a href="#callcenter/:analysis:lead:${encodeURIComponent(e.phone)}:call:${e.call_id}" data-go="callcenter" data-arg=":analysis:lead:${encodeURIComponent(e.phone)}:call:${e.call_id}">звонок ${e.call_id}</a></li>`).join('')}</ul></details>`).join('') : '<p>Повторяющихся подтверждённых наблюдений пока нет.</p>'}</section>
+      <section class="card blk"><h2>Отдельно: рекомендации операторам</h2>${d.coaching.length ? `<ul>${d.coaching.map(c => `<li>${esc(c.step || '')}: ${esc(c.advice || '')} · ${caEvidenceTime(c.at)}${esc(c.quote || '')} · <a href="#callcenter/:analysis:lead:${encodeURIComponent(c.phone || '')}:call:${c.call_id}" data-go="callcenter" data-arg=":analysis:lead:${encodeURIComponent(c.phone || '')}:call:${c.call_id}">звонок ${c.call_id}</a></li>`).join('')}</ul>` : '<p>Рекомендаций пока нет.</p>'}</section>
+      <section class="card blk"><h2>Все попытки (${fmt(d.attempts.length)})</h2><div data-ci-attempts></div></section>`;
+    caPagedAttempts($('[data-ci-attempts]', box), d.attempts);
+    $('[data-ci-apply]', box)?.addEventListener('click', () => caDashboard(view, $('[data-ci-start]', box).value, $('[data-ci-end]', box).value, $('[data-ci-project]', box).value, $('[data-ci-base]', box).value, $('[data-ci-operator]', box).value));
+  } catch (e) { if (box.isConnected) box.innerHTML = errCard(e.message); }
+}
+async function caLeadHistory(view, route) {
+  const [number, marker, target] = route.split(':');
+  clearTimeout(S.caTimer);
+  setHead({title: 'История номера', back: () => go('callcenter', ':analysis')});
+  try {
+    const d = await loading(view, api('/api/callcenter/analysis/insights/lead/' + encodeURIComponent(number)), 'page');
+    if (view.isConnected) view.innerHTML = `<div class="page"><section class="card blk"><h2>${esc(phone(d.phone) || d.phone)}</h2>${d.stop_contact ? '<p class="bad-text"><b>Не звонить: клиент запретил контакт.</b></p>' : ''}<p>Все попытки: ${fmt(d.attempts.length)}</p><div data-ci-history></div></section></div>`;
+    if (view.isConnected) caPagedAttempts($('[data-ci-history]', view), d.attempts, marker === 'call' ? target : null);
+  } catch (e) { if (view.isConnected) view.innerHTML = errCard(e.message); }
+}
+
+function caPagedAttempts(box, rows, focused = null) {
+  if (!box) return;
+  if (!rows.length) { box.innerHTML = '<p>Попыток нет.</p>'; return; }
+  const index = focused ? rows.findIndex(r => String(r.call_id) === String(focused)) : -1;
+  let end = 50;
+  const render = () => {
+    const pinned = index >= end ? caAttempt(rows[index], true) : '';
+    box.innerHTML = pinned + rows.slice(0, end).map(r => caAttempt(r, focused && String(r.call_id) === String(focused))).join('')
+      + (end < rows.length ? `<button class="btn" data-ci-more>Показать ещё (${fmt(rows.length - end)})</button>` : '');
+    $('[data-ci-more]', box)?.addEventListener('click', () => { end += 50; render(); });
+  };
+  render();
+  if (index >= 0) document.getElementById('ca-call-' + focused)?.scrollIntoView({block: 'center'});
 }

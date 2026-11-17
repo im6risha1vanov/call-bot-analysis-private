@@ -5,11 +5,11 @@ import json
 import os
 from datetime import datetime, timedelta
 
-from . import callcenter_base, callcenter_quality
+from . import callcenter_quality
 
 
 PREFIX = 'callcenter-monitor:'
-RULESET = '20261117-v2'
+RULESET = '20261117-v3'
 OPERATORS = {'olga': 'ольга', 'oksana': 'оксана'}
 INTERVAL = 60
 LOOKBACK = timedelta(minutes=45)
@@ -52,27 +52,53 @@ async def enqueue(pool) -> None:
             await conn.execute("""CREATE TABLE IF NOT EXISTS callcenter_monitor_state (
                 client_id INTEGER PRIMARY KEY REFERENCES clients(id) ON DELETE CASCADE,
                 scanned_at TIMESTAMPTZ NOT NULL)""")
-        await conn.execute("INSERT INTO callcenter_monitor_state VALUES($1,$2) ON CONFLICT DO NOTHING", client_id, since)
-        checkpoint = await conn.fetchval(
-            'SELECT scanned_at FROM callcenter_monitor_state WHERE client_id=$1 FOR UPDATE', client_id)
+        for column, kind in (('full_scanned_at', 'TIMESTAMPTZ'), ('scan_signature', 'TEXT')):
+            if not await conn.fetchval("SELECT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid='callcenter_monitor_state'::regclass AND attname=$1 AND NOT attisdropped)", column):
+                await conn.execute(f'ALTER TABLE callcenter_monitor_state ADD COLUMN IF NOT EXISTS {column} {kind}')
+        if not await conn.fetchval("SELECT to_regclass('callcenter_audio_retries') IS NOT NULL"):
+            await conn.execute('''CREATE TABLE IF NOT EXISTS callcenter_audio_retries (
+                item_id BIGINT PRIMARY KEY REFERENCES call_analysis_items(id) ON DELETE CASCADE,
+                attempts INTEGER NOT NULL DEFAULT 0, next_at TIMESTAMPTZ NOT NULL)''')
+        await conn.execute("INSERT INTO callcenter_monitor_state(client_id,scanned_at) VALUES($1,$2) ON CONFLICT DO NOTHING", client_id, since)
+        state = await conn.fetchrow(
+            'SELECT scanned_at,full_scanned_at,scan_signature FROM callcenter_monitor_state WHERE client_id=$1 FOR UPDATE', client_id)
         scan_at = await conn.fetchval('SELECT clock_timestamp()')
-        since_update = max(since, checkpoint - LOOKBACK)
+        since_update = max(since, state['scanned_at'] - LOOKBACK)
+        signature = json.dumps([RULESET, operators], ensure_ascii=True, sort_keys=True)
+        full = (state['full_scanned_at'] is None or state['scan_signature'] != signature
+                or scan_at - state['full_scanned_at'] >= timedelta(days=1))
+        await conn.execute('''INSERT INTO callcenter_audio_retries(item_id,next_at)
+            SELECT i.id,coalesce(i.processed_at,now()) + interval '5 minutes'
+            FROM call_analysis_items i JOIN call_analysis_runs r ON r.id=i.run_id
+            WHERE i.client_id=$1 AND r.dedup_key LIKE $2 AND i.status='transcript_failed'
+              AND i.transcript_source='transcript_failed'
+              AND ($3::boolean OR i.processed_at >= $4)
+            ON CONFLICT(item_id) DO NOTHING''', client_id, PREFIX + '%', full, since_update)
         for operator_id, extension, script in operators:
             days = await conn.fetch(
                 """SELECT (call_started_at AT TIME ZONE 'Europe/Moscow')::date AS day
-                   FROM calls WHERE client_id=$1 AND extension=$2 AND direction=2
-                     AND call_started_at >= $3 AND updated_at >= $4 AND updated_at <= $5
+                   FROM calls WHERE client_id=$1 AND extension=$2 AND direction IN (1,2)
+                     AND call_started_at >= $3 AND ($5::boolean OR updated_at >= $4)
                    UNION
                    SELECT period_start FROM call_analysis_runs WHERE client_id=$1 AND extension=$2 AND operator=$6
                      AND period_end_at > $3 AND dedup_key LIKE $7 AND dedup_key NOT LIKE $8
-                   ORDER BY day""", client_id, extension, since, since_update, scan_at, operator_id,
+                   UNION
+                   SELECT r.period_start FROM call_analysis_runs r JOIN call_analysis_items i ON i.run_id=r.id
+                   JOIN callcenter_audio_retries retry ON retry.item_id=i.id
+                   WHERE r.client_id=$1 AND r.extension=$2 AND r.operator=$6 AND r.dedup_key LIKE $7
+                     AND i.status='transcript_failed' AND i.transcript_source='transcript_failed'
+                     AND retry.attempts < 3 AND retry.next_at <= now()
+                   UNION
+                   SELECT r.period_start FROM call_analysis_runs r JOIN call_analysis_items i ON i.run_id=r.id
+                   WHERE r.client_id=$1 AND r.extension=$2 AND r.operator=$6 AND r.dedup_key LIKE $7
+                     AND r.status IN ('done','failed') AND i.status='pending'
+                   ORDER BY day""", client_id, extension, since, since_update, full, operator_id,
                 PREFIX + '%', f'{PREFIX}%:{RULESET}:{script}')
             for row in days:
                 day = row['day']
                 start, end = call_analysis.period_bounds(day, day)
                 await _enqueue_day(conn, client_id, operator_id, extension, script, day, max(start, since), end)
-        await conn.execute('UPDATE callcenter_monitor_state SET scanned_at=$2 WHERE client_id=$1', client_id, scan_at)
-    await callcenter_base.refresh_latest(pool, client_id, PREFIX)
+        await conn.execute('UPDATE callcenter_monitor_state SET scanned_at=$2, full_scanned_at=CASE WHEN $3 THEN $2 ELSE full_scanned_at END, scan_signature=$4 WHERE client_id=$1', client_id, scan_at, full, signature)
 
 
 async def _enqueue_day(conn, client_id, operator, extension, script, day, start, end) -> None:
@@ -88,7 +114,7 @@ async def _enqueue_day(conn, client_id, operator, extension, script, day, start,
         await conn.execute("UPDATE call_analysis_items SET status='pending', processed_at=NULL WHERE run_id=$1", run['id'])
 
     # Не отбираем свежую запись у основного бота, который уже поставил её на расшифровку.
-    ready = """c.client_id=$1 AND c.extension=$2 AND c.direction=2
+    ready = """c.client_id=$1 AND c.extension=$2 AND c.direction IN (1,2)
         AND c.call_started_at >= $3 AND c.call_started_at < $4
         AND (nullif(btrim(c.transcript),'') IS NOT NULL OR
              c.status NOT IN ('new','processing','awaiting_record') OR
@@ -101,7 +127,7 @@ async def _enqueue_day(conn, client_id, operator, extension, script, day, start,
              ON CONFLICT (client_id, dedup_key) DO NOTHING RETURNING id""", client_id, extension, start, end, operator, day, key)
     if run_id is None:
         return
-    changed = await conn.fetchval(
+    await conn.fetchval(
         f"""WITH updated AS (
              INSERT INTO call_analysis_items(run_id,client_id,call_ref,call_id,phone,at,duration_s,status)
              SELECT $5,$1,'calls:'||c.id,c.id,c.client_number,c.call_started_at,coalesce(c.duration_seconds,0),'pending'
@@ -111,6 +137,8 @@ async def _enqueue_day(conn, client_id, operator, extension, script, day, start,
                     (old.status NOT IN ('failed','missing_call') AND NOT (old.stages ? 'script_check')) OR
                     old.duration_s IS DISTINCT FROM coalesce(c.duration_seconds,0) OR
                     old.phone IS DISTINCT FROM c.client_number OR
+                    old.at IS DISTINCT FROM c.call_started_at OR
+                    c.updated_at > old.processed_at OR
                     ((old.transcript_source IN ('none','transcript_failed') OR old.status='failed')
                      AND nullif(btrim(c.transcript),'') IS NOT NULL) OR
                     (old.transcript_source='none' AND c.recording_id IS NOT NULL))))
@@ -118,12 +146,23 @@ async def _enqueue_day(conn, client_id, operator, extension, script, day, start,
                 duration_s=excluded.duration_s, error=NULL, processed_at=NULL
              RETURNING id)
              SELECT count(*) FROM updated""", client_id, extension, start, end, run_id)
-    if changed:
-        await conn.execute(
+    await conn.fetchval('''WITH due AS (
+        UPDATE callcenter_audio_retries retry SET attempts=retry.attempts+1,
+          next_at=now() + CASE retry.attempts WHEN 0 THEN interval '30 minutes' ELSE interval '2 hours' END
+        FROM call_analysis_items i WHERE i.id=retry.item_id AND i.run_id=$1
+          AND i.status='transcript_failed' AND i.transcript_source='transcript_failed'
+          AND retry.attempts < 3 AND retry.next_at <= now()
+        RETURNING retry.item_id
+    ), requeued AS (
+        UPDATE call_analysis_items SET status='pending',processed_at=NULL,error=NULL
+        WHERE id IN (SELECT item_id FROM due) RETURNING id
+    ) SELECT count(*) FROM requeued''', run_id)
+    await conn.execute(
             """UPDATE call_analysis_runs SET status='queued', stage='Есть новые звонки', finished_at=NULL, error=NULL,
                  total_calls=(SELECT count(*) FROM call_analysis_items WHERE run_id=$1),
                  processed=(SELECT count(*) FROM call_analysis_items WHERE run_id=$1 AND status <> 'pending')
-                 WHERE id=$1 AND status <> 'running'""", run_id)
+                 WHERE id=$1 AND status <> 'running'
+                   AND EXISTS(SELECT 1 FROM call_analysis_items WHERE run_id=$1 AND status='pending')""", run_id)
 
 
 async def telegram_summary(pool, client_id: int) -> str:

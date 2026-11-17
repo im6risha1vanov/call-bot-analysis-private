@@ -523,6 +523,26 @@ async def api_call_analysis(request):
         raise analysis_forbidden(exc)
 
 
+async def api_callcenter_insights(request):
+    from . import callcenter_insights
+    who = await viewer(request)
+    try:
+        return web.json_response(await callcenter_insights.dashboard(request.app[POOL], who,
+            request.query.get('start'), request.query.get('end'), request.query.get('project', ''),
+            request.query.get('base', ''), request.query.get('operator', '')))
+    except PermissionError as exc:
+        raise analysis_forbidden(exc)
+
+
+async def api_callcenter_insights_lead(request):
+    from . import callcenter_insights
+    who = await viewer(request)
+    try:
+        return web.json_response(await callcenter_insights.lead(request.app[POOL], who, request.match_info['phone']))
+    except PermissionError as exc:
+        raise analysis_forbidden(exc)
+
+
 async def api_call_analysis_counts(request):
     who = await viewer(request)
     try:
@@ -1589,6 +1609,8 @@ def build(pool) -> web.Application:
     app.router.add_post('/api/callcenter/leads/{id}/attempt', api_cc_attempt)
     app.router.add_post('/api/callcenter/prices', api_cc_prices)
     app.router.add_get('/api/callcenter/analysis', api_call_analysis)
+    app.router.add_get('/api/callcenter/analysis/insights', api_callcenter_insights)
+    app.router.add_get(r'/api/callcenter/analysis/insights/lead/{phone:\d+}', api_callcenter_insights_lead)
     app.router.add_get('/api/callcenter/analysis/counts', api_call_analysis_counts)
     app.router.add_post('/api/callcenter/analysis', api_call_analysis_start)
     app.router.add_get(r'/api/callcenter/analysis/{id:\d+}', api_call_analysis_one)
@@ -1694,6 +1716,34 @@ def build(pool) -> web.Application:
     return app
 
 
+async def callcenter_source_loop(pool):
+    from . import callcenter_base, callcenter_monitor
+    while True:
+        try:
+            client = os.getenv('CALLCENTER_MONITOR_CLIENT_ID', '').strip()
+            if client.isdigit():
+                await callcenter_base.refresh_latest(pool, int(client), callcenter_monitor.PREFIX)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception('сверка исходных таблиц колл-центра')
+        await asyncio.sleep(60)
+
+
+async def callcenter_export_loop(pool):
+    from . import callcenter_export
+    while True:
+        try:
+            client = os.getenv('CALLCENTER_MONITOR_CLIENT_ID', '').strip()
+            if client.isdigit() and os.getenv('CALLCENTER_EXPORT_SHEETS'):
+                await callcenter_export.sync(pool, int(client))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception('выгрузка карточек колл-центра')
+        await asyncio.sleep(60)
+
+
 async def make_app() -> web.Application:
     pool = await asyncpg.create_pool(os.environ['DATABASE_URL'], min_size=1, max_size=5)
     app = build(pool)
@@ -1712,6 +1762,9 @@ async def make_app() -> web.Application:
             tasks.append(asyncio.create_task(donor_agent.loop(pool)))
         if os.getenv('CALL_ANALYSIS_WORKER', 'on') != 'off':  # разбор звонков операторов и робота
             tasks.append(asyncio.create_task(call_analysis.loop(pool)))
+            tasks.append(asyncio.create_task(call_analysis.semantic_loop(pool)))
+            tasks.append(asyncio.create_task(callcenter_export_loop(pool)))
+            tasks.append(asyncio.create_task(callcenter_source_loop(pool)))
         try:
             yield
         finally:
