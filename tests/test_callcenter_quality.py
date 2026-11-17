@@ -11,7 +11,7 @@ def test_operator_can_be_second_speaker_and_step_quotes_come_from_operator():
     ])
     report = assess(split_lines(text), 'hh_ru', 35, False)
     assert report['state'] == 'review'
-    assert report['missing'] == ['Проверка регистрации', 'Интерес к регистрации или публикации']
+    assert report['missing'] == ['Проверка прежней регистрации', 'Интерес к регистрации или публикации']
     assert {step['at'] for step in report['found']} == {2, 12}
 
 
@@ -56,6 +56,61 @@ def test_auto_classifies_packaging_without_applying_accounting_steps():
     text = ('Клиент: Добрый день.\nОператор: Это Ольга, производство картонной упаковки. '
             'Подготовим для вас расчёт. Какие коробки нужны?\nКлиент: Самосборные.')
     check = assess(split_lines(text), 'auto', 40, False)
-    assert check['script'] == 'packaging' and check['state'] == 'needs_script'
-    assert check['live'] and 'missing' not in check
+    assert check['script'] == 'packaging' and check['state'] == 'review'
+    assert check['live'] and 'Размеры или образец' in check['missing'] and 'Форма бизнеса' not in check['missing']
     assert summarize([{'script_check': check}], 'auto', _phone_key)['topics'] == {'Картонная упаковка': 1}
+
+
+def test_accounting_decline_does_not_stop_hh_branch_or_double_count_calls():
+    text = ('Оператор: Вы интересовались бухгалтерскими услугами?\n'
+            'Клиент: Нет, не интересовались.\n'
+            'Оператор: Как сейчас привлекаете сотрудников? Ищете сотрудников? Компания когда-нибудь регистрировалась на hh.ru?\n'
+            'Клиент: Ищем менеджеров. Мы раньше регистрировались.\n'
+            'Оператор: Подскажите, есть ли кабинет работодателя?\nКлиент: Кабинет уже удалили.')
+    result = assess(split_lines(text), 'auto', 54, False)
+    assert result['directions'] == {'accounting': 'complete', 'hh_ru': 'stopped'}
+    assert 'not_relevant' not in result['signals']
+    assert result['lead'][0]['label'] == 'Регистрация или кабинет уже были'
+    summary = summarize([{'phone': '79001230001', 'script_check': result}], 'auto', _phone_key)
+    assert summary['states'] == {'complete': 1}
+    assert len(summary['topics']) == 2
+    assert summary['base']['contacts'] == 1
+
+
+def test_packaging_lower_bound_and_trial_band():
+    prefix = 'Оператор: Это Ольга, производство картонной упаковки.\nКлиент: '
+    def flags(amount):
+        return assess(split_lines(prefix + f'На закупку коробок в месяц тратим {amount} рублей.'), 'auto', 45, False)['lead']
+
+    assert flags('14 999')[0]['label'] == 'Закупка меньше 15 000 ₽ в месяц'
+    assert flags('15 000')[0]['follow_up']
+    assert flags('30 000') == []
+    assert flags('от 15 000 до 25 000') == []
+    size = assess(split_lines(prefix + 'Нужны коробки 60×40×40 см.'), 'auto', 45, False)
+    assert size['state'] == 'stopped' and size['lead'][0]['label'] == 'Размер вне критериев 60×40×40'
+    assert not assess(split_lines(prefix + 'Мелованный картон нам не нужен.'), 'auto', 45, False)['lead']
+
+
+def test_hangars_financing_is_separate_from_prohibited_question_about_amount():
+    text = ('Оператор: Строительство ангара сейчас актуально? Какой у вас бюджет?\n'
+            'Клиент: Ангар нужен, но финансирование ещё решается.')
+    result = assess(split_lines(text), 'auto', 54, False)
+    assert result['script'] == 'hangars'
+    assert result['warnings'][0]['label'] == 'Проверить вопрос о конкретной сумме финансирования'
+    assert result['lead'][0]['label'] == 'Финансирование не подтверждено'
+
+
+def test_sheet_attribution_uses_dated_attempts_and_never_guesses_between_projects():
+    from crm.callcenter_base import report
+
+    day = '2026-11-17'
+    def lead(phone, dated=False):
+        return {'phone': phone, 'attempts': [{'result': 'НДЗ', 'date': day}] if dated else []}
+
+    book = {'Упаковка': [lead('79001230001', True), lead('79001230002'), lead('123')],
+            'Ангары': [lead('89001230001'), lead('79001230002')]}
+    calls = [{'phone': f'7900123000{i}', 'duration_s': 0, 'script_check': None} for i in (1, 1, 2, 3)]
+    summary = report(book, calls, day, 'now')
+    assert (summary['matched'], summary['ambiguous'], summary['absent']) == (1, 1, 1)
+    assert (summary['sheet_contacts'], summary['duplicate_rows'], summary['invalid_rows']) == (2, 2, 1)
+    assert summary['projects'][0]['no_contact'] == 1

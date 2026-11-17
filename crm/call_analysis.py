@@ -1041,6 +1041,8 @@ async def _process_item(pool, run, item, lead_index: dict, has_reference: bool) 
         status = 'done'
     monitored_script = callcenter_monitor.script_for(run['dedup_key'])
     if monitored_script:
+        if confidence is None and source == 'existing':
+            confidence = item['transcript_confidence']
         check = callcenter_quality.assess(split_lines(text), monitored_script, call['duration'],
                                           confidence is not None and confidence < 0.55)
         return {'status': status, 'phone': call.get('phone'), 'duration_s': call['duration'],

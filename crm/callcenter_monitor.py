@@ -5,10 +5,11 @@ import json
 import os
 from datetime import datetime, timedelta
 
-from . import callcenter_quality
+from . import callcenter_base, callcenter_quality
 
 
 PREFIX = 'callcenter-monitor:'
+RULESET = '20261117-v2'
 OPERATORS = {'olga': 'ольга', 'oksana': 'оксана'}
 INTERVAL = 60
 LOOKBACK = timedelta(minutes=45)
@@ -58,19 +59,24 @@ async def enqueue(pool) -> None:
         since_update = max(since, checkpoint - LOOKBACK)
         for operator_id, extension, script in operators:
             days = await conn.fetch(
-                """SELECT DISTINCT (call_started_at AT TIME ZONE 'Europe/Moscow')::date AS day
+                """SELECT (call_started_at AT TIME ZONE 'Europe/Moscow')::date AS day
                    FROM calls WHERE client_id=$1 AND extension=$2 AND direction=2
                      AND call_started_at >= $3 AND updated_at >= $4 AND updated_at <= $5
-                   ORDER BY day""", client_id, extension, since, since_update, scan_at)
+                   UNION
+                   SELECT period_start FROM call_analysis_runs WHERE client_id=$1 AND extension=$2 AND operator=$6
+                     AND period_end_at > $3 AND dedup_key LIKE $7 AND dedup_key NOT LIKE $8
+                   ORDER BY day""", client_id, extension, since, since_update, scan_at, operator_id,
+                PREFIX + '%', f'{PREFIX}%:{RULESET}:{script}')
             for row in days:
                 day = row['day']
                 start, end = call_analysis.period_bounds(day, day)
                 await _enqueue_day(conn, client_id, operator_id, extension, script, day, max(start, since), end)
         await conn.execute('UPDATE callcenter_monitor_state SET scanned_at=$2 WHERE client_id=$1', client_id, scan_at)
+    await callcenter_base.refresh_latest(pool, client_id, PREFIX)
 
 
 async def _enqueue_day(conn, client_id, operator, extension, script, day, start, end) -> None:
-    key = f'{PREFIX}{operator}:{extension}:{day.isoformat()}:{script}'
+    key = f'{PREFIX}{operator}:{extension}:{day.isoformat()}:{RULESET}:{script}'
     run = await conn.fetchrow(
         """SELECT id,dedup_key FROM call_analysis_runs WHERE client_id=$1 AND operator=$2 AND extension=$3
              AND period_start=$4 AND dedup_key LIKE $5 ORDER BY id DESC LIMIT 1 FOR UPDATE""",
@@ -148,8 +154,11 @@ async def telegram_summary(pool, client_id: int) -> str:
                      f'проверить {review}. Всего звонков {result["total"]}.')
         if quality.get('topics'):
             lines.append('Темы · ' + ', '.join(f'{name} {count}' for name, count in quality['topics'].items()) + '.')
-        if quality.get('packaging_pending'):
-            lines.append(f'Упаковка · {quality["packaging_pending"]} звонков, нужен скрипт для проверки.')
+        for direction, counts in quality.get('directions', {}).items():
+            if counts.get('complete') or counts.get('review'):
+                lines.append(f'{direction} · все шаги {counts.get("complete", 0)}, проверить {counts.get("review", 0)}.')
+        if quality.get('warnings'):
+            lines.extend(f'Проверить · {label}: {count}.' for label, count in quality['warnings'].items())
         skipped = states.get('other_topic', 0) + states.get('unknown', 0)
         if skipped:
             lines.append(f'Без оценки из-за темы или качества записи: {skipped}.')
@@ -161,4 +170,15 @@ async def telegram_summary(pool, client_id: int) -> str:
             lines.append(f'Подтверждённая доля дозвона: {base["reach_pct"]:g} % от прозвоненных номеров.')
         lines.append(f'Повторный недозвон {base["repeated_no_contact"]}, неверный номер {base["wrong_number"]}, '
                      f'отрицали заявку {base["no_request"]}, неактуально {base["not_relevant"]}.')
+        if base.get('criteria'):
+            lines.append('Критерии базы · ' + ', '.join(f'{label} — {count}' for label, count in base['criteria'].items()) + '.')
+        sheet = quality.get('sheet_base')
+        if sheet and sheet['status'] == 'ready':
+            lines.append(f'Таблицы обзвона · связаны {sheet["matched"]} номеров, '
+                         f'в нескольких проектах {sheet["ambiguous"]}, без совпадения {sheet["absent"]}.')
+            lines.extend(f'{project["title"]} · прозвонено {project["matched"]}, '
+                         f'живой разговор {project["live"]}, без дозвона {project["no_contact"]}.'
+                         for project in sheet['projects'] if project['matched'])
+        elif sheet:
+            lines.append('Таблица обзвона пока недоступна.')
     return '\n'.join(lines)

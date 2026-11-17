@@ -69,6 +69,17 @@ function caItems(run) {
     }).join('')}</tbody></table></div>${weak.length > 80 ? `<p class="hint">Показаны первые 80 из ${fmt(weak.length)}.</p>` : ''}`;
 }
 
+function caLeadSheets(sheet) {
+  if (!sheet) return '';
+  const rows = sheet.projects || [];
+  return `<section class="card blk"><div class="card-h"><h2>Сверка с таблицами прозвона</h2></div>
+    ${sheet.status === 'ready' ? `<p>Связано ${fmt(sheet.matched)} номеров. В нескольких проектах ${fmt(sheet.ambiguous)}. Без совпадения ${fmt(sheet.absent)}.</p>
+    <p class="hint">В базе ${fmt(sheet.sheet_contacts)} уникальных номеров, ${fmt(sheet.duplicate_rows)} повторов номера в строках и ${fmt(sheet.invalid_rows)} строк без распознанного телефона. Проверено ${esc(fmtWhen(sheet.checked_at))}.</p>
+    <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Проект</th><th>В базе</th><th>Связано со звонками</th><th>Живой разговор</th><th>Без дозвона</th></tr></thead><tbody>
+    ${rows.map(project => `<tr><td>${esc(project.title)}</td><td class="n">${fmt(project.contacts)}</td><td class="n">${fmt(project.matched)}</td><td class="n">${fmt(project.live)}</td><td class="n">${fmt(project.no_contact)}</td></tr>`).join('')}
+    </tbody></table></div>` : '<p class="hint">Таблица обзвона пока недоступна.</p>'}</section>`;
+}
+
 function caAutomaticResult(run) {
   const result = run.result;
   const {script, states, gaps, base} = result.quality;
@@ -80,25 +91,32 @@ function caAutomaticResult(run) {
     ['Повторный недозвон', base.repeated_no_contact], ['Неверный номер', base.wrong_number],
     ['Клиент отрицает заявку', base.no_request], ['Явно неактуально', base.not_relevant]
   ];
-  const examples = (run.items || []).filter(item => ['complete', 'review'].includes(item.stages?.script_check?.state));
+  const examples = (run.items || []).filter(item => {
+    const check = item.stages?.script_check;
+    return check && (['complete', 'review'].includes(check.state) || check.lead?.length || check.warnings?.length);
+  });
   return `<section class="card blk"><div class="card-h"><h2>Соблюдение скрипта</h2><span class="hint">${esc(script)}</span></div>
     <p>Все шаги найдены в ${fmt(full)} из ${fmt(full + review)} звонков, пригодных для проверки. Всего звонков ${fmt(result.total)}.</p>
     ${result.quality.topics ? `<p class="hint">${Object.entries(result.quality.topics).map(([name, n]) => `${esc(name)} — ${fmt(n)}`).join(' · ')}</p>` : ''}
     ${result.quality.packaging_pending ? `<p>Для проверки звонков по картонной упаковке нужен скрипт проекта. Распознано звонков по теме ${fmt(result.quality.packaging_pending)}.</p>` : ''}
+    ${Object.entries(result.quality.directions || {}).map(([name, n]) => `<p>${esc(name)} · все шаги ${fmt(n.complete || 0)}, проверить ${fmt(n.review || 0)}, разговор остановлен ${fmt(n.stopped || 0)}.</p>`).join('')}
     <p class="hint">${Object.entries(states).map(([key, n]) => `${esc(CA_SCRIPT_STATES[key] || key)} — ${fmt(n)}`).join(' · ')}</p>
-    ${review ? `<ul>${Object.entries(gaps).sort((a, b) => b[1] - a[1]).map(([step, n]) => `<li>${esc(step)} · не найдено в ${fmt(n)} звонках</li>`).join('')}</ul>` : ''}
+    ${Object.keys(gaps).length ? `<ul>${Object.entries(gaps).sort((a, b) => b[1] - a[1]).map(([step, n]) => `<li>${esc(step)} · не найдено в ${fmt(n)} звонках</li>`).join('')}</ul>` : ''}
+    ${Object.entries(result.quality.warnings || {}).map(([name, n]) => `<p>${esc(name)} · ${fmt(n)} звонков.</p>`).join('')}
     </section>
     <section class="card blk"><div class="card-h"><h2>Качество прозвоненной базы</h2></div>
     ${base.talk_recorded == null ? '' : `<p>Mango зафиксировал время разговора по ${fmt(base.talk_recorded)} номерам.</p>`}
     ${base.reach_pct == null ? '' : `<p>Подтверждённая доля дозвона — ${esc(base.reach_pct)} % от прозвоненных номеров.</p>`}
     <div class="tbl-wrap"><table class="tbl"><tbody>${metrics.map(([name, n]) => `<tr><td>${esc(name)}</td><td class="n">${fmt(n)}</td></tr>`).join('')}</tbody></table></div>
+    ${Object.entries(base.criteria || {}).map(([label, n]) => `<p>${esc(label)} · ${fmt(n)} номеров.</p>`).join('')}
     <p class="hint">Повторные попытки объединены по номеру внутри дня. Для одного номера могут быть отмечены несколько признаков.</p></section>
+    ${caLeadSheets(result.quality.sheet_base)}
     ${examples.length ? `<section class="card blk"><div class="card-h"><h2>Звонки и подтверждения</h2></div>
     ${examples.map(item => {
       const check = item.stages.script_check;
-      const evidence = check.found.map(step => `<li>${step.at == null ? '' : `${Math.floor(step.at / 60)}:${String(step.at % 60).padStart(2, '0')} · `}${esc(step.label)} · ${esc(step.quote)}</li>`).join('');
+      const evidence = [...(check.warnings || []), ...(check.lead || []), ...(check.found || [])].map(step => `<li>${step.at == null ? '' : `${Math.floor(step.at / 60)}:${String(step.at % 60).padStart(2, '0')} · `}${esc(step.label)} · ${esc(step.quote)}</li>`).join('');
       return `<details><summary>Звонок №${esc(item.call_id)} · ${esc(CA_SCRIPT_STATES[check.state])}</summary>
-        ${check.missing.length ? `<p>Проверить ${esc(check.missing.join(', '))}</p>` : ''}${evidence ? `<ul>${evidence}</ul>` : ''}</details>`;
+        ${check.missing?.length ? `<p>Проверить ${esc(check.missing.join(', '))}</p>` : ''}${evidence ? `<ul>${evidence}</ul>` : ''}</details>`;
     }).join('')}</section>` : ''}`;
 }
 
