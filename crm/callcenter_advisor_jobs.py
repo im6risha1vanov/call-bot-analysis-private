@@ -13,6 +13,7 @@ from . import callcenter_advisor
 
 log = logging.getLogger(__name__)
 VERSION = 'executive-v2'
+OPERATOR_VERSION = 'operator-v1'
 FIELDS = ('start', 'end', 'previous_start', 'previous_end', 'filters', 'current', 'previous',
           'combinations', 'reasons', 'findings', 'coaching', 'attempts')
 
@@ -29,7 +30,12 @@ def request_data(client_id, report):
     # Only selected-period corroborated pins reach the model, never the UI archive.
     minimal['historical_findings'] = report.get('advisor_pins') or []
     packet, refs = callcenter_advisor.evidence_packet(minimal)
-    fingerprint = hashlib.sha256(_dump([VERSION, packet, refs]).encode()).hexdigest()
+    if not scope['filters'].get('operator'):
+        # Preserve the aggregate cache fingerprint when only personal-review fields change.
+        for field in ('operator_script_candidates', 'operator_base_candidates', 'ambiguous_attribution'):
+            packet.pop(field, None)
+    version = OPERATOR_VERSION if scope['filters'].get('operator') in ('olga', 'oksana') else VERSION
+    fingerprint = hashlib.sha256(_dump([version, packet, refs]).encode()).hexdigest()
     scope_id = hashlib.sha256(_dump(scope).encode()).hexdigest()
     return scope_id, fingerprint, {'packet': packet, 'sources': refs}
 
@@ -92,7 +98,7 @@ async def work_once(pool):
              AND attempts<3 ORDER BY CASE WHEN report#>>'{packet,period,end}'=(now() AT TIME ZONE 'Europe/Moscow')::date::text
                    AND coalesce(report#>>'{packet,filters,project}','')=''
                    AND coalesce(report#>>'{packet,filters,base}','')=''
-                   AND coalesce(report#>>'{packet,filters,operator}','')='' THEN 0 ELSE 1 END,
+                   AND coalesce(report#>>'{packet,filters,operator}','') IN ('','olga','oksana') THEN 0 ELSE 1 END,
                  next_at,created_at LIMIT 1 FOR UPDATE SKIP LOCKED)
          RETURNING scope_id,client_id,fingerprint,report,attempts''', token)
     if row is None:
@@ -131,16 +137,31 @@ async def warm_default(pool, client_id):
     return await request(pool, int(client_id), report)
 
 
+async def warm_all(pool, client_id):
+    """Queue overall and operator summaries using one shared period snapshot."""
+    from . import callcenter_insights
+    client_id = int(client_id)
+    start, end = callcenter_insights.report_dates()
+    previous = start - timedelta(days=(end - start).days + 1)
+    records = await callcenter_insights.fetch_records(pool, client_id, previous, end)
+    states = {}
+    for operator in ('', 'olga', 'oksana'):
+        report = await callcenter_insights.report_for_company(pool, client_id, start, end,
+                                                                operator=operator, _records=records)
+        states[operator or 'all'] = await request(pool, client_id, report)
+    return states
+
+
 async def loop(pool):
     next_warm = 0.0
     while True:
         try:
             now = asyncio.get_running_loop().time()
             if now >= next_warm:
-                next_warm = now + 900
                 client = os.getenv('CALLCENTER_MONITOR_CLIENT_ID', '').strip()
                 if client.isdigit():
-                    await warm_default(pool, int(client))
+                    await warm_all(pool, int(client))
+                next_warm = now + 900
             worked = await work_once(pool)
             await asyncio.sleep(2 if worked else 30)
         except asyncio.CancelledError:

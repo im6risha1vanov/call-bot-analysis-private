@@ -327,3 +327,32 @@ def test_pinned_finding_uses_tenant_selector_real_period_and_filters(monkeypatch
     assert not asyncio.run(ci.historical_findings(pool,42,operator='oksana'))
     assert not asyncio.run(ci.historical_findings(pool,42,project='Другое'))
     assert not asyncio.run(ci.historical_findings(pool,42,base='Другая база'))
+
+
+def test_wrong_number_proof_requires_unambiguous_client_and_specific_phrase():
+    from crm.callcenter_insights import client_wrong_number_evidence as evidence
+    text = '[00:01 Оператор] Здравствуйте.\n[00:05 Клиент] Вы ошиблись номером, до свидания.'
+    assert evidence(text) == [{'quote':'Вы ошиблись номером', 'at':5, 'kind':'wrong_number'}]
+    assert evidence('[00:01 Оператор] Вы ошиблись номером.\n[00:05 Клиент] Здравствуйте.') == []
+    assert evidence('[00:01 Спикер 1] Здравствуйте.\n[00:05 Спикер 2] Вы ошиблись номером.') == []
+    assert evidence('[00:01 Оператор] Здравствуйте.\n[00:05 Клиент] Вы ошиблись с городом.') == []
+    assert evidence('[00:01 Оператор] Здравствуйте.\n[00:05 Клиент] Вы не ошиблись номером.') == []
+    assert evidence('[00:01 Оператор] Здравствуйте.\n[00:05 Клиент] Не тот номер.\n[00:06 Спикер 3] Да.') == []
+
+
+def test_wrong_number_proof_is_attached_without_transcript(monkeypatch):
+    import asyncio
+    from datetime import datetime, timezone
+    from unittest.mock import AsyncMock
+    row = dict(id=1, call_id=2, phone='79991234567', at=datetime(2026, 11, 18, tzinfo=timezone.utc),
+               stages={'script_check':{'signals':['wrong_number']}}, operator='olga', analysis_run_id=3,
+               status='done', duration_s=8, transcript_source='existing', error=None,
+               source_transcript='[00:01 Оператор] Здравствуйте.\n[00:03 Клиент] Вы ошиблись номером.')
+    class Pool:
+        fetchval = AsyncMock(return_value=False)
+        fetch = AsyncMock(return_value=[row])
+    monkeypatch.setattr(ci.call_analysis_schema, 'ensure', AsyncMock())
+    monkeypatch.delenv('CALLCENTER_LEADS_FOLDER_ID', raising=False)
+    result = asyncio.run(ci.fetch_records(Pool(), 1))
+    assert result[0]['check']['client_evidence'][0]['quote'] == 'Вы ошиблись номером'
+    assert 'source_transcript' not in result[0]

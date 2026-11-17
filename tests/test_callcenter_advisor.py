@@ -116,3 +116,141 @@ def test_retries_invalid_synthesis_and_fails_visibly(monkeypatch):
     async def fail(*args,**kwargs): return response('E999'),0
     monkeypatch.setattr(analysis,'_call',fail)
     with pytest.raises(advisor.SynthesisError): asyncio.run(advisor.advise_packet(packet,sources))
+
+
+def personal_report():
+    r=report(); r['filters']['operator']='olga'; r['current']['coverage']['dialogue']=1
+    coach={'step':'Начало разговора','advice':'Не утверждать наличие заявки', 'quote':'Вы оставляли заявку', 'at':3}
+    wrong={'issue':'Неверный номер','proposal':'Проверить контакт','quote':'Вы ошиблись номером','at':8}
+    row={'call_id':30,'run_id':9,'phone':'9993332211','operator':'olga',
+         'project':'Картон','tab':'Картон','attribution':'ambiguous',
+         'check':{'coaching':[coach],'friction':[wrong]}}
+    another={'call_id':31,'run_id':10,'phone':'9993332222','operator':'oksana',
+             'attribution':'matched','check':{'coaching':[coach]}}
+    r['attempts']=[row,another]; r['coaching']=[]; r['findings']=[]
+    return r
+
+
+def test_personal_candidates_are_scoped_and_independent():
+    packet,sources=advisor.evidence_packet(personal_report())
+    script=packet['operator_script_candidates']; base=packet['operator_base_candidates']
+    assert len(script)==1 and len(base)==1 and len(sources)==2
+    assert all(x['call_id']==30 for x in sources.values())
+    payload={'operator_review':{
+        'script':{'status':'supported','observation':'В начале разговора оператор сообщил о заявке.',
+                  'action':'Проверять источник обращения.', 'test':'Проверить записи разговоров.', 'refs':[script[0]['ref']]},
+        'base':{'status':'supported','observation':'Собеседник сообщил о неверном номере.',
+                'action':'Проверить этот контакт.', 'test':'Проверить результат обновления.', 'refs':[base[0]['ref']]}}}
+    out=advisor.validate_personal(payload,packet,sources)
+    assert out['status']=='ready' and out['operator_review']['script']['status']=='supported'
+    assert out['operator_review']['script']['evidence'][0]['step']=='Начало разговора'
+    assert 'привязка' in out['operator_review']['base']['observation'].lower()
+    assert 'в этой базе' not in out['operator_review']['base']['observation'].lower()
+    payload['operator_review']['script']['refs']=[base[0]['ref']]
+    with pytest.raises(advisor.SynthesisError): advisor.validate_personal(payload,packet,sources)
+
+
+def test_refusal_and_late_callback_are_not_base_defects():
+    r=personal_report(); row=r['attempts'][0]
+    row['check']['friction']=[{'quote':'Сейчас неудобно, перезвоните','at':8},
+                              {'quote':'Мы покупаем коробки нерегулярно','at':9},
+                              {'quote':'Повторите вопрос','at':10}]
+    packet,sources=advisor.evidence_packet(r)
+    assert packet['operator_base_candidates']==[]
+    out=advisor.validate_personal({'operator_review':{}},packet,sources)
+    assert out['operator_review']['base']['status']=='insufficient'
+    assert 'Привязка' in out['operator_review']['base']['observation']
+
+
+def test_one_dialog_personal_call_not_blocked(monkeypatch):
+    monkeypatch.setenv('CVC_API_KEY','synthetic-test')
+    analysis=importlib.import_module('analysis'); calls=[]
+    packet,sources=advisor.evidence_packet(personal_report())
+    ref=packet['operator_script_candidates'][0]['ref']
+    async def fake(*args,**kwargs):
+        calls.append(args); return {'operator_review':{'script':{'status':'supported','observation':'Оператор назвал заявку.',
+            'action':'Проверить источник.', 'test':'Проверить реплики.', 'refs':[ref]}, 'base':{'status':'insufficient'}}},0
+    monkeypatch.setattr(analysis,'_call',fake)
+    out=asyncio.run(advisor.advise_packet(packet,sources))
+    assert out['operator_review']['script']['status']=='supported' and calls
+    assert out['operator_review']['base']['status']=='insufficient'
+
+
+def test_product_mismatch_is_direct_not_wrong_number_or_whole_base():
+    r=personal_report(); row=r['attempts'][0]; row['attribution']='matched'
+    e1={'quote':'Нет, вообще не гофра. Однослойный картон нужен', 'at':12}
+    e2={'quote':'Я покупаю в месяц на 5000 рублей коробки', 'at':14}
+    row['check']['decisions']=[{'project':'packaging','category':'reusable','evidence':[e1,e2]}]
+    packet,sources=advisor.evidence_packet(r)
+    c=packet['operator_base_candidates']
+    mismatch=[x for x in c if x['kind']=='product_mismatch']
+    assert len(mismatch)==2
+    ref=next(x['ref'] for x in mismatch if sources[x['ref']]['quote']==e2['quote'])
+    payload={'operator_review':{'base':{'status':'supported','observation':'Клиент закупает на 5000 рублей в месяц.',
+        'action':'Уточнять закупку.', 'test':'Проверить отбор.', 'refs':[ref]}}}
+    out=advisor.validate_personal(payload,packet,sources)['operator_review']['base']
+    assert out['status']=='supported' and out['observation']=='Клиент закупает на 5000 рублей в месяц.'
+    assert out['evidence'][0]['quote']==e2['quote'] and out['evidence'][0]['kind']=='product_mismatch'
+    assert out['evidence'][0]['base']=='Картон'
+
+
+def test_team_packet_keeps_existing_shape():
+    packet,_=advisor.evidence_packet(report())
+    assert 'operator_script_candidates' not in packet
+    assert 'operator_base_candidates' not in packet and 'ambiguous_attribution' not in packet
+
+
+def test_other_campaigns_and_client_quote_are_supported_without_ambiguous_hh():
+    r=personal_report(); row=r['attempts'][0]; row['attribution']='matched'
+    row['project']='База B1_79991234567'; row['tab']='Ангары'
+    items=[('hangars','reusable','Нужен тентовый ангар'),
+           ('hh_ru','reusable','Мы уже регистрировались на hh.ru'),
+           ('hh_ru','reusable','Возможно мы уже регистрировались'),
+           ('accounting','competitor','Мы оказываем бухгалтерские услуги клиентам')]
+    row['check']['decisions']=[{'project':project,'category':cat,'evidence':[{'quote':quote,'at':i}]} for i,(project,cat,quote) in enumerate(items)]
+    row['check']['client_evidence']=[{'quote':'Вы ошиблись номером','at':21,'kind':'wrong_number'}]
+    packet,sources=advisor.evidence_packet(r)
+    candidates=packet['operator_base_candidates']
+    quotes=[sources[x['ref']]['quote'] for x in candidates]
+    assert 'Нужен тентовый ангар' in quotes and 'Мы уже регистрировались на hh.ru' in quotes
+    assert 'Возможно мы уже регистрировались' not in quotes
+    assert 'Мы оказываем бухгалтерские услуги клиентам' in quotes and 'Вы ошиблись номером' in quotes
+    assert '79991234567' not in json.dumps(packet,ensure_ascii=False)
+    item=next(x for x in candidates if sources[x['ref']]['quote']=='Нужен тентовый ангар')
+    data={'operator_review':{'base':{'status':'supported','observation':'Клиенту нужен тентовый ангар.',
+         'action':'Уточнять конструкцию.', 'test':'Проверить разметку.', 'refs':[item['ref']]}}}
+    out=advisor.validate_personal(data,packet,sources)['operator_review']['base']
+    assert out['observation']=='Клиенту нужен тентовый ангар.'
+    assert out['action']=='Уточнять конструкцию.' and out['evidence'][0]['base']=='База B1_79991234567'
+
+
+def test_personal_sampling_bounded_diverse_and_recent():
+    r=personal_report(); r['attempts']=[]
+    for i in range(60):
+        project='Упаковка' if i < 48 else 'Ангары'
+        step='Начало' if i < 36 else 'Квалификация'
+        quote=f'Оператор сказал вариант номер {i}'
+        r['attempts'].append({'call_id':i+1,'run_id':1,'phone':'9993332211','operator':'olga',
+            'tab':project,'at':f'2026-11-{10+i//10:02d}T10:00:00', 'attribution':'matched',
+            'check':{'coaching':[{'step':step,'advice':'Уточнить вопрос', 'quote':quote,'at':2}]}})
+    packet,sources=advisor.evidence_packet(r)
+    assert len(sources)<=12 and len(packet['examples'])<=12
+    candidates=packet['operator_script_candidates']
+    assert {c['project'] for c in candidates} == {'Упаковка','Ангары'}
+    assert {c['step'] for c in candidates} == {'Начало','Квалификация'}
+    assert max(int(x['call_id']) for x in sources.values())>=50
+    assert any(c['distinct_calls']>=10 for c in candidates)
+    assert not packet['findings'] and not packet['coaching'] and not packet['outcomes']
+    reversed_packet,reversed_sources=advisor.evidence_packet(dict(r,attempts=list(reversed(r['attempts']))))
+    assert {x['call_id'] for x in sources.values()}=={x['call_id'] for x in reversed_sources.values()}
+
+
+def test_wrong_number_strict_for_all_evidence_paths():
+    r=personal_report(); row=r['attempts'][0]; row['check']['coaching']=[]
+    cases=['Вы ошиблись с городом', 'Вы ошиблись', 'Вы не ошиблись номером']
+    row['check']['friction']=[{'quote':x,'at':i} for i,x in enumerate(cases)]
+    row['check']['client_evidence']=[{'quote':x,'at':i+5} for i,x in enumerate(cases)]
+    row['check']['decisions']=[{'project':'packaging','category':'pending',
+        'evidence':[{'quote':x,'at':i+10} for i,x in enumerate(cases)]}]
+    packet,sources=advisor.evidence_packet(r)
+    assert not packet['operator_base_candidates'] and not sources

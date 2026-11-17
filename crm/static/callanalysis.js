@@ -169,7 +169,9 @@ async function callAnalysisView(view, arg) {
   clearTimeout(S.caTimer);
   if (arg?.startsWith(':analysis:lead:')) return caLeadHistory(view, arg.slice(15));
   const findingRoute = /^:analysis:findings(?::(\d{4}-\d{2}-\d{2}):(\d{4}-\d{2}-\d{2}))?$/.exec(arg || '');
-  if (arg === ':analysis' || findingRoute) return caFindingsView(view, findingRoute?.[1], findingRoute?.[2]);
+  const operatorRoute = /^:analysis:operator:(olga|oksana)(?::(\d{4}-\d{2}-\d{2}):(\d{4}-\d{2}-\d{2}))?$/.exec(arg || '');
+  if (arg === ':analysis' || findingRoute || operatorRoute)
+    return caFindingsView(view, operatorRoute?.[2] || findingRoute?.[1], operatorRoute?.[3] || findingRoute?.[2], operatorRoute?.[1] || '');
   const runId = arg && arg.startsWith(':analysis:') ? Number(arg.slice(10)) : 0;
   if (runId) return caRun(view, runId);
   const d = await loading(view, api('/api/callcenter/analysis'), 'page');
@@ -295,22 +297,44 @@ function caAdviceFilters(d) {
   const includeSelected = (values, chosen) => chosen && !values.includes(chosen) ? [chosen, ...values] : values;
   const projects = includeSelected(d.options?.projects || [], selected.project);
   const bases = includeSelected(d.options?.bases || [], selected.base);
-  const operators = d.options?.operators || [];
-  const chosenOperator = selected.operator && !operators.some(x => x.id === selected.operator)
-    ? [{id: selected.operator, name: ({olga:'Ольга', oksana:'Оксана'}[selected.operator] || selected.operator)}, ...operators] : operators;
   return `<div class="ca-advice-filters">
     <label class="field">С<input type="date" data-advice-start value="${esc(d.start)}"></label>
     <label class="field">По<input type="date" data-advice-end value="${esc(d.end)}"></label>
     <label class="field">Проект<select data-advice-project>${option('', 'Все проекты', selected.project || '')}${projects.map(v => option(v, v, selected.project)).join('')}</select></label>
     <label class="field">База<select data-advice-base>${option('', 'Все базы', selected.base || '')}${bases.map(v => option(v, v, selected.base)).join('')}</select></label>
-    <label class="field">Оператор<select data-advice-operator>${option('', 'Оба оператора', selected.operator || '')}${chosenOperator.map(v => option(v.id, v.name, selected.operator)).join('')}</select></label>
     <button class="btn" type="button" data-advice-apply>Показать</button>
   </div>`;
 }
-function caAdviceSources(evidence) {
+function caAdviceRoute(operator, start, end) {
+  const scope = operator ? `:analysis:operator:${operator}` : ':analysis:findings';
+  return /^\d{4}-\d{2}-\d{2}$/.test(start || '') && /^\d{4}-\d{2}-\d{2}$/.test(end || '')
+    ? `${scope}:${start}:${end}` : scope;
+}
+function caAdviceSwitch(operator, start, end) {
+  return [['', 'Вся команда'], ['olga', 'Ольга'], ['oksana', 'Оксана']].map(([id, name]) => {
+    const arg = caAdviceRoute(id, start, end);
+    return `<a href="#callcenter/${esc(arg)}" data-advice-switch="${id}"${operator === id ? ' aria-current="page"' : ''}>${name}</a>`;
+  }).join('');
+}
+function caAdviceIntro(operator) {
+  const name = {olga: 'Ольги', oksana: 'Оксаны'}[operator];
+  return `<p>Анализ разговоров колл-центра</p><h2>${name ? `Работа ${name}` : 'Что улучшить в работе'}</h2><span>${name ? 'Персональный разбор за выбранный период' : 'Рекомендации по выбранному периоду и команде'}</span>`;
+}
+function caPersonalSection(title, part, kind) {
+  if (!part || part.status !== 'supported') return `<section class="ca-advice-panel ca-personal-panel"><h2>${esc(title)}</h2><p class="ca-advice-why">${esc(part?.observation || 'Недостаточно подтверждённых данных для вывода по этому разделу.')}</p></section>`;
+  return `<section class="ca-advice-panel ca-personal-panel"><h2>${esc(title)}</h2>
+    <p><b>Что произошло</b><br>${esc(part.observation || '')}</p>
+    <p><b>Что исправить</b><br>${esc(part.action || '')}</p>
+    <p><b>Как проверить</b><br>${esc(part.test || '')}</p>${caAdviceSources(part.evidence, kind)}</section>`;
+}
+function caAdviceSources(evidence, kind = '') {
   const list = Array.isArray(evidence) ? evidence : [];
   if (!list.length) return '';
-  return `<details class="ca-advice-sources"><summary>Звонки и подтверждения (${fmt(list.length)})</summary><ul>${list.map(e => `<li>«${esc(e.quote || '')}» ${caEvidenceTime(e.at)}${caFindingCall(e)}</li>`).join('')}</ul></details>`;
+  return `<details class="ca-advice-sources"><summary>Звонки и подтверждения (${fmt(list.length)})</summary><ul>${list.map(e => {
+    const details = kind === 'base' ? (e.attribution === 'matched' ? [e.project, e.base].filter(Boolean) : ['Источник базы не подтверждён'])
+      : kind === 'script' ? [e.project, e.step].filter(Boolean) : [];
+    return `<li>${details.length ? `<span>${details.map(esc).join(' · ')}</span><br>` : ''}«${esc(e.quote || '')}» ${caEvidenceTime(e.at)}${caFindingCall(e)}</li>`;
+  }).join('')}</ul></details>`;
 }
 function caAdviceAction(action, index) {
   return `<article class="ca-advice-action"><div class="ca-advice-number">${index + 1}</div><div>
@@ -328,10 +352,16 @@ function caAdviceArchive(items) {
     return `<p><b>${esc(h.project_name)} · ${esc(h.start)} — ${esc(h.end)}</b><br>Тип затруднения отмечен у ${fmt(h.leads)} разных номеров; приведённый пример относится к конкретному звонку.</p>${h.evidence.map(caFindingExample).join('')}<p><a href="#callcenter/${arg}" data-go="callcenter" data-arg="${arg}">Выводы за тот период</a></p>`;
   }).join('')}</details>`;
 }
-function caAdviceBody(d) {
+function caAdviceBody(d, operator = '') {
   const state = d.advisor || {status: 'unavailable'};
   const brief = state.brief || {};
-  const archive = caAdviceArchive(d.historical_findings);
+  const archive = operator ? '' : caAdviceArchive(d.historical_findings);
+  if (operator && state.status === 'ready') {
+    const review = brief.operator_review;
+    if (!review) return '<section class="ca-advice-panel"><h2>Персональный разбор пока недоступен</h2><p>Дождитесь обновления анализа для этого сотрудника.</p></section>';
+    return `${caPersonalSection('Работа по скрипту', review.script, 'script')}${caPersonalSection('Качество базы', review.base, 'base')}
+      ${(brief.limitations || []).length ? `<p class="ca-advice-limit">${brief.limitations.map(x => esc(x)).join(' ')}</p>` : ''}`;
+  }
   if (state.status === 'ready' && brief.status === 'insufficient') {
     return `<section class="ca-advice-panel"><h2>Пока недостаточно данных</h2><p>${esc(brief.summary || 'Для надёжного вывода нужно больше подтверждённых разговоров.')}</p>${(brief.limitations || []).map(x => `<p class="hint">${esc(x)}</p>`).join('')}</section>${archive}`;
   }
@@ -346,33 +376,54 @@ function caAdviceBody(d) {
   const label = state.status === 'stale' ? 'Обновляем выводы' : state.status === 'running' ? 'Анализируем разговоры' : 'Готовим выводы';
   return `<section class="ca-advice-panel" aria-live="polite"><h2>${label}</h2><p>${esc(state.message || 'Обычно это занимает несколько минут. Страницу можно оставить открытой.')}</p></section>${archive}`;
 }
-async function caFindingsView(view, start, end) {
+async function caFindingsView(view, start, end, operator = '') {
   clearTimeout(S.caTimer);
   setHead({title: 'Выводы агента', back: () => go('callcenter'),
     actions: '<button class="btn" type="button" data-go="callcenter" data-arg=":analysis:stats">Статистика и журнал</button>'});
-  view.innerHTML = `<div class="page ca-advice"><div class="ca-advice-intro"><p>Анализ разговоров колл-центра</p><h2>Что улучшить в работе</h2><span>Рекомендации по выбранному периоду и команде</span></div>
+  view.innerHTML = `<div class="page ca-advice"><div class="ca-advice-intro" data-advice-intro>${caAdviceIntro(operator)}</div>
+    <nav class="ca-advice-people" aria-label="Выбрать сотрудника" data-advice-switches>${caAdviceSwitch(operator, start, end)}</nav>
     <section class="ca-advice-filter-card" aria-label="Период и фильтры"><div data-advice-filters>Загружаем фильтры…</div></section><div data-advice-content aria-live="polite"><section class="ca-advice-panel"><h2>Загружаем данные</h2></section></div></div>`;
   let serial = 0;
-  let active = {start, end};
+  let active = {start, end, operator};
   const filterBox = $('[data-advice-filters]', view), content = $('[data-advice-content]', view);
+  const switches = $('[data-advice-switches]', view), intro = $('[data-advice-intro]', view);
+  const selectedInputs = () => ({start: $('[data-advice-start]', filterBox)?.value || active.start,
+    end: $('[data-advice-end]', filterBox)?.value || active.end,
+    project: $('[data-advice-project]', filterBox)?.value ?? active.project ?? '',
+    base: $('[data-advice-base]', filterBox)?.value ?? active.base ?? ''});
+  switches?.addEventListener('click', e => {
+    const link = e.target.closest('[data-advice-switch]');
+    if (!link) return;
+    e.preventDefault();
+    const next = link.getAttribute('data-advice-switch');
+    if (!['', 'olga', 'oksana'].includes(next)) return;
+    active = {...selectedInputs(), operator: next};
+    const arg = caAdviceRoute(next, active.start, active.end);
+    history.replaceState(null, '', '#callcenter/' + arg);
+    S.arg = arg;
+    switches.innerHTML = caAdviceSwitch(next, active.start, active.end);
+    intro.innerHTML = caAdviceIntro(next);
+    content.innerHTML = '<section class="ca-advice-panel" aria-live="polite"><h2>Загружаем данные</h2></section>';
+    refresh(true);
+  });
   async function refresh(resetFilters = false) {
     clearTimeout(S.caTimer);
     const seq = ++serial;
     try {
       const d = await api('/api/callcenter/analysis/insights' + qs(active));
       if (!view.isConnected || seq !== serial) return;
+      if ((d.filters?.operator || '') !== (active.operator || '')) throw new Error('Данные выбранного сотрудника пока недоступны.');
       if (resetFilters) {
         active = {start: d.start, end: d.end, ...(d.filters || {})};
+        if (switches) switches.innerHTML = caAdviceSwitch(active.operator || '', active.start, active.end);
         filterBox.innerHTML = caAdviceFilters(d);
         $('[data-advice-apply]', filterBox)?.addEventListener('click', () => {
-          active = {start: $('[data-advice-start]', filterBox).value, end: $('[data-advice-end]', filterBox).value,
-            project: $('[data-advice-project]', filterBox).value, base: $('[data-advice-base]', filterBox).value,
-            operator: $('[data-advice-operator]', filterBox).value};
+          active = {...selectedInputs(), operator: active.operator || ''};
           content.innerHTML = '<section class="ca-advice-panel" aria-live="polite"><h2>Загружаем данные</h2></section>';
           refresh(true);
         });
       }
-      content.innerHTML = caAdviceBody(d);
+      content.innerHTML = caAdviceBody(d, active.operator);
       $('[data-advice-retry]', content)?.addEventListener('click', () => refresh(false));
       if (['waiting', 'queued', 'running', 'stale'].includes(d.advisor?.status)) S.caTimer = setTimeout(() => { if (view.isConnected) refresh(false); }, 30000);
     } catch (e) {

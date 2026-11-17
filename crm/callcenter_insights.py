@@ -11,6 +11,27 @@ from . import call_analysis, call_analysis_schema, callcenter_base, callcenter_m
 
 INCEPTION = date(2026, 11, 17)
 CATEGORIES = {'qualified', 'reusable', 'competitor', 'pending'}
+_WRONG_NUMBER_PROOF = re.compile(
+    r'\b(?:не\s+туда\s+попали|(?:вы\s+)?ошиблись\s+(?:номером|телефоном)|'
+    r'не\s+тот\s+номер|это\s+не\s+(?:его|е[её]|их)\s+номер)\b', re.I)
+
+
+def client_wrong_number_evidence(transcript):
+    """Return only a short verbatim client phrase when roles are unambiguous."""
+    lines = call_analysis.split_lines(transcript)
+    operator, clients = callcenter_verdict._roles(lines)
+    if not operator or not clients:
+        return []
+    for line in lines:
+        if line.get('speaker') not in clients:
+            continue
+        text = str(line.get('text') or '')
+        if re.search(r'\bне\s+ошиблись\s+(?:номером|телефоном)', text, re.I):
+            continue
+        found = _WRONG_NUMBER_PROOF.search(text)
+        if found:
+            return [{'quote': found.group(0), 'at': line.get('at'), 'kind': 'wrong_number'}]
+    return []
 
 
 def _json(value):
@@ -83,8 +104,10 @@ async def fetch_records(pool, client_id, start=None, end=None, phone=None, snaps
         conditions.append("(regexp_replace(coalesce(i.phone,''), '[^0-9]', '', 'g') = $%d OR "
                           "regexp_replace(coalesce(i.phone,''), '[^0-9]', '', 'g') IN ('7'||$%d, '8'||$%d))" % ((len(params),) * 3))
     extra = (' AND ' + ' AND '.join(conditions)) if conditions else ''
-    rows = await pool.fetch("""SELECT i.*,r.operator,r.id AS analysis_run_id""" + source_fields + """
+    rows = await pool.fetch("""SELECT i.*,r.operator,r.id AS analysis_run_id,
+        CASE WHEN (i.stages #> '{script_check,signals}') ? 'wrong_number' THEN c.transcript END AS source_transcript""" + source_fields + """
         FROM call_analysis_items i JOIN call_analysis_runs r ON r.id=i.run_id AND r.client_id=i.client_id
+        LEFT JOIN calls c ON c.id=i.call_id AND c.client_id=i.client_id
         """ + source_join + """ WHERE r.client_id=$1 AND r.dedup_key LIKE $2 AND r.operator IN ('olga','oksana')
         """ + extra + """ ORDER BY i.at NULLS LAST,i.id""", *params)
     folder = os.getenv('CALLCENTER_LEADS_FOLDER_ID', '').strip()
@@ -106,6 +129,8 @@ async def fetch_records(pool, client_id, start=None, end=None, phone=None, snaps
         phone = callcenter_base._phone_key(row['phone'])
         stages = _json(row['stages'])
         check = stages.get('script_check') or {}
+        if 'wrong_number' in (check.get('signals') or []) and row['source_transcript']:
+            check = dict(check, client_evidence=client_wrong_number_evidence(row['source_transcript']))
         rec = {'phone': phone, 'operator': row['operator'], 'at': at.isoformat() if at else None,
                'run_id': row['analysis_run_id'], 'call_id': row['call_id'], 'item_id': row['id'],
                'status': row['status'], 'semantic': stages.get('semantic') or {}, 'duration_s': row['duration_s'] or 0, 'check': check,
@@ -262,7 +287,7 @@ def summarize(records, start, end, project="", base="", operator=""):
     options = {'projects': sorted({_campaign(r) for r in in_period}),
                'bases': sorted({_base_name(r) for r in in_period}),
                'operators': [{'id': k, 'name': _operator_name({'operator': k})}
-                             for k in sorted({r.get('operator') for r in in_period if r.get('operator')})]}
+                             for k in ('olga', 'oksana')]}
     def matches(r):
         return (not project or _campaign(r) == project) and (not base or _base_name(r) == base) and (not operator or r.get('operator') == operator)
     selected = [r for r in in_period if between(r, start, end) and matches(r)]
@@ -361,8 +386,7 @@ async def selected_pins(pool, client_id, report):
     return output
 
 
-async def report_for_company(pool, client_id, start=None, end=None, project="", base="", operator=""):
-    """Build a scoped report without scheduling background work or loading pinned history."""
+def report_dates(start=None, end=None):
     today = datetime.now(call_analysis.MOSCOW).date()
     configured = os.getenv('CALLCENTER_MONITOR_FROM', '')
     try:
@@ -374,11 +398,21 @@ async def report_for_company(pool, client_id, start=None, end=None, project="", 
         raise ValueError('Конец периода раньше начала.')
     if last > today or (last - first).days > 365:
         raise ValueError('Выберите завершившийся период не более 366 дней.')
+    return first, last
+
+
+async def report_for_company(pool, client_id, start=None, end=None, project="", base="", operator="", _records=None):
+    """Build a scoped report without scheduling background work or loading pinned history."""
+    first, last = report_dates(start, end)
     if any(len(value) > 200 for value in (project, base, operator)):
         raise ValueError('Некорректный фильтр.')
     previous_start = first - timedelta(days=(last - first).days + 1)
-    result = summarize(await fetch_records(pool, client_id, previous_start, last), first, last, project, base, operator)
-    if project and project not in result['options']['projects'] or base and base not in result['options']['bases'] or operator and operator not in {o['id'] for o in result['options']['operators']}:
+    records = await fetch_records(pool, client_id, previous_start, last) if _records is None else _records
+    result = summarize(records, first, last, project, base, operator)
+    if operator and operator not in {'olga', 'oksana'}:
+        raise ValueError('Неизвестный оператор.')
+    if not operator and ((project and project not in result['options']['projects']) or
+                         (base and base not in result['options']['bases'])):
         raise ValueError('Выбранный фильтр отсутствует в данных за период.')
     result['advisor_pins'] = await selected_pins(pool, client_id, result)
     return result

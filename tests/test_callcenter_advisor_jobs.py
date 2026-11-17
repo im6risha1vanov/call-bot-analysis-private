@@ -116,3 +116,58 @@ def test_evidence_packet_never_receives_archive_pins():
     _, _, data = jobs.request_data(1, r)
     assert not data['packet']['pinned']
     assert not data['sources']
+
+@pytest.mark.asyncio
+async def test_warm_all_reuses_snapshot_and_never_mixes_operators():
+    from datetime import date
+    from crm import callcenter_insights as insights
+    rows = [{'phone':'9991234567', 'operator':'olga', 'at':'2026-11-18T12:00:00+03:00',
+             'run_id':1,'call_id':1,'item_id':1,'status':'done','duration_s':10,'check':{}, 'tab':'Упаковка', 'project':'B1'},
+            {'phone':'9991234568', 'operator':'oksana', 'at':'2026-11-18T13:00:00+03:00',
+             'run_id':2,'call_id':2,'item_id':2,'status':'done','duration_s':10,'check':{}, 'tab':'Упаковка', 'project':'B1'}]
+    sent = []
+    async def submit(pool, client, value):
+        sent.append(value)
+        return {'status':'queued'}
+    with patch.object(insights, 'report_dates', return_value=(date(2026,11,17), date(2026,11,18))), \
+         patch.object(insights, 'fetch_records', AsyncMock(return_value=rows)) as fetch, \
+         patch.object(insights, 'selected_pins', AsyncMock(return_value=[])), patch.object(jobs, 'request', submit):
+        states = await jobs.warm_all(object(), 1)
+    assert set(states) == {'all','olga','oksana'}
+    fetch.assert_awaited_once()
+    assert [len(r['attempts']) for r in sent] == [2,1,1]
+    assert sent[1]['attempts'][0]['operator'] == 'olga'
+    assert sent[2]['attempts'][0]['operator'] == 'oksana'
+
+
+@pytest.mark.asyncio
+async def test_known_empty_operator_allowed_with_existing_project_filter():
+    from datetime import date
+    from crm import callcenter_insights as insights
+    rows = [{'phone':'9991234567', 'operator':'olga', 'at':'2026-11-18T12:00:00+03:00',
+             'run_id':1,'call_id':1,'item_id':1,'status':'done','duration_s':10,'check':{}, 'tab':'Упаковка', 'project':'B1'}]
+    with patch.object(insights, 'report_dates', return_value=(date(2026,11,17), date(2026,11,18))), \
+         patch.object(insights, 'selected_pins', AsyncMock(return_value=[])):
+        result = await insights.report_for_company(None, 1, project='Упаковка', operator='oksana', _records=rows)
+        assert result['filters']['operator'] == 'oksana'
+        assert result['current']['attempts'] == 0 and result['attempts'] == []
+        assert {o['id'] for o in result['options']['operators']} == {'olga', 'oksana'}
+        empty = await insights.report_for_company(None, 1, project='Упаковка', base='Нет звонков в этой базе', operator='oksana', _records=rows)
+        assert empty['attempts'] == [] and empty['filters']['base'] == 'Нет звонков в этой базе'
+        with pytest.raises(ValueError):
+            await insights.report_for_company(None, 1, project='Неизвестный проект', _records=rows)
+        with pytest.raises(ValueError):
+            await insights.report_for_company(None, 1, operator='not-a-person', _records=rows)
+
+
+def test_personal_cache_version_keeps_overall_version():
+    overall = report()
+    operator = {**overall, 'filters': {'project':'', 'base':'', 'operator':'olga'}}
+    old = jobs.OPERATOR_VERSION
+    first = jobs.request_data(1, overall)[1]
+    second = jobs.request_data(1, operator)[1]
+    with patch.object(jobs, 'OPERATOR_VERSION', old + '-changed'):
+        assert jobs.request_data(1, overall)[1] == first
+        assert jobs.request_data(1, operator)[1] != second
+    assert 'operator_script_candidates' not in jobs.request_data(1, overall)[2]['packet']
+    assert 'operator_script_candidates' in jobs.request_data(1, operator)[2]['packet']
