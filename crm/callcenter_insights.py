@@ -66,7 +66,7 @@ def _operator_name(r):
     return {'olga': 'Ольга', 'oksana': 'Оксана'}.get(r.get('operator'), r.get('operator') or 'Не установлено')
 
 
-async def fetch_records(pool, client_id, start=None, end=None, phone=None):
+async def fetch_records(pool, client_id, start=None, end=None, phone=None, snapshot_data=None):
     """All automatic attempts scoped to a company; only current automatic runs."""
     await call_analysis_schema.ensure(pool)
     has_sources = await pool.fetchval("SELECT to_regclass('callcenter_call_sources') IS NOT NULL")
@@ -88,8 +88,12 @@ async def fetch_records(pool, client_id, start=None, end=None, phone=None):
         """ + source_join + """ WHERE r.client_id=$1 AND r.dedup_key LIKE $2 AND r.operator IN ('olga','oksana')
         """ + extra + """ ORDER BY i.at NULLS LAST,i.id""", *params)
     folder = os.getenv('CALLCENTER_LEADS_FOLDER_ID', '').strip()
-    checked_at, books = (await callcenter_base.snapshot(folder)) if folder and all(c.isascii() and (c.isalnum() or c in '-_') for c in folder) else (None, {})
+    if snapshot_data is not None:
+        checked_at, books = snapshot_data
+    else:
+        checked_at, books = (await callcenter_base.snapshot(folder)) if folder and all(c.isascii() and (c.isalnum() or c in '-_') for c in folder) else (None, {})
     index = _sheet_index(books)
+    competitor_index = callcenter_base.sheet_competitor_index(books)
     out = []
     # A call can appear in more than one automatic run after configuration changes.
     latest = {}
@@ -107,6 +111,8 @@ async def fetch_records(pool, client_id, start=None, end=None, phone=None):
                'status': row['status'], 'semantic': stages.get('semantic') or {}, 'duration_s': row['duration_s'] or 0, 'check': check,
                'source': row['transcript_source'], 'error': row['error'], 'sheet_checked_at': checked_at}
         rec.update(_attribute(index, row['operator'], phone, _day(at) if at else ''))
+        rec['sheet_competitor'] = (callcenter_base.sheet_competitor(competitor_index, row['operator'], phone, _day(at))
+                                   if at and phone and books.get(row['operator']) is not None else None)
         if has_sources and row['saved_sheet_id']:
             rec.update(project=row['saved_project'], base=row['saved_base'], tab=row['saved_tab'],
                        sheet_id=row['saved_sheet_id'], tag=row['saved_tag'], attribution='matched')
@@ -118,12 +124,16 @@ def build_cards(records):
     """Most recent explicit decision for each phone and script; silence does not erase it."""
     history = defaultdict(list)
     decisions = {}
+    sheet_markers = {}
     stopped = set()
     for record in sorted(records, key=lambda r: (r.get('at') or '', r.get('item_id') or 0)):
         phone = record.get('phone')
         if not phone:
             continue
         history[phone].append(record)
+        marker = record.get('sheet_competitor')
+        if marker and marker.get('project'):
+            sheet_markers[(phone, marker['project'])] = (marker, record)
         check = record.get('check') or {}
         if check.get('stop_contact') is True:
             stopped.add(phone)
@@ -133,7 +143,21 @@ def build_cards(records):
             project, category = decision.get('project'), decision.get('category')
             if project and category in CATEGORIES and (category != 'pending' or (phone, project) not in decisions):
                 decisions[(phone, project)] = (decision, record)
+    for key, (marker, record) in sheet_markers.items():
+        marker_day = _day(datetime.fromisoformat(record['at'])) if record.get('at') else None
+        if any(x.get('operator') == record.get('operator') and x.get('at')
+               and _day(datetime.fromisoformat(x['at'])) == marker_day
+               and (x is record or (x.get('tab') == marker.get('tab') and x.get('sheet_id') == marker.get('sheet_id')))
+               and 'wrong_number' in ((x.get('check') or {}).get('signals') or []) for x in history[key[0]]):
+            continue
+        current = decisions.get(key)
+        if current and current[0].get('category') != 'pending':
+            continue
+        decisions[key] = ({'project': key[1], 'category': 'competitor', 'provenance': 'sheet_operator',
+                           'reason': 'Отметка оператора в исходной таблице: ' + marker['marker'],
+                           'evidence': [marker], 'next_step': False}, record)
     return [dict(phone=phone, project=project, category=d['category'], reason=d.get('reason') or '',
+                 provenance=d.get('provenance') or 'call_analysis',
                  evidence=d.get('evidence') or [], product_qualified=d.get('product_qualified') is True, next_step=d.get('next_step') is True,
                  next_step_text=d.get('next_step_text') or '', at=r['at'], run_id=r['run_id'],
                  call_id=r['call_id'], history_url='#callcenter/:analysis:lead:' + phone,
@@ -143,8 +167,8 @@ def build_cards(records):
             for (phone, project), (d, r) in sorted(decisions.items())]
 
 
-async def cards(pool, client_id):
-    return build_cards(await fetch_records(pool, client_id))
+async def cards(pool, client_id, snapshot_data=None):
+    return build_cards(await fetch_records(pool, client_id, snapshot_data=snapshot_data))
 
 
 def _metrics(records):
@@ -165,7 +189,9 @@ def _metrics(records):
     def metric(n, total):
         return {'count': n, 'denominator': total, 'percent': round(100 * n / total, 1) if total else None}
     category_counts = {category: len({d['phone'] for d in decisions if d['category'] == category}) for category in CATEGORIES}
-    return {'category_counts': category_counts, 'attempts': len(records), 'phones': len(phones), 'no_phone': sum(not r.get('phone') for r in records),
+    classified = {d['phone'] for d in decisions if d['category'] in ('qualified', 'reusable', 'competitor')}
+    return {'category_counts': category_counts, 'unclassified_phones': len(set(phones) - classified),
+            'attempts': len(records), 'phones': len(phones), 'no_phone': sum(not r.get('phone') for r in records),
             'reached': metric(len(reached), len(phones)), 'qualified': metric(len(qualified & reached), len(reached)),
             'next_step': metric(len(steps & qualified), len(qualified))}
 

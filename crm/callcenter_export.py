@@ -20,6 +20,7 @@ HEADERS = ['ID карточки', 'Проект', 'Телефон', 'Катег�
            'История звонков', 'Ссылки CRM', 'Источники', 'Обновлено', 'Версия']
 CATEGORIES = ('qualified', 'reusable', 'competitor')
 LABELS = {'qualified': 'Квалифицированный лид', 'reusable': 'Неквалифицированный лид', 'competitor': 'Конкурент клиента'}
+SHEET_PROVENANCE = 'Источник: отметка оператора в таблице'
 API = 'https://sheets.googleapis.com/v4/spreadsheets/'
 
 
@@ -101,8 +102,10 @@ def render(card):
         raise ValueError('Не задан корректный CALLCENTER_CRM_URL')
     link = base_url + '/' + str(card.get('history_url') or '')
     reason = str(card.get('reason') or '')
-    evidence = '\n'.join(f"{p.get('at', '')}: «{p.get('quote', '')}»" for p in card.get('evidence') or [] if isinstance(p, dict))
-    result = '\n'.join(x for x in (reason, evidence, card.get('next_step_text') or '') if x)[:5000]
+    evidence = '\n'.join(f"{p.get('at', '')}: «{p['quote']}»" for p in card.get('evidence') or []
+                         if isinstance(p, dict) and p.get('quote'))
+    provenance = SHEET_PROVENANCE if card.get('provenance') == 'sheet_operator' else 'Источник: разбор разговора'
+    result = '\n'.join(x for x in (provenance, reason, evidence, card.get('next_step_text') or '') if x)[:5000]
     return [card_id(card), str(label), str(card.get('phone') or ''), LABELS[category], result,
             str(card.get('client') or ''), _date(latest), _history(history), link,
             _sources(card.get('sources') or []), _date(latest), '1']
@@ -183,14 +186,15 @@ async def sync(pool, client_id):
             await _mark(conn, client_id, 'syncing')
             sheets = destinations()
             from . import callcenter_insights
-            cards = await callcenter_insights.cards(pool, client_id)
             # An unavailable source is never interpreted as an empty or complete dataset.
             folder = os.getenv('CALLCENTER_LEADS_FOLDER_ID', '').strip()
             if not folder:
                 raise ValueError('Не задана папка исходных таблиц')
-            _, books = await callcenter_base.snapshot(folder)
-            if any(books.get(op) is None for op in callcenter_base.TITLES):
+            snapshot_data = await callcenter_base.snapshot(folder)
+            _, books = snapshot_data
+            if any(not books.get(op) for op in callcenter_base.TITLES):
                 raise ValueError('Исходные таблицы временно недоступны')
+            cards = await callcenter_insights.cards(pool, client_id, snapshot_data=snapshot_data)
             wanted = {}
             stopped = {}
             for card in cards:
@@ -209,6 +213,22 @@ async def sync(pool, client_id):
                 records = await conn.fetch('SELECT card_id,category,sheet_id,payload FROM callcenter_export_rows WHERE client_id=$1', client_id)
                 known = {(r['card_id'], r['category'], r['sheet_id']): (json.loads(r['payload']) if isinstance(r['payload'], str) else r['payload']) for r in records}
                 errors = []
+                # Withdraw only a row produced from a sheet marker that no longer qualifies.
+                # Classified calls with other evidence and unrelated rows are never removed here.
+                for (key, oldcat, oldsheet), previous in list(known.items()):
+                    if key in wanted or key in stopped or len(previous) < 5 or not previous[4].startswith(SHEET_PROVENANCE):
+                        continue
+                    if oldcat not in pages or sheets.get(oldcat) != oldsheet:
+                        errors.append('Изменилась таблица назначения: ' + key[-8:]); continue
+                    oldrows, oldindex = pages[oldcat]
+                    number = oldindex.get(key)
+                    if number:
+                        if padded(oldrows[number - 1]) != previous:
+                            errors.append('Карточка изменена вручную: ' + key[-8:]); continue
+                        await _put(http, oldsheet, number, [''] * len(HEADERS))
+                        oldrows[number - 1] = [''] * len(HEADERS) + oldrows[number - 1][len(HEADERS):]
+                        del oldindex[key]
+                    await conn.execute('DELETE FROM callcenter_export_rows WHERE client_id=$1 AND card_id=$2 AND category=$3 AND sheet_id=$4', client_id, key, oldcat, oldsheet)
                 # An interrupted first write may leave a row before its ownership record was saved.
                 # Do not silently report a revoked contact as removed when that row cannot be verified.
                 for key in stopped:

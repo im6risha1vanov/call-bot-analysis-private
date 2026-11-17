@@ -109,7 +109,7 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
         env = {'CALLCENTER_EXPORT_SHEETS': '{"qualified":"a","reusable":"b","competitor":"c"}',
                'CALLCENTER_CRM_URL': 'https://averonleads.ru', 'CALLCENTER_LEADS_FOLDER_ID': 'folder'}
         with patch.dict(os.environ, env), patch.object(callcenter_insights, 'cards', AsyncMock(return_value=[card])) as cards_mock, \
-             patch.object(export.callcenter_base, 'snapshot', AsyncMock(return_value=('now', {'olga': {}, 'oksana': {}}))), \
+             patch.object(export.callcenter_base, 'snapshot', AsyncMock(return_value=('now', {'olga': {'tab': []}, 'oksana': {'tab': []}}))) as snapshot_mock, \
              patch.object(export, '_token', return_value='token'), patch.object(export.httpx, 'AsyncClient', Client), \
              patch.object(export, '_read', read), patch.object(export, '_put', put), patch.object(export, '_grow', AsyncMock()):
             await export.sync(Pool(), 1)
@@ -125,3 +125,21 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(any(pages['a'][1]))
             await export.sync(Pool(), 1)
             self.assertFalse(any(pages['a'][1]))
+
+            cards_mock.return_value = [{**card, 'category': 'competitor', 'provenance': 'sheet_operator'}]
+            await export.sync(Pool(), 1)
+            self.assertTrue(pages['c'][1][4].startswith(export.SHEET_PROVENANCE))
+            cards_mock.return_value = []
+            original = list(pages['c'][1])
+            pages['c'][1][4] = 'Изменено вручную'
+            await export.sync(Pool(), 1)
+            self.assertEqual(conn.state, 'error')
+            self.assertEqual(pages['c'][1][4], 'Изменено вручную')
+            pages['c'][1] = original
+            snapshot_mock.return_value = ('now', {'olga': None, 'oksana': {'tab': []}})
+            await export.sync(Pool(), 1)
+            self.assertTrue(any(pages['c'][1]))
+            snapshot_mock.return_value = ('now', {'olga': {'tab': []}, 'oksana': {'tab': []}})
+            await export.sync(Pool(), 1)
+            self.assertFalse(any(pages['c'][1]))
+            self.assertFalse(conn.records)

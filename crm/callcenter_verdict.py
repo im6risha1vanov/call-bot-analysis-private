@@ -217,10 +217,12 @@ async def assess_semantic(lines, check):
         return check
     # Import lazily: the sync quality check never needs a provider credential.
     import json
+    import os
     import analysis
     projects = [x['project'] for x in check['decisions']]
     script_steps = {key: [label for label, _ in quality.SCRIPTS[key][2]]
                     for key in projects if key in quality.SCRIPTS}
     payload, _cost = await analysis._call(PROMPT, json.dumps(
-        {'projects': projects, 'approved_script_steps': script_steps, 'dialog': lines}, ensure_ascii=False), 4000)
+        {'projects': projects, 'approved_script_steps': script_steps, 'dialog': lines}, ensure_ascii=False), 4000,
+        reasoning_effort=os.getenv('CALLCENTER_SEMANTIC_REASONING_EFFORT', 'low').strip() or 'low')
     return validate(payload, lines, check)

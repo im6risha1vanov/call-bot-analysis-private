@@ -123,3 +123,109 @@ def test_fetch_records_bounds_company_period_and_phone_before_loading(monkeypatc
     assert params[0] == 19 and params[-1] == '9000000001'
     assert params[2].isoformat() == '2026-11-17T00:00:00+03:00'
     assert params[3].isoformat() == '2026-11-19T00:00:00+03:00'
+
+
+def test_unclassified_includes_unknown_and_no_script():
+    rows = [attempt('9000000001','2026-11-17'),
+            attempt('9000000002','2026-11-17',decisions=[decision('pending')]),
+            attempt('9000000003','2026-11-17',decisions=[decision('reusable')])]
+    metrics = ci.summarize(rows,'2026-11-17','2026-11-17')['current']
+    assert metrics['unclassified_phones'] == 2 and metrics['phones'] == 3
+
+
+def test_automatic_batch_concurrency_is_bounded_and_requeues(monkeypatch):
+    import asyncio
+    from unittest.mock import AsyncMock
+    from crm import call_analysis as ca
+    running, peak = 0, 0
+    async def process_item(*args):
+        nonlocal running, peak
+        running += 1
+        peak = max(peak, running)
+        await asyncio.sleep(.01)
+        running -= 1
+        return {'status':'done', 'stages':{}}
+    class Pool:
+        execute = AsyncMock(return_value='UPDATE 1')
+        fetch = AsyncMock(return_value=[{'id':i} for i in range(4)])
+        fetchval = AsyncMock(return_value=True)
+    pool = Pool()
+    monkeypatch.setattr(ca, '_process_item', process_item)
+    run = {'id': 1, 'dedup_key': 'callcenter-monitor:olga:1:2026-11-17:v:auto',
+           'client_id': 1, 'processed': 0, 'total_calls': 20}
+    asyncio.run(ca.process(pool, run))
+    assert peak == 4
+    assert 'LIMIT 4' in pool.fetch.await_args.args[0]
+    assert any("status='queued'" in c.args[0] for c in pool.execute.await_args_list)
+
+
+def test_semantic_claim_failure_never_calls_provider(monkeypatch):
+    import asyncio
+    from unittest.mock import AsyncMock
+    from crm import call_analysis as ca, callcenter_verdict
+    class Pool:
+        execute = AsyncMock(return_value='UPDATE 0')
+    pool = Pool()
+    assess = AsyncMock()
+    monkeypatch.setattr(callcenter_verdict, 'assess_semantic', assess)
+    asyncio.run(ca._semantic_item(pool, {'id':1, 'stages': {'script_check': {'live':True}}, 'transcript':'x'}))
+    assess.assert_not_awaited()
+
+
+def test_sheet_competitor_provenance_conflict_and_revocation():
+    marker = {'project':'accounting','marker':'конкурент','provenance':'sheet_operator','sheet_id':'x'}
+    row = attempt('9000000001','2026-11-17',decisions=[decision('pending')])
+    row['sheet_competitor'] = marker
+    card = ci.build_cards([row])[0]
+    assert card['category'] == 'competitor' and card['provenance'] == 'sheet_operator'
+    row['check']['decisions'] = [decision('reusable')]
+    assert ci.build_cards([row])[0]['category'] == 'reusable'
+    row['check']['decisions'] = [decision('pending')]
+    row['sheet_competitor'] = None
+    assert ci.build_cards([row])[0]['category'] == 'pending'
+    row['sheet_competitor'] = marker
+    row['check']['stop_contact'] = True
+    assert ci.build_cards([row])[0]['stop_contact']
+
+
+def test_semantic_timeout_migration_retries_once_and_fences(monkeypatch):
+    import asyncio
+    import json
+    from unittest.mock import AsyncMock
+    from crm import call_analysis as ca, callcenter_verdict
+    class Pool:
+        execute = AsyncMock(return_value='UPDATE 1')
+    pool = Pool()
+    monkeypatch.setattr(callcenter_verdict, '_roles', lambda lines: ('operator', {'client'}))
+    monkeypatch.setattr(callcenter_verdict, 'assess_semantic', AsyncMock(side_effect=TimeoutError()))
+    stages = {'script_check': {'live': True, 'decisions': [decision('pending')]},
+              'semantic': {'status':'failed','attempts':3,'error':'TimeoutError'}}
+    asyncio.run(ca._semantic_item(pool, {'id':1,'stages':stages,'transcript':'x'}))
+    claim = json.loads(pool.execute.await_args_list[0].args[2])
+    result = json.loads(pool.execute.await_args_list[1].args[2])
+    assert claim['semantic']['status'] == 'processing' and claim['semantic']['timeout_migrated']
+    assert result['semantic']['status'] == 'retry' and result['semantic']['attempts'] == 1
+    assert pool.execute.await_args_list[1].args[3] == pool.execute.await_args_list[0].args[2]
+
+
+def test_wrong_number_blocks_sheet_marker_on_same_moscow_day():
+    marker = {'project':'accounting','marker':'конкурент','provenance':'sheet_operator','sheet_id':'x','tab':'Бухгалтерия'}
+    row = attempt('9000000001','2026-11-17',decisions=[decision('pending')])
+    row.update(sheet_competitor=marker, tab='Бухгалтерия', sheet_id='x', at='2026-11-16T22:30:00+00:00')
+    wrong = attempt('9000000001','2026-11-17',item=2)
+    wrong.update(tab='Бухгалтерия', sheet_id='x')
+    wrong['check']['signals'] = ['wrong_number']
+    assert ci.build_cards([row,wrong])[0]['category'] == 'pending'
+
+
+def test_cards_reuses_passed_snapshot_without_refresh(monkeypatch):
+    import asyncio
+    from unittest.mock import AsyncMock
+    class Pool:
+        fetchval = AsyncMock(return_value=False)
+        fetch = AsyncMock(return_value=[])
+    snapshot = AsyncMock(side_effect=AssertionError('must reuse snapshot'))
+    monkeypatch.setattr(ci.callcenter_base, 'snapshot', snapshot)
+    monkeypatch.setattr(ci.call_analysis_schema, 'ensure', AsyncMock())
+    assert asyncio.run(ci.cards(Pool(), 1, snapshot_data=('stamp', {'olga': {}, 'oksana': {}}))) == []
+    snapshot.assert_not_awaited()

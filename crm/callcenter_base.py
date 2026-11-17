@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
@@ -105,6 +106,46 @@ def _phone_key(value):
     if len(digits) == 10:
         return digits
     return digits[1:] if len(digits) == 11 and digits[0] in '78' else ''
+
+
+def sheet_competitor_index(books):
+    """Index all dated rows, including unmarked rows, to expose ambiguity."""
+    index = defaultdict(list)
+    for operator, book in (books or {}).items():
+        for tab, rows in (book or {}).items():
+            for row in rows:
+                phone = _phone_key(row.get('phone'))
+                if not phone:
+                    continue
+                dates = {str(a['date']) for a in row.get('attempts', []) if a.get('result') and a.get('date')}
+                for day in dates:
+                    index[(operator, phone, day)].append((tab, row))
+    return index
+
+
+def sheet_competitor(index, operator, phone, day):
+    """A single dated source row can attest to an operator's explicit marker."""
+    from . import callcenter_quality
+    phone = _phone_key(phone)
+    if not phone or not day:
+        return None
+    candidates = index.get((operator, phone, str(day)), [])
+    if len(candidates) != 1:
+        return None
+    tab, row = candidates[0]
+    project_keys = [key for key, spec in callcenter_quality.SCRIPTS.items()
+                    if str(spec[0]).strip().casefold() == tab.strip().casefold()]
+    if len(project_keys) != 1 or not row.get('source_sheet_id'):
+        return None
+    fields = [str(row.get(key) or '').strip().casefold() for key in ('note', 'comment')]
+    if any(re.search(r'\bне\s+конкурент', field) for field in fields):
+        return None
+    marker = next((field for field in fields if field in ('конкурент', 'конкуренты')), None)
+    if marker is None:
+        return None
+    return {'project': project_keys[0], 'provenance': 'sheet_operator', 'marker': marker,
+            'sheet_id': row['source_sheet_id'], 'tab': tab, 'base': row.get('base') or '',
+            'source_project': row.get('project') or '', 'tag': row.get('tag') or ''}
 
 
 def report(book, rows, day, checked_at):

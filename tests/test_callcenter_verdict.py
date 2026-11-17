@@ -120,3 +120,44 @@ def test_packaging_requires_evidence_for_every_fact_and_separate_consent():
     lines[1]['text'] = 'Нам не нужны коробки'
     data['decisions'][0]['evidence'][0]['quote'] = lines[1]['text']
     assert not v.validate(data, lines, check)['decisions'][0]['product_qualified']
+
+
+def test_reasoning_override_preserves_general_calls(monkeypatch):
+    import asyncio
+    import importlib
+    monkeypatch.setenv('CVC_API_KEY', 'synthetic-test-key')
+    analysis = importlib.import_module('analysis')
+    sent = []
+    class Response:
+        status_code = 200
+        def json(self): return {'output_text':'{}', 'usage':{}}
+    class Client:
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def post(self, url, **kwargs):
+            sent.append(kwargs['json']); return Response()
+    monkeypatch.setattr(analysis, 'REASONING_EFFORT', 'high')
+    monkeypatch.setattr(analysis.httpx, 'AsyncClient', Client)
+    async def run():
+        await analysis._call('system', 'user', 100)
+        await analysis._call('system', 'user', 100, reasoning_effort='low')
+    asyncio.run(run())
+    assert [x['reasoning']['effort'] for x in sent] == ['high', 'low']
+
+
+def test_semantic_reasoning_is_configurable(monkeypatch):
+    import asyncio
+    import importlib
+    monkeypatch.setenv('CVC_API_KEY', 'synthetic-test-key')
+    analysis = importlib.import_module('analysis')
+    captured = []
+    async def fake_call(*args, **kwargs):
+        captured.append(kwargs); return {}, 0
+    monkeypatch.setattr(analysis, '_call', fake_call)
+    lines = sample(); check = q.assess(lines, 'packaging', 30, False)
+    monkeypatch.delenv('CALLCENTER_SEMANTIC_REASONING_EFFORT', raising=False)
+    asyncio.run(v.assess_semantic(lines, check))
+    monkeypatch.setenv('CALLCENTER_SEMANTIC_REASONING_EFFORT', 'medium')
+    asyncio.run(v.assess_semantic(lines, check))
+    assert [x['reasoning_effort'] for x in captured] == ['low', 'medium']

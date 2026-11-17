@@ -28,6 +28,7 @@ import json
 import logging
 import os
 import re
+import uuid
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -1078,10 +1079,12 @@ async def process(pool, run) -> None:
     monitored_script = callcenter_monitor.script_for(run['dedup_key'])
     await pool.execute("UPDATE call_analysis_runs SET status='running', started_at=coalesce(started_at,now()), stage='Читаю звонки' WHERE id=$1", run_id)
     lead_index, has_reference = ({}, False) if monitored_script else await _lead_index(pool, run['client_id'])
-    items = await pool.fetch('SELECT * FROM call_analysis_items WHERE run_id=$1 AND status=$2 ORDER BY id', run_id, 'pending')
+    item_sql = 'SELECT * FROM call_analysis_items WHERE run_id=$1 AND status=$2'
+    item_sql += ' ORDER BY at DESC NULLS LAST,id DESC LIMIT 4' if monitored_script else ' ORDER BY id'
+    items = await pool.fetch(item_sql, run_id, 'pending')
     processed = int(run['processed'] or 0)
     total = int(run['total_calls'] or 0)
-    for item in items:
+    async def process_item(item):
         try:
             result = await _process_item(pool, run, item, lead_index, has_reference)
         except Exception as exc:  # noqa: BLE001 — один звонок не должен ронять весь разбор
@@ -1103,9 +1106,20 @@ async def process(pool, run) -> None:
             None, result.get('unknown_attribution', True),
             (result.get('break') or {}).get('group'), (result.get('break') or {}).get('code'),
             (result.get('break') or {}).get('label'), result.get('model_lead_hint', False), result.get('error'))
-        processed += 1
-        await pool.execute('UPDATE call_analysis_runs SET processed=$2, stage=$3 WHERE id=$1', run_id, processed,
-                           f'Обработано {processed} из {total}' if total else 'Готово')
+        await pool.execute("""UPDATE call_analysis_runs SET processed=(SELECT count(*) FROM call_analysis_items WHERE run_id=$1 AND status <> 'pending'),
+            stage='Обрабатываю звонки' WHERE id=$1 AND status='running'""", run_id)
+    if monitored_script:
+        batch_results = await asyncio.gather(*(process_item(item) for item in items), return_exceptions=True)
+        for outcome in batch_results:
+            if isinstance(outcome, BaseException):
+                raise outcome
+        pending = await pool.fetchval("SELECT EXISTS(SELECT 1 FROM call_analysis_items WHERE run_id=$1 AND status='pending')", run_id)
+        if pending:
+            await pool.execute("UPDATE call_analysis_runs SET status='queued', stage='Продолжаю обработку' WHERE id=$1 AND status='running'", run_id)
+            return
+    else:
+        for item in items:
+            await process_item(item)
     rows = await pool.fetch('SELECT stages, evidence, status, transcript_source, transcript_confidence, phone, duration_s, '
                             'unknown_attribution, break_code, model_lead_hint FROM call_analysis_items WHERE run_id=$1', run_id)
     items_summary = []
@@ -1143,11 +1157,13 @@ async def process(pool, run) -> None:
 async def take(pool):
     return await pool.fetchrow(
         """UPDATE call_analysis_runs SET status='running', stage='Запуск', started_at=coalesce(started_at,now())
-           WHERE id=(SELECT id FROM call_analysis_runs WHERE status='queued' ORDER BY created_at LIMIT 1
-                     FOR UPDATE SKIP LOCKED) RETURNING *""")
+           WHERE id=(SELECT r.id FROM call_analysis_runs r WHERE r.status='queued'
+                     ORDER BY r.period_start DESC,
+                       (SELECT max(i.at) FROM call_analysis_items i WHERE i.run_id=r.id AND i.status='pending') DESC NULLS LAST,
+                       r.created_at LIMIT 1 FOR UPDATE OF r SKIP LOCKED) RETURNING *""")
 
 
-async def loop(pool) -> None:
+async def _loop_owned(pool) -> None:
     """Фоновый разбор. После перезапуска продолжает незавершённые прогоны."""
     recovered, warned = False, False
     next_scan = 0.0
@@ -1190,10 +1206,67 @@ async def loop(pool) -> None:
         await asyncio.sleep(POLL_SECONDS)
 
 
-async def semantic_loop(pool) -> None:
-    """Independent, bounded semantic retries; never hold up the base analysis."""
-    from . import callcenter_verdict
+async def loop(pool) -> None:
+    """One active base worker across CRM processes; session lock survives each batch."""
+    import asyncpg
     while True:
+        try:
+            conn = await asyncpg.connect(os.environ['DATABASE_URL'])
+            try:
+                if await conn.fetchval('SELECT pg_try_advisory_lock($1,$2)', 1128481875, 1):
+                    await _loop_owned(pool)
+            finally:
+                await conn.close()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception('авторазбор: блокировка фонового обработчика')
+        await asyncio.sleep(10)
+
+
+async def _semantic_item(pool, row):
+    """Claim with a lease before provider work; the token fences late writes."""
+    from . import callcenter_verdict
+    stages = _json(row['stages'], {})
+    old = json.dumps(stages, ensure_ascii=False)
+    meta = stages.get('semantic') or {}
+    token = uuid.uuid4().hex
+    migrate_timeout = meta.get('status') == 'failed' and meta.get('error') == 'TimeoutError' and not meta.get('timeout_migrated')
+    attempts_before = 0 if migrate_timeout else int(meta.get('attempts') or 0)
+    timeout_migrated = bool(migrate_timeout or meta.get('timeout_migrated'))
+    stages['semantic'] = {'status': 'processing', 'token': token,
+                          'attempts': attempts_before, 'timeout_migrated': timeout_migrated,
+                          'retry_at': (datetime.now(timezone.utc) + timedelta(minutes=6)).isoformat()}
+    claimed = json.dumps(stages, ensure_ascii=False)
+    changed = await pool.execute("""UPDATE call_analysis_items SET stages=$2::jsonb
+        WHERE id=$1 AND status <> 'pending' AND stages=$3::jsonb""", row['id'], claimed, old)
+    if changed != 'UPDATE 1':
+        return
+    try:
+        lines = split_lines(row['transcript'])
+        check = stages.get('script_check') or {}
+        operator, clients = callcenter_verdict._roles(lines)
+        if not operator or not clients or not check.get('live') or not check.get('decisions'):
+            stages['semantic'] = {'status': 'ineligible'}
+        else:
+            stages['script_check'] = await asyncio.wait_for(callcenter_verdict.assess_semantic(lines, check), timeout=300)
+            stages['semantic'] = {'status': 'done'}
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        attempts = attempts_before + 1
+        stages['semantic'] = {'status': 'failed' if attempts >= 3 else 'retry',
+                              'attempts': attempts, 'timeout_migrated': timeout_migrated, 'error': type(exc).__name__,
+                              'retry_at': (datetime.now(timezone.utc) + timedelta(minutes=5 * attempts)).isoformat()}
+    await pool.execute("""UPDATE call_analysis_items SET stages=$2::jsonb
+        WHERE id=$1 AND status <> 'pending' AND stages=$3::jsonb""",
+        row['id'], json.dumps(stages, ensure_ascii=False), claimed)
+
+
+async def _semantic_loop_owned(pool) -> None:
+    """Process at most three independently claimed conversations concurrently."""
+    while True:
+        rows = []
         try:
             client = os.getenv('CALLCENTER_MONITOR_CLIENT_ID', '').strip()
             if client.isdigit():
@@ -1203,38 +1276,41 @@ async def semantic_loop(pool) -> None:
                     JOIN calls c ON c.id=i.call_id AND c.client_id=i.client_id
                     WHERE i.client_id=$1 AND r.dedup_key LIKE $2 AND i.status <> 'pending'
                       AND i.stages #>> '{script_check,live}' = 'true'
-                      AND coalesce(i.stages #>> '{semantic,status}','') NOT IN ('done','failed')
-                      AND (i.stages #>> '{semantic,retry_at}' IS NULL OR
+                      AND jsonb_typeof(i.stages #> '{script_check,decisions}')='array'
+                      AND jsonb_array_length(i.stages #> '{script_check,decisions}') > 0
+                      AND (coalesce(i.stages #>> '{semantic,status}','') NOT IN ('done','failed','ineligible')
+                           OR (i.stages #>> '{semantic,status}' = 'failed'
+                               AND i.stages #>> '{semantic,error}' = 'TimeoutError'
+                               AND coalesce(i.stages #>> '{semantic,timeout_migrated}','false') <> 'true'))
+                      AND ((i.stages #>> '{semantic,status}' = 'failed' AND i.stages #>> '{semantic,error}' = 'TimeoutError')
+                           OR i.stages #>> '{semantic,retry_at}' IS NULL OR
                            (i.stages #>> '{semantic,retry_at}')::timestamptz <= now())
-                      AND nullif(c.transcript,'') IS NOT NULL ORDER BY i.id LIMIT 20""",
+                      AND nullif(c.transcript,'') IS NOT NULL ORDER BY i.at DESC NULLS LAST,i.id DESC LIMIT 3""",
                     int(client), callcenter_monitor.PREFIX + '%')
-                for row in rows:
-                    stages = _json(row['stages'], {})
-                    meta = stages.get('semantic') or {}
-                    retry_at = meta.get('retry_at')
-                    if retry_at and datetime.fromisoformat(retry_at) > datetime.now(timezone.utc):
-                        continue
-                    old = json.dumps(stages, ensure_ascii=False)
-                    try:
-                        check = await asyncio.wait_for(callcenter_verdict.assess_semantic(
-                            split_lines(row['transcript']), stages['script_check']), timeout=90)
-                        stages['script_check'] = check
-                        stages['semantic'] = {'status': 'done'}
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as exc:
-                        attempts = int(meta.get('attempts') or 0) + 1
-                        stages['semantic'] = {'status': 'failed' if attempts >= 3 else 'retry',
-                            'attempts': attempts, 'error': type(exc).__name__,
-                            'retry_at': (datetime.now(timezone.utc) + timedelta(minutes=5 * attempts)).isoformat()}
-                    await pool.execute("""UPDATE call_analysis_items SET stages=$2::jsonb
-                        WHERE id=$1 AND status <> 'pending' AND stages=$3::jsonb""",
-                        row['id'], json.dumps(stages, ensure_ascii=False), old)
+                await asyncio.gather(*(_semantic_item(pool, row) for row in rows))
         except asyncio.CancelledError:
             raise
         except Exception:
             log.exception('фоновая смысловая проверка звонков')
-        await asyncio.sleep(60)
+        await asyncio.sleep(1 if rows else 15)
+
+
+async def semantic_loop(pool) -> None:
+    """Limit aggregate semantic concurrency across CRM processes."""
+    import asyncpg
+    while True:
+        try:
+            conn = await asyncpg.connect(os.environ['DATABASE_URL'])
+            try:
+                if await conn.fetchval('SELECT pg_try_advisory_lock($1,$2)', 1128481875, 2):
+                    await _semantic_loop_owned(pool)
+            finally:
+                await conn.close()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception('смысловая проверка: блокировка обработчика')
+        await asyncio.sleep(10)
 
 
 async def one(pool, who, run_id: int) -> dict:
