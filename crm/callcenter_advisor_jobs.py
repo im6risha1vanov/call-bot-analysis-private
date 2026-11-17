@@ -22,6 +22,11 @@ def _dump(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'), default=str)
 
 
+def scope_id(client_id, start, end, filters):
+    scope = {'client_id': int(client_id), 'start': str(start), 'end': str(end), 'filters': filters}
+    return hashlib.sha256(_dump(scope).encode()).hexdigest()
+
+
 def request_data(client_id, report):
     """Use exactly the validated evidence packet as the change detector."""
     scope = {'client_id': int(client_id), 'start': report['start'], 'end': report['end'],
@@ -36,8 +41,56 @@ def request_data(client_id, report):
             packet.pop(field, None)
     version = OPERATOR_VERSION if scope['filters'].get('operator') in ('olga', 'oksana') else VERSION
     fingerprint = hashlib.sha256(_dump([version, packet, refs]).encode()).hexdigest()
-    scope_id = hashlib.sha256(_dump(scope).encode()).hexdigest()
-    return scope_id, fingerprint, {'packet': packet, 'sources': refs}
+    key = scope_id(client_id, scope['start'], scope['end'], scope['filters'])
+    return key, fingerprint, {'packet': packet, 'sources': refs}
+
+
+async def operator_highlights(pool, client_id):
+    """Read only the current week's cached operator conclusions; never enqueue work."""
+    from . import callcenter_insights
+    start, end = callcenter_insights.report_dates()
+    ids = {op: scope_id(client_id, start.isoformat(), end.isoformat(),
+                        {'project': '', 'base': '', 'operator': op}) for op in ('olga', 'oksana')}
+    if not await pool.fetchval("SELECT to_regclass('callcenter_advisor_jobs') IS NOT NULL"):
+        return {'start': start.isoformat(), 'end': end.isoformat(),
+                'operators': {op: _result(None) for op in ids}}
+    rows = await pool.fetch('''SELECT scope_id,fingerprint,result_fingerprint,result_at,status,
+        CASE WHEN jsonb_typeof(result->'operator_review')='object' THEN
+          jsonb_build_object('operator_review',jsonb_build_object(
+            'script',jsonb_build_object('status',result#>>'{operator_review,script,status}',
+                'observation',result#>>'{operator_review,script,observation}',
+                'action',result#>>'{operator_review,script,action}'),
+            'base',jsonb_build_object('status',result#>>'{operator_review,base,status}',
+                'observation',result#>>'{operator_review,base,observation}',
+                'action',result#>>'{operator_review,base,action}'))) ELSE NULL END AS result
+        FROM callcenter_advisor_jobs WHERE client_id=$1 AND scope_id=ANY($2::text[])''',
+        int(client_id), list(ids.values()))
+    by_id = {row['scope_id']: row for row in rows}
+    def item(key):
+        value = _result(by_id.get(key))
+        if isinstance(value['brief'], dict):
+            review = value['brief'].get('operator_review')
+            if isinstance(review, dict) and any(isinstance(review.get(name), dict) for name in ('script', 'base')):
+                value['brief'] = {'operator_review': {
+                    name: {field: (review.get(name) or {}).get(field) for field in ('status', 'observation', 'action')}
+                    for name in ('script', 'base') if isinstance(review.get(name), dict)}}
+            else:
+                value['brief'] = None
+        if value['brief'] is None and value['status'] == 'ready':
+            value['status'] = 'waiting'
+        return value
+    return {'start': start.isoformat(), 'end': end.isoformat(),
+            'operators': {op: item(key) for op, key in ids.items()}}
+
+
+async def highlights_for_viewer(pool, who):
+    from . import call_analysis
+    if not call_analysis.can_manage(who):
+        raise PermissionError('Раздел директора.')
+    client_id = call_analysis.company_of(who)
+    if client_id is None:
+        raise PermissionError('Компания не определена.')
+    return await operator_highlights(pool, client_id)
 
 
 async def ensure(pool):

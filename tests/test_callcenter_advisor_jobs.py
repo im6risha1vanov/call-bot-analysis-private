@@ -171,3 +171,61 @@ def test_personal_cache_version_keeps_overall_version():
         assert jobs.request_data(1, operator)[1] != second
     assert 'operator_script_candidates' not in jobs.request_data(1, overall)[2]['packet']
     assert 'operator_script_candidates' in jobs.request_data(1, operator)[2]['packet']
+
+@pytest.mark.asyncio
+async def test_highlights_are_read_only_scoped_and_redacted():
+    from datetime import date
+    from types import SimpleNamespace
+    from crm import callcenter_insights as insights
+    start, end = date(2026,11,12), date(2026,11,18)
+    filters = {'project':'', 'base':'', 'operator':'olga'}
+    key = jobs.scope_id(7, start.isoformat(), end.isoformat(), filters)
+    rows = [{'scope_id':key, 'fingerprint':'new', 'result_fingerprint':'old', 'status':'queued',
+             'result_at':datetime(2026,11,18,tzinfo=timezone.utc),
+             'result': {'operator_review':{'script':{'status':'supported','observation':'Пример',
+                           'action':'Уточнить','evidence':[{'phone':'79990000000'}], 'test':'лишнее'},
+                           'base':{'status':'insufficient','observation':'','action':''}}, 'history':['секрет']}}]
+    class Pool:
+        async def fetchval(self, sql): return True
+        async def fetch(self, sql, tenant, ids):
+            assert tenant == 7 and key in ids and len(ids) == 2
+            assert 'client_id=$1' in sql and 'scope_id=ANY' in sql
+            assert 'evidence' not in sql and 'report,' not in sql
+            return rows
+    actor = SimpleNamespace(role='owner', client_id=7)
+    who = SimpleNamespace(role='director', actor=actor, company=7, test=False, support=False)
+    with patch.object(insights, 'report_dates', return_value=(start,end)):
+        out = await jobs.highlights_for_viewer(Pool(), who)
+    assert (out['start'],out['end']) == ('2026-11-12','2026-11-18')
+    assert out['operators']['olga']['status'] == 'stale'
+    assert out['operators']['oksana']['status'] == 'waiting'
+    assert out['operators']['olga']['brief']['operator_review']['script'] == {
+        'status':'supported','observation':'Пример','action':'Уточнить'}
+    assert '79990000000' not in json.dumps(out)
+    assert jobs.scope_id(8, start.isoformat(), end.isoformat(), filters) != key
+    assert jobs.scope_id(7, '2026-11-11', end.isoformat(), filters) != key
+    assert jobs.scope_id(7, start.isoformat(), end.isoformat(), {**filters,'base':'B1'}) != key
+
+
+@pytest.mark.asyncio
+async def test_highlights_forbidden_without_director_role_and_real_session():
+    from types import SimpleNamespace
+    class Pool:
+        async def fetchval(self, *args): raise AssertionError('Forbidden request read the database')
+    for who in (SimpleNamespace(role='manager',actor=SimpleNamespace(role='manager'),company=1,test=False,support=False),
+                SimpleNamespace(role='director',actor=SimpleNamespace(role='owner'),company=1,test=True,support=False),
+                SimpleNamespace(role='director',actor=SimpleNamespace(role='owner'),company=1,test=False,support=True),
+                SimpleNamespace(role='director',actor=None,company=1,test=False,support=False)):
+        with pytest.raises(PermissionError): await jobs.highlights_for_viewer(Pool(), who)
+
+
+@pytest.mark.asyncio
+async def test_highlights_waiting_if_cache_table_not_ready():
+    from datetime import date
+    from crm import callcenter_insights as insights
+    class Pool:
+        async def fetchval(self, sql): return False
+        async def fetch(self, *args): raise AssertionError('Unexpected cache read')
+    with patch.object(insights, 'report_dates', return_value=(date(2026,11,17),date(2026,11,18))):
+        out = await jobs.operator_highlights(Pool(), 1)
+    assert all(x['status'] == 'waiting' and x['brief'] is None for x in out['operators'].values())

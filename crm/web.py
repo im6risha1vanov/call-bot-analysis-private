@@ -536,6 +536,15 @@ async def api_callcenter_insights(request):
         raise web.HTTPBadRequest(text=str(exc))
 
 
+async def api_callcenter_operator_highlights(request):
+    from . import callcenter_advisor_jobs
+    who = await viewer(request)
+    try:
+        return web.json_response(await callcenter_advisor_jobs.highlights_for_viewer(request.app[POOL], who))
+    except PermissionError as exc:
+        raise analysis_forbidden(exc)
+
+
 async def api_callcenter_insights_lead(request):
     from . import callcenter_insights
     who = await viewer(request)
@@ -1612,6 +1621,7 @@ def build(pool) -> web.Application:
     app.router.add_post('/api/callcenter/prices', api_cc_prices)
     app.router.add_get('/api/callcenter/analysis', api_call_analysis)
     app.router.add_get('/api/callcenter/analysis/insights', api_callcenter_insights)
+    app.router.add_get('/api/callcenter/analysis/operator-highlights', api_callcenter_operator_highlights)
     app.router.add_get(r'/api/callcenter/analysis/insights/lead/{phone:\d+}', api_callcenter_insights_lead)
     app.router.add_get('/api/callcenter/analysis/counts', api_call_analysis_counts)
     app.router.add_post('/api/callcenter/analysis', api_call_analysis_start)

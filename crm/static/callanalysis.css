@@ -44,3 +44,23 @@
 .ca-personal-panel p { line-height: 1.55; overflow-wrap: anywhere; }
 .ca-personal-panel p b { font-size: 12px; }
 @media (max-width: 560px) { .ca-advice-people a { padding: 8px 12px; } }
+
+/* Краткие выводы перед общей статистикой колл-центра. */
+.cc-highlights { margin: 0 0 24px; }
+.cc-highlights-head { display: flex; justify-content: space-between; align-items: end; gap: 14px; margin-bottom: 14px; }
+.cc-highlights-head h2 { font-size: 20px; margin: 0; }
+.cc-highlights-head p { color: var(--muted); margin: 5px 0 0; font-size: 13px; }
+.cc-highlights-head > span { color: var(--muted); font-size: 12px; }
+.cc-highlights-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 14px; }
+.cc-highlight-card { display: flex; flex-direction: column; min-width: 0; background: var(--surface); border: 1px solid var(--line); border-top: 3px solid var(--accent); border-radius: var(--r); box-shadow: var(--shadow); padding: 20px; overflow-wrap: anywhere; }
+.cc-highlight-name { font-size: 19px; font-weight: 700; margin-bottom: 13px; }
+.cc-highlight-row + .cc-highlight-row { border-top: 1px solid var(--line); margin-top: 14px; padding-top: 14px; }
+.cc-highlight-row h3 { font-size: 12px; color: var(--muted); margin: 0 0 6px; }
+.cc-highlight-row p { line-height: 1.5; margin: 0; }
+.cc-highlight-row .cc-highlight-action { margin-top: 8px; }
+.cc-highlight-wait { color: var(--muted); margin: 0 0 14px; }
+.cc-highlight-link { display: inline-block; margin-top: auto; padding-top: 16px; font-weight: 600; }
+.cc-client-chooser { margin: 20px 0; padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
+.cc-client-chooser summary { cursor: pointer; color: var(--accent-text); font-weight: 600; }
+.cc-client-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+@media (max-width: 680px) { .cc-highlights-grid { grid-template-columns: minmax(0,1fr); } .cc-highlights-head { align-items: start; flex-direction: column; gap: 4px; } }

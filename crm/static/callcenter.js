@@ -58,6 +58,32 @@ function longList(list, render, first = 10) {
   return render(list.slice(0, first)) + `<details class="inline" data-css="margin-top:10px"><summary>Показать ещё ${list.length - first}</summary>${render(list.slice(first))}</details>`;
 }
 
+function ccHighlightCard(id, item, start, end) {
+  const name = {olga: 'Ольга', oksana: 'Оксана'}[id] || id;
+  const dates = /^\d{4}-\d{2}-\d{2}$/.test(start || '') && /^\d{4}-\d{2}-\d{2}$/.test(end || '');
+  const route = `:analysis:operator:${id}${dates ? ':' + start + ':' + end : ''}`;
+  const review = item?.status === 'ready' ? item.brief?.operator_review : null;
+  const script = review?.script, base = review?.base;
+  const show = part => part?.status === 'supported' && part.observation;
+  const status = item?.status === 'error' ? 'Не удалось подготовить вывод. Откройте полный разбор, чтобы проверить состояние.'
+    : item?.status === 'stale' ? 'Обновляем выводы по новым разговорам.'
+    : item?.status === 'running' ? 'Анализируем разговоры.' : 'Готовим выводы.';
+  return `<article class="cc-highlight-card"><div class="cc-highlight-name">${esc(name)}</div>
+    ${review ? `<div class="cc-highlight-row"><h3>Работа по скрипту</h3><p>${esc(show(script) ? script.observation : script?.observation || 'Недостаточно подтверждённых данных.')}</p>
+      ${show(script) && script.action ? `<p class="cc-highlight-action"><b>Что исправить:</b> ${esc(script.action)}</p>` : ''}</div>
+      <div class="cc-highlight-row"><h3>Качество базы</h3><p>${esc(show(base) ? base.observation : base?.observation || 'Недостаточно подтверждённых данных.')}</p></div>`
+      : `<p class="cc-highlight-wait">${esc(item?.status === 'ready' ? 'Недостаточно подтверждённых данных для персонального вывода.' : status)}</p>`}
+    <a class="cc-highlight-link" href="#callcenter/${esc(route)}" data-go="callcenter" data-arg="${esc(route)}">Полный разбор →</a></article>`;
+}
+function ccHighlights(data, selected) {
+  const people = selected === 'olga' || selected === 'oksana' ? [selected] : selected ? [] : ['olga', 'oksana'];
+  if (!people.length) return '';
+  const dates = data?.start && data?.end ? `${esc(data.start)} — ${esc(data.end)}` : '';
+  return `<section class="cc-highlights" aria-label="Выводы по операторам"><div class="cc-highlights-head"><div><h2>Выводы по операторам</h2>
+    <p>Автоматический разбор · последняя неделя${dates ? ' · ' + dates : ''}</p></div><span>Период выводов не зависит от фильтра статистики</span></div>
+    <div class="cc-highlights-grid">${people.map(id => ccHighlightCard(id, data?.operators?.[id], data?.start, data?.end)).join('')}</div></section>`;
+}
+
 VIEWS.callcenter = async (view, arg) => {
   if (S.me.role === 'manager' || arg === ':work') return ccWork(view);
   if (arg === ':setup') return ccSetup(view);
@@ -74,12 +100,16 @@ VIEWS.callcenter = async (view, arg) => {
   // Период и сотрудник — как в «Сводке». Фильтры показываем только тем, кому разрешил сервер.
   const canFilter = !!S.me.callcenter_filters;
   S.cc = S.cc || {period: '', operator: ''};
-  let seq = 0, data = null;
+  const canHighlights = S.me.role === 'director' && S.me.privileged && !S.me.test && !S.me.support;
+  let seq = 0, highlightSeq = 0, data = null;
+  view.innerHTML = '<div class="page"><div data-cc-highlights></div><div data-cc-stats></div></div>';
+  const highlightsBox = $('[data-cc-highlights]', view), statsBox = $('[data-cc-stats]', view);
   const head = () => {
     const f = data?.filters || {};
     const ops = (f.operators || []).filter(o => o.available);
-    const who = f.operator_available && ops.length
-      ? seg('ccop', [['', 'Весь отдел'], ...ops.map(o => [o.id, shortName(o.name)])], S.cc.operator, 'Сотрудник') : '';
+    const others = ops.filter(o => !['olga', 'oksana'].includes(o.id));
+    const who = canHighlights ? seg('ccop', [['', 'Весь отдел'], ['olga', 'Ольга'], ['oksana', 'Оксана'], ...others.map(o => [o.id, shortName(o.name)])], S.cc.operator, 'Сотрудник')
+      : f.operator_available && ops.length ? seg('ccop', [['', 'Весь отдел'], ...ops.map(o => [o.id, shortName(o.name)])], S.cc.operator, 'Сотрудник') : '';
     setHead({actions: actions.join(''), filters: canFilter
       ? seg('period', [['', 'Всё время'], ...PERIOD_OPTS], S.cc.period, 'Период') + who : ''});
   };
@@ -88,20 +118,49 @@ VIEWS.callcenter = async (view, arg) => {
     ccop: v => { S.cc.operator = v; draw(); },
   });
 
+  async function loadHighlights(selected) {
+    const current = ++highlightSeq;
+    clearTimeout(S.ccHighlightTimer);
+    if (!canHighlights) { highlightsBox.innerHTML = ''; return; }
+    highlightsBox.innerHTML = ccHighlights(null, selected);
+    try {
+      const result = await api('/api/callcenter/analysis/operator-highlights');
+      if (!view.isConnected || current !== highlightSeq) return;
+      highlightsBox.innerHTML = ccHighlights(result, selected);
+      if (Object.values(result.operators || {}).some(x => ['queued', 'running', 'stale', 'waiting'].includes(x.status)))
+        S.ccHighlightTimer = setTimeout(() => { if (view.isConnected && current === highlightSeq) loadHighlights(selected); }, 30000);
+    } catch (e) {
+      if (!view.isConnected || current !== highlightSeq) return;
+      highlightsBox.innerHTML = '<section class="cc-highlights"><h2>Выводы по операторам</h2><p class="hint">Выводы сейчас недоступны. Попробуйте обновить страницу позже.</p></section>';
+    }
+  }
   async function draw() {
     const my = ++seq;
+    head(); bind();
+    loadHighlights(canFilter ? S.cc.operator : '');
+    statsBox.innerHTML = '<div class="empty">Загружаем статистику…</div>';
+    const selectedState = (data?.filters?.operators || []).find(o => o.id === S.cc.operator);
+    if (canFilter && S.cc.operator && selectedState && !selectedState.available) {
+      const who = {olga: 'Ольге', oksana: 'Оксане'}[S.cc.operator] || 'выбранному сотруднику';
+      statsBox.innerHTML = `<div class="empty">В таблице нет подтверждённых данных по ${esc(who)}.</div>`;
+      return;
+    }
     let d;
     try {
-      d = await loading(view, api('/api/callcenter' + qs(canFilter ? {period: S.cc.period, operator: S.cc.operator} : {})), 'page');
+      d = await api('/api/callcenter' + qs(canFilter ? {period: S.cc.period, operator: S.cc.operator} : {}));
     } catch (e) {
-      if (S.cc.operator && S.cc.operator !== 'oksana') { S.cc.operator = ''; return draw(); }
-      throw e;
+      if (my === seq && view.isConnected) statsBox.innerHTML = `<div class="empty">Не удалось загрузить статистику: ${esc(e.message)}</div>`;
+      return;
     }
     if (my !== seq || !view.isConnected) return;
     data = d;
     const f = d.filters || {};
-    if (canFilter && f.operator_available === false && S.cc.operator) { S.cc.operator = ''; return draw(); }
     head(); bind();
+    if (canFilter && S.cc.operator && f.operator_available === false) {
+      const who = {olga: 'Ольге', oksana: 'Оксане'}[S.cc.operator] || 'выбранному сотруднику';
+      statsBox.innerHTML = `<div class="empty">В таблице нет подтверждённых данных по ${esc(who)}.</div>`;
+      return;
+    }
     const t = d.total;
     let i = 0;
     const filtering = !!(S.cc.period || S.cc.operator);
@@ -110,7 +169,6 @@ VIEWS.callcenter = async (view, arg) => {
     const notes = [];
     if (f.operator_sheet) notes.push(`Источник статистики — таблица «${esc(f.operator_sheet)}».`);
     if (canFilter && f.operator_available === false) notes.push(esc(f.operator_reason || 'Разрез по сотрудникам недоступен.'));
-    if (canFilter && f.sum_available === false) notes.push(esc(f.sum_reason || 'Сумма за период недоступна.'));
     const off = (f.operators || []).filter(o => !o.available && (o.kind !== 'robot' || filtering));
     if (canFilter && f.operator_available && off.length) notes.push('Разрез недоступен: ' + off.map(o => `<b>${esc(o.name)}</b> — ${esc(o.reason)}`).join('; '));
     if (canFilter && f.operator_available && f.unattributed) notes.push(`Без подтверждённого оператора: ${plainItems(f.unattributed, 'попытка', 'попытки', 'попыток')} — они входят только в «Весь отдел».`);
@@ -118,9 +176,6 @@ VIEWS.callcenter = async (view, arg) => {
     if (canFilter && filtering && f.matching) notes.push(matchNote(f.matching));
     if (canFilter && filtering && f.matching?.truncated) notes.push('Сверка ограничена последними звонками журнала Mango: выберите период, чтобы «без звонка» считалось по всему срезу.');
     if (canFilter && S.cc.operator === 'robot' && rob.available) notes.push('Звонки робота не входят в попытки листа: они показаны отдельно из вкладки «Робот» и не засчитываются лидами листа.');
-    const sumHelp = f.sum_available
-      ? (db ? 'Первичные и повторные звонки и заинтересованные по ценам из «Клиенты и номера».' : 'Первичные и повторные звонки и заинтересованные по ценам из листа «Сводка».')
-      : (f.sum_reason || '');
     const ms = f.mango_stats;
     const mangoKpis = ms ? [
       {key: 'cc-mango', label: 'Звонков Mango', value: ms.calls, sub: 'Исходящие, включая повторные'},
@@ -135,8 +190,6 @@ VIEWS.callcenter = async (view, arg) => {
       {key: 'cc-called', label: ms ? 'Лидов обзвонено (таблица)' : 'Лидов обзвонено', value: t.called || 0, sub: `из ${fmt(t.total)} переданных`},
       {key: 'cc-rate', label: ms ? 'Дозвон (таблица)' : 'Дозвон', value: t.called ? t.reached / t.called * 100 : 0, kind: 'pct', sub: `${fmt(t.reached)} взяли трубку`},
       {key: 'cc-int', label: ms ? 'Заинтересованных (таблица)' : 'Заинтересованных', value: t.interested || 0}];
-    const sumKpi = t.sum == null ? kpiDash({label: 'Сумма по тарифу', help: sumHelp}, i++)
-      : kpiHtml({key: 'cc-sum', label: 'Сумма по тарифу', value: t.sum || 0, kind: 'rub', help: sumHelp}, i++);
     // Робот — из своей вкладки: попытки и лиды считаются по разным определениям и не смешиваются с листом.
     const robotCard = (canFilter && filtering && rob.source) ? `<section class="card blk" data-css="--i:${i++}">
       <div class="card-h"><h2>Робот</h2><span class="hint">${esc(rob.source)}${rob.cabinet ? ' · ' + esc(rob.cabinet) : ''}</span></div>
@@ -150,18 +203,14 @@ VIEWS.callcenter = async (view, arg) => {
     const matchBlock = canFilter && filtering && f.matching?.available ? `<h3>Сверка звонков с листом</h3>
       <p class="hint">${esc(matchNote(f.matching))} Связь ставится только при совпадении телефона, дня звонка и кампании; телефоны в примерах замаскированы.</p>
       ${matchSamples(f.matching)}` : '';
-    view.innerHTML = `<div class="page">
+    statsBox.innerHTML = `<div>
       ${notes.filter(Boolean).map(n => `<p class="hint blk" data-css="--i:${i++}">${n}</p>`).join('')}
-      <div class="kpis">${kpis.map(k => kpiHtml(k, i++)).join('')}${sumKpi}</div>
+      <div class="kpis">${kpis.map(k => kpiHtml(k, i++)).join('')}</div>
       ${robotCard}
       ${repeatInsight(t.reached_first || 0, t.reached || 0, t.called || 0).replace('class="insight"', `class="insight blk" data-css="--i:${i++}"`)}
-      <section class="card blk" data-css="--i:${i++}"><div class="card-h"><h2>По клиентам</h2><span class="hint">${f.operator_sheet ? 'нажмите, чтобы открыть статистику клиента' : 'нажмите, чтобы открыть кабинет так, как его видит клиент'}</span></div>
-        ${d.clients.length ? `<div class="tbl-wrap"><table class="tbl anim"><thead><tr><th>Клиент</th><th class="n">Лидов</th><th class="n">Дозвон</th><th class="n">Заинтересованы</th>
-          <th class="n hide-m">Перезвон</th><th class="n hide-m">Ждут попытки ${help('Не взяли трубку, а третьей попытки ещё не было.')}</th><th class="n">Сумма</th><th></th></tr></thead><tbody>
-          ${d.clients.map((c, r) => `<tr class="click" tabindex="0" data-name="${esc(c.name)}" data-css="--r:${r}"><td><div class="t">${esc(c.name)}</div>${c.since ? `<div class="s">с ${esc(ddmm(c.since))}</div>` : ''}</td>
-            <td class="n">${fmt(c.leads)}</td><td class="n">${pctOf(c.reached, c.called)}</td><td class="n">${fmt(c.interested)}</td><td class="n hide-m">${fmt(c.callback)}</td>
-            <td class="n hide-m">${fmt(c.waiting)}</td><td class="n nw">${rubOrDash(c.sum)}</td><td>${svg('chev', 'go')}</td></tr>`).join('')}</tbody></table></div>`
-          : `<div class="empty">${db ? 'Клиентов пока нет: добавьте их в «Клиенты и номера».' : 'В таблице колл-центра пока нет клиентов.'}</div>`}</section>
+      <details class="cc-client-chooser"><summary>Кабинеты клиентов (${fmt(d.clients.length)})</summary>
+        ${d.clients.length ? `<div class="cc-client-list">${d.clients.map(c => `<button class="btn" type="button" data-go="callcenter" data-arg="${esc(c.name)}">${esc(c.name)}</button>`).join('')}</div>`
+          : `<p class="hint">${db ? 'Клиентов пока нет: добавьте их в «Клиенты и номера».' : 'В таблице колл-центра пока нет клиентов.'}</p>`}</details>
       ${d.days.length > 1 ? `<section class="card blk" data-css="--i:${i++}"><div class="card-h"><h2>Звонки по дням</h2><span class="hint">последние ${d.days.length} ${plural(d.days.length, 'день', 'дня', 'дней')} со звонками</span></div><div class="chart" data-chart></div></section>` : ''}
       <section class="card blk" data-css="--i:${i++}"><div class="card-h"><h2>${db ? 'Кому перезвонить' : 'Кому Ольге перезвонить'}</h2><span class="hint">${fmt(d.callbacks.length)}</span></div>
         ${d.callbacks.length ? longList(d.callbacks, l => leadRows(l, true, true)) : '<div class="empty">Перезвонов нет.</div>'}</section>
@@ -174,9 +223,6 @@ VIEWS.callcenter = async (view, arg) => {
     </div>`;
     if ($('[data-chart]', view)) daysChart($('[data-chart]', view), d.days);
     countUp(view);
-    const open = tr => go('callcenter', tr.dataset.name);
-    $('tbody', view)?.addEventListener('click', e => { const tr = e.target.closest('[data-name]'); if (tr) open(tr); });
-    $('tbody', view)?.addEventListener('keydown', e => { const tr = e.target.closest('[data-name]'); if (tr && e.key === 'Enter') open(tr); });
   }
   await draw();
 };
