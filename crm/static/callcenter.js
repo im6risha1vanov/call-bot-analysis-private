@@ -69,7 +69,7 @@ VIEWS.callcenter = async (view, arg) => {
   if (db && !S.me.readonly) actions.push('<button class="btn" type="button" data-go="callcenter" data-arg=":setup">Клиенты и номера</button>');
   if (S.me.role === 'director' && !S.me.readonly) {
     actions.push('<button class="btn" type="button" data-go="callcenter" data-arg=":analysis:findings">Выводы агента</button>');
-    actions.push('<button class="btn" type="button" data-go="callcenter" data-arg=":analysis">Разобрать звонки</button>');
+    actions.push('<button class="btn" type="button" data-go="callcenter" data-arg=":analysis:stats">Разобрать звонки</button>');
   }
   // Период и сотрудник — как в «Сводке». Фильтры показываем только тем, кому разрешил сервер.
   const canFilter = !!S.me.callcenter_filters;

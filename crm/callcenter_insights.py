@@ -339,11 +339,31 @@ async def historical_findings(pool, client_id, project='', base='', operator='')
     return output
 
 
-async def dashboard(pool, who, start=None, end=None, project="", base="", operator=""):
-    if not call_analysis.can_manage(who):
-        raise PermissionError('Раздел директора.')
+async def selected_pins(pool, client_id, report):
+    """Only pins still corroborated in the selected report, without rereading old periods."""
+    calls = list({item['call_id'] for finding in report['findings'] for item in finding['evidence']
+                  if item.get('call_id') is not None})
+    if not calls or pool is None or not await pool.fetchval("SELECT to_regclass('callcenter_insight_pins') IS NOT NULL"):
+        return []
+    pins = await pool.fetch('''SELECT call_id,period_start,period_end,script,stage_id,issue_code
+                               FROM callcenter_insight_pins WHERE client_id=$1 AND call_id=ANY($2::bigint[])
+                               ORDER BY period_end DESC,call_id''', client_id, calls)
+    output = []
+    for pin in pins:
+        for finding in report['findings']:
+            if (finding['project'], finding['stage_id'], finding['issue_code']) != (pin['script'], pin['stage_id'], pin['issue_code']):
+                continue
+            examples = [item for item in finding['evidence'] if item.get('call_id') == pin['call_id']]
+            if examples:
+                output.append({'start': pin['period_start'].isoformat(), 'end': pin['period_end'].isoformat(),
+                               'project_name': finding['project_name'], 'step': finding['step'],
+                               'issue': finding['issue'], 'leads': finding['leads'], 'evidence': examples})
+    return output
+
+
+async def report_for_company(pool, client_id, start=None, end=None, project="", base="", operator=""):
+    """Build a scoped report without scheduling background work or loading pinned history."""
     today = datetime.now(call_analysis.MOSCOW).date()
-    client_id = call_analysis.company_of(who)
     configured = os.getenv('CALLCENTER_MONITOR_FROM', '')
     try:
         inception = _day(datetime.fromisoformat(configured)) if configured else INCEPTION
@@ -352,9 +372,32 @@ async def dashboard(pool, who, start=None, end=None, project="", base="", operat
     first, last = _day(start or max(inception, today - timedelta(days=6))), _day(end or today)
     if last < first:
         raise ValueError('Конец периода раньше начала.')
+    if last > today or (last - first).days > 365:
+        raise ValueError('Выберите завершившийся период не более 366 дней.')
+    if any(len(value) > 200 for value in (project, base, operator)):
+        raise ValueError('Некорректный фильтр.')
     previous_start = first - timedelta(days=(last - first).days + 1)
     result = summarize(await fetch_records(pool, client_id, previous_start, last), first, last, project, base, operator)
+    if project and project not in result['options']['projects'] or base and base not in result['options']['bases'] or operator and operator not in {o['id'] for o in result['options']['operators']}:
+        raise ValueError('Выбранный фильтр отсутствует в данных за период.')
+    result['advisor_pins'] = await selected_pins(pool, client_id, result)
+    return result
+
+
+async def dashboard(pool, who, start=None, end=None, project="", base="", operator=""):
+    if not call_analysis.can_manage(who):
+        raise PermissionError('Раздел директора.')
+    client_id = call_analysis.company_of(who)
+    result = await report_for_company(pool, client_id, start, end, project, base, operator)
+    if pool is not None:
+        from . import callcenter_advisor_jobs
+        try:
+            result['advisor'] = await callcenter_advisor_jobs.request(pool, client_id, result)
+        except Exception:
+            result['advisor'] = {'status': 'error', 'brief': None, 'updated_at': None,
+                                 'message': 'Вывод руководителю временно недоступен'}
     result['historical_findings'] = await historical_findings(pool, client_id, project, base, operator)
+    result.pop('advisor_pins', None)
     if os.getenv('CALLCENTER_EXPORT_SHEETS'):
         from . import callcenter_export
         try:

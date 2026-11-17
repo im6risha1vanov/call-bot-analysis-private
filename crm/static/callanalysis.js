@@ -169,6 +169,7 @@ async function callAnalysisView(view, arg) {
   clearTimeout(S.caTimer);
   if (arg?.startsWith(':analysis:lead:')) return caLeadHistory(view, arg.slice(15));
   const findingRoute = /^:analysis:findings(?::(\d{4}-\d{2}-\d{2}):(\d{4}-\d{2}-\d{2}))?$/.exec(arg || '');
+  if (arg === ':analysis' || findingRoute) return caFindingsView(view, findingRoute?.[1], findingRoute?.[2]);
   const runId = arg && arg.startsWith(':analysis:') ? Number(arg.slice(10)) : 0;
   if (runId) return caRun(view, runId);
   const d = await loading(view, api('/api/callcenter/analysis'), 'page');
@@ -209,7 +210,7 @@ async function callAnalysisView(view, arg) {
       go('callcenter', ':analysis:' + r.id);
     } catch (err) { busy(btn, false); toast(err.message, true); }
   });
-  await Promise.all([caCounts(view), caDashboard(view, findingRoute?.[1], findingRoute?.[2], '', '', '', !!findingRoute)]);
+  await Promise.all([caCounts(view), caDashboard(view)]);
 }
 
 async function caRun(view, id) {
@@ -218,7 +219,7 @@ async function caRun(view, id) {
   try { run = await api('/api/callcenter/analysis/' + id); }
   catch (e) { if (view.isConnected) view.innerHTML = errCard(e.message); return; }
   if (!view.isConnected) return;
-  const back = () => go('callcenter', ':analysis');
+  const back = () => go('callcenter', ':analysis:stats');
   setHead({title: 'Разбор · ' + (run.operator?.display || run.operator?.name || ''), back,
     actions: run.status === 'done' ? `<button class="btn" type="button" data-ca-save>${run.saved ? 'Сохранено' : 'Сохранить в CRM'}</button>
       ${run.can_telegram ? `<button class="btn primary" type="button" data-ca-tg>${run.telegram ? 'Отправлено в Telegram' : 'Отправить в Telegram'}</button>` : ''}`
@@ -281,36 +282,109 @@ function caBreakdown(rows) {
   return `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Группа</th><th>Попыток</th><th>Номеров</th><th>Дозвон</th><th>Квалификация</th><th>Следующий шаг</th></tr></thead><tbody>${rows.map(r => `<tr><td>${esc(r.name)}</td><td>${fmt(r.attempts)}</td><td>${fmt(r.phones)}</td><td>${caMetric(r.reached)}</td><td>${caMetric(r.qualified)}</td><td>${caMetric(r.next_step)}</td></tr>`).join('')}</tbody></table></div>`;
 }
 function caFindingCall(e) {
-  const arg = e.phone ? `:analysis:lead:${encodeURIComponent(e.phone)}:call:${e.call_id}` : `:analysis:${e.run_id}`;
-  return `<a href="#callcenter/${arg}" data-go="callcenter" data-arg="${arg}">Звонок ${esc(e.call_id || e.run_id)}</a>`;
+  const arg = e.phone ? `:analysis:lead:${encodeURIComponent(e.phone)}:call:${encodeURIComponent(e.call_id || '')}` : `:analysis:${encodeURIComponent(e.run_id || '')}`;
+  return `<a href="#callcenter/${esc(arg)}" data-go="callcenter" data-arg="${esc(arg)}">Звонок ${esc(e.call_id || e.run_id)}</a>`;
 }
 function caFindingExample(e) {
   return `<div><p><b>Пример${e.date ? ' · ' + esc(e.date) : ''}:</b> ${esc(e.issue)}<br>«${esc(e.quote)}» ${caEvidenceTime(e.at)}· ${caFindingCall(e)}</p>
     <p><b>Предложение:</b> ${esc(e.proposal)}${e.measure ? `<br><b>Как проверить:</b> ${esc(e.measure)}` : ''}</p></div>`;
 }
-function caFindingGroup(f) {
-  const evidence = f.evidence || [];
-  const first = evidence[0];
-  return `<article><h3>${esc(f.project_name)} · ${esc(f.step)} · ${esc(f.issue)}${f.specific_issue ? ' · ' + esc(f.specific_issue) : ''}</h3>
-    <p>${f.leads > 1 ? `Повторяющийся тип затруднения: ${fmt(f.leads)} разных номеров. Примеры внутри группы могут различаться.` : 'Отдельный пример: 1 номер.'}</p>
-    ${first ? caFindingExample(first) : ''}
-    ${evidence.length > 1 ? `<details><summary>Другие примеры (${fmt(evidence.length - 1)})</summary>${evidence.slice(1).map(caFindingExample).join('')}</details>` : ''}</article>`;
+function caAdviceFilters(d) {
+  const selected = d.filters || {};
+  const option = (value, label, chosen) => `<option value="${esc(value)}"${value === chosen ? ' selected' : ''}>${esc(label)}</option>`;
+  const includeSelected = (values, chosen) => chosen && !values.includes(chosen) ? [chosen, ...values] : values;
+  const projects = includeSelected(d.options?.projects || [], selected.project);
+  const bases = includeSelected(d.options?.bases || [], selected.base);
+  const operators = d.options?.operators || [];
+  const chosenOperator = selected.operator && !operators.some(x => x.id === selected.operator)
+    ? [{id: selected.operator, name: ({olga:'Ольга', oksana:'Оксана'}[selected.operator] || selected.operator)}, ...operators] : operators;
+  return `<div class="ca-advice-filters">
+    <label class="field">С<input type="date" data-advice-start value="${esc(d.start)}"></label>
+    <label class="field">По<input type="date" data-advice-end value="${esc(d.end)}"></label>
+    <label class="field">Проект<select data-advice-project>${option('', 'Все проекты', selected.project || '')}${projects.map(v => option(v, v, selected.project)).join('')}</select></label>
+    <label class="field">База<select data-advice-base>${option('', 'Все базы', selected.base || '')}${bases.map(v => option(v, v, selected.base)).join('')}</select></label>
+    <label class="field">Оператор<select data-advice-operator>${option('', 'Оба оператора', selected.operator || '')}${chosenOperator.map(v => option(v.id, v.name, selected.operator)).join('')}</select></label>
+    <button class="btn" type="button" data-advice-apply>Показать</button>
+  </div>`;
 }
-function caFindings(d) {
-  const items = d.findings || [], first = items.slice(0, 3), rest = items.slice(3);
-  const historical = d.historical_findings || [];
-  return `<section class="card blk" data-ci-findings><div class="card-h"><h2>Выводы агента</h2><span class="hint">${esc(d.start)} — ${esc(d.end)}</span></div>
-    <p class="hint">Наблюдения отсортированы по числу разных номеров. Повторяющийся тип затруднения — гипотеза для проверки, а не доказанный дефект скрипта.</p>
-    ${historical.length ? `<h3>Закреплённые исторические выводы</h3><p class="hint">Это примеры за указанные даты; текущие фильтры проекта, базы и оператора применяются отдельно.</p>${historical.map(h => {
-      const arg = `:analysis:findings:${h.start}:${h.end}`;
-      return `<article><h3>${esc(h.project_name)} · ${esc(h.step)} · ${esc(h.issue)}</h3><p>Исторический период ${esc(h.start)} — ${esc(h.end)} · тип затруднения отмечен у ${fmt(h.leads)} разных номеров за этот период; конкретная ситуация ниже относится к указанному звонку.</p>${h.evidence.map(caFindingExample).join('')}<a href="#callcenter/${arg}" data-go="callcenter" data-arg="${arg}">Открыть выводы за этот период</a></article>`;
-    }).join('')}` : ''}
-    ${first.length ? first.map(caFindingGroup).join('') : '<p>За выбранный период подтверждённых наблюдений пока нет.</p>'}
-    ${rest.length ? `<details><summary>Остальные наблюдения (${fmt(rest.length)})</summary>${rest.map(caFindingGroup).join('')}</details>` : ''}
-    ${d.coaching?.length ? `<details><summary>Отдельные рекомендации операторам (${fmt(d.coaching.length)})</summary>${d.coaching.map(c => `<p><b>${esc(c.project)} · ${esc(c.step || '')}</b>: ${esc(c.advice || '')}<br>«${esc(c.quote || '')}» · ${caEvidenceTime(c.at)}${caFindingCall(c)}</p>`).join('')}</details>` : ''}
-</section>`;
+function caAdviceSources(evidence) {
+  const list = Array.isArray(evidence) ? evidence : [];
+  if (!list.length) return '';
+  return `<details class="ca-advice-sources"><summary>Звонки и подтверждения (${fmt(list.length)})</summary><ul>${list.map(e => `<li>«${esc(e.quote || '')}» ${caEvidenceTime(e.at)}${caFindingCall(e)}</li>`).join('')}</ul></details>`;
 }
-async function caDashboard(view, start, end, project, base, operator, focusFindings = false) {
+function caAdviceAction(action, index) {
+  return `<article class="ca-advice-action"><div class="ca-advice-number">${index + 1}</div><div>
+    <h3>${esc(action.title || 'Предложение')}</h3>
+    ${action.diagnosis ? `<p class="ca-advice-why">${esc(action.diagnosis)}</p>` : ''}
+    ${action.action ? `<p><b>Что изменить</b><br>${esc(action.action)}</p>` : ''}
+    ${action.test ? `<p><b>Как проверить</b><br>${esc(action.test)}</p>` : ''}
+    ${caAdviceSources(action.evidence)}
+  </div></article>`;
+}
+function caAdviceArchive(items) {
+  if (!items?.length) return '';
+  return `<details class="ca-advice-archive"><summary>Исторический пример</summary>${items.map(h => {
+    const arg = `:analysis:findings:${encodeURIComponent(h.start)}:${encodeURIComponent(h.end)}`;
+    return `<p><b>${esc(h.project_name)} · ${esc(h.start)} — ${esc(h.end)}</b><br>Тип затруднения отмечен у ${fmt(h.leads)} разных номеров; приведённый пример относится к конкретному звонку.</p>${h.evidence.map(caFindingExample).join('')}<p><a href="#callcenter/${arg}" data-go="callcenter" data-arg="${arg}">Выводы за тот период</a></p>`;
+  }).join('')}</details>`;
+}
+function caAdviceBody(d) {
+  const state = d.advisor || {status: 'unavailable'};
+  const brief = state.brief || {};
+  const archive = caAdviceArchive(d.historical_findings);
+  if (state.status === 'ready' && brief.status === 'insufficient') {
+    return `<section class="ca-advice-panel"><h2>Пока недостаточно данных</h2><p>${esc(brief.summary || 'Для надёжного вывода нужно больше подтверждённых разговоров.')}</p>${(brief.limitations || []).map(x => `<p class="hint">${esc(x)}</p>`).join('')}</section>${archive}`;
+  }
+  if (state.status === 'ready' && brief.status === 'ready') {
+    const actions = Array.isArray(brief.actions) ? brief.actions.slice(0, 3) : [];
+    return `<section class="ca-advice-summary"><div class="ca-advice-eyebrow">Главный вывод</div><p>${esc(brief.summary || 'Вывод сформирован')}</p></section>
+      ${actions.length ? `<section class="ca-advice-panel"><div class="ca-advice-section-head"><h2>Что можно улучшить</h2><span>${fmt(actions.length)} ${actions.length === 1 ? 'предложение' : 'предложения'}</span></div>${actions.map(caAdviceAction).join('')}</section>` : ''}
+      ${(brief.limitations || []).length ? `<p class="ca-advice-limit">${brief.limitations.map(x => esc(x)).join(' ')}</p>` : ''}${archive}`;
+  }
+  if (state.status === 'unavailable') return `<section class="ca-advice-panel"><h2>Вывод пока недоступен</h2><p>Источник анализа не вернул состояние. Попробуйте обновить страницу позже.</p></section>${archive}`;
+  if (state.status === 'error') return `<section class="ca-advice-panel"><h2>Не удалось подготовить вывод</h2><p>${esc(state.message || 'Повторите попытку позже.')}</p><button class="btn" type="button" data-advice-retry>Проверить снова</button></section>${archive}`;
+  const label = state.status === 'stale' ? 'Обновляем выводы' : state.status === 'running' ? 'Анализируем разговоры' : 'Готовим выводы';
+  return `<section class="ca-advice-panel" aria-live="polite"><h2>${label}</h2><p>${esc(state.message || 'Обычно это занимает несколько минут. Страницу можно оставить открытой.')}</p></section>${archive}`;
+}
+async function caFindingsView(view, start, end) {
+  clearTimeout(S.caTimer);
+  setHead({title: 'Выводы агента', back: () => go('callcenter'),
+    actions: '<button class="btn" type="button" data-go="callcenter" data-arg=":analysis:stats">Статистика и журнал</button>'});
+  view.innerHTML = `<div class="page ca-advice"><div class="ca-advice-intro"><p>Анализ разговоров колл-центра</p><h2>Что улучшить в работе</h2><span>Рекомендации по выбранному периоду и команде</span></div>
+    <section class="ca-advice-filter-card" aria-label="Период и фильтры"><div data-advice-filters>Загружаем фильтры…</div></section><div data-advice-content aria-live="polite"><section class="ca-advice-panel"><h2>Загружаем данные</h2></section></div></div>`;
+  let serial = 0;
+  let active = {start, end};
+  const filterBox = $('[data-advice-filters]', view), content = $('[data-advice-content]', view);
+  async function refresh(resetFilters = false) {
+    clearTimeout(S.caTimer);
+    const seq = ++serial;
+    try {
+      const d = await api('/api/callcenter/analysis/insights' + qs(active));
+      if (!view.isConnected || seq !== serial) return;
+      if (resetFilters) {
+        active = {start: d.start, end: d.end, ...(d.filters || {})};
+        filterBox.innerHTML = caAdviceFilters(d);
+        $('[data-advice-apply]', filterBox)?.addEventListener('click', () => {
+          active = {start: $('[data-advice-start]', filterBox).value, end: $('[data-advice-end]', filterBox).value,
+            project: $('[data-advice-project]', filterBox).value, base: $('[data-advice-base]', filterBox).value,
+            operator: $('[data-advice-operator]', filterBox).value};
+          content.innerHTML = '<section class="ca-advice-panel" aria-live="polite"><h2>Загружаем данные</h2></section>';
+          refresh(true);
+        });
+      }
+      content.innerHTML = caAdviceBody(d);
+      $('[data-advice-retry]', content)?.addEventListener('click', () => refresh(false));
+      if (['waiting', 'queued', 'running', 'stale'].includes(d.advisor?.status)) S.caTimer = setTimeout(() => { if (view.isConnected) refresh(false); }, 30000);
+    } catch (e) {
+      if (view.isConnected && seq === serial) {
+        content.innerHTML = `<section class="ca-advice-panel"><h2>Не удалось загрузить выводы</h2><p>${esc(e.message)}</p><button class="btn" type="button" data-advice-retry>Повторить</button></section>`;
+        $('[data-advice-retry]', content)?.addEventListener('click', () => refresh(resetFilters));
+      }
+    }
+  }
+  await refresh(true);
+}
+async function caDashboard(view, start, end, project, base, operator) {
   const box = $('[data-ca-dashboard]', view); if (!box) return;
   try {
     const d = await api('/api/callcenter/analysis/insights' + qs({start, end, project, base, operator}));
@@ -326,14 +400,13 @@ async function caDashboard(view, start, end, project, base, operator, focusFindi
       <p class="hint">Дозвон — от уникальных номеров; квалификация — от номеров с подтверждённым живым разговором, следующий шаг — от квалифицированных номеров по тому же направлению. Данные по расшифровке, а не отметки лидов в CRM. Повторные звонки одному номеру не увеличивают число номеров.</p>
       <p>Предыдущий сопоставимый период ${esc(d.previous_start)} — ${esc(d.previous_end)}: ${d.previous.attempts ? `${fmt(d.previous.attempts)} попыток, ${fmt(d.previous.phones)} номеров; дозвон ${caMetric(d.previous.reached)}, квалификация ${caMetric(d.previous.qualified)}, следующий шаг ${caMetric(d.previous.next_step)}` : 'нет данных'}.</p>
       <p class="hint">Неподтверждённые разговоры и отсутствующие записи не считаются отказом. Привязка к таблице при неоднозначности не выполняется.</p></section>
-      ${caFindings(d)}
+      <p><button class="btn primary" type="button" data-go="callcenter" data-arg=":analysis:findings">Выводы агента</button></p>
       <section class="card blk"><h2>По дням</h2><p class="hint">Номера уникальны внутри каждого дня; при повторном звонке в другой день номер появится снова.</p><div class="tbl-wrap"><table class="tbl"><thead><tr><th>День</th><th>Попыток</th><th>Номеров</th><th>Живой разговор</th><th>Соответствуют критериям</th><th>Согласован следующий шаг</th></tr></thead><tbody>${d.daily.map(x => `<tr><td>${esc(x.day)}</td><td>${fmt(x.attempts)}</td><td>${fmt(x.phones)}</td><td>${caMetric(x.reached)}</td><td>${caMetric(x.qualified)}</td><td>${caMetric(x.next_step)}</td></tr>`).join('')}</tbody></table></div></section>
       <section class="card blk"><h2>Полнота данных по попыткам</h2><p>Подтверждён живой диалог с распознанными ролями: ${fmt(d.current.coverage.dialogue)} из ${fmt(d.current.attempts)}; нет записи, данных недостаточно или обработка не завершена: ${fmt(d.current.coverage.missing_or_unclear)}; недозвон или автоответчик: ${fmt(d.current.coverage.no_answer_or_machine)}.</p><p class="hint">Категории попыток не пересекаются. Если доступно мало диалогов, предполагаемые пропуски критериев и причины изменения показателей — гипотезы, требующие проверки.</p></section>
       <section class="card blk"><h2>Проекты</h2>${caBreakdown(d.projects)}<h2>Базы</h2>${caBreakdown(d.bases)}<h2>Операторы</h2>${caBreakdown(d.operators)}<h2>Проект · база · оператор</h2>${caBreakdown(d.combinations.map(x => ({...x, name: `${x.project} · ${x.base} · ${x.operator}`})))}</section>
       <section class="card blk"><h2>Наблюдаемые причины</h2>${d.reasons.length ? `<ul>${d.reasons.map(r => `<li>${esc(r.reason)} · ${fmt(r.leads)} номеров; ранее ${d.previous.attempts ? fmt(r.previous) : 'нет данных'} ${r.evidence.map(e => `<a href="#callcenter/:analysis:lead:${encodeURIComponent(e.phone)}:call:${e.call_id}" data-go="callcenter" data-arg=":analysis:lead:${encodeURIComponent(e.phone)}:call:${e.call_id}">звонок ${e.call_id}</a> ${e.quote ? caEvidenceTime(e.quote_at) + esc(e.quote) : ''}`).join(' · ')}</li>`).join('')}</ul>` : '<p>Подтверждённых причин пока нет.</p>'}</section>
       <section class="card blk"><h2>Все попытки (${fmt(d.attempts.length)})</h2><div data-ci-attempts></div></section>`;
     caPagedAttempts($('[data-ci-attempts]', box), d.attempts);
-    if (focusFindings) $('[data-ci-findings]', box)?.scrollIntoView({block: 'start'});
     $('[data-ci-apply]', box)?.addEventListener('click', () => caDashboard(view, $('[data-ci-start]', box).value, $('[data-ci-end]', box).value, $('[data-ci-project]', box).value, $('[data-ci-base]', box).value, $('[data-ci-operator]', box).value));
   } catch (e) { if (box.isConnected) box.innerHTML = errCard(e.message); }
 }

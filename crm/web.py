@@ -532,6 +532,8 @@ async def api_callcenter_insights(request):
             request.query.get('base', ''), request.query.get('operator', '')))
     except PermissionError as exc:
         raise analysis_forbidden(exc)
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text=str(exc))
 
 
 async def api_callcenter_insights_lead(request):
@@ -1765,6 +1767,8 @@ async def make_app() -> web.Application:
             tasks.append(asyncio.create_task(call_analysis.semantic_loop(pool)))
             tasks.append(asyncio.create_task(callcenter_export_loop(pool)))
             tasks.append(asyncio.create_task(callcenter_source_loop(pool)))
+            from . import callcenter_advisor_jobs
+            tasks.append(asyncio.create_task(callcenter_advisor_jobs.loop(pool)))
         try:
             yield
         finally:

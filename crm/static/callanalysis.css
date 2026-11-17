@@ -1,0 +1,38 @@
+/* Экран выводов: спокойная иерархия, те же цвета и шрифт, что в CRM. */
+.ca-advice { max-width: 1020px; margin-inline: auto; padding-bottom: 48px; }
+.ca-advice-intro { margin: 8px 0 24px; }
+.ca-advice-intro p { margin: 0 0 6px; color: var(--accent-text); font-weight: 600; font-size: 12px; }
+.ca-advice-intro h2 { margin: 0; font-size: clamp(24px, 3vw, 32px); line-height: 1.2; letter-spacing: -.025em; }
+.ca-advice-intro span { display: block; margin-top: 8px; color: var(--muted); }
+.ca-advice-filter-card, .ca-advice-panel, .ca-advice-archive { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 20px 24px; margin-bottom: 16px; box-shadow: var(--shadow); }
+.ca-advice-filters { display: grid; grid-template-columns: 1fr 1fr 1.35fr 1.35fr 1fr auto; gap: 12px; align-items: end; }
+.ca-advice-filters .field { min-width: 0; margin: 0; }
+.ca-advice-filters input, .ca-advice-filters select { width: 100%; min-width: 0; }
+.ca-advice-filters button { min-height: 40px; }
+.ca-advice-summary { border-left: 4px solid var(--accent); background: var(--accent-soft); border-radius: var(--r); padding: 24px 28px; margin-bottom: 16px; }
+.ca-advice-eyebrow { color: var(--accent-text); font-size: 12px; font-weight: 700; margin-bottom: 9px; }
+.ca-advice-summary p { max-width: 780px; margin: 0; font-size: 19px; line-height: 1.5; font-weight: 600; overflow-wrap: anywhere; }
+.ca-advice-panel > h2, .ca-advice-section-head h2 { margin: 0; font-size: 19px; }
+.ca-advice-section-head { display: flex; gap: 16px; align-items: baseline; justify-content: space-between; padding-bottom: 10px; }
+.ca-advice-section-head span { color: var(--muted); font-size: 12px; }
+.ca-advice-action { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 16px; padding: 22px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.ca-advice-action:last-child { padding-bottom: 2px; }
+.ca-advice-number { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%; background: var(--accent-soft); color: var(--accent-text); font-weight: 700; }
+.ca-advice-action h3 { margin: 2px 0 8px; font-size: 16px; }
+.ca-advice-action p { margin: 12px 0 0; line-height: 1.55; }
+.ca-advice-action p b { font-size: 12px; }
+.ca-advice-why, .ca-advice-limit { color: var(--muted); }
+.ca-advice-limit { font-size: 13px; line-height: 1.5; margin: 6px 2px 20px; }
+.ca-advice-sources { margin-top: 16px; color: var(--muted); }
+.ca-advice-sources summary, .ca-advice-archive summary { color: var(--accent-text); cursor: pointer; font-weight: 600; }
+.ca-advice-sources ul { padding-left: 20px; line-height: 1.6; }
+.ca-advice-archive { overflow-wrap: anywhere; }
+@media (max-width: 850px) { .ca-advice-filters { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 560px) {
+  .ca-advice-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ca-advice-filter-card, .ca-advice-panel, .ca-advice-archive { padding: 18px; }
+  .ca-advice-summary { padding: 20px; }
+  .ca-advice-summary p { font-size: 17px; }
+  .ca-advice-action { grid-template-columns: 26px minmax(0, 1fr); gap: 11px; }
+  .ca-advice-number { width: 26px; height: 26px; }
+}
