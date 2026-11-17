@@ -168,6 +168,7 @@ async function caCounts(view) {
 async function callAnalysisView(view, arg) {
   clearTimeout(S.caTimer);
   if (arg?.startsWith(':analysis:lead:')) return caLeadHistory(view, arg.slice(15));
+  const findingRoute = /^:analysis:findings(?::(\d{4}-\d{2}-\d{2}):(\d{4}-\d{2}-\d{2}))?$/.exec(arg || '');
   const runId = arg && arg.startsWith(':analysis:') ? Number(arg.slice(10)) : 0;
   if (runId) return caRun(view, runId);
   const d = await loading(view, api('/api/callcenter/analysis'), 'page');
@@ -208,7 +209,7 @@ async function callAnalysisView(view, arg) {
       go('callcenter', ':analysis:' + r.id);
     } catch (err) { busy(btn, false); toast(err.message, true); }
   });
-  await Promise.all([caCounts(view), caDashboard(view)]);
+  await Promise.all([caCounts(view), caDashboard(view, findingRoute?.[1], findingRoute?.[2], '', '', '', !!findingRoute)]);
 }
 
 async function caRun(view, id) {
@@ -279,7 +280,37 @@ function caAttempt(r, focused = false) {
 function caBreakdown(rows) {
   return `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Группа</th><th>Попыток</th><th>Номеров</th><th>Дозвон</th><th>Квалификация</th><th>Следующий шаг</th></tr></thead><tbody>${rows.map(r => `<tr><td>${esc(r.name)}</td><td>${fmt(r.attempts)}</td><td>${fmt(r.phones)}</td><td>${caMetric(r.reached)}</td><td>${caMetric(r.qualified)}</td><td>${caMetric(r.next_step)}</td></tr>`).join('')}</tbody></table></div>`;
 }
-async function caDashboard(view, start, end, project, base, operator) {
+function caFindingCall(e) {
+  const arg = e.phone ? `:analysis:lead:${encodeURIComponent(e.phone)}:call:${e.call_id}` : `:analysis:${e.run_id}`;
+  return `<a href="#callcenter/${arg}" data-go="callcenter" data-arg="${arg}">Звонок ${esc(e.call_id || e.run_id)}</a>`;
+}
+function caFindingExample(e) {
+  return `<div><p><b>Пример${e.date ? ' · ' + esc(e.date) : ''}:</b> ${esc(e.issue)}<br>«${esc(e.quote)}» ${caEvidenceTime(e.at)}· ${caFindingCall(e)}</p>
+    <p><b>Предложение:</b> ${esc(e.proposal)}${e.measure ? `<br><b>Как проверить:</b> ${esc(e.measure)}` : ''}</p></div>`;
+}
+function caFindingGroup(f) {
+  const evidence = f.evidence || [];
+  const first = evidence[0];
+  return `<article><h3>${esc(f.project_name)} · ${esc(f.step)} · ${esc(f.issue)}${f.specific_issue ? ' · ' + esc(f.specific_issue) : ''}</h3>
+    <p>${f.leads > 1 ? `Повторяющийся тип затруднения: ${fmt(f.leads)} разных номеров. Примеры внутри группы могут различаться.` : 'Отдельный пример: 1 номер.'}</p>
+    ${first ? caFindingExample(first) : ''}
+    ${evidence.length > 1 ? `<details><summary>Другие примеры (${fmt(evidence.length - 1)})</summary>${evidence.slice(1).map(caFindingExample).join('')}</details>` : ''}</article>`;
+}
+function caFindings(d) {
+  const items = d.findings || [], first = items.slice(0, 3), rest = items.slice(3);
+  const historical = d.historical_findings || [];
+  return `<section class="card blk" data-ci-findings><div class="card-h"><h2>Выводы агента</h2><span class="hint">${esc(d.start)} — ${esc(d.end)}</span></div>
+    <p class="hint">Наблюдения отсортированы по числу разных номеров. Повторяющийся тип затруднения — гипотеза для проверки, а не доказанный дефект скрипта.</p>
+    ${historical.length ? `<h3>Закреплённые исторические выводы</h3><p class="hint">Это примеры за указанные даты; текущие фильтры проекта, базы и оператора применяются отдельно.</p>${historical.map(h => {
+      const arg = `:analysis:findings:${h.start}:${h.end}`;
+      return `<article><h3>${esc(h.project_name)} · ${esc(h.step)} · ${esc(h.issue)}</h3><p>Исторический период ${esc(h.start)} — ${esc(h.end)} · тип затруднения отмечен у ${fmt(h.leads)} разных номеров за этот период; конкретная ситуация ниже относится к указанному звонку.</p>${h.evidence.map(caFindingExample).join('')}<a href="#callcenter/${arg}" data-go="callcenter" data-arg="${arg}">Открыть выводы за этот период</a></article>`;
+    }).join('')}` : ''}
+    ${first.length ? first.map(caFindingGroup).join('') : '<p>За выбранный период подтверждённых наблюдений пока нет.</p>'}
+    ${rest.length ? `<details><summary>Остальные наблюдения (${fmt(rest.length)})</summary>${rest.map(caFindingGroup).join('')}</details>` : ''}
+    ${d.coaching?.length ? `<details><summary>Отдельные рекомендации операторам (${fmt(d.coaching.length)})</summary>${d.coaching.map(c => `<p><b>${esc(c.project)} · ${esc(c.step || '')}</b>: ${esc(c.advice || '')}<br>«${esc(c.quote || '')}» · ${caEvidenceTime(c.at)}${caFindingCall(c)}</p>`).join('')}</details>` : ''}
+</section>`;
+}
+async function caDashboard(view, start, end, project, base, operator, focusFindings = false) {
   const box = $('[data-ca-dashboard]', view); if (!box) return;
   try {
     const d = await api('/api/callcenter/analysis/insights' + qs({start, end, project, base, operator}));
@@ -295,14 +326,14 @@ async function caDashboard(view, start, end, project, base, operator) {
       <p class="hint">Дозвон — от уникальных номеров; квалификация — от номеров с подтверждённым живым разговором, следующий шаг — от квалифицированных номеров по тому же направлению. Данные по расшифровке, а не отметки лидов в CRM. Повторные звонки одному номеру не увеличивают число номеров.</p>
       <p>Предыдущий сопоставимый период ${esc(d.previous_start)} — ${esc(d.previous_end)}: ${d.previous.attempts ? `${fmt(d.previous.attempts)} попыток, ${fmt(d.previous.phones)} номеров; дозвон ${caMetric(d.previous.reached)}, квалификация ${caMetric(d.previous.qualified)}, следующий шаг ${caMetric(d.previous.next_step)}` : 'нет данных'}.</p>
       <p class="hint">Неподтверждённые разговоры и отсутствующие записи не считаются отказом. Привязка к таблице при неоднозначности не выполняется.</p></section>
+      ${caFindings(d)}
       <section class="card blk"><h2>По дням</h2><p class="hint">Номера уникальны внутри каждого дня; при повторном звонке в другой день номер появится снова.</p><div class="tbl-wrap"><table class="tbl"><thead><tr><th>День</th><th>Попыток</th><th>Номеров</th><th>Живой разговор</th><th>Соответствуют критериям</th><th>Согласован следующий шаг</th></tr></thead><tbody>${d.daily.map(x => `<tr><td>${esc(x.day)}</td><td>${fmt(x.attempts)}</td><td>${fmt(x.phones)}</td><td>${caMetric(x.reached)}</td><td>${caMetric(x.qualified)}</td><td>${caMetric(x.next_step)}</td></tr>`).join('')}</tbody></table></div></section>
       <section class="card blk"><h2>Полнота данных по попыткам</h2><p>Подтверждён живой диалог с распознанными ролями: ${fmt(d.current.coverage.dialogue)} из ${fmt(d.current.attempts)}; нет записи, данных недостаточно или обработка не завершена: ${fmt(d.current.coverage.missing_or_unclear)}; недозвон или автоответчик: ${fmt(d.current.coverage.no_answer_or_machine)}.</p><p class="hint">Категории попыток не пересекаются. Если доступно мало диалогов, предполагаемые пропуски критериев и причины изменения показателей — гипотезы, требующие проверки.</p></section>
       <section class="card blk"><h2>Проекты</h2>${caBreakdown(d.projects)}<h2>Базы</h2>${caBreakdown(d.bases)}<h2>Операторы</h2>${caBreakdown(d.operators)}<h2>Проект · база · оператор</h2>${caBreakdown(d.combinations.map(x => ({...x, name: `${x.project} · ${x.base} · ${x.operator}`})))}</section>
       <section class="card blk"><h2>Наблюдаемые причины</h2>${d.reasons.length ? `<ul>${d.reasons.map(r => `<li>${esc(r.reason)} · ${fmt(r.leads)} номеров; ранее ${d.previous.attempts ? fmt(r.previous) : 'нет данных'} ${r.evidence.map(e => `<a href="#callcenter/:analysis:lead:${encodeURIComponent(e.phone)}:call:${e.call_id}" data-go="callcenter" data-arg=":analysis:lead:${encodeURIComponent(e.phone)}:call:${e.call_id}">звонок ${e.call_id}</a> ${e.quote ? caEvidenceTime(e.quote_at) + esc(e.quote) : ''}`).join(' · ')}</li>`).join('')}</ul>` : '<p>Подтверждённых причин пока нет.</p>'}</section>
-      <section class="card blk"><h2>Повторяющиеся затруднения</h2><p class="hint">Гипотезы по нескольким клиентам, а не доказанные дефекты скрипта. Изменение следует проверить на новых разговорах и сравнить показатели до и после.</p>${d.friction.length ? d.friction.map(f => `<details><summary>${esc(f.project)} · ${esc(f.step)} · ${esc(f.issue)}${f.specific_issue ? ' · ' + esc(f.specific_issue) : ''} (${fmt(f.leads)} номеров)</summary><p class="hint">Ниже — отдельные примеры; формулировки и предложения относятся только к указанному звонку.</p><ul>${f.evidence.map(e => `<li><b>Пример:</b> ${esc(e.issue)} · ${caEvidenceTime(e.at)}${esc(e.quote)}<br>Предложение: ${esc(e.proposal)}${e.measure ? ' · Как измерить: ' + esc(e.measure) : ''} · <a href="#callcenter/:analysis:lead:${encodeURIComponent(e.phone)}:call:${e.call_id}" data-go="callcenter" data-arg=":analysis:lead:${encodeURIComponent(e.phone)}:call:${e.call_id}">звонок ${e.call_id}</a></li>`).join('')}</ul></details>`).join('') : '<p>Повторяющихся подтверждённых наблюдений пока нет.</p>'}</section>
-      <section class="card blk"><h2>Отдельно: рекомендации операторам</h2>${d.coaching.length ? `<ul>${d.coaching.map(c => `<li>${esc(c.step || '')}: ${esc(c.advice || '')} · ${caEvidenceTime(c.at)}${esc(c.quote || '')} · <a href="#callcenter/:analysis:lead:${encodeURIComponent(c.phone || '')}:call:${c.call_id}" data-go="callcenter" data-arg=":analysis:lead:${encodeURIComponent(c.phone || '')}:call:${c.call_id}">звонок ${c.call_id}</a></li>`).join('')}</ul>` : '<p>Рекомендаций пока нет.</p>'}</section>
       <section class="card blk"><h2>Все попытки (${fmt(d.attempts.length)})</h2><div data-ci-attempts></div></section>`;
     caPagedAttempts($('[data-ci-attempts]', box), d.attempts);
+    if (focusFindings) $('[data-ci-findings]', box)?.scrollIntoView({block: 'start'});
     $('[data-ci-apply]', box)?.addEventListener('click', () => caDashboard(view, $('[data-ci-start]', box).value, $('[data-ci-end]', box).value, $('[data-ci-project]', box).value, $('[data-ci-base]', box).value, $('[data-ci-operator]', box).value));
   } catch (e) { if (box.isConnected) box.innerHTML = errCard(e.message); }
 }

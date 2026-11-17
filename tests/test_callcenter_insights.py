@@ -286,3 +286,44 @@ def test_friction_group_uses_broad_label_and_preserves_each_examples_context():
     assert 'proposal' not in group and 'measure' not in group
     assert [(x['issue'], x['proposal'], x['measure']) for x in group['evidence']] == [
         (first['issue'], first['proposal'], first['measure']), (second['issue'], second['proposal'], second['measure'])]
+
+
+def test_findings_rank_by_distinct_phones_and_human_project_preserve_singles():
+    f = {'project':'packaging', 'step':'Квалификация', 'stage_id':'qualification', 'issue_code':'unclear_question',
+         'issue':'Вопрос клиента', 'proposal':'Пояснить', 'measure':'Ответы', 'quote':'Что?', 'at':10}
+    one = attempt('9000000001','2026-11-17',friction=[f])
+    same = attempt('9000000001','2026-11-17',friction=[f],item=2)
+    different = attempt('9000000002','2026-11-17',friction=[f],item=3)
+    single = attempt('9000000003','2026-11-17',friction=[dict(f, issue_code='price',issue='Вопрос цены')],item=4)
+    findings = ci.summarize([one,same,different,single], '2026-11-17','2026-11-17')['findings']
+    assert [f['leads'] for f in findings] == [2,1]
+    assert findings[0]['project_name'] == 'Картонная упаковка'
+    assert findings[0]['evidence'][0]['date'] == '2026-11-17'
+
+
+def test_pinned_finding_uses_tenant_selector_real_period_and_filters(monkeypatch):
+    import asyncio
+    from datetime import date
+    from unittest.mock import AsyncMock
+    target = {'project':'packaging','step':'Квалификация','stage_id':'qualification','issue_code':'unclear_question',
+              'issue':'Нерегулярные закупки','proposal':'Проверить три месяца','measure':'Доля ответов', 'quote':'Покупаем по мере нужды','at':20}
+    other = dict(target, issue_code='price',issue='Другое замечание')
+    one = attempt('9000000001','2026-11-17',friction=[target,other],item=5)
+    one['tab'] = 'Картонная упаковка'
+    another = attempt('9000000002','2026-11-16',friction=[target],item=6)
+    another['tab'] = 'Картонная упаковка'
+    pins = [{'call_id':5,'period_start':date(2026,11,11),'period_end':date(2026,11,17),
+             'script':'packaging','stage_id':'qualification','issue_code':'unclear_question'}]
+    class Pool:
+        fetchval = AsyncMock(return_value=True)
+        fetch = AsyncMock(return_value=pins)
+    pool = Pool()
+    read = AsyncMock(return_value=[one,another])
+    monkeypatch.setattr(ci, 'fetch_records', read)
+    results = asyncio.run(ci.historical_findings(pool, 42))
+    assert len(results) == 1 and results[0]['leads'] == 2
+    assert results[0]['evidence'][0]['quote'] == 'Покупаем по мере нужды'
+    assert pool.fetch.await_args.args[1] == 42 and read.await_args.args[1] == 42
+    assert not asyncio.run(ci.historical_findings(pool,42,operator='oksana'))
+    assert not asyncio.run(ci.historical_findings(pool,42,project='Другое'))
+    assert not asyncio.run(ci.historical_findings(pool,42,base='Другая база'))

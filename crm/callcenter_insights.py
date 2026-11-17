@@ -7,7 +7,7 @@ import re
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 
-from . import call_analysis, call_analysis_schema, callcenter_base, callcenter_monitor, callcenter_verdict
+from . import call_analysis, call_analysis_schema, callcenter_base, callcenter_monitor, callcenter_verdict, callcenter_quality
 
 INCEPTION = date(2026, 11, 17)
 CATEGORIES = {'qualified', 'reusable', 'competitor', 'pending'}
@@ -285,15 +285,22 @@ def summarize(records, start, end, project="", base="", operator=""):
                        f['issue'] if code == 'other' else '')
                 friction[key].append({'phone': r['phone'], 'quote': f['quote'], 'at': f.get('at'),
                                       'run_id': r['run_id'], 'call_id': r['call_id'], 'step': f.get('step') or '',
-                                      'issue': f['issue'], 'proposal': f['proposal'], 'measure': f.get('measure') or ''})
+                                      'issue': f['issue'], 'proposal': f['proposal'], 'measure': f.get('measure') or '',
+                                      'date': _day(datetime.fromisoformat(r['at'])).isoformat()})
         for c in check.get('coaching') or []:
             if isinstance(c, dict):
-                coaching.append({**c, 'phone': r.get('phone'), 'run_id': r['run_id'], 'call_id': r['call_id']})
-    recurring = [{'project': k[0], 'step': callcenter_verdict.FRICTION_STAGES.get(k[1], v[0]['step']),
-                  'issue': callcenter_verdict.FRICTION_ISSUES.get(k[2], 'Другая конкретная проблема'),
-                  'specific_issue': k[3] if k[2] == 'other' else '',
-                  'leads': len({e['phone'] for e in v}), 'evidence': v}
-                 for k, v in friction.items() if len({e['phone'] for e in v}) >= 2]
+                coaching.append({**c, 'phone': r.get('phone'), 'run_id': r['run_id'], 'call_id': r['call_id'],
+                                 'project': _campaign(r), 'date': _day(datetime.fromisoformat(r['at'])).isoformat()})
+    findings = [{'project': k[0],
+                 'project_name': callcenter_quality.SCRIPTS.get(k[0], (k[0] or 'Проект не установлен',))[0],
+                 'stage_id': k[1], 'issue_code': k[2],
+                 'step': callcenter_verdict.FRICTION_STAGES.get(k[1], v[0]['step']),
+                 'issue': callcenter_verdict.FRICTION_ISSUES.get(k[2], 'Другая конкретная проблема'),
+                 'specific_issue': k[3] if k[2] == 'other' else '',
+                 'leads': len({e['phone'] for e in v}), 'evidence': v}
+                for k, v in friction.items()]
+    findings.sort(key=lambda f: (-f['leads'], f['project_name'], f['step'], f['issue']))
+    recurring = [item for item in findings if item['leads'] >= 2]
     return {'start': start.isoformat(), 'end': end.isoformat(), 'previous_start': prev_start.isoformat(),
             'previous_end': prev_end.isoformat(), 'current': _metrics(selected), 'previous': _metrics(previous), 'daily': daily,
             'projects': _breakdown(selected, _campaign), 'bases': _breakdown(selected, _base_name),
@@ -302,7 +309,34 @@ def summarize(records, start, end, project="", base="", operator=""):
             'combinations': [{'project': k[0], 'base': k[1], 'operator': k[2], **_metrics(v)} for k, v in sorted(combinations.items())], 'reasons': [{'reason': k, 'leads': len({e['phone'] for e in reasons.get(k, [])}),
                          'previous': len({e['phone'] for e in previous_reasons.get(k, [])}),
                          'evidence': reasons.get(k, [])} for k in sorted(set(reasons) | set(previous_reasons))],
-            'friction': recurring, 'coaching': coaching, 'attempts': selected}
+            'findings': findings, 'friction': recurring, 'coaching': coaching, 'attempts': selected}
+
+
+async def historical_findings(pool, client_id, project='', base='', operator=''):
+    """Read director-pinned call references; conclusions and counts remain derived from source data."""
+    if pool is None or not await pool.fetchval("SELECT to_regclass('callcenter_insight_pins') IS NOT NULL"):
+        return []
+    pins = await pool.fetch("""SELECT call_id,period_start,period_end,script,stage_id,issue_code FROM callcenter_insight_pins
+                               WHERE client_id=$1 ORDER BY period_end DESC,call_id""", client_id)
+    output, periods = [], {}
+    for pin in pins:
+        first, last = pin['period_start'], pin['period_end']
+        if last < first:
+            continue
+        period = (first, last)
+        if period not in periods:
+            records = await fetch_records(pool, client_id, first, last)
+            periods[period] = summarize(records, first, last, project, base, operator)
+        report = periods[period]
+        for finding in report['findings']:
+            if (finding['project'], finding['stage_id'], finding['issue_code']) != (pin['script'], pin['stage_id'], pin['issue_code']):
+                continue
+            examples = [item for item in finding['evidence'] if item.get('call_id') == pin['call_id']]
+            if examples:
+                output.append({'start': first.isoformat(), 'end': last.isoformat(),
+                               'project_name': finding['project_name'], 'step': finding['step'],
+                               'issue': finding['issue'], 'leads': finding['leads'], 'evidence': examples})
+    return output
 
 
 async def dashboard(pool, who, start=None, end=None, project="", base="", operator=""):
@@ -320,6 +354,7 @@ async def dashboard(pool, who, start=None, end=None, project="", base="", operat
         raise ValueError('Конец периода раньше начала.')
     previous_start = first - timedelta(days=(last - first).days + 1)
     result = summarize(await fetch_records(pool, client_id, previous_start, last), first, last, project, base, operator)
+    result['historical_findings'] = await historical_findings(pool, client_id, project, base, operator)
     if os.getenv('CALLCENTER_EXPORT_SHEETS'):
         from . import callcenter_export
         try:
