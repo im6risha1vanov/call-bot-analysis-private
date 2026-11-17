@@ -254,3 +254,28 @@ def test_wrong_number_strict_for_all_evidence_paths():
         'evidence':[{'quote':x,'at':i+10} for i,x in enumerate(cases)]}]
     packet,sources=advisor.evidence_packet(r)
     assert not packet['operator_base_candidates'] and not sources
+
+
+def test_asr_only_claim_is_not_a_confirmed_operator_deviation():
+    r=personal_report(); row=r['attempts'][0]
+    row['check']['coaching']=[{'step':'Вопрос','advice':'Неразборчивая формулировка',
+                               'quote':'ШЕригами мапс','at':2}]
+    row['check']['friction']=[]
+    packet,sources=advisor.evidence_packet(r)
+    assert not packet['operator_script_candidates']
+    out=asyncio.run(advisor.advise_packet(packet,sources))
+    assert out['operator_review']['script']['status']=='insufficient'
+
+
+def test_asr_only_output_retries_when_real_action_available():
+    r=personal_report(); row=r['attempts'][0]
+    row['check']['coaching']=[
+      {'step':'Вопрос','advice':'Уточнить вопрос', 'quote':'Заняли буквально коробки. Я','at':2},
+      {'step':'Квалификация','advice':'Разделить составной вопрос', 'quote':'Размер и тираж, сколько?', 'at':3}]
+    packet,sources=advisor.evidence_packet(r)
+    candidates=packet['operator_script_candidates']
+    assert sources[candidates[0]['ref']]['quote']=='Размер и тираж, сколько?'
+    noisy=next(x for x in candidates if sources[x['ref']]['quote'].startswith('Заняли'))
+    payload={'operator_review':{'script':{'status':'supported','observation':'Фраза неразборчива и оборвана.',
+      'action':'Говорить чётче.', 'test':'Прослушать запись.', 'refs':[noisy['ref']]}}}
+    with pytest.raises(advisor.SynthesisError): advisor.validate_personal(payload,packet,sources)

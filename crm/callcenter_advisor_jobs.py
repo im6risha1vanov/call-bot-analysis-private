@@ -13,7 +13,7 @@ from . import callcenter_advisor
 
 log = logging.getLogger(__name__)
 VERSION = 'executive-v2'
-OPERATOR_VERSION = 'operator-v1'
+OPERATOR_VERSION = 'operator-v2'
 FIELDS = ('start', 'end', 'previous_start', 'previous_end', 'filters', 'current', 'previous',
           'combinations', 'reasons', 'findings', 'coaching', 'attempts')
 
