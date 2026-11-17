@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import re
 from collections import Counter, defaultdict
 
@@ -256,6 +257,75 @@ REF_IN_TEXT = re.compile(r'(?i)(?:\(\s*)?\bE\d+\b(?:\s*\))?')
 PROPOSED_DURATION = re.compile(r'(?<!\w)\d+\s*(?:месяц(?:а|ев)?|мес\.?|дн(?:я|ей)?|недел(?:и|ь)?)(?!\w)', re.I)
 
 
+
+_PERSONAL_REF_CONTEXT = re.compile(r'(?i)\b(?:из|в|по|для|на|к|с|у|за|от)\s+(?:\(\s*)?E\d+\b(?:\s*\))?')
+_DANGLING_PREPOSITION = re.compile(r'(?i)\b(?:из|по|для|на|к|с|у|за|от)\s+(?=и\b|,|\.|$)')
+_QUOTED = re.compile(r'«([^»]+)»|"([^"\n]+)"|“([^”]+)”')
+
+
+def _clean_personal_refs(value):
+    if not isinstance(value, str): return value
+    text = _PERSONAL_REF_CONTEXT.sub('', value)
+    text = REF_IN_TEXT.sub('', text)
+    text = _DANGLING_PREPOSITION.sub('', text)
+    text = re.sub(r'\s+([,.;:])', r'\1', text)
+    return re.sub(r' {2,}', ' ', text).strip()
+
+
+def _clean_personal_observation(value, evidence):
+    value = _clean_personal_refs(value)
+    if not isinstance(value, str): return value
+    originals = [str(item.get(key) or '') for item in evidence if isinstance(item, dict)
+                 for key in ('quote', 'step') if item.get(key)]
+    def is_original(content):
+        return any(content in original for original in originals)
+    removed = False
+    trailing_quote = re.compile(r'\s*:\s*(?:«([^»]+)»|"([^"\n]+)"|“([^”]+)”)(?=[.!?]?(?:\s|$))')
+    def drop_unverified(match):
+        nonlocal removed
+        content = next((part for part in match.groups() if part is not None), '')
+        if is_original(content): return match.group(0)
+        removed = True
+        return ''
+    value = trailing_quote.sub(drop_unverified, value)
+    def replace(match):
+        content = next((part for part in match.groups() if part is not None), '')
+        if is_original(content): return match.group(0)
+        return 'эту формулировку'
+    value = _QUOTED.sub(replace, value).strip()
+    if removed:
+        if re.search(r'\b(?:сказал\w*|произн[её]с\w*|спросил\w*|пояснил\w*|сообщил\w*|утверждал\w*|назвал\w*)[.!?]?$', value, re.I):
+            return 'В доказательстве приведена исходная реплика.'
+        if value and value[-1] not in '.!?': value += '.'
+    return value
+
+
+def clean_personal_brief(brief):
+    """Idempotently clean a stored personal brief without calling the model."""
+    if not isinstance(brief, dict) or not isinstance(brief.get('operator_review'), dict): return brief
+    result = copy.deepcopy(brief)
+    review = result['operator_review']
+    for section in review.values():
+        if not isinstance(section, dict): continue
+        evidence = section.get('evidence') if isinstance(section.get('evidence'), list) else []
+        if 'observation' in section:
+            section['observation'] = _clean_personal_observation(section['observation'], evidence)
+        for key in ('action', 'test'):
+            if key in section:
+                text = _clean_personal_refs(section[key])
+                if isinstance(text, str) and re.search(r'сказал|ответил|произн[её]с|прозвучал|сообщил', text, re.I):
+                    text = _clean_personal_observation(text, evidence)
+                section[key] = text
+    supported = [review[k].get('observation') for k in ('script', 'base')
+                 if isinstance(review.get(k), dict) and review[k].get('status') == 'supported'
+                 and review[k].get('observation')]
+    if supported:
+        result['summary'] = ' '.join(supported)
+    elif 'summary' in result:
+        result['summary'] = _clean_personal_refs(result['summary'])
+    return result
+
+
 def _supported_text(value, *, proposals=False, limit=500, allowed_numbers=()):
     if not isinstance(value, str): return ''
     text = REF_IN_TEXT.sub('', value).strip()
@@ -316,7 +386,7 @@ def _personal_section(raw, kind, packet, sources):
     if not isinstance(refs, list) or not refs or any(not isinstance(x, str) or x not in allowed for x in refs):
         raise SynthesisError('Персональный вывод требует ссылки на подходящий подтверждённый пример')
     factual_numbers = {number for ref in refs for number in NUMBER.findall(sources[ref].get('quote') or '')}
-    fields = {key: _supported_text(raw.get(key), proposals=key in ('action', 'test'), limit=420,
+    fields = {key: _supported_text(_clean_personal_refs(raw.get(key)), proposals=key in ('action', 'test'), limit=420,
                                    allowed_numbers=factual_numbers if key == 'observation' else ())
               for key in ('observation', 'action', 'test')}
     if not all(fields.values()): raise SynthesisError('Персональный вывод требует наблюдения, действия и проверки')
@@ -350,8 +420,8 @@ def validate_personal(payload, packet, sources):
     ready = any(x['status'] == 'supported' for x in sections.values())
     summaries = [x['observation'] for x in sections.values() if x['status'] == 'supported']
     summary = ' '.join(summaries) if summaries else 'Недостаточно подтверждений для персональных выводов.'
-    return {'status': 'ready' if ready else 'insufficient', 'summary': summary,
-            'actions': [], 'limitations': [], 'operator_review': sections}
+    return clean_personal_brief({'status': 'ready' if ready else 'insufficient', 'summary': summary,
+            'actions': [], 'limitations': [], 'operator_review': sections})
 
 
 async def advise_packet(packet, sources):

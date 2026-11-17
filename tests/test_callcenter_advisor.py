@@ -279,3 +279,42 @@ def test_asr_only_output_retries_when_real_action_available():
     payload={'operator_review':{'script':{'status':'supported','observation':'Фраза неразборчива и оборвана.',
       'action':'Говорить чётче.', 'test':'Прослушать запись.', 'refs':[noisy['ref']]}}}
     with pytest.raises(advisor.SynthesisError): advisor.validate_personal(payload,packet,sources)
+
+
+def test_existing_brief_clean_is_idempotent_and_does_not_invent_quotes():
+    brief={'status':'ready','summary':'Старый текст E1', 'operator_review':{
+      'script':{'status':'supported','observation':'Оператор уточнил «1000 штук — это самосборные».',
+        'action':'Проверить контакт из E1 и зафиксировать несоответствие.',
+        'test':'Проверить пример по E1.',
+        'evidence':[{'quote':'1000 штук это самобурные.', 'step':'Уточнение параметров'}]},
+      'base':{'status':'insufficient','observation':'Недостаточно данных.', 'action':'', 'test':'', 'evidence':[]}}}
+    out=advisor.clean_personal_brief(brief)
+    script=out['operator_review']['script']
+    assert '1000 штук — это самосборные' not in script['observation']
+    assert script['action']=='Проверить контакт и зафиксировать несоответствие.'
+    assert 'E1' not in json.dumps(out,ensure_ascii=False)
+    assert '1000 штук это самобурные.' == script['evidence'][0]['quote']
+    assert brief['summary']=='Старый текст E1' and out==advisor.clean_personal_brief(out)
+
+
+def test_exact_quotes_and_step_names_remain_in_personal_observation():
+    brief={'operator_review':{'script':{'status':'supported',
+        'observation':'В шаге «Уточнение параметров» прозвучало «Какой размер?».',
+        'action':'Уточнить размер.', 'test':'Проверить диалоги.',
+        'evidence':[{'quote':'Какой размер?','step':'Уточнение параметров'}]}}}
+    out=advisor.clean_personal_brief(brief)
+    assert out['operator_review']['script']['observation']==brief['operator_review']['script']['observation']
+
+
+def test_unverified_trailing_quote_removed_without_dangling_phrase():
+    brief={'operator_review':{'script':{'status':'supported',
+        'observation':'Оператор подменяет ответ клиента предположением: «1000 штук — это самосборные».',
+        'action':'Уточнять ответ.', 'test':'Проверить диалоги.',
+        'evidence':[{'quote':'1000 штук это самобурные.', 'step':'Уточнение'}]}}}
+    out=advisor.clean_personal_brief(brief)
+    assert out['operator_review']['script']['observation']=='Оператор подменяет ответ клиента предположением.'
+    assert out['summary']=='Оператор подменяет ответ клиента предположением.'
+    assert out==advisor.clean_personal_brief(out)
+    brief['operator_review']['script']['observation']='Оператор сказал: «1000 штук — это самосборные».'
+    out=advisor.clean_personal_brief(brief)
+    assert out['operator_review']['script']['observation']=='В доказательстве приведена исходная реплика.'
