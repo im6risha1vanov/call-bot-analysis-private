@@ -224,5 +224,6 @@ async def assess_semantic(lines, check):
                     for key in projects if key in quality.SCRIPTS}
     payload, _cost = await analysis._call(PROMPT, json.dumps(
         {'projects': projects, 'approved_script_steps': script_steps, 'dialog': lines}, ensure_ascii=False), 4000,
-        reasoning_effort=os.getenv('CALLCENTER_SEMANTIC_REASONING_EFFORT', 'low').strip() or 'low')
+        reasoning_effort=os.getenv('CALLCENTER_SEMANTIC_REASONING_EFFORT', 'low').strip() or 'low',
+        json_object=True)
     return validate(payload, lines, check)

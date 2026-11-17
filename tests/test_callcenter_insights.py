@@ -229,3 +229,60 @@ def test_cards_reuses_passed_snapshot_without_refresh(monkeypatch):
     monkeypatch.setattr(ci.call_analysis_schema, 'ensure', AsyncMock())
     assert asyncio.run(ci.cards(Pool(), 1, snapshot_data=('stamp', {'olga': {}, 'oksana': {}}))) == []
     snapshot.assert_not_awaited()
+
+
+def test_daily_breakdown_coverage_and_repeat_across_days():
+    rows = [attempt('9000000001','2026-11-17',live=True,decisions=[dict(decision('pending'), product_qualified=True)]),
+            attempt('9000000001','2026-11-17',item=2),
+            attempt('9000000001','2026-11-18',item=3),
+            attempt('9000000002','2026-11-18',item=4)]
+    rows[1]['check']['state'] = 'not_reached'
+    rows[2]['status'] = 'audio_missing'
+    rows[3]['status'] = 'pending'
+    result = ci.summarize(rows, '2026-11-17', '2026-11-19')
+    first, second, empty = result['daily']
+    assert first['phones'] == 1 and first['attempts'] == 2
+    assert first['qualified']['count'] == 1 and first['next_step']['count'] == 0
+    assert second['phones'] == 2 and empty['attempts'] == 0
+    assert result['current']['phones'] == 2
+    assert result['current']['coverage'] == {'dialogue':1, 'missing_or_unclear':2, 'no_answer_or_machine':1}
+    assert sum(result['current']['coverage'].values()) == result['current']['attempts']
+    assert result['previous']['attempts'] == 0
+
+
+def test_dashboard_defaults_to_moscow_last_seven_days_and_preserves_explicit_dates(monkeypatch):
+    import asyncio
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    class FakeDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            instant = cls(2026, 11, 18, 22, 30, tzinfo=timezone.utc)
+            return instant.astimezone(tz) if tz else instant.replace(tzinfo=None)
+    monkeypatch.setattr(ci, 'datetime', FakeDateTime)
+    monkeypatch.setattr(ci.call_analysis, 'can_manage', lambda who: True)
+    monkeypatch.setattr(ci, 'fetch_records', AsyncMock(return_value=[]))
+    monkeypatch.setenv('CALLCENTER_MONITOR_FROM', '2026-11-11T00:00:00+03:00')
+    monkeypatch.delenv('CALLCENTER_EXPORT_SHEETS', raising=False)
+    who = SimpleNamespace(company=1)
+    default = asyncio.run(ci.dashboard(None, who))
+    assert (default['start'], default['end']) == ('2026-11-13', '2026-11-19')
+    explicit = asyncio.run(ci.dashboard(None, who, '2026-11-11', '2026-11-12'))
+    assert (explicit['start'], explicit['end']) == ('2026-11-11', '2026-11-12')
+    monkeypatch.setenv('CALLCENTER_MONITOR_FROM', '2026-11-17T00:00:00+03:00')
+    assert asyncio.run(ci.dashboard(None, who))['start'] == '2026-11-17'
+
+
+def test_friction_group_uses_broad_label_and_preserves_each_examples_context():
+    first = {'project':'packaging', 'step':'Квалификация', 'stage_id':'qualification', 'issue_code':'unclear_question',
+             'issue':'Не понятен вопрос о расходах', 'proposal':'Пояснить расходы', 'measure':'Доля ответов на вопрос о расходах', 'quote':'Что за сумма?', 'at':5}
+    second = dict(first, issue='Не понятен вопрос о печати', proposal='Уточнить печать',
+                  measure='Доля ответов о печати', quote='Какая печать?')
+    rows = [attempt('9000000001','2026-11-17',friction=[first]),
+            attempt('9000000002','2026-11-17',friction=[second],item=2)]
+    group = ci.summarize(rows, '2026-11-17', '2026-11-17')['friction'][0]
+    assert group['issue'] == 'Вопрос непонятен' and group['leads'] == 2
+    assert 'proposal' not in group and 'measure' not in group
+    assert [(x['issue'], x['proposal'], x['measure']) for x in group['evidence']] == [
+        (first['issue'], first['proposal'], first['measure']), (second['issue'], second['proposal'], second['measure'])]

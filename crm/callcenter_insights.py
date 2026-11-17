@@ -7,7 +7,7 @@ import re
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 
-from . import call_analysis, call_analysis_schema, callcenter_base, callcenter_monitor
+from . import call_analysis, call_analysis_schema, callcenter_base, callcenter_monitor, callcenter_verdict
 
 INCEPTION = date(2026, 11, 17)
 CATEGORIES = {'qualified', 'reusable', 'competitor', 'pending'}
@@ -188,9 +188,20 @@ def _metrics(records):
              if isinstance(d, dict) and (r['phone'], d.get('project')) in qualified_pairs and d.get('next_step') is True}
     def metric(n, total):
         return {'count': n, 'denominator': total, 'percent': round(100 * n / total, 1) if total else None}
+    coverage = {'dialogue': 0, 'missing_or_unclear': 0, 'no_answer_or_machine': 0}
+    for record in records:
+        check = record.get('check') or {}
+        if record.get('status') in ('pending', 'failed', 'missing_call'):
+            coverage['missing_or_unclear'] += 1
+        elif check.get('live') is True:
+            coverage['dialogue'] += 1
+        elif check.get('state') in ('not_reached', 'answering_machine'):
+            coverage['no_answer_or_machine'] += 1
+        else:
+            coverage['missing_or_unclear'] += 1
     category_counts = {category: len({d['phone'] for d in decisions if d['category'] == category}) for category in CATEGORIES}
     classified = {d['phone'] for d in decisions if d['category'] in ('qualified', 'reusable', 'competitor')}
-    return {'category_counts': category_counts, 'unclassified_phones': len(set(phones) - classified),
+    return {'coverage': coverage, 'category_counts': category_counts, 'unclassified_phones': len(set(phones) - classified),
             'attempts': len(records), 'phones': len(phones), 'no_phone': sum(not r.get('phone') for r in records),
             'reached': metric(len(reached), len(phones)), 'qualified': metric(len(qualified & reached), len(reached)),
             'next_step': metric(len(steps & qualified), len(qualified))}
@@ -257,8 +268,12 @@ def summarize(records, start, end, project="", base="", operator=""):
     selected = [r for r in in_period if between(r, start, end) and matches(r)]
     previous = [r for r in in_period if between(r, prev_start, prev_end) and matches(r)]
     combinations = defaultdict(list)
+    daily_groups = defaultdict(list)
     for r in selected:
         combinations[(_campaign(r), _base_name(r), _operator_name(r))].append(r)
+        daily_groups[_day(datetime.fromisoformat(r['at']))].append(r)
+    daily = [{'day': (start + timedelta(days=i)).isoformat(),
+              **_metrics(daily_groups[start + timedelta(days=i)])} for i in range(days)]
     friction, coaching = defaultdict(list), []
     reasons, previous_reasons = _loss_reasons(selected), _loss_reasons(previous)
     for r in selected:
@@ -274,12 +289,13 @@ def summarize(records, start, end, project="", base="", operator=""):
         for c in check.get('coaching') or []:
             if isinstance(c, dict):
                 coaching.append({**c, 'phone': r.get('phone'), 'run_id': r['run_id'], 'call_id': r['call_id']})
-    recurring = [{'project': k[0], 'step': v[0]['step'], 'issue': v[0]['issue'],
-                  'proposal': v[0]['proposal'], 'measure': v[0]['measure'],
+    recurring = [{'project': k[0], 'step': callcenter_verdict.FRICTION_STAGES.get(k[1], v[0]['step']),
+                  'issue': callcenter_verdict.FRICTION_ISSUES.get(k[2], 'Другая конкретная проблема'),
+                  'specific_issue': k[3] if k[2] == 'other' else '',
                   'leads': len({e['phone'] for e in v}), 'evidence': v}
                  for k, v in friction.items() if len({e['phone'] for e in v}) >= 2]
     return {'start': start.isoformat(), 'end': end.isoformat(), 'previous_start': prev_start.isoformat(),
-            'previous_end': prev_end.isoformat(), 'current': _metrics(selected), 'previous': _metrics(previous),
+            'previous_end': prev_end.isoformat(), 'current': _metrics(selected), 'previous': _metrics(previous), 'daily': daily,
             'projects': _breakdown(selected, _campaign), 'bases': _breakdown(selected, _base_name),
             'operators': _breakdown(selected, _operator_name), 'options': options,
             'filters': {'project': project, 'base': base, 'operator': operator},
@@ -299,7 +315,7 @@ async def dashboard(pool, who, start=None, end=None, project="", base="", operat
         inception = _day(datetime.fromisoformat(configured)) if configured else INCEPTION
     except ValueError:
         inception = INCEPTION
-    first, last = _day(start or inception), _day(end or today)
+    first, last = _day(start or max(inception, today - timedelta(days=6))), _day(end or today)
     if last < first:
         raise ValueError('Конец периода раньше начала.')
     previous_start = first - timedelta(days=(last - first).days + 1)

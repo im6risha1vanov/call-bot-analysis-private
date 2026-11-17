@@ -141,9 +141,11 @@ def test_reasoning_override_preserves_general_calls(monkeypatch):
     monkeypatch.setattr(analysis.httpx, 'AsyncClient', Client)
     async def run():
         await analysis._call('system', 'user', 100)
-        await analysis._call('system', 'user', 100, reasoning_effort='low')
+        await analysis._call('system', 'user', 100, reasoning_effort='low', json_object=True)
     asyncio.run(run())
     assert [x['reasoning']['effort'] for x in sent] == ['high', 'low']
+    assert 'text' not in sent[0]
+    assert sent[1]['text'] == {'format': {'type': 'json_object'}}
 
 
 def test_semantic_reasoning_is_configurable(monkeypatch):
@@ -161,3 +163,4 @@ def test_semantic_reasoning_is_configurable(monkeypatch):
     monkeypatch.setenv('CALLCENTER_SEMANTIC_REASONING_EFFORT', 'medium')
     asyncio.run(v.assess_semantic(lines, check))
     assert [x['reasoning_effort'] for x in captured] == ['low', 'medium']
+    assert all(x['json_object'] is True for x in captured)
