@@ -575,6 +575,22 @@ from review.prompt_ui import install as install_prompt_mode
 install_prompt_mode(router, lambda: PG_POOL)
 
 
+@router.message(Command('callcenter_quality'))
+async def callcenter_quality_report(message: Message):
+    if message.chat.type != 'private' or not message.from_user or PG_POOL is None:
+        return
+    actor = await resolve_actor(PG_POOL, message.from_user.id)
+    if actor is None or actor.role not in ('owner', 'head') or not await PG_POOL.fetchval(
+            """SELECT 1 FROM employees WHERE client_id=$1 AND telegram_user_id=$2
+               AND role IN ('owner','head') AND archived_at IS NULL""", actor.client_id, message.from_user.id):
+        return
+    from crm.callcenter_monitor import telegram_summary
+    if not await PG_POOL.fetchval("SELECT to_regclass('call_analysis_runs') IS NOT NULL"):
+        await message.answer('Автоматические сводки колл-центра пока не сформированы.')
+        return
+    await message.answer(await telegram_summary(PG_POOL, actor.client_id), parse_mode=None)
+
+
 @router.message(F.text)
 async def rop_question(message: Message):
     """Свободный вопрос агенту РОПа (Этап 3). Регистрируется после команд —

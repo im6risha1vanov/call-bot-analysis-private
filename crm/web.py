@@ -1712,9 +1712,12 @@ async def make_app() -> web.Application:
             tasks.append(asyncio.create_task(donor_agent.loop(pool)))
         if os.getenv('CALL_ANALYSIS_WORKER', 'on') != 'off':  # разбор звонков операторов и робота
             tasks.append(asyncio.create_task(call_analysis.loop(pool)))
-        yield
-        for task in tasks:
-            task.cancel()
+        try:
+            yield
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
     app.cleanup_ctx.append(robot_cabinet)
     return app
 
