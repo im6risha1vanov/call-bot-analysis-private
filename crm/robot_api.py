@@ -72,6 +72,10 @@ def routes(viewer, body, pool_key) -> list:
         pool, _, owner = await ctx(request)
         return web.json_response(await rs.contacts(pool, owner, request.query.get('q', '')))
 
+    async def contacts_ids(request):
+        pool, _, owner = await ctx(request)
+        return web.json_response({'ids': await rs.contact_ids(pool, owner, request.query.get('q', ''))})
+
     async def contacts_upload(request):
         data = await body(request)
         pool, _, owner = await ctx(request, True, data)
@@ -98,7 +102,16 @@ def routes(viewer, body, pool_key) -> list:
     async def contacts_delete(request):
         data = await body(request)
         pool, _, owner = await ctx(request, True, data)
-        return web.json_response({'deleted': await rs.delete_contacts(pool, owner, data.get('ids'))})
+        ids = data.get('ids')
+        if 'ids36' in data:
+            packed = data['ids36']
+            if not isinstance(packed, str) or len(packed) > 300_000:
+                raise ValueError('Список номеров слишком велик.')
+            parts = packed.split(',') if packed else []
+            if len(parts) > rs.MAX_CONTACTS or any(not p or len(p) > 13 or any(c not in '0123456789abcdefghijklmnopqrstuvwxyz' for c in p) for p in parts):
+                raise ValueError('Некорректный список номеров.')
+            ids = [str(int(p, 36)) for p in parts]
+        return web.json_response({'deleted': await rs.delete_contacts(pool, owner, ids)})
 
     # стоп-лист
     async def stop(request):
@@ -166,6 +179,7 @@ def routes(viewer, body, pool_key) -> list:
         web.post(base + '/operators/{id}', operator_save), web.post(base + '/operators/{id}/delete', operator_delete),
         web.get(base + '/contacts', contacts), web.post(base + '/contacts/upload', contacts_upload),
         web.get(base + '/contacts/tabs', contacts_tabs), web.post(base + '/contacts/sheet', contacts_sheet),
+        web.get(base + '/contacts/ids', contacts_ids),
         web.post(base + '/contacts/delete', contacts_delete),
         web.get(base + '/stop', stop), web.post(base + '/stop', stop_add), web.post(base + '/stop/remove', stop_remove),
         web.get(base + '/campaigns', campaigns), web.post(base + '/campaigns', campaign_save),

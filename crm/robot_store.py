@@ -488,21 +488,34 @@ async def sheet_contacts(pool, who, owner: str, tab: str) -> dict:
     return {**await import_contacts(pool, owner, contacts, 'лист ' + tab), 'skipped': bad}
 
 
-async def contacts(pool, owner: str, q: str = '', limit: int = 500) -> dict:
+# One predicate is shared by the visible page and the ID-only selection snapshot.
+_CONTACT_FILTER = """c.owner=$1 AND ($2='' OR c.name ILIKE '%'||$2||'%' OR c.note ILIKE '%'||$2||'%' OR ($3<>'' AND c.phone LIKE '%'||$3||'%'))"""
+
+
+def _contact_search(q):
     q = str(q or '').strip()
-    digits = ''.join(ch for ch in q if ch.isdigit())
+    return q, ''.join(ch for ch in q if ch.isdigit())
+
+
+async def contacts(pool, owner: str, q: str = '', limit: int = 500) -> dict:
+    q, digits = _contact_search(q)
     rows = await pool.fetch(
-        """SELECT c.id, c.phone, c.name, c.note, c.source, c.created_at, s.phone IS NOT NULL AS stopped
+        f"""SELECT c.id, c.phone, c.name, c.note, c.source, c.created_at, s.phone IS NOT NULL AS stopped
            FROM robot_contacts c LEFT JOIN robot_stoplist s ON s.owner=c.owner AND s.phone=c.phone
-           WHERE c.owner=$1 AND ($2='' OR c.name ILIKE '%'||$2||'%' OR c.note ILIKE '%'||$2||'%' OR ($3<>'' AND c.phone LIKE '%'||$3||'%'))
-           ORDER BY c.id DESC LIMIT $4""", owner, q, digits, limit)
-    total = await pool.fetchval('SELECT count(*) FROM robot_contacts WHERE owner=$1', owner)
-    return {'total': total, 'items': [{'id': r['id'], 'phone': r['phone'], 'name': r['name'], 'note': r['note'],
+           WHERE {_CONTACT_FILTER} ORDER BY c.id DESC LIMIT $4""", owner, q, digits, limit)
+    total = await pool.fetchval(f'SELECT count(*) FROM robot_contacts c WHERE {_CONTACT_FILTER}', owner, q, digits)
+    return {'total': total, 'items': [{'id': r['id'], 'id_exact': str(r['id']), 'phone': r['phone'], 'name': r['name'], 'note': r['note'],
                                        'source': r['source'], 'stopped': r['stopped']} for r in rows]}
 
 
+async def contact_ids(pool, owner: str, q: str = '') -> list[str]:
+    q, digits = _contact_search(q)
+    rows = await pool.fetch(f'SELECT c.id FROM robot_contacts c WHERE {_CONTACT_FILTER} ORDER BY c.id DESC', owner, q, digits)
+    return [str(r['id']) for r in rows]
+
+
 async def delete_contacts(pool, owner: str, ids) -> int:
-    ids = [int(i) for i in (ids or []) if str(i).isdigit() and len(str(i)) <= 18]
+    ids = [int(i) for i in (ids or []) if str(i).isdigit() and len(str(i)) <= 19 and int(i) <= 9223372036854775807]
     status = await pool.execute('DELETE FROM robot_contacts WHERE owner=$1 AND id=ANY($2)', owner, ids)
     return int(status.split()[-1])
 

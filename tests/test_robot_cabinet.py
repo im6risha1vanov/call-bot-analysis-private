@@ -24,6 +24,15 @@ from crm import auth, robot, robot_runner, robot_store
 H = {'X-CRM': '1'}
 
 
+def base36(number):
+    alphabet = '0123456789abcdefghijklmnopqrstuvwxyz'
+    result = ''
+    while number:
+        number, digit = divmod(number, 36)
+        result = alphabet[digit] + result
+    return result or '0'
+
+
 def xlsx(rows) -> bytes:
     """Минимальный .xlsx: общие строки и один лист."""
     strings, sheet = [], []
@@ -427,6 +436,21 @@ class CabinetTests(DBCase):
         self.assertIsNone(await robot_runner.tick(self.pool, later))
         self.assertEqual([tuple(r) for r in await targets()][1], ('79990000022', True, 'error', 1))
         self.assertEqual(await self.pool.fetchval('SELECT status FROM robot_campaigns WHERE id=$1', camp['id']), 'done')
+
+    async def test_select_all_contact_ids_uses_filtered_owner_snapshot(self):
+        await self.as_director()
+        await self.pool.executemany(
+            'INSERT INTO robot_contacts(owner,phone,name,note,source) VALUES($1,$2,$3,$4,$5)',
+            [('', str(79000000000 + i), 'Выборка', '', 'test') for i in range(510)] +
+            [('', '79990000001', 'Другая', '', 'test'),
+             ('other', '79990000002', 'Выборка', '', 'test')])
+        page = await (await self.http.get('/api/robot/cab/contacts', params={'q': 'Выборка'})).json()
+        snapshot = await (await self.http.get('/api/robot/cab/contacts/ids', params={'q': 'Выборка'})).json()
+        self.assertEqual((page['total'], len(page['items']), len(snapshot['ids'])), (510, 500, 510))
+        await self.pool.execute("INSERT INTO robot_contacts(owner,phone,name,note,source) VALUES('', '79990000003', 'Выборка', '', 'test')")
+        result = await (await self.http.post('/api/robot/cab/contacts/delete', json={'ids36': ','.join(base36(int(i)) for i in snapshot['ids'])}, headers=H)).json()
+        self.assertEqual(result['deleted'], 510)
+        self.assertEqual(await self.pool.fetchval("SELECT count(*) FROM robot_contacts WHERE name='Выборка'"), 2)
 
     async def test_huge_ids_and_repeat_upload(self):
         """Номер больше int64 — 404/400, а не 500; повторная загрузка тех же номеров не считается добавлением."""

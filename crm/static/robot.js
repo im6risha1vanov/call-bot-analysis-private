@@ -306,12 +306,15 @@ async function campaignForm(c) {
 
 // ---------- контакты ----------
 RB_VIEW.contacts = async el => {
-  const [data, tabs] = await Promise.all([rbGet('/contacts', {q: RB.q || ''}), rbGet('/contacts/tabs').catch(() => ({tabs: []}))]);
+  const selectionOwner = RB.owner, selectionQuery = RB.q || '';
+  const [data, tabs] = await Promise.all([rbGet('/contacts', {q: selectionQuery}), rbGet('/contacts/tabs').catch(() => ({tabs: []}))]);
+  if (!el.isConnected || RB.owner !== selectionOwner) return;
   el.innerHTML = `<div class="grid2"><section class="card blk"><div class="card-h"><h2>Номера для обзвона</h2><span class="hint">${fmt(data.total)}</span></div>
       <div class="row gapb"><input class="inp" id="ct-q" type="search" placeholder="Номер, имя или заметка" value="${esc(RB.q || '')}"><button class="btn" type="button" id="ct-find">Найти</button>
+        <button class="btn" type="button" id="ct-all"${data.total ? '' : ' disabled'}>Выделить все</button><span class="hint" id="ct-count" aria-live="polite">Выбрано: 0</span>
         ${data.items.length ? `<button class="btn danger small" type="button" id="ct-del"${rbRO()}>Удалить отмеченные</button>` : ''}</div>
       ${data.items.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th></th><th>Номер</th><th>Имя</th><th class="hide-m">Заметка</th><th class="hide-m">Откуда</th></tr></thead><tbody>
-        ${data.items.map(c => `<tr><td><input type="checkbox" data-ct="${c.id}" aria-label="Отметить"></td><td class="num nw">${esc(phone(c.phone))}${c.stopped ? ' <span class="chip bad">стоп</span>' : ''}</td>
+        ${data.items.map(c => `<tr><td><input type="checkbox" data-ct="${c.id_exact || c.id}" aria-label="Отметить"></td><td class="num nw">${esc(phone(c.phone))}${c.stopped ? ' <span class="chip bad">стоп</span>' : ''}</td>
           <td>${esc(c.name)}</td><td class="hide-m s">${esc(c.note)}</td><td class="hide-m s">${esc(c.source)}</td></tr>`).join('')}</tbody></table></div>
         ${data.items.length < data.total ? `<p class="hint">Показаны последние ${data.items.length}. Остальные найдутся поиском.</p>` : ''}`
         : '<div class="empty">Номеров пока нет. Загрузите файл или возьмите номера с листа таблицы.</div>'}</section>
@@ -324,11 +327,41 @@ RB_VIEW.contacts = async el => {
   const find = () => { RB.q = $('#ct-q', el).value; reload(); };
   $('#ct-find', el).addEventListener('click', find);
   $('#ct-q', el).addEventListener('keydown', e => { if (e.key === 'Enter') find(); });
+  const selected = new Set();
+  let selectedAll = false;
+  const updateSelection = () => {
+    $$('[data-ct]', el).forEach(i => { i.checked = selected.has(i.dataset.ct); });
+    $('#ct-count', el).textContent = `Выбрано: ${fmt(selected.size)}`;
+    $('#ct-all', el).textContent = selectedAll ? 'Снять выделение' : 'Выделить все';
+  };
+  $$('[data-ct]', el).forEach(i => i.addEventListener('change', () => {
+    if (i.checked) selected.add(i.dataset.ct); else { selected.delete(i.dataset.ct); selectedAll = false; }
+    updateSelection();
+  }));
+  $('#ct-all', el).addEventListener('click', async e => {
+    if (selectedAll) { selected.clear(); selectedAll = false; updateSelection(); return; }
+    const button = e.currentTarget;
+    button.disabled = true;
+    try {
+      const result = await api('/api/robot/cab/contacts/ids' + qs({owner: selectionOwner, q: selectionQuery}));
+      if (!el.isConnected || RB.owner !== selectionOwner) return;
+      selected.clear();
+      result.ids.forEach(id => selected.add(String(id)));
+      selectedAll = selected.size > 0;
+      updateSelection();
+    } catch (err) { if (el.isConnected && RB.owner === selectionOwner) toast(err.message, true); }
+    finally { if (el.isConnected) button.disabled = false; }
+  });
   $('#ct-del', el)?.addEventListener('click', async () => {
-    const ids = $$('[data-ct]:checked', el).map(i => +i.dataset.ct);
+    const ids = [...selected];
     if (!ids.length) return toast('Отметьте контакты.', true);
     if (!await askConfirm(`Удалить ${plainItems(ids.length, 'контакт', 'контакта', 'контактов')}? Из уже созданных кампаний номера не пропадут.`)) return;
-    try { await rbPost('/contacts/delete', {ids}); reload(); } catch (e) { toast(e.message, true); }
+    if (!el.isConnected || RB.owner !== selectionOwner) return;
+    try {
+      const ids36 = ids.map(id => BigInt(id).toString(36)).join(',');
+      await api('/api/robot/cab/contacts/delete', {method: 'POST', body: {ids36, owner: selectionOwner}});
+      if (el.isConnected && RB.owner === selectionOwner) reload();
+    } catch (e) { if (el.isConnected && RB.owner === selectionOwner) toast(e.message, true); }
   });
   $('#ct-file', el).addEventListener('change', async e => {
     const f = e.target.files[0]; if (!f) return;
