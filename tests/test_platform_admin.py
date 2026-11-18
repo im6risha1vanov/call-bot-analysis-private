@@ -9,7 +9,7 @@ from urllib.parse import quote
 
 from aiohttp.test_utils import TestClient, TestServer
 
-from crm import admin_integrations, admin_pipelines, auth, automations, web
+from crm import admin_integrations, admin_pipelines, admin_rules, auth, automations, web
 from tests.test_crm import DBCase, DSN
 
 
@@ -17,6 +17,14 @@ BASE = '/api/platform/admin'
 
 
 class AdminSpecTests(unittest.TestCase):
+    def test_an_edit_can_reuse_only_a_webhook_url_from_the_current_rule(self):
+        url = 'https://example.test/hook-with-a-private-token'
+        current = {'actions': [{'type': 'email.send'}, {'type': 'webhook.send', 'url': url}]}
+        update = {'actions': [{'type': 'webhook.send', 'source_action': 1}]}
+        self.assertEqual(admin_rules.restore_action_urls(update, current)['actions'][0]['url'], url)
+        with self.assertRaises(ValueError):
+            admin_rules.restore_action_urls(update, {'actions': []})
+
     def test_openapi_matches_registered_operations(self):
         from crm import admin_api
 
@@ -207,3 +215,33 @@ class PlatformAdminTests(DBCase):
             probe.assert_not_awaited()
         unknown = await self.request('GET', path + f"/operations/{another['id']}")
         self.assertEqual(unknown['status'], 'delivery_unknown')
+
+    @unittest.skipUnless(os.getenv('CRM_ADMIN_PLAYWRIGHT'), 'CRM_ADMIN_PLAYWRIGHT is required')
+    async def test_browser_workflow_with_real_crm_routes(self):
+        await self.pool.execute("""INSERT INTO deal_events(client_id,phone,kind,extension)
+                                VALUES(1,'9990000001','presentation','101')""")
+        self.enterContext(patch.object(web, 'SECURE_COOKIE', False))
+        self.enterContext(patch.object(admin_integrations.mango_client, 'call', AsyncMock(return_value={'balance': 10})))
+        send = self.enterContext(patch.object(automations.blocks, 'email_send', AsyncMock(return_value='sent')))
+        env = {**os.environ, 'CRM_ADMIN_TEST_URL': str(self.http.make_url('/'))}
+        script = Path(__file__).resolve().parents[1] / 'scripts/check_crm_platform_admin_browser.cjs'
+
+        async def work():
+            while True:
+                await admin_integrations.process(self.pool)
+                await automations.tick(self.pool)
+                await asyncio.sleep(0.2)
+
+        worker = asyncio.create_task(work())
+        process = await asyncio.create_subprocess_exec(
+            'node', str(script), env=env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        try:
+            output, _ = await asyncio.wait_for(process.communicate(), timeout=180)
+            self.assertEqual(process.returncode, 0, output.decode(errors='replace'))
+            send.assert_awaited_once()
+        finally:
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
+            worker.cancel()
+            await asyncio.gather(worker, return_exceptions=True)

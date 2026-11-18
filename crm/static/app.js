@@ -89,11 +89,17 @@ async function api(path, opts = {}) {
     init.body = JSON.stringify(opts.body);
   }
   if (init.method !== 'GET') init.headers['X-CRM'] = '1';
+  if (opts.idempotencyKey) init.headers['Idempotency-Key'] = opts.idempotencyKey;
   let r;
   try { r = await fetch(path, init); } catch (e) { throw new Error('Нет связи с сервером. Проверьте подключение к интернету и повторите действие.'); }
   const data = await r.json().catch(() => ({}));
   if (r.status === 401) { showLogin(); throw new Error('Время входа истекло. Войдите в CRM снова.'); }
-  if (!r.ok) throw new Error(CRMText.error(data.error,r.status===403?'Недостаточно прав. Обратитесь к руководителю.':CRMText.operation(path,init.method)));
+  if (!r.ok) {
+    const error = new Error(CRMText.error(data.error, r.status === 403
+      ? 'Недостаточно прав. Обратитесь к руководителю.' : CRMText.operation(path, init.method)));
+    error.status = r.status;
+    throw error;
+  }
   return data;
 }
 const qs = obj => { const p = new URLSearchParams(); Object.entries(obj).forEach(([k, v]) => { if (v !== '' && v != null) p.set(k, v); }); const s = p.toString(); return s ? '?' + s : ''; };
@@ -407,10 +413,11 @@ const PAGES = {
   learning: {name: 'Обучение', icon: 'report', roles: ['manager', 'director']},
   settings: {name: 'Настройки', icon: 'gear', roles: ['director']},
   cab: {name: 'Кабинет', icon: 'home', roles: ['client']},
+  'platform-admin': {name: 'Админка платформы', icon: 'gear', roles: ['director']},
   companies: {name: 'Компании', icon: 'building', roles: ['director']},
 };
 const MENU = {
-  director: {nav: ['summary', 'calls', 'callbacks', 'deals', 'staff', 'callcenter', 'robot'], more: ['personal', 'learning', 'reports', 'logs', 'economics', 'auto', 'settings', 'companies'], tabs: ['summary', 'calls', 'callbacks', 'deals']},
+  director: {nav: ['summary', 'calls', 'callbacks', 'deals', 'staff', 'callcenter', 'robot'], more: ['personal', 'learning', 'reports', 'logs', 'economics', 'auto', 'settings', 'companies', 'platform-admin'], tabs: ['summary', 'calls', 'callbacks', 'deals']},
   manager: {nav: ['queue', 'deals', 'calls'], more: ['personal', 'me', 'learning', 'callcenter', 'sources', 'reports'], tabs: ['queue', 'deals', 'calls']},
   client: {nav: ['cab', 'robot'], more: [], tabs: ['cab', 'robot']},
 };
@@ -427,6 +434,7 @@ const hasModule = m => !S.me.modules || S.me.modules.includes(m);
 const PAGE_MODULE = {callcenter: 'callcenter', robot: 'robot', sources: 'sources', auto: 'automations'};
 const allowed = p => !!PAGES[p] && PAGES[p].roles.includes(S.me.role) && (!PAGE_MODULE[p] || hasModule(PAGE_MODULE[p]))
   && (p !== 'personal' || !!S.me.personal_agent_enabled)
+  && (p !== 'platform-admin' || !!S.me.platform_admin)
   && (p !== 'companies' || !!S.me.platform) && (p !== 'callcenter' || S.me.role !== 'manager' || S.me.callcenter_mode === 'db')
   && (p !== 'logs' || (!S.me.readonly && !S.me.support))
   && (p !== 'economics' || !!S.me.economics)

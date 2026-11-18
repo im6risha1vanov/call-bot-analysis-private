@@ -9,7 +9,7 @@ const dealName = d => d.company || phone(d.number);
 const CHAT_LINKED = {contact: 'номер из контакта клиента', text: 'номер из сообщения клиента', manual: 'привязали вручную'};
 const CHAT_MEDIA = {voice: 'голосовое', video_note: 'видеокружок', audio: 'аудио', video: 'видео', animation: 'гифка', photo: 'фото',
   sticker: 'стикер', document: 'файл', contact: 'контакт', location: 'геопозиция'};
-S.deal = {show: 'active', days: '90', stage: 0};
+S.deal = {show: 'active', days: '90', stage: 0, pipeline: 'default'};
 
 function dealStatus(d) {
   if (d.status === 'paid') return `<span class="chip good">оплачено${d.amount ? ' · ' + rub(d.amount) : ''}</span>`;
@@ -18,7 +18,8 @@ function dealStatus(d) {
   return '<span class="chip acc">в работе</span>';
 }
 function dealSteps(d) {
-  return `<div class="deal-steps">${(S.dealStages || []).slice(1).map((st, i) => {
+  const stages = S.dealPipelines?.find(p => p.pipeline === d.pipeline)?.config.stages || S.dealStages || [];
+  return `<div class="deal-steps">${stages.slice(1).map((st, i) => {
     const n = i + 2;
     const cls = d.stage_no > n || (d.stage_no === n && d.status === 'paid') ? 'done' : d.stage_no === n ? (d.status === 'lost' ? 'lost' : 'cur') : '';
     return `<span class="${cls}">${esc(st.name)}</span>`;
@@ -33,12 +34,15 @@ VIEWS.deals = async (view, arg) => {
   if (arg === 'contracts' && hasModule('contracts')) return contractsView(view);
   const f = S.deal;
   const dir = S.me.role === 'director';
-  const head = managers => setHead({filters: seg('show', DEAL_SHOW, f.show, 'Какие сделки') + seg('days', DEAL_PERIODS, f.days, 'Период') +
+  const head = (managers, pipelines) => setHead({filters: seg('show', DEAL_SHOW, f.show, 'Какие сделки') + seg('days', DEAL_PERIODS, f.days, 'Период') +
     (dir && managers?.length > 1 ? `<select class="inp" data-ext-pick aria-label="Менеджер"><option value="">Все менеджеры</option>${managers.map(m =>
-      `<option value="${esc(m.ext)}"${m.ext === S.f.ext ? ' selected' : ''}>${esc(m.name)}</option>`).join('')}</select>` : '')});
-  let d = null, seq = 0;
+      `<option value="${esc(m.ext)}"${m.ext === S.f.ext ? ' selected' : ''}>${esc(m.name)}</option>`).join('')}</select>` : '') +
+    (pipelines?.length > 1 ? `<select class="inp" data-deal-pipeline aria-label="Воронка"><option value="default">Основная воронка</option>${pipelines.filter(p => p.pipeline !== 'default').map(p =>
+      `<option value="${esc(p.pipeline)}"${p.pipeline === f.pipeline ? ' selected' : ''}>${esc(p.config.name)}</option>`).join('')}</select>` : '')});
+  let d = null, seq = 0, lastPipelines = '';
   const bind = () => {
     bindSeg($('#top'), {show: v => { f.show = v; render(); }, days: v => { f.days = v; load(); }});
+    $('[data-deal-pipeline]', $('#top'))?.addEventListener('change', e => { f.pipeline = e.target.value; f.stage = 0; render(); });
     $('[data-ext-pick]', $('#top'))?.addEventListener('change', e => { S.f.ext = e.target.value; saveFilters(); load(); });
   };
   head(null); bind();
@@ -52,13 +56,19 @@ VIEWS.deals = async (view, arg) => {
     const first = !d;
     d = data;
     S.dealStages = d.stages; S.dealReasons = d.reasons; S.canPay = d.can_pay;
-    if (first) { head(d.managers); bind(); }
+    S.dealPipelines = d.pipelines || [];
+    if (f.pipeline !== 'default' && !S.dealPipelines.some(p => p.pipeline === f.pipeline)) {
+      f.pipeline = 'default'; f.stage = 0;
+    }
+    const key = S.dealPipelines.map(p => p.pipeline + ':' + p.version).join('|');
+    if (first || lastPipelines !== key) { lastPipelines = key; head(d.managers, S.dealPipelines); bind(); }
     render();
   }
 
   function render(focusedStage) {
-    const fn = d.funnel;
-    const list = d.deals.filter(x => (f.show === 'all' || (f.show === 'stalled' ? x.stalled_days != null : x.status === f.show))
+    const selected = S.dealPipelines.find(p => p.pipeline === f.pipeline);
+    const fn = selected?.funnel || d.funnel;
+    const list = d.deals.filter(x => (x.pipeline || 'default') === f.pipeline && (f.show === 'all' || (f.show === 'stalled' ? x.stalled_days != null : x.status === f.show))
       && (!f.stage || x.stage_no === f.stage));
     const picked = f.stage ? fn.stages[f.stage - 1] : null;
     let i = 0;
@@ -189,7 +199,9 @@ async function chatView(peer, onLinked) {
 
 function dealTimeline(items) {
   return items.map(t => {
-    const head = `<div class="rvm-ih"><b>${esc(t.title)}</b><span class="rvm-mut">${esc(when(t.at))}${t.by ? ' · ' + esc(t.by) : ''}</span>
+    const stage = t.type === 'stage' && S.dealPipelines?.find(p => p.pipeline === t.pipeline)?.config.stages.find(s => s.key === t.stage);
+    const title = t.type === 'stage' ? `Этап: ${stage?.name || t.stage}` : t.title;
+    const head = `<div class="rvm-ih"><b>${esc(title)}</b><span class="rvm-mut">${esc(when(t.at))}${t.by ? ' · ' + esc(t.by) : ''}</span>
       ${(t.type === 'presentation' || t.type === 'chat') && TEMP[t.temperature] ? `<span class="rvm-chip ${TEMP[t.temperature][1]}">клиент ${TEMP[t.temperature][0]}</span>` : ''}
       ${t.amount ? `<span class="rvm-chip good">${rub(t.amount)}</span>` : ''}</div>`;
     const cls = t.type === 'event' ? '' : t.ok || (t.type === 'presentation' && !t.lost) || (t.type === 'chat' && t.temperature && !t.lost) ? 'good' : t.lost ? 'miss' : '';
@@ -202,6 +214,64 @@ function dealTimeline(items) {
       ${t.type === 'chat' ? `<div class="rvm-q">${t.chat ? esc(t.chat) + ' · ' : ''}${plainItems(t.messages, 'сообщение', 'сообщения', 'сообщений')} с ${esc(when(t.since))}${CHAT_LINKED[t.linked] ? ' · ' + esc(CHAT_LINKED[t.linked]) : ''}</div>
         <div><button class="btn small" type="button" data-chat="${t.id}">Переписка</button></div>` : ''}</div>`;
   }).join('');
+}
+
+function dealStageForm(d, box, onChange) {
+  const current = d.pipeline || 'default';
+  const pipelines = (S.dealPipelines || []).filter(p => p.version > 0 &&
+    (p.pipeline === current || S.me.privileged));
+  if (!pipelines.length || d.status !== 'active' || S.me.readonly || S.me.learning_mode) return;
+  const panel = $('[data-deal-stage-form]', box);
+  const targets = p => {
+    const allowedStages = p.pipeline === current && Object.hasOwn(p.config.transitions, d.stage)
+      ? p.config.transitions[d.stage] : null;
+    return p.config.stages.filter(stage => stage.key !== 'paid' &&
+      (p.pipeline !== current || stage.key !== d.stage) &&
+      (allowedStages == null || allowedStages.includes(stage.key)));
+  };
+  const available = pipelines.filter(p => targets(p).length);
+  if (!available.length) return;
+  const first = available.find(p => p.pipeline === current) || available[0];
+  panel.innerHTML = `<form class="pa-form">
+    <h3>Изменить этап</h3>
+    <div class="pa-fields">
+      <label class="field">Воронка<select name="pipeline">${available.map(p =>
+        `<option value="${esc(p.pipeline)}"${p === first ? ' selected' : ''}>${esc(p.config.name)}</option>`).join('')}</select></label>
+      <label class="field">Новый этап<select name="stage" required></select></label>
+    </div><p class="pa-error" role="alert" tabindex="-1" hidden></p>
+    <button class="btn small" type="submit">Перевести сделку</button>
+    </form>`;
+  const form = $('form', panel);
+  const error = $('.pa-error', form), picker = form.elements.pipeline, next = form.elements.stage;
+  const selected = () => available.find(p => p.pipeline === picker.value);
+  function sync() {
+    next.innerHTML = '<option value="">Выберите этап</option>' + targets(selected()).map(s =>
+      `<option value="${esc(s.key)}">${esc(s.name)}</option>`).join('');
+  }
+  picker.addEventListener('change', sync);
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    const button = $('button[type=submit]', form);
+    busy(button, true);
+    error.hidden = true;
+    const target = selected();
+    try {
+      await api(`/api/deals/${encodeURIComponent(d.phone)}/stage`, {method: 'POST',
+        body: {from: d.stage, from_pipeline: current, pipeline: target.pipeline,
+          version: target.version, stage: next.value}});
+      if (!box.isConnected) return;
+      box.close();
+      toast('Этап сделки изменён');
+      await onChange?.();
+      dealCard(d.phone, onChange);
+    } catch (cause) {
+      if (!box.isConnected) return;
+      error.textContent = cause.status === 409 ? cause.message + ' Закройте и откройте карточку снова.' : cause.message;
+      error.hidden = false;
+      error.focus();
+    } finally { busy(button, false); }
+  });
+  sync();
 }
 
 async function dealCard(ph, onChange) {
@@ -218,6 +288,7 @@ async function dealCard(ph, onChange) {
   box.innerHTML = `${modalHead(dealName(d), `${d.company ? `<span class="num">${esc(phone(d.number))}</span> · ` : ''}${esc(d.manager)} · этап: ${esc(d.stage_name)}`, dealStatus(d))}
     <div class="rvm-body">
       ${dealSteps(d)}
+      <section data-deal-stage-form></section>
       <div class="row">${S.me.role !== 'client' ? `<button class="btn small primary" type="button" data-dcall>${svg('phone', '')}${S.me.can_dial ? 'Позвонить' : 'Карточка клиента'}</button>` : ''}
         ${ro || !hasModule('contracts') ? '' : '<button class="btn small" type="button" data-contract data-learning-target="deal-contract">Составить договор</button>'}</div>
       ${d.status === 'lost' ? `<div class="rvm-item miss"><b>Отказ: ${esc(d.lost.reason)}</b>${d.lost.note ? `<div>${esc(d.lost.note)}</div>` : ''}
@@ -230,6 +301,7 @@ async function dealCard(ph, onChange) {
         <button class="btn small" type="button" data-ev="note" data-learning-target="deal-note">Заметка</button></div><div data-form></div></section>`}
       <section><h3>История</h3>${dealTimeline([...d.timeline].reverse()) || '<div class="rvm-mut">Пусто.</div>'}</section>
     </div>`;
+  dealStageForm(d, box, onChange);
   $$('[data-ev]', box).forEach(b => b.addEventListener('click', () => {
     $$('[data-ev]', box).forEach(x => x.setAttribute('aria-pressed', String(x === b)));
     dealForm(box, d, b.dataset.ev, onChange);

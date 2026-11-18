@@ -29,6 +29,7 @@ window.CRMWorkspaceNav = (() => {
     ]},
     {id: 'settings', label: 'Настройки', links: [
       {page: 'settings', arg: 'access', label: 'Учётные записи', description: 'Управление доступом к CRM', keywords: 'выдать доступ логин пароль учетка аккаунт'},
+      {page: 'platform-admin', description: 'Компании, права, воронки и интеграции', keywords: 'админка платформы управление настройки'},
       {page: 'companies', description: 'Компании и подключённые модули'},
       {page: 'logs', description: 'Кто и когда изменил данные', keywords: 'аудит история изменений'},
     ]},

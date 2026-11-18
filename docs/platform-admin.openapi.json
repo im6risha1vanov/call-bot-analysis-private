@@ -2517,6 +2517,12 @@
                 },
                 "proxy": {
                   "type": "boolean"
+                },
+                "source_action": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "writeOnly": true,
+                  "description": "Индекс действия с сохранённым URL в текущей версии этого же правила."
                 }
               }
             }

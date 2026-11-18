@@ -41,6 +41,22 @@ async def listing(pool, client_id):
     return result
 
 
+def restore_action_urls(spec, previous):
+    if not isinstance(spec, dict) or not isinstance(spec.get('actions'), list):
+        return spec
+    previous_actions = admin.decoded(previous)['actions'] if previous is not None else []
+    actions = []
+    for action in spec['actions']:
+        if isinstance(action, dict) and action.get('type') == 'webhook.send' and 'source_action' in action:
+            index = action['source_action']
+            if (type(index) is not int or not 0 <= index < len(previous_actions)
+                    or previous_actions[index].get('type') != 'webhook.send' or not previous_actions[index].get('url')):
+                raise ValueError('Сохранённый адрес вебхука недоступен. Введите адрес заново.')
+            action = {**action, 'url': previous_actions[index]['url']}
+        actions.append(action)
+    return {**spec, 'actions': actions}
+
+
 async def draft(conn, who, client_id, rule_id, data):
     await admin.client(conn, client_id, lock=True)
     await company.require(conn, client_id, 'automations')
@@ -60,6 +76,8 @@ async def draft(conn, who, client_id, rule_id, data):
         name, spec = source['name'], admin.decoded(source['spec'])
     else:
         name, spec = data.get('name'), data.get('spec')
+        previous = latest['spec'] if latest else old['spec'] if old else None
+        spec = restore_action_urls(spec, previous)
     if not isinstance(name, str) or not 1 <= len(name.strip()) <= 120:
         raise ValueError('Укажите название правила от 1 до 120 символов.')
     clean = engine.validate(spec, await engine.accounts(conn, client_id))
