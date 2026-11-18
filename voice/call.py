@@ -14,7 +14,7 @@ import re
 import time
 from typing import Awaitable, Callable
 
-from voice import llm, machine, results, speech
+from voice import llm, machine, results, speech, reply_library
 from voice.dialog import SILENCE, CallResult, Dialog, quick_static
 
 log = logging.getLogger("voice.call")
@@ -124,6 +124,11 @@ class CallSession:
         self.utterance_at = 0.0   # когда клиент начал текущую реплику (по первому промежуточному тексту)
         self.utterance_over_robot = False
         self.backchannel_at = 0.0
+        self.approved_replies = []
+        self.reply_library_events = []
+        self.active_library_event = None
+        self.active_fallback_event = None
+        self.contact_context = ""
         self.after_end: asyncio.Queue[str] = asyncio.Queue()  # что клиент сказал после прощания робота
 
     # ------------------------------------------------------------------ жизненный цикл
@@ -167,6 +172,10 @@ class CallSession:
                 await asyncio.wait_for(self.tts_task, timeout=30)
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 self.tts_task.cancel()
+        if self.active_library_event and self.active_library_event["outcome"] == "sent":
+            self.active_library_event["outcome"] = "completed" if time.monotonic() >= self.speaking_until else "call_ended"
+        if self.reply_library_events:
+            self.extra["reply_library_events"] = self.reply_library_events
         extra = {**self.extra, "tts_chars": self.tts_usage.get("chars", 0)} if self.extra else {}
         self.saved = await self.save(self.dialog, phone=self.phone, mode=self.mode, **({"extra": extra} if extra else {}))
         await self.send_event({"type": "result", "reason": reason, **{k: self.saved[k] for k in (
@@ -236,6 +245,10 @@ class CallSession:
 
     async def _barge_in(self, text: str = "") -> None:
         log.info("BARGE_IN: клиент перебил робота: «%s»", text)
+        if self.active_library_event and self.active_library_event["outcome"] == "sent":
+            self.active_library_event["outcome"] = "interrupted" if time.monotonic() < self.speaking_until else "completed"
+            self.active_library_event = None
+        self.active_fallback_event = None
         if self.quick_said and self.dialog.undo_quick(self.quick_said):
             log.info("быстрый ответ отменён: клиент не договорил")
         self.quick_said = ""
@@ -281,6 +294,34 @@ class CallSession:
             await self.send_event({"type": "transcript", "role": "robot", "text": NO_ANSWER, "first_text_ms": 0})
             self._arm_silence()
             return
+        if text != SILENCE and self.voice_enabled and not self.dialog.finished:
+            available = [item for item in self.approved_replies if item.get("voice_signature") == reply_library.signature(self.voice, item["reply"])]
+            item, confidence = reply_library.match(available, text, self.dialog.messages, self.contact_context)
+            if item:
+                if self.active_library_event and self.active_library_event["outcome"] == "sent":
+                    self.active_library_event["outcome"] = "completed"
+                event = {"reply_id": item["id"], "version_id": item["version_id"],
+                         "confidence": confidence, "outcome": "sent",
+                         "response_ms": max(0, round((time.monotonic() - self.heard_at) * 1000)) if self.heard_at else None}
+                self.dialog._add_client(text)
+                self.dialog._add_robot(item["reply"])
+                self.quick_said = item["reply"]
+                self.reply_library_events.append(event)
+                self.active_library_event = event
+                self.active_fallback_event = None
+                self.audio_sent = self.reply_spoke = True
+                self.speaking_until = max(time.monotonic(), self.speaking_until) + len(item["audio"]) / speech.TTS_BYTES_PER_SECOND
+                await self.send_audio(item["audio"])
+                await self.send_event({"type": "transcript", "role": "robot", "text": item["reply"], "first_text_ms": 0})
+                self._arm_silence()
+                return
+            if self.approved_replies:
+                if self.active_library_event and self.active_library_event.get("outcome") == "sent":
+                    self.active_library_event["outcome"] = "completed"
+                self.active_library_event = None
+                event = {"outcome": "fallback", "reason": "no_compatible_match"}
+                self.reply_library_events.append(event)
+                self.active_fallback_event = event
         quick = getattr(self.dialog, "quick_reply", None)
         fast = quick(text) if quick and text != SILENCE else None
         if fast:  # ожидаемый ответ клиента: заготовка из анкеты, без ожидания модели
