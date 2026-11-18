@@ -355,16 +355,24 @@ async def configured_deals(pool, actor, items, tz, now, as_of=None):
         return {}, items
     from . import admin_pipelines
     rows = await pool.fetch(
-        """SELECT DISTINCT ON (pipeline) * FROM crm_pipeline_versions WHERE client_id=$1
-           AND published_at IS NOT NULL AND ($2::timestamptz IS NULL OR published_at <= $2)
-           ORDER BY pipeline,version DESC""", actor.client_id, as_of)
-    configs = {row['pipeline']: admin_pipelines.present(row) for row in rows}
-    changes = {r['phone']: r for r in await pool.fetch(
-        """SELECT DISTINCT ON (phone) phone,pipeline,stage,changed_at FROM crm_deal_stage_changes
-           WHERE client_id=$1 AND ($2::timestamptz IS NULL OR changed_at <= $2)
-           ORDER BY phone,id DESC""", actor.client_id, as_of)}
-    if not configs and not changes:
-        return configs, items
+        """WITH versions AS (
+               SELECT DISTINCT ON (pipeline) * FROM crm_pipeline_versions WHERE client_id=$1
+               AND published_at IS NOT NULL AND ($2::timestamptz IS NULL OR published_at <= $2)
+               ORDER BY pipeline,version DESC
+           ), latest AS (
+               SELECT DISTINCT ON (phone) phone,pipeline,stage,changed_at
+               FROM crm_deal_stage_changes WHERE client_id=$1
+               AND ($2::timestamptz IS NULL OR changed_at <= $2) ORDER BY phone,id DESC
+           )
+           SELECT 'config' AS kind,pipeline,version,config,published_at,NULL AS phone,NULL AS stage,
+                  NULL::timestamptz AS changed_at FROM versions
+           UNION ALL
+           SELECT 'change',pipeline,NULL,NULL,NULL,phone,stage,changed_at FROM latest""",
+        actor.client_id, as_of)
+    configs = {r['pipeline']: admin_pipelines.present(r) for r in rows if r['kind'] == 'config'}
+    changes = {r['phone']: r for r in rows if r['kind'] == 'change'}
+    if not changes and not any(config['version'] for config in configs.values()):
+        return {}, items
     configs.setdefault('default', admin_pipelines.implicit())
     day = now.astimezone(tz).date()
     for item in items:
@@ -381,6 +389,11 @@ async def configured_deals(pool, actor, items, tz, now, as_of=None):
         stage_no, data = next(((i, d) for i, d in enumerate(config['config']['stages'], 1) if d['key'] == stage))
         item.update(pipeline=pipeline, pipeline_version=config['version'], stage=stage, stage_no=stage_no,
                     stage_name=data['name'], stalled_days=None)
+        if item['lost'] and not item['lost']['auto']:
+            reason_names = config['config']['reasons']
+            original = item['lost']['reason']
+            known_key = next((key for key, text in LOST_REASONS.items() if text == original), original)
+            item['lost']['reason'] = reason_names.get(known_key, original)
         if item['status'] == 'active' and item['last_at']:
             idle = (day - date.fromisoformat(item['last_at'][:10])).days
             limit = data['stall_days']

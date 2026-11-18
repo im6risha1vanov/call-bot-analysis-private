@@ -60,6 +60,8 @@ def routes(viewer, body, pool_key):
                 pool = request.app[pool_key]
                 who = await viewer(request)
                 await admin.require(pool, who)
+                if not await pool.fetchval("SELECT to_regclass('crm_admin_audit') IS NOT NULL"):
+                    raise web.HTTPServiceUnavailable(reason='Миграция админки ещё не применена.')
                 match = request.match_info
                 client_id = number(match['company_id']) if 'company_id' in match else None
                 if method == 'GET':
@@ -198,9 +200,10 @@ def routes(viewer, body, pool_key):
     async def rule_save(pool, who, client_id, path, data):
         return await rules.draft(pool, who, client_id, number(path['rule_id']) if 'rule_id' in path else None, data)
 
-    @register('POST', COMPANY + RULE + '/{action:simulate|publish|pause}')
+    @register('POST', COMPANY + RULE + '/{action:simulate|publish|pause|resume}')
     async def rule_action(pool, who, client_id, path, data):
-        command = {'simulate': rules.simulate, 'publish': rules.publish, 'pause': rules.pause}[path['action']]
+        command = {'simulate': rules.simulate, 'publish': rules.publish,
+                   'pause': rules.pause, 'resume': rules.resume}[path['action']]
         return await command(pool, who, client_id, number(path['rule_id']), data)
 
     @register('GET', COMPANY + RULE + '/runs')

@@ -27,7 +27,7 @@ from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from crypto_util import decrypt, encrypt
-from . import automation_blocks as blocks, company
+from . import admin_permissions, automation_blocks as blocks, company
 
 log = logging.getLogger(__name__)
 POLL_SEC = 5
@@ -226,7 +226,7 @@ def validate(spec, accounts: dict[int, dict]) -> dict:
         raise ValueError('Сценарий описан неверно.')
     trigger = spec.get('trigger') or {}
     kind = trigger.get('type') if isinstance(trigger, dict) else None
-    if kind not in TRIGGERS:
+    if not isinstance(kind, str) or kind not in TRIGGERS:
         raise ValueError(f'Неизвестное событие: {kind}. Есть: {", ".join(TRIGGERS)}.')
     clean_trigger = {'type': kind}
     if kind == 'schedule.daily':
@@ -239,7 +239,8 @@ def validate(spec, accounts: dict[int, dict]) -> dict:
         raise ValueError(f'Условий может быть до {MAX_CONDITIONS}.')
     clean_if = []
     for c in conditions:
-        if not isinstance(c, dict) or c.get('op') not in OPS or not FIELD.fullmatch('{%s}' % c.get('field', '')):
+        if (not isinstance(c, dict) or not isinstance(c.get('op'), str) or c['op'] not in OPS
+                or not FIELD.fullmatch('{%s}' % c.get('field', ''))):
             raise ValueError(f'Условие описано неверно. Операции: {", ".join(OPS)}.')
         item = {'field': c['field'], 'op': c['op']}
         if c['op'] not in ('empty', 'not_empty'):
@@ -369,11 +370,20 @@ async def delete_account(pool, client_id: int, account_id: int) -> dict:
 
 # --- Сценарии -------------------------------------------------------------------------------------
 
+def public_spec(spec):
+    return {**spec, 'actions': [
+        {k: v for k, v in action.items() if k != 'url'} | ({'url_configured': True} if 'url' in action else {})
+        for action in spec['actions']
+    ]}
+
+
 def automation_view(row, accs: dict[int, dict], *, include_hook: bool = True) -> dict:
     spec = json.loads(row['spec']) if isinstance(row['spec'], str) else row['spec']
+    if row.get('admin_managed'):
+        spec = public_spec(spec)
     out = {'id': row['id'], 'name': row['name'], 'enabled': row['enabled'], 'spec': spec,
            'text': describe(spec, accs), 'paused_reason': row['paused_reason']}
-    if include_hook and spec['trigger']['type'] == 'webhook.in':
+    if include_hook and not row.get('admin_managed') and spec['trigger']['type'] == 'webhook.in':
         out['hook'] = f'/hook/{row["hook_token"]}'
     return out
 
@@ -666,6 +676,13 @@ async def fire(pool, auto, event_id: int | None, kind: str, payload: dict):
         json.dumps(payload, ensure_ascii=False), json.dumps(steps, ensure_ascii=False), retry_at)
 
 
+async def can_execute(pool, client_id):
+    if not await company.has_module(pool, client_id, 'automations'):
+        return False
+    denied = await admin_permissions.denied(pool, client_id, 'director')
+    return not (denied & admin_permissions.restrictions('automations', 'run'))
+
+
 async def handle(pool, ev) -> None:
     if ev['automation_id']:
         autos = await pool.fetch('SELECT * FROM automations WHERE id=$1 AND client_id=$2 AND enabled',
@@ -675,12 +692,15 @@ async def handle(pool, ev) -> None:
                                  ev['client_id'], ev['kind'])
     if not autos:
         return
-    if 'admin_managed' in autos[0] and not await company.has_module(pool, ev['client_id'], 'automations'):
+    if 'admin_managed' in autos[0] and not await can_execute(pool, ev['client_id']):
         return
     payload = json.loads(ev['payload']) if ev['payload'] else await build_payload(pool, ev['client_id'], ev['kind'], ev['ref_id'])
     if payload is None:
         return
     for auto in autos:
+        activated = auto.get('admin_activated_at')
+        if activated and ev['created_at'] < activated:
+            continue
         await fire(pool, auto, ev['id'], ev['kind'], payload)
 
 
@@ -703,7 +723,7 @@ async def retry_due(pool) -> None:
             break
         auto = await pool.fetchrow('SELECT * FROM automations WHERE id=$1', run['automation_id'])
         if (auto is None or not auto['enabled'] or auto.get('admin_managed')
-                or ('admin_managed' in auto and not await company.has_module(pool, run['client_id'], 'automations'))):
+                or ('admin_managed' in auto and not await can_execute(pool, run['client_id']))):
             await pool.execute("UPDATE automation_runs SET status='failed' WHERE id=$1", run['id'])
             continue
         spec = json.loads(auto['spec']) if isinstance(auto['spec'], str) else auto['spec']

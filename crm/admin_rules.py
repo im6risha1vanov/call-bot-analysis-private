@@ -8,16 +8,8 @@ from aiohttp import web
 from . import admin_store as admin, automations as engine, company
 
 
-def summarize(spec):
-    spec = admin.decoded(spec)
-    return {**spec, 'actions': [
-        {k: v for k, v in action.items() if k != 'url'} | ({'url_configured': True} if 'url' in action else {})
-        for action in spec['actions']
-    ]}
-
-
 def version_view(row):
-    return {'version': row['id'], 'name': row['name'], 'spec': summarize(row['spec']),
+    return {'version': row['id'], 'name': row['name'], 'spec': engine.public_spec(admin.decoded(row['spec'])),
             'simulated': row['simulated_at'] is not None,
             'published_at': row['published_at'].isoformat() if row['published_at'] else None}
 
@@ -43,7 +35,7 @@ async def listing(pool, client_id):
     result = await engine.overview(pool, client_id, include_hooks=False)
     for item in result['automations']:
         item.pop('text')
-        item['spec'] = summarize(item['spec'])
+        item['spec'] = engine.public_spec(item['spec'])
     for account in result['accounts']:
         account.pop('error', None)
     return result
@@ -80,7 +72,8 @@ async def draft(conn, who, client_id, rule_id, data):
         archived = await conn.fetchval(
             '''INSERT INTO crm_automation_versions(automation_id,name,spec,published_at)
                VALUES($1,$2,$3,$4) RETURNING id''', rule_id, old['name'], old['spec'], old['updated_at'])
-        await conn.execute('UPDATE automations SET admin_managed=true,admin_version_id=$2 WHERE id=$1',
+        await conn.execute(
+            'UPDATE automations SET admin_managed=true,admin_version_id=$2,admin_activated_at=updated_at WHERE id=$1',
                            rule_id, archived)
     await conn.execute(
         'DELETE FROM crm_automation_versions WHERE automation_id=$1 AND published_at IS NULL', rule_id)
@@ -101,6 +94,21 @@ async def current_draft(conn, client_id, rule_id, data):
         raise web.HTTPConflict(reason='Создайте черновик правила.')
     admin.check_version(data, row['id'])
     return rule, row
+
+
+async def activation_spec(conn, client_id, rule_id, spec):
+    if not await engine.can_execute(conn, client_id):
+        raise web.HTTPConflict(reason='Запуск автоматизаций отключён в настройках компании.')
+    limit = await conn.fetchval('SELECT max_active FROM automation_limits WHERE client_id=$1', client_id)
+    active = await conn.fetchval(
+        'SELECT count(*) FROM automations WHERE client_id=$1 AND enabled AND id<>$2', client_id, rule_id)
+    if limit is not None and active >= limit:
+        raise ValueError(f'По тарифу можно до {limit} включённых сценариев.')
+    accounts = await engine.accounts(conn, client_id)
+    clean = engine.validate(admin.decoded(spec), accounts)
+    if any(a.get('account') is not None and accounts[a['account']]['status'] != 'ready' for a in clean['actions']):
+        raise web.HTTPConflict(reason='Сначала подключите аккаунты, которые используются в правиле.')
+    return clean
 
 
 async def simulate(conn, who, client_id, rule_id, data):
@@ -127,23 +135,17 @@ async def simulate(conn, who, client_id, rule_id, data):
 
 async def publish(conn, who, client_id, rule_id, data):
     client = await admin.client(conn, client_id, lock=True)
-    await company.require(conn, client_id, 'automations')
     rule, row = await current_draft(conn, client_id, rule_id, data)
     if row['simulated_at'] is None:
         raise web.HTTPConflict(reason='Проверьте эту версию правила в симуляции.')
-    limit = await conn.fetchval('SELECT max_active FROM automation_limits WHERE client_id=$1', client_id)
-    active = await conn.fetchval(
-        'SELECT count(*) FROM automations WHERE client_id=$1 AND enabled AND id<>$2', client_id, rule_id)
-    if limit is not None and active >= limit:
-        raise ValueError(f'По тарифу можно до {limit} включённых сценариев.')
-    spec = engine.validate(admin.decoded(row['spec']), await engine.accounts(conn, client_id))
+    spec = await activation_spec(conn, client_id, rule_id, row['spec'])
     trigger = spec['trigger']
     local = datetime.now(ZoneInfo(client['timezone'] or 'Europe/Moscow'))
     last = local.date().isoformat() if trigger['type'] == 'schedule.daily' and local.strftime('%H:%M') >= trigger['time'] else None
     hook = (rule['hook_token'] or secrets.token_urlsafe(24)) if trigger['type'] == 'webhook.in' else None
     await conn.execute(
         '''UPDATE automations SET name=$2,spec=$3,enabled=true,paused_reason=NULL,last_fired=$4,
-               hook_token=$5,admin_version_id=$6,updated_at=now() WHERE id=$1''',
+               hook_token=$5,admin_version_id=$6,admin_activated_at=clock_timestamp(),updated_at=now() WHERE id=$1''',
         rule_id, row['name'], admin.as_json(spec), last, hook, row['id'])
     published = await conn.fetchrow(
         'UPDATE crm_automation_versions SET published_at=clock_timestamp() WHERE id=$1 RETURNING *', row['id'])
@@ -159,6 +161,21 @@ async def pause(conn, who, client_id, rule_id, data):
     await conn.execute('UPDATE automations SET enabled=false,updated_at=now() WHERE id=$1', rule_id)
     after = {'id': rule_id, 'enabled': False, 'version': rule['admin_version_id'] or 0}
     await admin.audit(conn, who, client_id, 'automations', rule_id, 'pause', {'enabled': rule['enabled']}, after)
+    return after
+
+
+async def resume(conn, who, client_id, rule_id, data):
+    await admin.client(conn, client_id, lock=True)
+    rule = await get(conn, client_id, rule_id, lock=True)
+    if rule['admin_version_id'] is None:
+        raise web.HTTPConflict(reason='Сначала опубликуйте правило.')
+    admin.check_version(data, rule['admin_version_id'])
+    await activation_spec(conn, client_id, rule_id, rule['spec'])
+    await conn.execute(
+        '''UPDATE automations SET enabled=true,paused_reason=NULL,admin_activated_at=clock_timestamp(),
+               updated_at=now() WHERE id=$1''', rule_id)
+    after = {'id': rule_id, 'enabled': True, 'version': rule['admin_version_id']}
+    await admin.audit(conn, who, client_id, 'automations', rule_id, 'resume', {'enabled': rule['enabled']}, after)
     return after
 
 

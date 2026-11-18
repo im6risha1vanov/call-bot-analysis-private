@@ -1,0 +1,3077 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Averon Platform Administration",
+    "version": "1.0.0",
+    "description": "Запросы админки требуют прямой сессии Григория. Маршрут движения сделки использует обычную сессию CRM и права сотрудника в компании."
+  },
+  "security": [
+    {
+      "crmSession": []
+    }
+  ],
+  "paths": {
+    "/api/platform/admin/catalog": {
+      "get": {
+        "operationId": "getAdminCatalog",
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Catalog"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/platform/admin/companies": {
+      "get": {
+        "operationId": "listCompanies",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyPage"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createCompany",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/csrf"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompanyCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanySettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/platform/admin/companies/{company_id}": {
+      "get": {
+        "operationId": "getCompany",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyDetails"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/platform/admin/companies/{company_id}/settings": {
+      "patch": {
+        "operationId": "updateCompanySettings",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          },
+          {
+            "$ref": "#/components/parameters/csrf"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompanyPatch"
+              },
+              "example": {
+                "version": 0,
+                "modules": [
+                  "automations",
+                  "callcenter"
+                ],
+                "settings": {
+                  "ai_day_limit_rub": 1500
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanySettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/platform/admin/companies/{company_id}/settings/restore/{entry_id}": {
+      "post": {
+        "operationId": "restoreCompanySettings",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          },
+          {
+            "$ref": "#/components/parameters/entry_id"
+          },
+          {
+            "$ref": "#/components/parameters/csrf"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsRestore"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanySettings"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/platform/admin/companies/{company_id}/accounts": {
+      "get": {
+        "operationId": "listCompanyAccounts",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountPage"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createCompanyAccount",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          },
+          {
+            "$ref": "#/components/parameters/csrf"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/platform/admin/companies/{company_id}/accounts/{account_id}/permissions": {
+      "get": {
+        "operationId": "getAccountPermissions",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          },
+          {
+            "$ref": "#/components/parameters/account_id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountPermissions"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/platform/admin/companies/{company_id}/accounts/{account_id}/disable": {
+      "post": {
+        "operationId": "disableAccount",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          },
+          {
+            "$ref": "#/components/parameters/account_id"
+          },
+          {
+            "$ref": "#/components/parameters/csrf"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Empty"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/platform/admin/companies/{company_id}/accounts/{account_id}/sessions": {
+      "post": {
+        "operationId": "closeAccountSessions",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          },
+          {
+            "$ref": "#/components/parameters/account_id"
+          },
+          {
+            "$ref": "#/components/parameters/csrf"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Empty"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/platform/admin/companies/{company_id}/accounts/{account_id}/role": {
+      "post": {
+        "operationId": "changeAccountRole",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          },
+          {
+            "$ref": "#/components/parameters/account_id"
+          },
+          {
+            "$ref": "#/components/parameters/csrf"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountRole"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/platform/admin/companies/{company_id}/accounts/{account_id}/password": {
+      "post": {
+        "operationId": "resetAccountPassword",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          },
+          {
+            "$ref": "#/components/parameters/account_id"
+          },
+          {
+            "$ref": "#/components/parameters/csrf"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Password"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/platform/admin/companies/{company_id}/permissions/{role}": {
+      "get": {
+        "operationId": "getRolePermissions",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          },
+          {
+            "$ref": "#/components/parameters/role"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Permissions"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "setRolePermissions",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          },
+          {
+            "$ref": "#/components/parameters/role"
+          },
+          {
+            "$ref": "#/components/parameters/csrf"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PermissionsUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Permissions"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/platform/admin/companies/{company_id}/pipelines": {
+      "get": {
+        "operationId": "listPipelines",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineList"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/platform/admin/companies/{company_id}/pipelines/{pipeline}/versions": {
+      "get": {
+        "operationId": "listPipelineVersions",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          },
+          {
+            "$ref": "#/components/parameters/pipeline"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineVersions"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/platform/admin/companies/{company_id}/pipelines/{pipeline}/draft": {
+      "put": {
+        "operationId": "savePipelineDraft",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          },
+          {
+            "$ref": "#/components/parameters/pipeline"
+          },
+          {
+            "$ref": "#/components/parameters/csrf"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PipelineDraft"
+              },
+              "example": {
+                "version": 0,
+                "config": {
+                  "name": "Новые продажи",
+                  "stages": [
+                    {
+                      "key": "base",
+                      "name": "База"
+                    },
+                    {
+                      "key": "consultation",
+                      "name": "Консультация",
+                      "stall_days": 2
+                    },
+                    {
+                      "key": "paid",
+                      "name": "Оплата"
+                    }
+                  ],
+                  "transitions": {
+                    "base": [
+                      "consultation"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineVersion"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/platform/admin/companies/{company_id}/pipelines/{pipeline}/preview": {
+      "get": {
+        "operationId": "previewPipeline",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          },
+          {
+            "$ref": "#/components/parameters/pipeline"
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelinePreview"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/platform/admin/companies/{company_id}/pipelines/{pipeline}/publish": {
+      "post": {
+        "operationId": "publishPipeline",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          },
+          {
+            "$ref": "#/components/parameters/pipeline"
+          },
+          {
+            "$ref": "#/components/parameters/csrf"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PipelinePublish"
+              },
+              "example": {
+                "version": 3,
+                "remap": {
+                  "removed_stage": "consultation"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineVersion"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/platform/admin/companies/{company_id}/pipelines/{pipeline}/report": {
+      "get": {
+        "operationId": "reportPipeline",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          },
+          {
+            "$ref": "#/components/parameters/pipeline"
+          },
+          {
+            "name": "as_of",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/platform/admin/companies/{company_id}/automations": {
+      "get": {
+        "operationId": "listAutomations",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationList"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createAutomationDraft",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          },
+          {
+            "$ref": "#/components/parameters/csrf"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuleDraft"
+              },
+              "example": {
+                "version": 0,
+                "name": "Уведомление о консультации",
+                "spec": {
+                  "trigger": {
+                    "type": "deal.stage_changed"
+                  },
+                  "if": [
+                    {
+                      "field": "transition.to",
+                      "op": "=",
+                      "value": "consultation"
+                    }
+                  ],
+                  "actions": [
+                    {
+                      "type": "telegram.send",
+                      "account": 1,
+                      "text": "Новая консультация"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuleVersion"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/platform/admin/companies/{company_id}/automations/{rule_id}/draft": {
+      "put": {
+        "operationId": "saveAutomationDraft",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          },
+          {
+            "$ref": "#/components/parameters/rule_id"
+          },
+          {
+            "$ref": "#/components/parameters/csrf"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuleDraft"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuleVersion"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/platform/admin/companies/{company_id}/automations/{rule_id}/versions": {
+      "get": {
+        "operationId": "listAutomationVersions",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          },
+          {
+            "$ref": "#/components/parameters/rule_id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuleVersions"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/platform/admin/companies/{company_id}/automations/{rule_id}/simulate": {
+      "post": {
+        "operationId": "simulateAutomation",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          },
+          {
+            "$ref": "#/components/parameters/rule_id"
+          },
+          {
+            "$ref": "#/components/parameters/csrf"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Simulation"
+              },
+              "example": {
+                "version": 1
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SimulationResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/platform/admin/companies/{company_id}/automations/{rule_id}/publish": {
+      "post": {
+        "operationId": "publishAutomation",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          },
+          {
+            "$ref": "#/components/parameters/rule_id"
+          },
+          {
+            "$ref": "#/components/parameters/csrf"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Version"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuleVersion"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/platform/admin/companies/{company_id}/automations/{rule_id}/pause": {
+      "post": {
+        "operationId": "pauseAutomation",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          },
+          {
+            "$ref": "#/components/parameters/rule_id"
+          },
+          {
+            "$ref": "#/components/parameters/csrf"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Version"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuleState"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/platform/admin/companies/{company_id}/automations/{rule_id}/runs": {
+      "get": {
+        "operationId": "listAutomationRuns",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          },
+          {
+            "$ref": "#/components/parameters/rule_id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Runs"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/platform/admin/companies/{company_id}/integrations": {
+      "get": {
+        "operationId": "listIntegrations",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Integrations"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/platform/admin/companies/{company_id}/integrations/{kind}/check": {
+      "post": {
+        "operationId": "queueIntegrationCheck",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          },
+          {
+            "$ref": "#/components/parameters/kind"
+          },
+          {
+            "$ref": "#/components/parameters/csrf"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntegrationCheck"
+              },
+              "example": {}
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/platform/admin/companies/{company_id}/integrations/telegram": {
+      "post": {
+        "operationId": "connectTelegram",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          },
+          {
+            "$ref": "#/components/parameters/csrf"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TelegramConnect"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationStatus"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/platform/admin/companies/{company_id}/automations/{rule_id}/webhook": {
+      "post": {
+        "operationId": "rotateWebhook",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          },
+          {
+            "$ref": "#/components/parameters/rule_id"
+          },
+          {
+            "$ref": "#/components/parameters/csrf"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookRotate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookState"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/platform/admin/companies/{company_id}/integrations/accounts/{account_id}/disconnect": {
+      "post": {
+        "operationId": "disconnectIntegration",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          },
+          {
+            "$ref": "#/components/parameters/account_id"
+          },
+          {
+            "$ref": "#/components/parameters/csrf"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Empty"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deleted"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/platform/admin/companies/{company_id}/operations/{operation_id}": {
+      "get": {
+        "operationId": "getOperation",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          },
+          {
+            "$ref": "#/components/parameters/operation_id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operation"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/platform/admin/companies/{company_id}/audit": {
+      "get": {
+        "operationId": "listAuditEntries",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "resource",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditPage"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/deals/{phone}/stage": {
+      "post": {
+        "operationId": "moveDealStage",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/phone"
+          },
+          {
+            "$ref": "#/components/parameters/csrf"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StageMove"
+              },
+              "example": {
+                "version": 1,
+                "from": "presentation",
+                "stage": "consultation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DealStage"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/platform/admin/companies/{company_id}/automations/{rule_id}/resume": {
+      "post": {
+        "operationId": "resumeAutomation",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/company_id"
+          },
+          {
+            "$ref": "#/components/parameters/rule_id"
+          },
+          {
+            "$ref": "#/components/parameters/csrf"
+          },
+          {
+            "$ref": "#/components/parameters/idempotency"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Version"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Операция принята",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RuleState"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "crmSession": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "crm_session"
+      }
+    },
+    "parameters": {
+      "company_id": {
+        "name": "company_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "account_id": {
+        "name": "account_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "entry_id": {
+        "name": "entry_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "rule_id": {
+        "name": "rule_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "operation_id": {
+        "name": "operation_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "role": {
+        "name": "role",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "enum": [
+            "director",
+            "manager",
+            "client"
+          ]
+        }
+      },
+      "pipeline": {
+        "name": "pipeline",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,39}$"
+        }
+      },
+      "phone": {
+        "name": "phone",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "kind": {
+        "name": "kind",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "enum": [
+            "mango",
+            "sheets"
+          ]
+        }
+      },
+      "csrf": {
+        "name": "X-CRM",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "const": "1"
+        }
+      },
+      "idempotency": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{12,96}$"
+        },
+        "description": "Повтор с тем же ключом и тем же телом возвращает исходный результат. Иной запрос с тем же ключом возвращает 409."
+      }
+    },
+    "responses": {
+      "Error": {
+        "description": "400 неверный запрос, 401 требуется вход, 403 недостаточно прав, 404 объект отсутствует, 409 конфликт, 503 сервис недоступен",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Catalog": {
+        "type": "object",
+        "required": [
+          "modules",
+          "settings",
+          "roles",
+          "sections",
+          "actions",
+          "write_enabled"
+        ],
+        "properties": {
+          "modules": {
+            "type": "object"
+          },
+          "settings": {
+            "type": "object"
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "sections": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "write_enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CompanyListItem": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "home"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "home": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CompanyPage": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CompanyListItem"
+            }
+          },
+          "next_after": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      },
+      "CompanyCreate": {
+        "type": "object",
+        "required": [
+          "name",
+          "password"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "modules": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "settings": {
+            "$ref": "#/components/schemas/Settings"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 64,
+            "writeOnly": true
+          },
+          "login": {
+            "type": "string"
+          },
+          "director": {
+            "type": "string"
+          }
+        }
+      },
+      "CompanyPatch": {
+        "type": "object",
+        "required": [
+          "version"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "modules": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "settings": {
+            "$ref": "#/components/schemas/Settings"
+          }
+        }
+      },
+      "CompanySettings": {
+        "type": "object",
+        "required": [
+          "version",
+          "name",
+          "timezone",
+          "modules",
+          "settings"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "modules": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "settings": {
+            "$ref": "#/components/schemas/Settings"
+          }
+        }
+      },
+      "Settings": {
+        "type": "object",
+        "properties": {
+          "callcenter_sheet": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "contract_email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ai_day_limit_rub": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 100000
+          }
+        }
+      },
+      "CompanyDetails": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/CompanySettings"
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "directors"
+            ],
+            "properties": {
+              "id": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "mango": {
+                "type": "boolean"
+              },
+              "processing_enabled": {
+                "type": "boolean"
+              },
+              "directors": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "role"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "integer"
+                    },
+                    "role": {
+                      "const": "director"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "login": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              },
+              "settings_sources": {
+                "type": "object"
+              },
+              "effective_settings": {
+                "$ref": "#/components/schemas/Settings"
+              },
+              "ai_spent_today_rub": {
+                "type": "number"
+              },
+              "ai_limit_reached": {
+                "type": "boolean"
+              }
+            }
+          }
+        ]
+      },
+      "AccountCreate": {
+        "type": "object",
+        "required": [
+          "role",
+          "login",
+          "password"
+        ],
+        "properties": {
+          "role": {
+            "enum": [
+              "director",
+              "manager",
+              "client"
+            ]
+          },
+          "extension": {
+            "type": "string"
+          },
+          "client_key": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 64,
+            "writeOnly": true
+          },
+          "login": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "AccountRole": {
+        "type": "object",
+        "required": [
+          "role"
+        ],
+        "properties": {
+          "role": {
+            "enum": [
+              "director",
+              "manager",
+              "client"
+            ]
+          },
+          "extension": {
+            "type": "string"
+          },
+          "client_key": {
+            "type": "string"
+          }
+        }
+      },
+      "Password": {
+        "type": "object",
+        "required": [
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 64,
+            "writeOnly": true
+          }
+        }
+      },
+      "Account": {
+        "type": "object",
+        "required": [
+          "id",
+          "role"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "role": {
+            "enum": [
+              "director",
+              "manager",
+              "client"
+            ]
+          },
+          "login": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "extension": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "client_key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "platform": {
+            "type": "boolean"
+          },
+          "disabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "AccountPage": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Account"
+            }
+          },
+          "next_after": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      },
+      "AccountPermissions": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Permissions"
+          },
+          {
+            "type": "object",
+            "required": [
+              "account",
+              "scope",
+              "modules"
+            ],
+            "properties": {
+              "account": {
+                "$ref": "#/components/schemas/Account"
+              },
+              "scope": {
+                "type": "string"
+              },
+              "modules": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "Version": {
+        "type": "object",
+        "required": [
+          "version"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "Empty": {
+        "type": "object",
+        "properties": {}
+      },
+      "Permissions": {
+        "type": "object",
+        "required": [
+          "role",
+          "version",
+          "denied"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "role": {
+            "enum": [
+              "director",
+              "manager",
+              "client"
+            ]
+          },
+          "denied": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "PermissionsUpdate": {
+        "type": "object",
+        "required": [
+          "version",
+          "denied"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "denied": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "PipelineConfig": {
+        "type": "object",
+        "required": [
+          "name",
+          "stages"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "stages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Stage"
+            }
+          },
+          "reasons": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "transitions": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "Stage": {
+        "type": "object",
+        "required": [
+          "key",
+          "name"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "stall_days": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      },
+      "PipelineVersion": {
+        "type": "object",
+        "required": [
+          "pipeline",
+          "version",
+          "config"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "pipeline": {
+            "type": "string"
+          },
+          "config": {
+            "$ref": "#/components/schemas/PipelineConfig"
+          },
+          "published_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "PipelineList": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "pipeline"
+              ],
+              "properties": {
+                "pipeline": {
+                  "type": "string"
+                },
+                "draft": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/PipelineVersion"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "active": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/PipelineVersion"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "PipelineVersions": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PipelineVersion"
+            }
+          }
+        }
+      },
+      "PipelinePreview": {
+        "type": "object",
+        "required": [
+          "draft",
+          "affected"
+        ],
+        "properties": {
+          "draft": {
+            "$ref": "#/components/schemas/PipelineVersion"
+          },
+          "affected": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "stage",
+                "status",
+                "count"
+              ],
+              "properties": {
+                "stage": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          }
+        }
+      },
+      "PipelineReport": {
+        "type": "object",
+        "required": [
+          "pipeline",
+          "version",
+          "funnel",
+          "as_of"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "pipeline": {
+            "type": "string"
+          },
+          "as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "funnel": {
+            "type": "object"
+          }
+        }
+      },
+      "PipelineDraft": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "version",
+              "config"
+            ],
+            "properties": {
+              "version": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "config": {
+                "$ref": "#/components/schemas/PipelineConfig"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "version",
+              "restore_version"
+            ],
+            "properties": {
+              "version": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "restore_version": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        ]
+      },
+      "PipelinePublish": {
+        "type": "object",
+        "required": [
+          "version"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "remap": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "StageMove": {
+        "type": "object",
+        "required": [
+          "version",
+          "from",
+          "stage"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "from": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string"
+          },
+          "from_pipeline": {
+            "type": "string"
+          },
+          "pipeline": {
+            "type": "string"
+          }
+        }
+      },
+      "DealStage": {
+        "type": "object",
+        "required": [
+          "phone",
+          "stage",
+          "stage_name"
+        ],
+        "properties": {
+          "phone": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string"
+          },
+          "stage_name": {
+            "type": "string"
+          },
+          "pipeline": {
+            "type": "string"
+          },
+          "pipeline_version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "RuleSpec": {
+        "type": "object",
+        "required": [
+          "trigger",
+          "actions"
+        ],
+        "properties": {
+          "trigger": {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string"
+              },
+              "time": {
+                "type": "string"
+              }
+            }
+          },
+          "if": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "field",
+                "op"
+              ],
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "op": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                }
+              }
+            }
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "type"
+              ],
+              "properties": {
+                "type": {
+                  "enum": [
+                    "email.send",
+                    "telegram.send",
+                    "sheets.append",
+                    "webhook.send"
+                  ]
+                },
+                "account": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "to": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "text": {
+                  "type": "string"
+                },
+                "subject": {
+                  "type": "string"
+                },
+                "row": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "url": {
+                  "type": "string",
+                  "writeOnly": true
+                },
+                "url_configured": {
+                  "type": "boolean"
+                },
+                "proxy": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      },
+      "RuleDraft": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "version",
+              "name",
+              "spec"
+            ],
+            "properties": {
+              "version": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "name": {
+                "type": "string"
+              },
+              "spec": {
+                "$ref": "#/components/schemas/RuleSpec"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "version",
+              "restore_version"
+            ],
+            "properties": {
+              "version": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "restore_version": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        ]
+      },
+      "RuleVersion": {
+        "type": "object",
+        "required": [
+          "version",
+          "name",
+          "spec"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/RuleSpec"
+          },
+          "simulated": {
+            "type": "boolean"
+          },
+          "published_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "RuleVersions": {
+        "type": "object",
+        "required": [
+          "id",
+          "versions"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "active_version": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "paused_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RuleVersion"
+            }
+          }
+        }
+      },
+      "RuleState": {
+        "type": "object",
+        "required": [
+          "id",
+          "version",
+          "enabled"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "AutomationList": {
+        "type": "object",
+        "required": [
+          "automations",
+          "accounts",
+          "usage",
+          "catalog"
+        ],
+        "properties": {
+          "automations": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "accounts": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "usage": {
+            "type": "object"
+          },
+          "catalog": {
+            "type": "object"
+          }
+        }
+      },
+      "Simulation": {
+        "type": "object",
+        "required": [
+          "version"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "payload": {
+            "type": "object"
+          }
+        }
+      },
+      "SimulationResult": {
+        "type": "object",
+        "required": [
+          "version",
+          "conditions_pass",
+          "steps"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "simulation": {
+            "type": "boolean"
+          },
+          "conditions": {
+            "type": "array",
+            "items": {
+              "type": "boolean"
+            }
+          },
+          "conditions_pass": {
+            "type": "boolean"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      },
+      "Runs": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "status"
+              ],
+              "properties": {
+                "id": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "version": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "status": {
+                  "type": "string"
+                },
+                "test": {
+                  "type": "boolean"
+                },
+                "at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "steps": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "Integrations": {
+        "type": "object",
+        "required": [
+          "mango",
+          "telegram",
+          "accounts",
+          "webhooks",
+          "checks"
+        ],
+        "properties": {
+          "mango": {
+            "type": "object"
+          },
+          "telegram": {
+            "type": "boolean"
+          },
+          "accounts": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "webhooks": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "checks": {
+            "type": "object"
+          }
+        }
+      },
+      "IntegrationCheck": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "key",
+              "salt"
+            ],
+            "properties": {
+              "key": {
+                "type": "string",
+                "writeOnly": true
+              },
+              "salt": {
+                "type": "string",
+                "writeOnly": true
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "url"
+            ],
+            "properties": {
+              "url": {
+                "type": "string",
+                "writeOnly": true
+              },
+              "sheet": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "maxProperties": 0
+          }
+        ]
+      },
+      "TelegramConnect": {
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9]{24,40}$",
+            "writeOnly": true
+          }
+        }
+      },
+      "WebhookRotate": {
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_-]{32,80}$",
+            "writeOnly": true
+          }
+        }
+      },
+      "WebhookState": {
+        "type": "object",
+        "required": [
+          "id",
+          "configured"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "configured": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Deleted": {
+        "type": "object",
+        "required": [
+          "id",
+          "deleted"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "deleted": {
+            "type": "boolean"
+          }
+        }
+      },
+      "OperationStatus": {
+        "type": "object",
+        "required": [
+          "id",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "Operation": {
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "kind"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "running",
+              "ok",
+              "failed",
+              "delivery_unknown"
+            ]
+          },
+          "kind": {
+            "type": "string"
+          },
+          "result": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "AuditPage": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuditEntry"
+            }
+          },
+          "next_before": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      },
+      "AuditEntry": {
+        "type": "object",
+        "required": [
+          "id",
+          "actor_id",
+          "client_id",
+          "resource",
+          "entity",
+          "action",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "actor_id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "client_id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "resource": {
+            "type": "string"
+          },
+          "entity": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "before_state": {},
+          "after_state": {},
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "SettingsRestore": {
+        "type": "object",
+        "required": [
+          "version"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "state": {
+            "enum": [
+              "before",
+              "after"
+            ],
+            "default": "after"
+          }
+        }
+      }
+    }
+  }
+}

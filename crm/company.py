@@ -70,10 +70,10 @@ async def require(pool, client_id: int | None, module: str) -> None:
         raise Forbidden(f'Модуль «{MODULES[module]}» не подключён.')
 
 
-async def setting(pool, client_id: int | None, key: str) -> str | None:
+async def setting(pool, client_id: int | None, key: str):
     if client_id is None:
         return None
-    return (await info(pool, client_id))['settings'].get(key) or None
+    return (await info(pool, client_id))['settings'].get(key)
 
 
 def module_of(path: str) -> str | None:

@@ -25,7 +25,7 @@ import mango_client  # noqa: E402
 from tools import Forbidden, home_client_id, is_privileged  # noqa: E402
 from . import activity, economics, lead_import, lead_qualification
 from . import learning, tour, personal, personal_connections
-from . import admin_api, admin_integrations, admin_permissions, admin_pipelines
+from . import admin_api, admin_integrations, admin_permissions, admin_pipelines, admin_store
 from . import accounts, ask as asking, auth, automation_agent, automations, cabinet, call_analysis, callcenter_access, callcenter_db, callcenter_match, callcenter_robot, company, contracts, deals, donor_agent, gpt, journal, overview, people, platform, recording, reviews, sources, staff, store, training  # noqa: E402
 from . import prompts as prompt_mode, robot, webphone, robot_api, robot_prices, robot_runner, robot_store  # noqa: E402
 from .dial import dial  # noqa: E402
@@ -36,6 +36,7 @@ COOKIE = 'crm_session'
 TEST_COOKIE = 'crm_test'
 BACK_COOKIE = 'crm_back'  # своя сессия, пока смотрим чужую компанию (вкладка «Компании»)
 POOL = web.AppKey('pool', asyncpg.Pool)
+SESSION_VIEWER = web.RequestKey('session_viewer', auth.Viewer)
 SECURE_COOKIE = os.getenv('CRM_COOKIE_SECURE', '1') != '0'
 HEADERS = {
     'Content-Security-Policy': "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; "
@@ -68,7 +69,7 @@ async def guard(request: web.Request, handler):
     if request.method not in ('GET', 'HEAD') and request.path not in VIEW_ONLY_POSTS \
             and not request.path.startswith('/api/platform/accounts/'):  # из «Посмотреть» можно сразу сменить учётку
         # Тестовая ссылка и открытый сайт: смотреть можно всё, менять ничего (а не по списку разделов).
-        who = await auth.viewer_for(request.app[POOL], request.cookies.get(COOKIE))
+        who = await session_viewer(request)
         if who is not None and who.test:
             response = fail(403, VIEW_ONLY)
             response.headers.update(HEADERS)
@@ -76,7 +77,7 @@ async def guard(request: web.Request, handler):
     module = company.module_of(request.path)
     if module:
         # Модуль не подключён компании: его адреса закрыты для всех её входов.
-        who = await auth.viewer_for(request.app[POOL], request.cookies.get(COOKIE))
+        who = await session_viewer(request)
         if who is not None and not await company.has_module(request.app[POOL], who.company, module):
             response = fail(403, f'Модуль «{company.MODULES[module]}» не подключён.')
             response.headers.update(HEADERS)
@@ -84,7 +85,7 @@ async def guard(request: web.Request, handler):
     try:
         permission = admin_permissions.permission_for(request.method, request.path)
         if permission:
-            who = await auth.viewer_for(request.app[POOL], request.cookies.get(COOKIE))
+            who = await session_viewer(request)
             await admin_permissions.enforce(request.app[POOL], who, permission)
         response = await handler(request)
     except web.HTTPException as exc:
@@ -114,8 +115,14 @@ async def guard(request: web.Request, handler):
     return response
 
 
+async def session_viewer(request):
+    if SESSION_VIEWER not in request:
+        request[SESSION_VIEWER] = await auth.viewer_for(request.app[POOL], request.cookies.get(COOKIE))
+    return request[SESSION_VIEWER]
+
+
 async def viewer(request: web.Request) -> auth.Viewer:
-    who = await auth.viewer_for(request.app[POOL], request.cookies.get(COOKIE))
+    who = await session_viewer(request)
     if who is None:
         raise web.HTTPUnauthorized(reason='Войдите в CRM по логину и паролю.')
     request[activity.ACTOR] = who
@@ -190,7 +197,7 @@ async def ext_of(request: web.Request, who, value=None) -> str:
 # ---- страницы ----
 
 async def index(request):
-    who = await auth.viewer_for(request.app[POOL], request.cookies.get(COOKIE))
+    who = await session_viewer(request)
     if who is None and auth.public_on():
         raise web.HTTPFound('/t/' + auth.PUBLIC_KEY)  # открытый сайт: сразу выбор входа
     return web.FileResponse(STATIC / 'index.html')
@@ -232,7 +239,7 @@ async def test_exit(request):
 
 async def support_exit(request):
     """Из чужой компании обратно в свою сессию."""
-    who = await auth.viewer_for(request.app[POOL], request.cookies.get(COOKIE))
+    who = await session_viewer(request)
     back = request.cookies.get(BACK_COOKIE)
     if who is not None and who.support:
         await auth.logout(request.app[POOL], request.cookies.get(COOKIE))
@@ -281,6 +288,7 @@ async def api_me(request):
     owner = await is_home_owner(pool, who)
     firm = {'manage_accounts': owner, 'trainer': training.bot() if owner else None, 'company': firm['name'], 'modules': firm['modules'], 'support': who.support, 'callcenter_mode': cc_mode,
             'platform': who.platform and not who.support and firm['home'], 'switcher': await can_switch(pool, who),
+            'platform_admin': not tour.active(request) and await admin_store.allowed(pool, who),
             'learning_mode':tour.active(request) and who.role in {'manager','director'},
             'personal_agent_enabled': not tour.active(request) and await personal.identity(pool, who) is not None}
     if who.role == 'client':
@@ -893,9 +901,13 @@ async def api_deal_event(request):
     who = await actor(request, write=True)
     pool = request.app[POOL]
     data = await body(request)
-    return web.json_response(await deals.add_event(pool, who, request.match_info['phone'], str(data.get('kind') or ''),
-                                                   data.get('note'), data.get('reason'), data.get('amount'),
-                                                   await author_name(pool, who)))
+    async with pool.acquire() as conn, conn.transaction():
+        if await deals.has_table(conn, 'crm_pipeline_versions'):
+            await admin_store.client(conn, who.client_id, lock=True)
+        result = await deals.add_event(conn, who, request.match_info['phone'], str(data.get('kind') or ''),
+                                       data.get('note'), data.get('reason'), data.get('amount'),
+                                       await author_name(conn, who))
+    return web.json_response(result)
 
 
 async def api_deal_stage(request):
@@ -1463,7 +1475,7 @@ async def api_webphone(request):
 async def webphone_ws(request):
     if not webphone.same_origin(request):
         raise web.HTTPForbidden()
-    who = await auth.viewer_for(request.app[POOL], request.cookies.get(COOKIE))
+    who = await session_viewer(request)
     a = who.actor if who is not None and not who.test else None
     if a is None or await webphone.account(request.app[POOL], a.client_id, a.extension) is None:
         raise web.HTTPForbidden()

@@ -270,7 +270,7 @@ def check_action(action: dict, accounts: dict[int, dict]) -> dict:
     if not isinstance(action, dict):
         raise ValueError('Действие описано неверно.')
     kind = action.get('type')
-    meta = ACTIONS.get(kind)
+    meta = ACTIONS.get(kind) if isinstance(kind, str) else None
     if meta is None:
         raise ValueError(f'Такого действия нет: {kind}. Есть: {", ".join(ACTIONS)}.')
     out = {'type': kind}
@@ -293,6 +293,8 @@ def check_action(action: dict, accounts: dict[int, dict]) -> dict:
     elif kind == 'email.send':
         to = action.get('to')
         to = [to] if isinstance(to, str) else (to or [])
+        if not isinstance(to, list):
+            raise ValueError('«Письмо»: укажите список адресов.')
         to = [str(x).strip() for x in to if str(x).strip()]
         if not to or len(to) > MAX_EMAILS or not all(EMAIL.fullmatch(x) for x in to):
             raise ValueError(f'«Письмо»: нужно от 1 до {MAX_EMAILS} правильных адресов.')

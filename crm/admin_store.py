@@ -25,11 +25,15 @@ def check_version(data, current):
         raise web.HTTPConflict(reason='Данные изменились. Обновите страницу.')
 
 
-async def require(pool, who):
+async def allowed(pool, who):
     invite = os.getenv('CRM_PLATFORM_ADMIN_INVITE_ID', '')
-    if (not invite.isascii() or not invite.isdecimal() or who.role != 'director'
-            or who.test or who.support or who.support_by is not None or who.invite_id != int(invite)
-            or who.company != await home_client_id(pool)):
+    return (invite.isascii() and invite.isdecimal() and who.role == 'director'
+            and not who.test and not who.support and who.support_by is None and who.invite_id == int(invite)
+            and who.company == await home_client_id(pool))
+
+
+async def require(pool, who):
+    if not await allowed(pool, who):
         raise Forbidden('Админка платформы недоступна.')
 
 
@@ -100,7 +104,8 @@ async def detail(pool, client_id):
     directors = [a for a in await auth.invites(pool, client_id) if a['role'] == 'director']
     return {**status, **config, 'directors': directors, 'settings_sources': sources,
             'effective_settings': {k: effective.get(k) for k in platform.SETTING_KEYS},
-            'ai_spent_today_rub': round(await company.spent_today_rub(pool, client_id), 2)}
+            'ai_spent_today_rub': round(await company.spent_today_rub(pool, client_id), 2),
+            'ai_limit_reached': await company.ai_over_limit(pool, client_id)}
 
 
 async def create_company(conn, who, data):
@@ -154,12 +159,15 @@ async def update_company(conn, who, client_id, data, *, restore=None):
 
 
 async def restore_settings(conn, who, client_id, entry_id, data):
+    state = data.get('state', 'after')
+    if state not in ('before', 'after'):
+        raise ValueError('Выберите состояние до или после изменения.')
     row = await conn.fetchrow(
-        '''SELECT after_state FROM crm_admin_audit WHERE client_id=$1 AND id=$2 AND resource='settings' ''',
+        '''SELECT before_state,after_state FROM crm_admin_audit WHERE client_id=$1 AND id=$2 AND resource='settings' ''',
         client_id, entry_id)
-    if row is None or row['after_state'] is None:
+    if row is None or row[state + '_state'] is None:
         raise web.HTTPNotFound(reason='Версия настроек не найдена.')
-    return await update_company(conn, who, client_id, data, restore=decoded(row['after_state']))
+    return await update_company(conn, who, client_id, data, restore=decoded(row[state + '_state']))
 
 
 async def permissions(pool, client_id, role):

@@ -1,8 +1,11 @@
 import asyncio
+import json
 import os
+import re
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
+from urllib.parse import quote
 
 from aiohttp.test_utils import TestClient, TestServer
 
@@ -11,6 +14,25 @@ from tests.test_crm import DBCase, DSN
 
 
 BASE = '/api/platform/admin'
+
+
+class AdminSpecTests(unittest.TestCase):
+    def test_openapi_matches_registered_operations(self):
+        from crm import admin_api
+
+        registered = set()
+        for rule in admin_api.routes(None, None, None):
+            match = re.search(r'\{action:([^}]+)\}', rule.path)
+            choices = match[1].split('|') if match else [None]
+            for action in choices:
+                path = rule.path.replace(match[0], action) if match else rule.path
+                path = re.sub(r'\{(\w+):\\d\{\d,\d+\}\}', r'{\1}', path)
+                registered.add((rule.method.lower(), path))
+        registered.add(('post', '/api/deals/{phone}/stage'))
+        path = Path(__file__).resolve().parents[1] / 'docs/platform-admin.openapi.json'
+        spec = json.loads(path.read_text(encoding='utf-8'))
+        documented = {(method, route) for route, methods in spec['paths'].items() for method in methods}
+        self.assertEqual(registered, documented)
 
 
 @unittest.skipUnless(DSN, 'METHODOLOGY_TEST_DATABASE_URL is required')
@@ -71,6 +93,7 @@ class PlatformAdminTests(DBCase):
         ])
         self.assertEqual(first, repeated)
         self.assertEqual(first['version'], 1)
+        self.assertTrue((await self.request('GET', path))['ai_limit_reached'])
         self.assertEqual(await self.pool.fetchval("SELECT settings->>'other_key' FROM company_settings WHERE client_id=1"),
                          'kept')
         await self.request('PATCH', path + '/settings', {'version': 1, 'name': 'Averon 2'}, key=key, status=409)
@@ -81,6 +104,9 @@ class PlatformAdminTests(DBCase):
         restored = await self.request('POST', path + f"/settings/restore/{journal[1]['id']}", {'version': 2})
         self.assertEqual(restored['name'], 'Averon 1')
         self.assertEqual(restored['version'], 3)
+        restored = await self.request('POST', path + f"/settings/restore/{journal[1]['id']}",
+                                      {'version': 3, 'state': 'before'})
+        self.assertEqual(restored['name'], 'Averon')
 
     async def test_company_accounts_and_live_role_restrictions(self):
         await self.session(self.admin)
@@ -107,6 +133,8 @@ class PlatformAdminTests(DBCase):
         await self.pool.execute(
             """INSERT INTO deal_events(client_id,phone,kind,extension) VALUES(1,'9990000001','presentation','101')""")
         original = await self.request('GET', '/api/deals/9990000001')
+        seed = await self.request('GET', path + '/pipelines/default/versions')
+        self.assertEqual(seed['items'][0]['config'], admin_pipelines.default_config())
         config = admin_pipelines.default_config()
         config['stages'].insert(3, {'key': 'consultation', 'name': 'Повторная консультация', 'stall_days': 2})
         config['transitions'] = {'presentation': ['consultation']}
@@ -136,6 +164,7 @@ class PlatformAdminTests(DBCase):
             event = await self.pool.fetchrow("SELECT * FROM automation_events WHERE kind='deal.stage_changed'")
             await asyncio.gather(automations.handle(self.pool, event), automations.handle(self.pool, event))
             delivery.assert_awaited_once()
+        historical_time = await self.pool.fetchval('SELECT max(changed_at) FROM crm_deal_stage_changes')
         await self.session(self.admin)
         runs = await self.request('GET', rule_path + '/runs')
         self.assertEqual([(r['status'], r['version']) for r in runs['items']], [('ok', rule['version'])])
@@ -147,6 +176,11 @@ class PlatformAdminTests(DBCase):
         await self.request('POST', path + '/pipelines/default/publish',
                            {'version': nxt['version'], 'remap': {'consultation': 'messenger'}})
         self.assertEqual((await self.request('GET', '/api/deals/9990000001'))['stage'], 'messenger')
+        report = await self.request('GET', path + '/pipelines/default/report?as_of=' + quote(historical_time.isoformat()))
+        self.assertEqual(report['version'], draft['version'])
+        self.assertEqual(next(s['reached'] for s in report['funnel']['stages'] if s['key'] == 'consultation'), 1)
+        await self.request('POST', rule_path + '/pause', data)
+        self.assertTrue((await self.request('POST', rule_path + '/resume', data))['enabled'])
 
     async def test_home_mango_is_queued_and_credentials_are_write_only(self):
         await self.session(self.admin)
@@ -163,3 +197,13 @@ class PlatformAdminTests(DBCase):
         state = await self.request('GET', path + '/integrations')
         self.assertEqual(state['checks']['mango']['status'], 'ok')
         self.assertNotIn('sentinel', str(await self.request('GET', path + '/audit')))
+
+        another = await self.request('POST', path + '/integrations/mango/check', {}, status=202)
+        await self.pool.execute(
+            "UPDATE crm_admin_operations SET status='running', started_at=now()-interval '6 min' WHERE id=$1",
+            another['id'])
+        with patch.object(admin_integrations.mango_client, 'call', new_callable=AsyncMock) as probe:
+            await admin_integrations.process(self.pool)
+            probe.assert_not_awaited()
+        unknown = await self.request('GET', path + f"/operations/{another['id']}")
+        self.assertEqual(unknown['status'], 'delivery_unknown')
