@@ -225,3 +225,23 @@ class ApprovedPrintGuideTests(unittest.TestCase):
         for phrase in ('Какая печать возможна?', 'Можно нанести логотип?', 'У вас есть офсетная печать?', 'Офсетная печать есть?', 'Афсетная печать есть?'):
             self.assertIn(phrase,item['triggers'])
         self.assertEqual(item['answer'],'Мы делаем простую флексопечать в один или два цвета.')
+
+class MaterialEvidenceRegressionTests(unittest.TestCase):
+    def test_existing_material_evidence_about_website_is_excluded_without_reprocessing(self):
+        from crm.robot_reply_learning import build_candidates, intent_of
+        noise = 'так идет ГУДД значит открывая сайт который заходила в гофрокартон как бы гудпак именно такого даже нету может'
+        source = {'source_type':'human', 'source_id':'20358', 'evidence':[{'question':noise, 'intent':'material', 'answer':'Уточню.'}]}
+        direct = {'source_type':'human', 'source_id':'2', 'evidence':[{'question':'С каким картоном работаете?', 'intent':'material', 'answer':'Уточню.'}]}
+        candidates=build_candidates([source,direct], 'packaging', guide_enabled=True)
+        material=next(c for c in candidates if c['intent']=='material')
+        self.assertNotIn('human:20358',material['group']['source_ids'])
+        self.assertNotIn(noise,material['triggers'])
+        self.assertEqual(intent_of('С каким картоном работаете?'), 'material')
+
+    def test_real_material_specs_and_questions_are_kept(self):
+        from crm.robot_reply_learning import build_candidates, intent_of
+        phrases=['Внутри бурая, а снаружи белая. Трехслойная', 'Какой гофрокартон используете?']
+        sources=[{'source_type':'human','source_id':str(i),'evidence':[{'question':v,'intent':intent_of(v),'answer':'Уточню.'}]} for i,v in enumerate(phrases)]
+        material=next(c for c in build_candidates(sources,'packaging') if c['intent']=='material')
+        self.assertEqual(set(material['group']['source_ids']),{'human:0','human:1'})
+        self.assertEqual(set(material['triggers']),set(phrases))

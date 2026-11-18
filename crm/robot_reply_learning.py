@@ -23,7 +23,7 @@ INTENTS = (
     ('assortment', r'каки[еуюх].{0,20}(?:короб|упаковк)|ассортимент|что (?:вы )?(?:производите|делаете)'),
     ('print', r'печать|печат[ьи]|логотип|флексограф'),
     ('profile', r'профил[ьяюе]|профиль|\b(?:BE|BC|EB|БЕ|БЦ)\b'),
-    ('material', r'гофрокартон|материал|тр[её]хслойн|пятислойн|мелованн'),
+    ('material', r'гофрокартон|материал|тр[её]хслойн|пятислойн|мелованн|(?:какой|каким|какого|какую|каких)\s+картон'),
     ('price', r'цен[аыуе]|стоимост|сколько стоит|поч[её]м|прайс'),
     ('supplier', r'поставщик|уже (?:работаем|закупаем)|есть с кем работаем'),
     ('busy', r'занят|некогда|неудобно|перезвоните|перезвонить'),
@@ -258,6 +258,17 @@ def usable_observation(item):
     if 'profile' in hits and set(hits) <= {'profile','material'}: hits = ['profile']
     if hits == ['price'] and not re.fullmatch(r'(?:а\s+)?(?:сколько\s+(?:это\s+)?сто(?:ит|ят)(?:\s+(?:коробк[иа]|коробок|упаковк[аи]))?|как(?:ая|ова)\s+(?:цена|стоимость)(?:\s+(?:коробк[иа]|коробок|упаковк[аи]))?|(?:цена|стоимость)(?:\s+(?:коробк[иа]|коробок|упаковк[аи]))?)(?:[?!.])?', value.strip(), re.I):
         return False
+    if hits == ['material']:
+        # A product keyword alone can be a website/search or supplier mention.
+        # Keep actual material specifications, material questions and requests.
+        specification = re.search(r'тр[её]хслойн|пятислойн|мелованн', value, re.I)
+        material_question = re.search(
+            r'(?:какой|каким|какая|какую|какие|какого|каких|какое|из чего|из какого).{0,35}(?:картон|материал)'
+            r'|(?:гофрокартон|материал).{0,35}(?:какой|какая|какие|используете|работаете|бывает)', value, re.I)
+        material_request = re.search(
+            r'(?:нужен|нужна|нужно|требуется|ищем|используем|закупаем|покупаем|бер[её]м).{0,35}(?:гофрокартон|материал)', value, re.I)
+        if not (specification or material_question or material_request):
+            return False
     if hits == ['color'] and not re.search(r'короб|картон|упаков', value, re.I):
         return False
     if hits == ['print'] and not re.search(r'\?|(?:есть|делаете|можете|возможн|какая|какую|бывает)', value, re.I):
