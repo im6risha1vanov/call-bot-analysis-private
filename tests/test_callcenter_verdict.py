@@ -127,6 +127,7 @@ def test_reasoning_override_preserves_general_calls(monkeypatch):
     import importlib
     monkeypatch.setenv('CVC_API_KEY', 'synthetic-test-key')
     analysis = importlib.import_module('analysis')
+    from crm import callcenter_transport
     sent = []
     class Response:
         status_code = 200
@@ -141,22 +142,25 @@ def test_reasoning_override_preserves_general_calls(monkeypatch):
     monkeypatch.setattr(analysis.httpx, 'AsyncClient', Client)
     async def run():
         await analysis._call('system', 'user', 100)
-        await analysis._call('system', 'user', 100, reasoning_effort='low', json_object=True)
+        await callcenter_transport.request('system', 'user', 100, reasoning_effort='low', json_object=True)
     asyncio.run(run())
     assert [x['reasoning']['effort'] for x in sent] == ['high', 'low']
     assert 'text' not in sent[0]
     assert sent[1]['text'] == {'format': {'type': 'json_object'}}
+    # Request options must never invalidate polling/queue configuration.
+    from unified.analysis_policy import current_configuration, legacy_configuration
+    assert current_configuration()['package_sha256'] == legacy_configuration()['package_sha256']
 
 
 def test_semantic_reasoning_is_configurable(monkeypatch):
     import asyncio
     import importlib
     monkeypatch.setenv('CVC_API_KEY', 'synthetic-test-key')
-    analysis = importlib.import_module('analysis')
+    from crm import callcenter_transport
     captured = []
     async def fake_call(*args, **kwargs):
         captured.append((args, kwargs)); return {}, 0
-    monkeypatch.setattr(analysis, '_call', fake_call)
+    monkeypatch.setattr(callcenter_transport, 'request', fake_call)
     lines = sample(); check = q.assess(lines, 'packaging', 30, False)
     monkeypatch.delenv('CALLCENTER_SEMANTIC_REASONING_EFFORT', raising=False)
     asyncio.run(v.assess_semantic(lines, check))

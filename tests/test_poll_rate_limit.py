@@ -9,7 +9,7 @@ os.environ.setdefault('CVC_API_KEY', 'test')
 
 import astra_worker as worker
 
-LIMIT = RuntimeError('Mango stats/calls/request 429: {"name":"Too Many Requests"}')
+LIMIT = worker.mango_client.MangoHTTPError('stats/calls/request', 429)
 
 
 class StatsWindowTests(unittest.IsolatedAsyncioTestCase):
@@ -63,10 +63,10 @@ class RateLimitTests(unittest.IsolatedAsyncioTestCase):
             await worker.poll_all_clients(self.pool, polls if polls is not None else {})
         return notice
 
-    async def test_short_limit_is_silent_and_retried_sooner(self):
+    async def test_short_limit_is_silent_and_respects_poll_interval(self):
         polls = {}
         self.assertFalse((await self.run_at(1000, polls=polls)).await_count)
-        self.assertEqual(polls[1], 1000 + worker.RATE_LIMIT_RETRY_SEC)
+        self.assertEqual(polls[1], 1000 + max(300, worker.RATE_LIMIT_RETRY_SEC))
         self.assertFalse((await self.run_at(1000 + 30 * 60)).await_count)
 
     async def test_long_limit_is_reported_and_success_resets(self):

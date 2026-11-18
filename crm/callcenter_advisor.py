@@ -522,14 +522,14 @@ async def advise_packet(packet, sources):
     if not personal and ((packet.get('current') or {}).get('coverage', {}).get('dialogue', 0) < 2 or not sources):
         return {'status': 'insufficient', 'summary': 'Недостаточно разговоров с подтверждёнными примерами для выводов.',
                 'actions': [], 'limitations': ['Выводы появятся после накопления подходящих диалогов.']}
-    import analysis
+    from . import callcenter_transport
     model_packet = {k: v for k, v in packet.items() if k != 'contact_stats'} if personal else packet
     request = 'Верни JSON по инструкции.\n' + json.dumps(model_packet, ensure_ascii=False)
     last_error = None
     for attempt in range(2):
         correction = ('\nИсправь прошлый ответ: ' + str(last_error) + '. Дай короткие поля без цифр в выводах, реальные refs и проверку на одной базе/проекте.') if attempt else ''
         try:
-            data, _ = await analysis._call(PERSONAL_PROMPT if personal else PROMPT, request + correction, 2800, reasoning_effort='low', json_object=True)
+            data, _ = await callcenter_transport.request(PERSONAL_PROMPT if personal else PROMPT, request + correction, 2800, reasoning_effort='low', json_object=True)
             return validate_personal(data, packet, sources) if personal else validate(data, packet, sources)
         except (SynthesisError, json.JSONDecodeError) as exc:
             last_error = exc

@@ -72,7 +72,7 @@ def _cost(usage: dict) -> float:
     return billed * ASTRA_MULTIPLIER
 
 
-async def _call(system: str, user: str, max_tokens: int, *, reasoning_effort: str | None = None, json_object: bool = False):
+async def _call(system: str, user: str, max_tokens: int):
     # temperature запрошена промтом (0 / 0.4), но reasoning-модели этого прокси
     # её игнорируют (API молча фиксирует temperature=1) — не передаём, чтобы не
     # создавать ложное впечатление, что она на что-то влияет.
@@ -81,10 +81,8 @@ async def _call(system: str, user: str, max_tokens: int, *, reasoning_effort: st
         "instructions": system,
         "input": user,
         "max_output_tokens": max_tokens,
-        "reasoning": {"effort": reasoning_effort or REASONING_EFFORT},
+        "reasoning": {"effort": REASONING_EFFORT},
     }
-    if json_object:
-        body["text"] = {"format": {"type": "json_object"}}
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         r = await client.post(
             CVC_BASE_URL + "/responses",

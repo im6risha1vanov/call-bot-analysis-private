@@ -47,10 +47,10 @@ def test_rejects_unknown_references_and_unsupported_numbers():
 
 def test_transport_and_low_support(monkeypatch):
     monkeypatch.setenv('CVC_API_KEY', 'synthetic-test')
-    analysis=importlib.import_module('analysis'); calls=[]
+    transport=importlib.import_module('crm.callcenter_transport'); calls=[]
     async def fake(*args, **kwargs):
         calls.append((args, kwargs)); return response(), 0
-    monkeypatch.setattr(analysis, '_call', fake)
+    monkeypatch.setattr(transport, 'request', fake)
     r=report(); r['current']['coverage']['dialogue']=1
     assert asyncio.run(advisor.advise(r))['status']=='insufficient' and not calls
     r['current']['coverage']['dialogue']=2
@@ -70,10 +70,10 @@ def test_pin_must_resolve_to_selected_source():
 
 def test_advice_can_run_from_prepared_packet(monkeypatch):
     monkeypatch.setenv('CVC_API_KEY', 'synthetic-test')
-    analysis=importlib.import_module('analysis'); calls=[]
+    transport=importlib.import_module('crm.callcenter_transport'); calls=[]
     async def fake(*args, **kwargs):
         calls.append((args, kwargs)); return response(), 0
-    monkeypatch.setattr(analysis, '_call', fake)
+    monkeypatch.setattr(transport, 'request', fake)
     packet, sources=advisor.evidence_packet(report())
     assert asyncio.run(advisor.advise_packet(packet, sources))['status']=='ready'
     assert calls and '9991112233' not in calls[0][0][1]
@@ -106,15 +106,15 @@ def test_valid_remaining_action_and_no_mixed_benchmark():
 
 def test_retries_invalid_synthesis_and_fails_visibly(monkeypatch):
     monkeypatch.setenv('CVC_API_KEY','synthetic-test')
-    analysis=importlib.import_module('analysis'); calls=[]
+    transport=importlib.import_module('crm.callcenter_transport'); calls=[]
     async def fake(*args,**kwargs):
         calls.append(args[1]); return (response('E999') if len(calls)==1 else response()), 0
-    monkeypatch.setattr(analysis,'_call',fake)
+    monkeypatch.setattr(transport,'request',fake)
     packet,sources=advisor.evidence_packet(report())
     assert asyncio.run(advisor.advise_packet(packet,sources))['status']=='ready'
     assert len(calls)==2 and 'Исправь прошлый ответ' in calls[1]
     async def fail(*args,**kwargs): return response('E999'),0
-    monkeypatch.setattr(analysis,'_call',fail)
+    monkeypatch.setattr(transport,'request',fail)
     with pytest.raises(advisor.SynthesisError): asyncio.run(advisor.advise_packet(packet,sources))
 
 
@@ -164,13 +164,13 @@ def test_refusal_and_late_callback_are_not_base_defects():
 
 def test_one_dialog_personal_call_not_blocked(monkeypatch):
     monkeypatch.setenv('CVC_API_KEY','synthetic-test')
-    analysis=importlib.import_module('analysis'); calls=[]
+    transport=importlib.import_module('crm.callcenter_transport'); calls=[]
     packet,sources=advisor.evidence_packet(personal_report())
     ref=packet['operator_script_candidates'][0]['ref']
     async def fake(*args,**kwargs):
         calls.append(args); return {'operator_review':{'script':{'status':'supported','observation':'Оператор назвал заявку.',
             'action':'Проверить источник.', 'test':'Проверить реплики.', 'refs':[ref]}, 'base':{'status':'insufficient'}}},0
-    monkeypatch.setattr(analysis,'_call',fake)
+    monkeypatch.setattr(transport,'request',fake)
     out=asyncio.run(advisor.advise_packet(packet,sources))
     assert out['operator_review']['script']['status']=='supported' and calls
     assert out['operator_review']['base']['status']=='insufficient'
@@ -413,13 +413,13 @@ def test_largest_attributed_source_is_selected_and_personal_model_has_no_stats(m
     section=advisor._contact_stat_section(stats)
     assert '«Юг»' in section['action'] and 'контактов 4' in section['action']
     monkeypatch.setenv('CVC_API_KEY','synthetic-test')
-    analysis=importlib.import_module('analysis'); calls=[]
+    transport=importlib.import_module('crm.callcenter_transport'); calls=[]
     packet,sources=advisor.evidence_packet(personal_report());packet['contact_stats']=stats
     ref=packet['operator_script_candidates'][0]['ref']
     async def fake(*args,**kwargs):
         calls.append(args[1]);return {'operator_review':{'script':{'status':'supported','observation':'Оператор назвал заявку.',
           'action':'Проверить источник.', 'test':'Проверить реплики.', 'refs':[ref]}, 'base':{'status':'insufficient'}}},0
-    monkeypatch.setattr(analysis,'_call',fake)
+    monkeypatch.setattr(transport,'request',fake)
     out=asyncio.run(advisor.advise_packet(packet,sources))
     assert out['operator_review']['base']['status']=='supported'
     assert 'contact_stats' not in calls[0] and 'by_base' not in calls[0] and 'Север' not in calls[0]
