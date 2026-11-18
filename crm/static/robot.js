@@ -8,6 +8,7 @@ const RB_COSTS = [['mango_min', 'Минута Mango', 'за минуту'], ['el
 // Шесть вкладок; клиент видит первые четыре.
 const RB_TABS = [
   ['campaigns', 'Кампании и номера'], ['calls', 'Звонки'], ['operators', 'Операторы'],
+  ['replies', 'Библиотека ответов', 'director'],
   ['voice', 'Голос', 'director'], ['settings', 'Настройки', 'director'],
 ];
 const RB_OLD_TAB = {numbers: 'campaigns', contacts: 'campaigns', stop: 'campaigns', analytics: 'calls', integrations: 'settings'};
@@ -576,3 +577,97 @@ RB_VIEW.settings = async el => {
 
 // ---------- голос и тестовый звонок (static/robot-voice.js) ----------
 RB_VIEW.voice = async el => { await robotVoiceView(el); };
+
+
+// Библиотека утверждённых ответов, отдельно для каждого проекта.
+RB_VIEW.replies = async el => {
+  const [{items: projects}, {items: campaigns}] = await Promise.all([rbGet('/reply-projects'), rbGet('/campaigns')]);
+  if (!projects.some(p => String(p.id) === String(RB.replyProject))) RB.replyProject = projects[0]?.id || '';
+  const selected = projects.find(p => String(p.id) === String(RB.replyProject));
+  const items = selected ? (await rbGet('/replies', {project_id: selected.id})).items : [];
+  el.innerHTML = `<section class="card blk"><div class="card-h"><h2>Библиотека ответов</h2><span class="sp"></span><button class="btn primary small" id="reply-project-new"${rbRO()}>Новый проект</button></div>
+    <p class="lead">Утверждённые записи применяются только в кампаниях, привязанных к проекту. Новые варианты проверяет директор.</p>
+    ${projects.length ? `<label class="field">Проект<select class="inp" id="reply-project">${projects.map(p => `<option value="${esc(p.id)}"${String(p.id) === String(RB.replyProject) ? ' selected' : ''}>${esc(p.name)} · ${esc(opName(p.operator))}</option>`).join('')}</select></label>
+      ${(selected.campaigns || []).filter(c => c.reply_health?.error).map(c => `<p class="hint">Кампания ${esc(c.name || c.id)}: набор был отключён при последнем звонке — ${esc(c.reply_health.error)}.</p>`).join('')}
+      <div><button class="btn small" id="reply-profile"${rbRO()}>Профиль проекта</button> <button class="btn small" id="reply-operator"${rbRO()}>Назначить оператора</button> <button class="btn small" id="reply-map"${rbRO()}>Привязать кампанию</button> <button class="btn small" id="reply-script"${rbRO()}>Привязать сценарий</button> <button class="btn small" id="reply-sources">Источники и покрытие</button> <button class="btn small" id="reply-metrics">Применение</button> <button class="btn small" id="reply-contact"${rbRO()}>Согласованный перезвон</button> <button class="btn small" id="reply-propose"${rbRO()}>Предложить черновики</button> <button class="btn small" id="reply-new"${rbRO()}>Добавить ответ</button></div>
+      ${items.length ? items.map(i => `<article class="card blk"><div class="card-h"><b>${esc(i.question)}</b><span class="sp"></span><span class="chip">${esc(i.status)} · версия ${esc(i.version)}</span></div>
+        <p>${esc(i.answer)}</p><p class="hint">Источник: ${i.source_kind === "guide" ? "шпаргалка" : i.source_kind === "learned" ? "разговоры" : "вручную"} · связанных звонков: ${esc(i.evidence_count ?? 0)}</p>${i.fact_needed ? `<p class="hint">Требуется проверить факт: ${esc(i.fact_note || "уточните данные перед утверждением")}</p>` : ""}<p class="hint">Активная версия: ${esc(i.active_version || 'нет')} ${i.rejection_reason ? ' · Причина: ' + esc(i.rejection_reason) : ''}</p>
+        <button class="btn small" data-reply-edit="${i.id}"${rbRO()}>Изменить</button> <button class="btn small" data-reply-generate="${i.id}"${rbRO()}>Создать аудио</button>
+        <button class="btn small" data-reply-review="${i.id}">Проверить</button> <button class="btn small" data-reply-versions="${i.id}">Версии</button> <button class="btn small" data-reply-evidence="${i.id}">Источники</button></article>`).join('') : '<p class="empty">В проекте пока нет ответов.</p>'}` : '<p class="empty">Создайте проект и привяжите к нему кампанию.</p>'}</section>`;
+  $('#reply-project-new', el).onclick = () => replyProjectForm();
+  $('#reply-project', el)?.addEventListener('change', e => { RB.replyProject = e.target.value; RB_VIEW.replies(el).catch(e => toast(e.message, true)); });
+  $('#reply-profile', el)?.addEventListener('click', () => replyProfileForm(selected));
+  $('#reply-operator', el)?.addEventListener('click', () => replyOperatorForm(selected));
+  $('#reply-map', el)?.addEventListener('click', () => replyMapForm(selected, campaigns));
+  $('#reply-script', el)?.addEventListener('click', async () => { const script = prompt('Название сценария для обучения'); if (!script) return; try { await rbPost(`/reply-projects/${selected.id}/script`, {script}); toast('Сценарий привязан'); } catch(e) { toast(e.message, true); } });
+  $('#reply-propose', el)?.addEventListener('click', async () => { try { await rbPost(`/reply-projects/${selected.id}/propose`); toast('Черновики подготовлены'); reload(); } catch(e) { toast(e.message, true); } });
+  $('#reply-metrics', el)?.addEventListener('click', () => replyMetrics(selected));
+  $('#reply-contact', el)?.addEventListener('click', () => replyContactForm(selected));
+  $('#reply-sources', el)?.addEventListener('click', () => replySources(selected));
+  $('#reply-new', el)?.addEventListener('click', () => replyEditForm(selected.id));
+  const find = id => items.find(i => String(i.id) === String(id));
+  $$('[data-reply-edit]', el).forEach(b => b.onclick = () => replyEditForm(selected.id, find(b.dataset.replyEdit)));
+  $$('[data-reply-generate]', el).forEach(b => b.onclick = async () => { const i = find(b.dataset.replyGenerate); b.disabled = true; try { await rbPost(`/replies/${i.id}/generate`, {version:i.version}); toast('Аудио создано'); reload(); } catch(e) { toast(e.message, true); b.disabled = false; } });
+  $$('[data-reply-review]', el).forEach(b => b.onclick = () => replyReview(find(b.dataset.replyReview)));
+  $$('[data-reply-versions]', el).forEach(b => b.onclick = () => replyVersions(find(b.dataset.replyVersions)));
+  $$('[data-reply-evidence]', el).forEach(b => b.onclick = () => replyEvidence(selected.id, find(b.dataset.replyEvidence)));
+};
+
+function replyProjectForm() {
+  const box = modal(`${modalHead('Новый проект')}<div class="rvm-body"><label class="field">Название<input class="inp" id="rp-name" maxlength="200"></label><label class="field">Профиль проекта<select class="inp" id="rp-profile"><option value="generic">Другой проект</option><option value="packaging">Картонная упаковка</option></select></label><label class="field">Оператор<select class="inp" id="rp-op"><option value="">Назначить позже</option>${(RB.st.operators || []).map(o => `<option value="${esc(o.id)}">${esc(o.name)}</option>`).join('')}</select></label><button class="btn primary" id="rp-save">Создать</button></div>`);
+  $('#rp-save', box).onclick = async () => { try { const res = await rbPost('/reply-projects', {name: $('#rp-name', box).value, operator: $('#rp-op', box).value, profile: $('#rp-profile', box).value}); RB.replyProject = res.id; box.close(); reload(); } catch(e) { toast(e.message, true); } };
+}
+function replyProfileForm(project) {
+  const box = modal(`${modalHead('Профиль проекта', 'Можно изменить только до появления источников и ответов.')}<div class="rvm-body"><label class="field">Профиль<select class="inp" id="rp-profile"><option value="generic"${project.profile !== 'packaging' ? ' selected' : ''}>Другой проект</option><option value="packaging"${project.profile === 'packaging' ? ' selected' : ''}>Картонная упаковка</option></select></label><button class="btn primary" id="rp-save">Сохранить</button></div>`);
+  $('#rp-save', box).onclick = async () => { try { await rbPost(`/reply-projects/${project.id}/profile`, {profile: $('#rp-profile', box).value}); box.close(); reload(); } catch(e) { toast(e.message, true); } };
+}
+function replyOperatorForm(project) {
+  const box = modal(`${modalHead('Назначить оператора')}<div class="rvm-body"><label class="field">Оператор<select class="inp" id="rp-op">${(RB.st.operators || []).map(o => `<option value="${esc(o.id)}"${o.id === project.operator ? ' selected' : ''}>${esc(o.name)}</option>`).join('')}</select></label><button class="btn primary" id="rp-save">Сохранить</button></div>`);
+  $('#rp-save', box).onclick = async () => { try { await rbPost(`/reply-projects/${project.id}/operator`, {operator: $('#rp-op', box).value}); box.close(); reload(); } catch(e) { toast(e.message, true); } };
+}
+function replyMapForm(project, campaigns) {
+  const choices = campaigns.filter(c => c.operator === project.operator);
+  const box = modal(`${modalHead('Привязать кампанию')}<div class="rvm-body"><p>Доступны кампании того же оператора.</p><label class="field">Кампания<select class="inp" id="rp-campaign">${choices.map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}</select></label><button class="btn primary" id="rp-save"${choices.length ? '' : ' disabled'}>Привязать</button></div>`);
+  $('#rp-save', box).onclick = async () => { try { await rbPost(`/reply-projects/${project.id}/campaign`, {campaign_id: Number($('#rp-campaign', box).value)}); box.close(); toast('Кампания привязана'); reload(); } catch(e) { toast(e.message, true); } };
+}
+function replyEditForm(projectId, item) {
+  const box = modal(`${modalHead(item ? 'Изменить ответ' : 'Новый ответ', 'Изменение создаёт новую версию.') }<div class="rvm-body"><label class="field">Фраза клиента<textarea class="inp" id="rp-question" rows="3">${esc(item?.question || '')}</textarea></label><label class="field">Ответ<textarea class="inp" id="rp-answer" rows="4">${esc(item?.answer || '')}</textarea></label>${item?.fact_needed ? `<p class="hint">Требуется проверить факт: ${esc(item.fact_note || 'уточните данные перед утверждением')}</p><label><input type="checkbox" id="rp-fact-checked"> Я проверил и исправил факты в ответе</label>` : ''}${item ? `<label class="field">Варианты фразы клиента (по одному на строку; укажите и основную фразу)<textarea class="inp" id="rp-triggers" rows="3">${esc((item.triggers?.length ? item.triggers : [item.question]).join("\n"))}</textarea></label><label class="field">Действие после ответа<select class="inp" id="rp-action"><option value="reply">Продолжить разговор</option></select></label><label class="field">Обязательные слова из истории разговора (по одному на строку)<textarea class="inp" id="rp-context" rows="2">${esc((item.context_terms || []).join("\n"))}</textarea></label><label class="field">Обязательные сведения о контакте (по одному на строку)<textarea class="inp" id="rp-contact" rows="2">${esc((item.contact_terms || []).join("\n"))}</textarea></label>` : ''}<button class="btn primary" id="rp-save">Сохранить</button></div>`);
+  $('#rp-save', box).onclick = async () => { const data = {question: $('#rp-question', box).value, answer: $('#rp-answer', box).value}; try { if (item) await rbPost(`/replies/${item.id}/edit`, {...data, version: item.version, fact_checked: !!$('#rp-fact-checked', box)?.checked, triggers: $('#rp-triggers', box).value.split('\n').map(s => s.trim()).filter(Boolean), next_action: $('#rp-action', box).value, context_terms: $('#rp-context', box).value.split('\n').map(s => s.trim()).filter(Boolean), contact_terms: $('#rp-contact', box).value.split('\n').map(s => s.trim()).filter(Boolean)}); else await rbPost('/replies', {...data, project_id: projectId}); box.close(); reload(); } catch(e) { toast(e.message, true); } };
+}
+function replyReview(item) {
+  const box = modal(`${modalHead('Проверка ответа', `Версия ${esc(item.version)}`)}<div class="rvm-body"><p><b>Клиент:</b> ${esc(item.question)}</p><p><b>Робот:</b> ${esc(item.answer)}</p>${item.fact_needed ? `<p class="hint">Факты не проверены: сначала исправьте ответ и отметьте проверку.</p>` : ""}${item.has_audio ? `<audio id="rp-audio" controls preload="none" src="${esc(rbq(`/replies/${item.id}/audio`, {version:item.version}))}"></audio>` : '<p>Сначала создайте аудио.</p>'}<p class="hint" id="rp-status">Прослушайте запись целиком перед утверждением.</p><button class="btn primary" id="rp-approve" disabled>Утвердить</button> <button class="btn" id="rp-reject"${rbRO()}>Отклонить</button> <button class="btn" id="rp-rollback"${rbRO()}>Вернуть версию</button></div>`);
+  $('#rp-audio', box)?.addEventListener('ended', async () => { try { await rbPost(`/replies/${item.id}/preview`, {version:item.version}); $('#rp-status', box).textContent = 'Запись прослушана.'; $('#rp-approve', box).disabled = !!RB.st.readonly || !!item.fact_needed; } catch(e) { toast(e.message, true); } });
+  $('#rp-approve', box).onclick = async () => { try { await rbPost(`/replies/${item.id}/approve`, {version:item.version}); box.close(); reload(); } catch(e) { toast(e.message, true); } };
+  $('#rp-reject', box).onclick = async () => { const reason = prompt('Причина отклонения'); if (!reason) return; try { await rbPost(`/replies/${item.id}/reject`, {version:item.version, reason}); box.close(); reload(); } catch(e) { toast(e.message, true); } };
+  $('#rp-rollback', box).onclick = async () => { const target = Number(prompt('Номер ранее утверждённой версии')); if (!Number.isInteger(target) || target < 1) return; try { await rbPost(`/replies/${item.id}/rollback`, {version:item.version, target_version:target}); box.close(); reload(); } catch(e) { toast(e.message, true); } };
+}
+async function replyEvidence(projectId, item) {
+  try { const {items} = await rbGet(`/replies/${item.id}/evidence`, {project_id:projectId}); modal(`${modalHead('Источники ответа')}<div class="rvm-body">${items.length ? items.map(i => `<p><b>${esc(i.source_type)} · ${esc(i.source_id)}</b> · итог: ${esc(i.outcome || 'не указан')}<br>${replyEvidencePairs(i.evidence)}<br><audio controls preload="none" src="${esc(rbq(`/replies/${item.id}/evidence/${encodeURIComponent(i.source_type)}/${encodeURIComponent(i.source_id)}`, {project_id:projectId}))}"></audio></p>`).join('') : '<p>Связанных источников пока нет.</p>'}</div>`); } catch(e) { toast(e.message, true); }
+}
+
+async function replyVersions(item) {
+  try { const {items} = await rbGet(`/replies/${item.id}/versions`); modal(`${modalHead('Версии ответа')}<div class="rvm-body">${items.map(v => `<article><b>Версия ${esc(v.version)}</b> ${v.approved_at ? '· утверждена' : ''}<p>${esc(v.question)}</p><p>${esc(v.answer)}</p></article>`).join('')}</div>`); } catch(e) { toast(e.message, true); }
+}
+async function replySources(project) {
+  try {
+    const [data, replies] = await Promise.all([rbGet(`/reply-projects/${project.id}/sources`), rbGet('/replies', {project_id: project.id})]);
+    const box = modal(`${modalHead('Источники и покрытие', 'Итог звонка сам по себе не доказывает качество ответа.')}<div class="rvm-body"><p>Всего источников по статусам: ${(data.coverage || []).map(c => `${esc(c.source_type)} · ${esc(c.status)}${c.reason ? " · " + esc(c.reason) : ""}: ${esc(c.count)}`).join("; ") || "нет данных"}. Всего: ${esc(data.total ?? data.items.length)}; ниже показаны последние ${esc(data.shown ?? data.items.length)} источников.</p><p>По операторам: ${(data.operator_coverage || []).map(o => `${esc(o.operator || "не определён")}: ${esc(o.count)}`).join("; ") || "нет данных"}.</p>
+      <label class="field">Связать источник с ответом<select class="inp" id="rp-link-target">${replies.items.map(i => `<option value="${esc(i.id)}">${esc(i.question)}</option>`).join('')}</select></label>
+      ${(data.items || []).map((i, index) => `<article><b>${esc(i.source_type)} · ${esc(i.source_id)}</b> · ${esc(i.status)} ${i.reason ? '· ' + esc(i.reason) : ''}<p>Итог: ${esc(i.outcome || 'не указан')}</p><p>${replyEvidencePairs(i.evidence)}</p><button class="btn small" data-source-link="${index}"${rbRO()}>Связать с ответом</button></article>`).join('') || '<p>Источников пока нет.</p>'}</div>`, true);
+    $$('[data-source-link]', box).forEach(b => b.onclick = async () => { const source = data.items[Number(b.dataset.sourceLink)]; const id = Number($('#rp-link-target', box).value); if (!id) return; try { await rbPost(`/replies/${id}/evidence`, {project_id:project.id, source_type:source.source_type, source_id:source.source_id}); toast('Источник связан'); } catch(e) { toast(e.message, true); } });
+  } catch(e) { toast(e.message, true); }
+}
+
+function replyEvidencePairs(raw) {
+  let evidence = raw;
+  if (typeof evidence === 'string') { try { evidence = JSON.parse(evidence); } catch(e) { evidence = []; } }
+  return (Array.isArray(evidence) ? evidence : []).map(e => `<span>Вопрос ${e.at == null ? '(время неизвестно)' : esc(e.at) + ' с'}: ${esc(e.question || '')}<br>Ответ ${e.answer_at == null ? '(время неизвестно)' : esc(e.answer_at) + ' с'}: ${esc(e.answer || '')}<br>Повтор: ${e.reaction_at == null ? 'время неизвестно' : esc(e.reaction_at) + ' с'}</span>`).join('<br>');
+}
+
+function replyContactForm(project) {
+  const box = modal(`${modalHead('Согласованный перезвон', 'Укажите только время, действительно согласованное с клиентом.')}<div class="rvm-body"><label class="field">Телефон<input class="inp" type="tel" id="rp-phone"></label><label class="field">Дата и время<input class="inp" type="datetime-local" id="rp-callback"></label><button class="btn primary" id="rp-save">Сохранить</button></div>`);
+  $('#rp-save', box).onclick = async () => { try { const date = new Date($('#rp-callback', box).value); if (!Number.isFinite(date.getTime())) throw new Error('Укажите дату и время'); await rbPost(`/reply-projects/${project.id}/contact-memory`, {phone:$('#rp-phone', box).value, callback_at:date.toISOString()}); box.close(); toast('Перезвон сохранён'); } catch(e) { toast(e.message, true); } };
+}
+async function replyMetrics(project) {
+  try { const {items, fallback} = await rbGet(`/reply-projects/${project.id}/metrics`); modal(`${modalHead('Применение записей', 'Время — до передачи аудио, а не до звука в телефоне. Итоги относятся к звонку и не доказывают влияние записи.')}<div class="rvm-body">${items.map(i => `<p>Ответ ${esc(i.reply_id)} · версия ${esc(i.version)}: применений ${esc(i.uses)}, перебиваний ${esc(i.interrupted)}, среднее время до передачи аудио ${i.mean_response_ms == null ? 'нет данных' : esc(Math.round(i.mean_response_ms)) + ' мс'}, до первого кадра AudioSocket ${i.mean_first_audio_ms == null ? 'нет данных' : esc(Math.round(i.mean_first_audio_ms)) + ' мс'} (замеров ${esc(i.first_audio_samples || 0)}); воспроизведений в звонках с повтором ${esc(i.uses_in_repeated_calls || 0)}, с итогом «интерес» ${esc(i.calls_interested_events || 0)}, с итогом «перезвон» ${esc(i.calls_callback_events || 0)}</p>`).join('') || '<p>Применений пока нет.</p>'}<p>Обычный ответ: ${esc(fallback?.samples || 0)} случаев, первый кадр ${fallback?.mean_first_audio_ms == null ? 'нет данных' : esc(Math.round(fallback.mean_first_audio_ms)) + ' мс'} (замеров ${esc(fallback?.first_audio_samples || 0)}).</p></div>`); } catch(e) { toast(e.message, true); }
+}

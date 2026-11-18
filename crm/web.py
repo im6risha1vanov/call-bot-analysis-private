@@ -1703,6 +1703,8 @@ def build(pool) -> web.Application:
     app.router.add_get('/api/robot/voices/sample', api_robot_voice_sample)
     app.router.add_post('/api/robot/voices/clone', api_robot_voice_clone)
     app.router.add_routes(robot_api.routes(viewer, body, POOL))
+    from . import robot_reply_api
+    app.router.add_routes(robot_reply_api.routes(viewer, body, POOL))
     app.router.add_get('/api/prompts/version/{id}', api_prompt_version)
     app.router.add_post('/api/prompts/version/{id}/use', api_prompt_use)
     app.router.add_get('/api/prompts/{kind}', api_prompt)

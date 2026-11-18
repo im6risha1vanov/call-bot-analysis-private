@@ -137,10 +137,10 @@ class DBCase(unittest.IsolatedAsyncioTestCase):
                      '014_crm.sql', '015_crm_roles.sql', '016_crm_access.sql', '017_crm_reports.sql', '018_crm_questions.sql',
                      '019_crm_staff.sql', '020_robot.sql', '021_manager_memory.sql', '022_presentations.sql', '024_deals.sql', '025_contracts.sql', '026_presentation_client.sql', '027_sources.sql', '028_crm_logins.sql', '032_platform.sql', '033_callcenter.sql', '034_donor_agent.sql', '035_donor_rub.sql',
                      '040_crm_outcome_callback.sql', '041_crm_staff_activity.sql', '042_employee_notifications.sql',
-                     '023_tg_chats.sql', '044_tg_folder_ownership.sql'):
+                     '023_tg_chats.sql', '044_tg_folder_ownership.sql', '051_robot_reply_library.sql', '052_robot_reply_learning.sql', '053_robot_reply_commitments.sql', '054_robot_reply_audio_jobs.sql'):
             await self.pool.execute((root / 'migrations' / name).read_text())
         await self.pool.execute('TRUNCATE clients, tg_messages, crm_login_tokens, crm_sessions, crm_docs, crm_invites, crm_reports, crm_questions, '
-                                'employee_invites, manager_memory, deal_events, contracts, source_selections, donor_runs, donor_spend, prompt_active, prompt_versions, prompt_drafts, astra_daily_spend, robot_options CASCADE')
+                                'employee_invites, manager_memory, deal_events, contracts, source_selections, donor_runs, donor_spend, prompt_active, prompt_versions, prompt_drafts, astra_daily_spend, robot_options, robot_reply_projects, robot_reply_commitment_scans CASCADE')
         from crypto_util import encrypt
         await self.pool.execute("INSERT INTO clients(id,timezone,processing_enabled,vpbx_api_key_enc,vpbx_api_salt_enc) "
                                 "VALUES(1,'Europe/Moscow',true,$1,$2)", encrypt('key'), encrypt('salt'))

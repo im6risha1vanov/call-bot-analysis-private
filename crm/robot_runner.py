@@ -35,6 +35,30 @@ def record_id(rec: dict) -> str:
     return str(rec.get('call_id') or 'log-' + hashlib.sha1(f"{rec.get('at')}|{rec.get('phone')}".encode()).hexdigest()[:20])
 
 
+def reply_metrics(rec):
+    """Persist only bounded numerical identifiers and timing, never spoken text."""
+    events = rec.get('reply_library_events') or (rec.get('extra') or {}).get('reply_library_events') or []
+    result = []
+    for event in events[:100] if isinstance(events, list) else []:
+        if not isinstance(event, dict):
+            continue
+        if event.get('outcome') == 'fallback':
+            ms = event.get('response_ms')
+            first = event.get('first_audio_ms')
+            result.append({'outcome': 'fallback', 'response_ms': ms if isinstance(ms, int) and 0 <= ms <= 600000 else None,
+                           'first_audio_ms': first if isinstance(first, int) and 0 <= first <= 600000 else None})
+            continue
+        rid, version, ms = event.get('reply_id'), event.get('version_id'), event.get('response_ms')
+        first = event.get('first_audio_ms')
+        if not isinstance(rid, int) or not isinstance(version, int) or rid <= 0 or version <= 0:
+            continue
+        outcome = event.get('outcome') if event.get('outcome') in ('sent', 'completed', 'interrupted') else 'unknown'
+        result.append({'reply_id': rid, 'version_id': version, 'outcome': outcome,
+                       'response_ms': ms if isinstance(ms, int) and 0 <= ms <= 600000 else None,
+                       'first_audio_ms': first if isinstance(first, int) and 0 <= first <= 600000 else None})
+    return result
+
+
 async def ingest(pool) -> int:
     """Новые строки calls.jsonl → robot_calls. Позицию в файле храним в robot_options."""
     path = robot.CALLS_LOG
@@ -85,7 +109,7 @@ async def store_call(pool, rec: dict) -> None:
             at, outcome, str(rec.get('comment') or '')[:2000], int(rec.get('duration_s') or 0), tokens, int(rec.get('tts_chars') or 0),
             rec.get('recording') or None,
             json.dumps({'facts': rec.get('facts') or {}, 'transcript': rec.get('transcript') or [], 'transfer': bool(rec.get('transfer')),
-                        'error': rec.get('error')}, ensure_ascii=False))
+                        'error': rec.get('error'), 'reply_library_events': reply_metrics(rec)}, ensure_ascii=False))
         if not inserted:
             return
         owner = str(rec.get('owner') or '')
@@ -160,6 +184,17 @@ async def tick(pool, now: datetime | None = None) -> dict | None:
     busy = await robot_busy()
     if busy is None or busy:
         return None
+    from .robot_reply_library import approved_payload, contact_memory
+    try:
+        approved_replies = await approved_payload(pool, target['owner'], target['campaign_id'], target['operator'])
+    except ValueError as exc:
+        # Never send a partial set. Existing dialogue continues; record the reason.
+        log.error('Библиотека ответов кампании %s отключена для звонка: %s', target['campaign_id'], exc)
+        await robot_store.set_option(pool, f"reply_health:{target['campaign_id']}", {'error': str(exc), 'at': now.isoformat()})
+        approved_replies = []
+    else:
+        await robot_store.set_option(pool, f"reply_health:{target['campaign_id']}", {'error': None, 'at': now.isoformat()})
+    verified_contact_context = await contact_memory(pool, target['owner'], target['campaign_id'], target['phone'])
     target_id = target['id']
     held_until = now + timedelta(minutes=HOLD_MIN)
     # До подтверждения заявки старый обработчик при откате тоже не должен повторить вызов.
@@ -174,6 +209,8 @@ async def tick(pool, now: datetime | None = None) -> dict | None:
     meta = {'phone': target['phone'], 'operator': target['operator'], 'campaign_id': target['campaign_id'],
             'owner': target['owner'], 'target_id': target_id}
     try:
+        meta['approved_replies'] = approved_replies
+        meta['contact_context'] = verified_contact_context
         async with httpx.AsyncClient(timeout=15, trust_env=False) as client:
             r = await client.post(f'http://127.0.0.1:{robot.api_port()}/dial', json=meta)
         data = r.json() if r.headers.get('content-type', '').startswith('application/json') else {}
@@ -205,16 +242,40 @@ async def tick(pool, now: datetime | None = None) -> dict | None:
     return None
 
 
-async def loop(pool) -> None:
+async def learning_loop(pool) -> None:
     while True:
         try:
-            await ingest(pool)
-            await tick(pool)
+            from . import robot_reply_learning, robot_reply_commitments
+            await robot_reply_learning.backfill(pool)
+            await robot_reply_commitments.backfill(pool)
+            await robot_reply_learning.refresh_all(pool)
+            from . import robot_reply_library
+            await robot_reply_library.prepare_pending_audio(pool)
         except asyncio.CancelledError:
             raise
         except Exception:
-            log.exception('кабинет робота: сбой шага')
-        await asyncio.sleep(TICK_S)
+            log.exception('библиотека ответов: сбой обработки звонков')
+        await asyncio.sleep(300)
+
+
+async def loop(pool) -> None:
+    learning_task = asyncio.create_task(learning_loop(pool))
+    try:
+        while True:
+            try:
+                await ingest(pool)
+                await tick(pool)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception('кабинет робота: сбой шага')
+            await asyncio.sleep(TICK_S)
+    finally:
+        learning_task.cancel()
+        try:
+            await learning_task
+        except asyncio.CancelledError:
+            pass
 
 
 def enabled() -> bool:

@@ -17,6 +17,9 @@ Asterisk на том же сервере зарегистрирован в Mango
 from __future__ import annotations
 
 import argparse
+import base64
+import re
+import tomllib
 import array
 import asyncio
 import json
@@ -25,6 +28,7 @@ import os
 import sys
 import time
 import uuid as uuidlib
+from datetime import datetime
 import wave
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -258,6 +262,20 @@ class _NoModel:
 # ------------------------------------------------------------------ один звонок
 
 
+def verified_callback(data):
+    """Accept only two timezone-aware ISO timestamps from CRM, never free text."""
+    if not isinstance(data, dict) or set(data) != {"callback_at", "callback_source_at"}:
+        return None
+    try:
+        callback = datetime.fromisoformat(str(data["callback_at"]).replace("Z", "+00:00"))
+        source = datetime.fromisoformat(str(data["callback_source_at"]).replace("Z", "+00:00"))
+        if callback.utcoffset() is not None and source.utcoffset() is not None:
+            return callback.isoformat(), source.isoformat()
+    except (ValueError, TypeError):
+        pass
+    return None
+
+
 class PhoneCall:
     def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, *,
                  make_dialog=None, make_asr=None, synthesize=speech.synthesize_pcm, save=results.save) -> None:
@@ -276,14 +294,21 @@ class PhoneCall:
         self.rec_client = bytearray()     # запись: что пришло от клиента
         self.recording = True
         self.bg_pos = 0
+        self.library_audio_marker = None  # event, bytes ahead, queued time
 
     async def send_audio(self, pcm: bytes) -> None:
+        event = (getattr(self.session, "active_library_event", None) or getattr(self.session, "active_fallback_event", None)) if self.session else None
+        if event and event.get("outcome") in ("sent", "fallback") and "first_audio_ms" not in event and self.library_audio_marker is None:
+            if event.get("response_ms") is None and self.session.heard_at:
+                event["response_ms"] = max(0, round((time.monotonic() - self.session.heard_at) * 1000))
+            self.library_audio_marker = (event, len(self.out), time.monotonic())
         self.out += downsample(pcm, speech.TTS_RATE, RATE)
 
     async def send_event(self, event: dict) -> None:
         kind = event.get("type")
         if kind == "clear":
             self.out.clear()  # клиент перебил: недоговорённое не проигрываем
+            self.library_audio_marker = None
         elif kind in ("transcript", "result", "error"):
             log.info("звонок: %s", json.dumps(event, ensure_ascii=False))
 
@@ -313,6 +338,14 @@ class PhoneCall:
                 chunk, self.bg_pos = add_background(chunk, self.bg_pos, level)
             if chunk_sent:
                 await self.write(frame(KIND_AUDIO, chunk))
+                if had_speech and self.library_audio_marker:
+                    event, ahead, queued_at = self.library_audio_marker
+                    if ahead < FRAME_BYTES:
+                        queued_ms = event.get("response_ms")
+                        event["first_audio_ms"] = None if queued_ms is None else queued_ms + round((time.monotonic() - queued_at) * 1000)
+                        self.library_audio_marker = None
+                    else:
+                        self.library_audio_marker = (event, ahead - FRAME_BYTES, queued_at)
                 if self.recording:
                     self.rec_robot += chunk
             if not had_speech and self.ran_dry and self.session is not None and self.session.reply_spoke and (
@@ -358,6 +391,14 @@ class PhoneCall:
             tasks.append(asyncio.create_task(asr.run()))
         session = CallSession(self.make_dialog(load(operator)), self.send_audio, self.send_event,
                               mode="телефон", phone=phone, synthesize=self.synthesize, save=self.save)
+        from voice import reply_library
+        session.approved_replies = reply_library.prepare(meta.pop("approved_replies", []), speech.TTS_RATE, lambda text: reply_library.signature(session.voice, text))
+        contact = verified_callback(meta.pop("contact_context", None))
+        if contact:
+            stamp, source_stamp = contact
+            session.contact_context = stamp
+            session.dialog.system += ("\nПроверенные сведения о контакте: согласованное время перезвона: "
+                                      + stamp + "; источник подтверждён " + source_stamp + ". Учитывай их при разговоре.")
         session.extra = {"call_id": call_id, **meta, **({"recording": record_name} if self.recording else {})}
         reader_task = asyncio.create_task(self._read_audio(asr))
         try:
@@ -454,6 +495,34 @@ class PhoneASR:
 # ------------------------------------------------------------------ сервис
 
 
+async def reply_audio(operator_id: str, owner: str, text: str, synthesize=speech.synthesize_pcm) -> dict:
+    """Generate a preview using the voice and sample rate of this SIP runtime."""
+    from voice import operator, reply_library
+    path = operator.find(operator_id)
+    if not path:
+        raise ValueError("Оператор не найден")
+    data = tomllib.loads(path.read_text(encoding="utf-8"))
+    own = str(data.get("owner") or "") == owner
+    builtin_root = operator.shipped(operator_id) and (owner == "" or re.fullmatch(r"#\d+", owner))
+    if not own and not builtin_root:
+        raise ValueError("Оператор другого кабинета")
+    text = " ".join(str(text or "").split())
+    if not text or len(text) > 1000:
+        raise ValueError("Ответ должен содержать от 1 до 1000 символов")
+    op = load(operator_id)
+    speed = float(os.getenv("VOICE_SPEED") or op.voice_speed)
+    voice = speech.Voice(os.getenv("VOICE_VOICE") or op.voice, "" if os.getenv("VOICE_VOICE") else op.voice_role, speed)
+    token = speech.settings_override.set(dict(speech.settings_override.get() if speech.settings_override.get() is not None else speech.live_settings()))
+    try:
+        fingerprint = reply_library.signature(voice, text)
+        pcm = await synthesize(text, voice)
+        if not pcm or len(pcm) % 2 or len(pcm) > 4_000_000:
+            raise ValueError("Некорректное аудио")
+        return {"audio_pcm_b64":base64.b64encode(pcm).decode("ascii"), "sample_rate":speech.TTS_RATE,
+                "voice_signature":fingerprint}
+    finally:
+        speech.settings_override.reset(token)
+
 async def serve() -> None:
     from aiohttp import web
 
@@ -466,9 +535,20 @@ async def serve() -> None:
         finally:
             ACTIVE[0] -= 1
 
+    async def api_reply_audio(request: web.Request) -> web.Response:
+        data = await request.json()
+        try:
+            result = await reply_audio(str(data.get("operator") or ""), str(data.get("owner") or ""), data.get("text"))
+            return web.json_response(result)
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=400)
+        except Exception:
+            log.exception("Не удалось создать аудио ответа")
+            return web.json_response({"error": "Не удалось создать аудио ответа"}, status=503)
+
     async def api_dial(request: web.Request) -> web.Response:
         data = await request.json()
-        meta = {k: data[k] for k in ("campaign_id", "owner", "target_id") if data.get(k) not in (None, "")}
+        meta = {k: data[k] for k in ("campaign_id", "owner", "target_id", "approved_replies", "contact_context") if data.get(k) not in (None, "")}
         try:
             call_id = await dial(str(data.get("phone", "")), str(data.get("operator") or "kitchen"), meta=meta)
         except ValueError as e:  # номер или оператор не годятся: повторять бесполезно
@@ -491,8 +571,9 @@ async def serve() -> None:
 
     await asyncio.to_thread(background)  # петля фона готовится 0,3 с: заранее, а не посреди первого звонка
     server = await asyncio.start_server(on_socket, AUDIOSOCKET_HOST, AUDIOSOCKET_PORT)
-    app = web.Application()
+    app = web.Application(client_max_size=16 * 1024 * 1024)
     app.router.add_post("/dial", api_dial)
+    app.router.add_post("/reply-audio", api_reply_audio)
     app.router.add_get("/status", api_status)
     cleaning = asyncio.create_task(cleaner())  # noqa: F841 (держим ссылку, чтобы задачу не собрал сборщик)
     runner = web.AppRunner(app)
