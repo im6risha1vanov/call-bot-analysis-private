@@ -296,3 +296,35 @@ class PackagingApprovedSemanticTests(unittest.TestCase):
             self.assertIsNotNone(reply_library.match(approved,phrase,[], '')[0],phrase)
         for phrase in ('Вы не производите картон?', 'Вы производите картон и печать?', 'Что вы производите и сколько стоит?'):
             self.assertIsNone(reply_library.match(approved,phrase,[], '')[0],phrase)
+
+class NarrowNaturalVariantsTests(unittest.TestCase):
+    def make(self, trigger, reply='Понял вас.'):
+        return reply_library.prepare([asset(triggers=[trigger], reply=reply)], speech.TTS_RATE)
+
+    def test_assortment_continuation_is_narrow(self):
+        approved=self.make('Что вы производите?')
+        self.assertIsNotNone(reply_library.match(approved, 'А вы что производите? Коробки,', [], '')[0])
+        for text in ('А вы что производите? Коробки?', 'Вы что производите? Коробки и печать?',
+                     'Вы что не производите коробки?', 'Вы что производите коробки с доставкой?'):
+            self.assertIsNone(reply_library.match(approved,text,[], '')[0],text)
+        self.assertIsNone(reply_library.match(self.make('Какая цена?'), 'А вы что производите? Коробки,', [], '')[0])
+
+    def test_logo_repetition_needs_approved_logo_not_offset(self):
+        text='там еще лого можно будет сделать? Логотип?'
+        self.assertIsNotNone(reply_library.match(self.make('Можно нанести логотип?'),text,[], '')[0])
+        self.assertIsNone(reply_library.match(self.make('Офсетная печать есть?'),text,[], '')[0])
+        for q in ('там еще лого можно будет сделать? Логотип и цвет?',
+                  'там еще лого можно будет сделать? Логотип? И доставка?',
+                  'там еще лого нельзя будет сделать? Логотип?'):
+            self.assertIsNone(reply_library.match(self.make('Можно нанести логотип?'),q,[], '')[0],q)
+
+    def test_busy_paraphrase_needs_approved_family_and_no_time(self):
+        approved=self.make('Сейчас неудобно.', 'Когда лучше перезвонить?')
+        for phrase in ('Можете перезвонить тогда?', 'вам. Можете перезвонить тогда.'):
+            self.assertIsNotNone(reply_library.match(approved,phrase,[], '')[0],phrase)
+        for phrase in ('Можете перезвонить тогда завтра?', 'Не можете перезвонить тогда?',
+                       'Можете перезвонить тогда и прислать прайс?', 'Можете перезвонить тогда? Завтра?'):
+            self.assertIsNone(reply_library.match(approved,phrase,[], '')[0],phrase)
+        self.assertIsNone(reply_library.match(approved,'Можете перезвонить тогда?', [{'role':'user','content':'Давайте завтра'}], '')[0])
+        self.assertIsNone(reply_library.match(approved,'Можете перезвонить тогда?', [], '2026-11-20T15:00:00+03:00')[0])
+        self.assertIsNone(reply_library.match(self.make('Какая цена?'),'Можете перезвонить тогда?', [], '')[0])

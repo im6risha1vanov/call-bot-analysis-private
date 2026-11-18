@@ -24,9 +24,10 @@ PACKAGING_PRICE = re.compile(r"(?:сколько стоит|сколько ст�
 # from the SAME family. Logo approval never implicitly authorizes offset print.
 SEMANTIC_PATTERNS = {
     'print_general': re.compile(r'(?:какая|какую) печать (?:возможна|возможна у вас|возможна на коробках|делаете|вы делаете|есть|у вас есть)|(?:какая|какую) (?:у вас )?печать(?: возможна| есть)?'),
-    'print_logo': re.compile(r'(?:можно|можете|вы можете) (?:нанести|печатать|напечатать) логотип(?: на коробке| на коробках)?|(?:наносите|наносите ли|делаете|печатаете) логотип(?: на коробках)?'),
+    'print_logo': re.compile(r'(?:можно|можете|вы можете) (?:нанести|печатать|напечатать) логотип(?: на коробке| на коробках)?|(?:наносите|наносите ли|делаете|печатаете) логотип(?: на коробках)?|там еще лого можно будет сделать логотип'),
     'print_offset': re.compile(r'(?:у вас )?(?:есть )?(?:офсетная|афсетная) печать(?: есть| возможна| у вас)?|(?:офсетную|афсетную) печать (?:делаете|вы делаете|можно|можете)|(?:вы )?делаете (?:офсетную|афсетную) печать'),
-    'assortment': re.compile(r'что (?:вы |вы вообще )?(?:производите|изготавливаете|делаете)|(?:вы )?(?:картон|коробки|упаковку) производите или что|(?:вы )?производите (?:картон|коробки|упаковку) или что'),
+    'assortment': re.compile(r'что (?:вы |вы вообще )?(?:производите|изготавливаете|делаете)|вы что производите коробки|(?:вы )?(?:картон|коробки|упаковку) производите или что|(?:вы )?производите (?:картон|коробки|упаковку) или что'),
+    'busy': re.compile(r'(?:сейчас неудобно|неудобно сейчас|я сейчас занят|я сейчас занята|(?:вам )?можете перезвонить тогда)'),
 }
 
 
@@ -93,6 +94,9 @@ def prepare(items, sample_rate, voice_signature=None):
 
 def match(items, text, messages, contact=""):
     phrase = normalize(text)
+    # Only the reviewed repeated-logo ASR fragment may contain two questions.
+    if text.count('?') > 1 and phrase != 'там еще лого можно будет сделать логотип':
+        return None, 0.0
     # Stop requests and corrections must reach the normal dialogue / outcome path.
     if re.search(r'\b(?:не звоните|не звонить|больше не звоните|больше не звонить|хватит звонить|не беспокойте|удалите номер|удалите мой номер|уберите номер|уберите мой номер)\b', phrase):
         return None, 0.0
@@ -116,7 +120,8 @@ def match(items, text, messages, contact=""):
         needs_time = bool(re.search(r'когда|удобн.{0,20}врем|во сколько', questions, re.I))
         has_specs = bool(re.search(r'\d|размер|тираж|количеств|штук|партия', client_history))
         has_time = bool(contact or re.search(r'\d|сегодня|завтра|послезавтра|понедельник|вторник|среду|четверг|пятниц|суббот|воскрес|утром|вечером|после обеда|часов', client_history))
-        if needs_specs and has_specs or needs_time and has_time:
+        semantic_busy = semantic_intent(phrase) == 'busy' and any(semantic_intent(trigger) == 'busy' for trigger in item['triggers'])
+        if needs_specs and has_specs or (needs_time or semantic_busy) and has_time:
             continue
         filtered.append(item)
     # Ambiguous versions or answers never auto-play.
