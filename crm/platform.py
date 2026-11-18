@@ -112,6 +112,11 @@ async def _free_column_values(conn) -> dict:
 
 
 async def create(pool, who, data: dict) -> dict:
+    async with pool.acquire() as conn, conn.transaction():
+        return await create_company(conn, who, data)
+
+
+async def create_company(conn, who, data: dict) -> dict:
     """Новая компания: строка clients, настройки, учётка директора. Отдел работает, когда подключим Манго."""
     name = clean_name(data.get('name'))
     tz = str(data.get('timezone') or 'Europe/Moscow')
@@ -122,23 +127,18 @@ async def create(pool, who, data: dict) -> dict:
     modules = clean_modules(data.get('modules', list(company.DEFAULT_MODULES)))
     settings = clean_settings(data.get('settings'))
     director = ' '.join(str(data.get('director') or '').split())[:80] or 'Директор'
-    login = str(data.get('login') or '').strip() or await accounts.free_login(pool, accounts.slug(name) or 'company')
-    async with pool.acquire() as conn, conn.transaction():
-        await conn.execute('LOCK TABLE clients IN EXCLUSIVE MODE')
-        client_id = await conn.fetchval('SELECT coalesce(max(id), 0) + 1 FROM clients')
-        extra = await _free_column_values(conn)
-        cols = ['id', 'timezone', 'processing_enabled', *extra]
-        await conn.execute(f'INSERT INTO clients({",".join(cols)}) VALUES({",".join(f"${i + 1}" for i in range(len(cols)))})',
-                           client_id, tz, False, *extra.values())
-        await conn.execute('INSERT INTO company_settings(client_id,name,modules,settings) VALUES($1,$2,$3,$4::jsonb)',
-                           client_id, name, modules, json.dumps(settings))
-    try:
-        password = await auth.account_create(pool, client_id, 'director', login, name=director,
-                                             password=data.get('password') or None)
-    except Exception:
-        await pool.execute('DELETE FROM clients WHERE id=$1', client_id)  # без директора компания не нужна
-        raise
-    await log(pool, who, client_id, 'create', {'name': name, 'modules': modules, 'login': login})
+    await conn.execute('LOCK TABLE clients IN EXCLUSIVE MODE')
+    login = str(data.get('login') or '').strip() or await accounts.free_login(conn, accounts.slug(name) or 'company')
+    client_id = await conn.fetchval('SELECT coalesce(max(id), 0) + 1 FROM clients')
+    extra = await _free_column_values(conn)
+    cols = ['id', 'timezone', 'processing_enabled', *extra]
+    await conn.execute(f'INSERT INTO clients({",".join(cols)}) VALUES({",".join(f"${i + 1}" for i in range(len(cols)))})',
+                       client_id, tz, False, *extra.values())
+    await conn.execute('INSERT INTO company_settings(client_id,name,modules,settings) VALUES($1,$2,$3,$4::jsonb)',
+                       client_id, name, modules, json.dumps(settings))
+    password = await auth.account_create(conn, client_id, 'director', login, name=director,
+                                         password=data.get('password') or None)
+    await log(conn, who, client_id, 'create', {'name': name, 'modules': modules, 'login': login})
     return {'id': client_id, 'login': auth.clean_login(login), 'password': password}
 
 

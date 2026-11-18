@@ -339,13 +339,71 @@ def deal(k: str, src: dict, task, in_base: bool, names: dict, tz, now: datetime)
     }
 
 
-def funnel(deals: list[dict], base_count: int) -> dict:
+async def pipeline_configuration(pool, client_id, pipeline='default', as_of=None):
+    from . import admin_pipelines
+    row = await pool.fetchrow(
+        """SELECT * FROM crm_pipeline_versions WHERE client_id=$1 AND pipeline=$2
+           AND published_at IS NOT NULL AND ($3::timestamptz IS NULL OR published_at <= $3)
+           ORDER BY version DESC LIMIT 1""", client_id, pipeline, as_of)
+    if row is not None:
+        return admin_pipelines.present(row)
+    return admin_pipelines.implicit() if pipeline == admin_pipelines.DEFAULT else None
+
+
+async def configured_deals(pool, actor, items, tz, now, as_of=None):
+    if not await has_table(pool, 'crm_pipeline_versions'):
+        return {}, items
+    from . import admin_pipelines
+    rows = await pool.fetch(
+        """SELECT DISTINCT ON (pipeline) * FROM crm_pipeline_versions WHERE client_id=$1
+           AND published_at IS NOT NULL AND ($2::timestamptz IS NULL OR published_at <= $2)
+           ORDER BY pipeline,version DESC""", actor.client_id, as_of)
+    configs = {row['pipeline']: admin_pipelines.present(row) for row in rows}
+    changes = {r['phone']: r for r in await pool.fetch(
+        """SELECT DISTINCT ON (phone) phone,pipeline,stage,changed_at FROM crm_deal_stage_changes
+           WHERE client_id=$1 AND ($2::timestamptz IS NULL OR changed_at <= $2)
+           ORDER BY phone,id DESC""", actor.client_id, as_of)}
+    if not configs and not changes:
+        return configs, items
+    configs.setdefault('default', admin_pipelines.implicit())
+    day = now.astimezone(tz).date()
+    for item in items:
+        change = changes.get(item['phone'])
+        pipeline = change['pipeline'] if change else 'default'
+        config = configs[pipeline]
+        stage = item['stage']
+        if change and item['status'] != 'paid':
+            stage = change['stage']
+            changed = iso(change['changed_at'], tz)
+            item['timeline'].append({'type': 'stage', 'at': changed, 'stage': stage, 'pipeline': pipeline})
+            item['timeline'].sort(key=lambda event: event['at'] or '')
+            item['last_at'] = max(item['last_at'] or '', changed)
+        stage_no, data = next(((i, d) for i, d in enumerate(config['config']['stages'], 1) if d['key'] == stage))
+        item.update(pipeline=pipeline, pipeline_version=config['version'], stage=stage, stage_no=stage_no,
+                    stage_name=data['name'], stalled_days=None)
+        if item['status'] == 'active' and item['last_at']:
+            idle = (day - date.fromisoformat(item['last_at'][:10])).days
+            limit = data['stall_days']
+            if (item['due'] and item['due'] < day.isoformat()) or (limit and idle > limit):
+                item['stalled_days'] = idle
+    return configs, items
+
+
+async def all_deals(pool, actor, tz, now, raw=None, as_of=None):
+    source = raw if raw is not None else await load(pool, actor.client_id, actor=actor)
+    _, items = await configured_deals(pool, actor, build(source, tz, now), tz, now, as_of)
+    return items
+
+
+def funnel(deals: list[dict], base_count: int, stages=None) -> dict:
     """Сколько клиентов дошли до каждого этапа и где отвалились (с причинами)."""
-    reached = {k: 0 for k, _ in STAGES}
+    stages = STAGES if stages is None else stages
+    order = {k: i for i, (k, _) in enumerate(stages)}
+    reached = {k: 0 for k, _ in stages}
     reached['base'] = base_count
     for d in deals:
-        i = STAGE_INDEX[d['stage']]
-        for k, _ in STAGES[1:i + 1]:
+        i = order[d['stage']]
+        for k, _ in stages[1:i + 1]:
             reached[k] += 1
     lost = collections.defaultdict(collections.Counter)
     for d in deals:
@@ -354,7 +412,7 @@ def funnel(deals: list[dict], base_count: int) -> dict:
     cold_results = sum(1 for d in deals if d['cold_ok'])
     return {
         'stages': [{'key': k, 'name': n, 'reached': reached[k],
-                    'lost': sum(lost[k].values()), 'reasons': lost[k].most_common(5)} for k, n in STAGES],
+                    'lost': sum(lost[k].values()), 'reasons': lost[k].most_common(5)} for k, n in stages],
         'cold_results': cold_results,
         'active': sum(1 for d in deals if d['status'] == 'active'),
         'stalled': sum(1 for d in deals if d['stalled_days'] is not None),
@@ -370,7 +428,8 @@ async def listing(pool, actor, ext: str | None = None, days: int | None = None, 
         ext = actor.extension
     tz = await store.zone(pool, actor.client_id)
     raw = await load(pool, actor.client_id, actor=actor)
-    deals = build(raw, tz, now)
+    configs, all_items = await configured_deals(pool, actor, build(raw, tz, now), tz, now)
+    deals = all_items
     if ext:
         deals = [d for d in deals if d['ext'] == ext]
     if days:
@@ -378,12 +437,23 @@ async def listing(pool, actor, ext: str | None = None, days: int | None = None, 
         deals = [d for d in deals if (d['first_at'] or '') >= since]
     base = len({key(r['number']) for r in raw['base'] if (not ext or r['extension'] == ext)
                 and (not days or r['created_at'] >= now - timedelta(days=days))} - {None})
-    managers = sorted({(d['ext'], d['manager']) for d in build(raw, tz, now) if d['ext']}, key=lambda x: x[1])
-    return {'deals': [{**d, 'timeline': None} for d in deals], 'funnel': funnel(deals, base),
-            'unlinked': await unlinked(pool, actor, ext), 'unlinked_chats': await unlinked_chats(pool, actor, ext),
-            'stages': [{'key': k, 'name': n} for k, n in STAGES], 'reasons': LOST_REASONS,
-            'managers': [{'ext': e, 'name': n} for e, n in managers],
-            'can_pay': can_pay(actor), 'today': now.astimezone(tz).date().isoformat()}
+    managers = sorted({(d['ext'], d['manager']) for d in all_items if d['ext']}, key=lambda x: x[1])
+    primary = configs.get('default', {}).get('config')
+    stages = [(s['key'], s['name']) for s in primary['stages']] if primary else STAGES
+    funnel_items = [d for d in deals if d.get('pipeline', 'default') == 'default']
+    response = {'deals': [{**d, 'timeline': None} for d in deals], 'funnel': funnel(funnel_items, base, stages),
+                'unlinked': await unlinked(pool, actor, ext), 'unlinked_chats': await unlinked_chats(pool, actor, ext),
+                'stages': [{'key': k, 'name': n} for k, n in stages],
+                'reasons': primary['reasons'] if primary else LOST_REASONS,
+                'managers': [{'ext': e, 'name': n} for e, n in managers], 'can_pay': can_pay(actor),
+                'today': now.astimezone(tz).date().isoformat()}
+    if configs:
+        response['pipelines'] = [
+            {**meta, 'funnel': funnel([d for d in deals if d.get('pipeline', 'default') == code],
+                                      base if code == 'default' else sum(d.get('pipeline') == code for d in deals),
+                                      [(s['key'], s['name']) for s in meta['config']['stages']])}
+            for code, meta in configs.items()]
+    return response
 
 
 async def one(pool, actor, phone: str, now: datetime | None = None) -> dict:
@@ -392,12 +462,15 @@ async def one(pool, actor, phone: str, now: datetime | None = None) -> dict:
     if not k:
         raise ValueError('Неверный номер.')
     tz = await store.zone(pool, actor.client_id)
-    found = next((d for d in build(await load(pool, actor.client_id, actor=actor), tz, now) if d['phone'] == k), None)
+    items = await all_deals(pool, actor, tz, now)
+    found = next((d for d in items if d['phone'] == k), None)
     if not found:
         raise ValueError('Такой сделки нет.')
     if not is_privileged(actor) and found['ext'] != actor.extension:
         raise Forbidden('Это сделка другого менеджера.')
-    return {**found, 'reasons': LOST_REASONS, 'events': EVENT_LABELS, 'can_pay': can_pay(actor)}
+    config = await pipeline_configuration(pool, actor.client_id, found['pipeline']) if 'pipeline' in found else None
+    return {**found, 'reasons': config['config']['reasons'] if config else LOST_REASONS,
+            'events': EVENT_LABELS, 'can_pay': can_pay(actor)}
 
 
 async def unlinked(pool, actor, ext: str | None = None) -> list[dict]:
@@ -550,7 +623,7 @@ async def add_event(pool, actor, phone: str, kind: str, note=None, reason=None, 
     current = await one(pool, actor, k)  # заодно проверяет, что сделка есть и она своя
     note = (str(note).strip()[:2000] or None) if note else None
     if kind == 'lost':
-        if reason not in LOST_REASONS:
+        if not isinstance(reason, str) or reason not in current['reasons']:
             raise ValueError('Выберите причину отказа.')
         if reason == 'other' and not note:
             raise ValueError('Напишите, почему отказ.')

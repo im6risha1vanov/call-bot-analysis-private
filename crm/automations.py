@@ -27,7 +27,7 @@ from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from crypto_util import decrypt, encrypt
-from . import automation_blocks as blocks
+from . import automation_blocks as blocks, company
 
 log = logging.getLogger(__name__)
 POLL_SEC = 5
@@ -53,6 +53,10 @@ DEAL_SAMPLE = {'deal': {'phone': '79990000000', 'client': 'ООО Пример',
                         'author': 'Директор', 'when': '24.10.2026 15:40'}}
 TRIGGERS = {
     **{f'deal.{k}': {'title': v, 'group': 'Сделки', 'sample': DEAL_SAMPLE} for k, v in DEAL_KINDS.items()},
+    'deal.stage_changed': {'title': 'Сделка перешла на другой этап', 'group': 'Сделки',
+                           'sample': {'deal': {'phone': '79990000000', 'client': 'ООО Пример', 'manager': 'Анна'},
+                                      'transition': {'pipeline': 'default', 'from': 'cold',
+                                                     'to': 'consultation', 'version': 1}}},
     'lead.added': {'title': 'Новый номер в базе', 'group': 'База',
                    'sample': {'lead': {'phone': '79990000000', 'name': 'Анна', 'company': 'ООО Пример',
                                        'source': 'ГЦК', 'note': '', 'manager': 'Иван Петров'}}},
@@ -74,6 +78,8 @@ TRIGGERS = {
 FIELD_LABELS = {
     'deal.phone': 'Телефон', 'deal.client': 'Клиент', 'deal.contact': 'Контакт', 'deal.manager': 'Менеджер',
     'deal.event': 'Событие', 'deal.amount': 'Сумма', 'deal.reason': 'Причина отказа', 'deal.note': 'Комментарий',
+    'transition.pipeline': 'Воронка', 'transition.from': 'Исходный этап',
+    'transition.to': 'Новый этап', 'transition.version': 'Версия воронки',
     'deal.author': 'Кто отметил', 'deal.when': 'Когда',
     'lead.phone': 'Телефон', 'lead.name': 'Имя', 'lead.company': 'Компания', 'lead.source': 'Источник',
     'lead.note': 'Заметка', 'lead.manager': 'Менеджер',
@@ -418,7 +424,8 @@ async def save(pool, client_id: int, automation_id: int | None, name: str, spec,
         row = await pool.fetchrow(
             """UPDATE automations SET name=$3, spec=$4, enabled=false, paused_reason=NULL, updated_at=now(),
                       hook_token=CASE WHEN $5::text IS NULL THEN NULL ELSE coalesce(hook_token, $5) END
-               WHERE id=$1 AND client_id=$2 RETURNING *""",
+               WHERE id=$1 AND client_id=$2 AND NOT coalesce((to_jsonb(automations)->>'admin_managed')::boolean,false)
+               RETURNING *""",
             automation_id, client_id, name, json.dumps(clean, ensure_ascii=False), token)
         if row is None:
             raise ValueError('Такого сценария нет.')
@@ -430,6 +437,8 @@ async def set_enabled(pool, client_id: int, automation_id: int, on: bool) -> dic
         row = await conn.fetchrow('SELECT * FROM automations WHERE id=$1 AND client_id=$2 FOR UPDATE', automation_id, client_id)
         if row is None:
             raise ValueError('Такого сценария нет.')
+        if row.get('admin_managed'):
+            raise ValueError('Настройте правило в админке платформы.')
         if on and not row['enabled']:
             limit = await conn.fetchval('SELECT max_active FROM automation_limits WHERE client_id=$1', client_id)
             active = await conn.fetchval('SELECT count(*) FROM automations WHERE client_id=$1 AND enabled', client_id)
@@ -453,7 +462,9 @@ async def set_enabled(pool, client_id: int, automation_id: int, on: bool) -> dic
 
 
 async def delete(pool, client_id: int, automation_id: int) -> dict:
-    await pool.execute('DELETE FROM automations WHERE id=$1 AND client_id=$2', automation_id, client_id)
+    await pool.execute(
+        '''DELETE FROM automations WHERE id=$1 AND client_id=$2
+           AND NOT coalesce((to_jsonb(automations)->>'admin_managed')::boolean,false)''', automation_id, client_id)
     return {'ok': True}
 
 
@@ -610,6 +621,28 @@ async def too_often(pool, auto) -> bool:
     return True
 
 
+async def fire_admin(pool, auto, event_id, kind, payload, spec):
+    client_id = auto['client_id']
+    run = await pool.fetchval(
+        '''INSERT INTO automation_runs(automation_id,client_id,event_id,status,payload,admin_version_id)
+           SELECT id,client_id,$2,'running',$3,admin_version_id FROM automations
+           WHERE id=$1 AND admin_version_id=$4 AND enabled
+           ON CONFLICT DO NOTHING RETURNING id''', auto['id'], event_id,
+        json.dumps(payload, ensure_ascii=False), auto['admin_version_id'])
+    if run is None:
+        return
+    if not await count_run(pool, client_id):
+        await pool.execute("UPDATE automation_runs SET status='limit' WHERE id=$1", run)
+        return
+    steps = await run_actions(pool, client_id, spec, payload, kind)
+    for step in steps:
+        step['status'] = ('ok' if step['ok'] else 'delivery_unknown' if step.get('retry') else 'failed')
+    status = ('delivery_unknown' if any(step.get('retry') for step in steps)
+              else 'ok' if all(step['ok'] for step in steps) else 'failed')
+    await pool.execute('UPDATE automation_runs SET steps=$2,status=$3 WHERE id=$1', run,
+                       json.dumps(steps, ensure_ascii=False), status)
+
+
 async def fire(pool, auto, event_id: int | None, kind: str, payload: dict):
     spec = json.loads(auto['spec']) if isinstance(auto['spec'], str) else auto['spec']
     if not matches(spec['if'], payload):
@@ -617,6 +650,9 @@ async def fire(pool, auto, event_id: int | None, kind: str, payload: dict):
     if await too_often(pool, auto):
         return
     payload = plain(payload)
+    if auto.get('admin_version_id') is not None:
+        await fire_admin(pool, auto, event_id, kind, payload, spec)
+        return
     if not await count_run(pool, auto['client_id']):
         await pool.execute(
             """INSERT INTO automation_runs(automation_id, client_id, event_id, status, payload, steps)
@@ -638,6 +674,8 @@ async def handle(pool, ev) -> None:
         autos = await pool.fetch("SELECT * FROM automations WHERE client_id=$1 AND enabled AND spec->'trigger'->>'type'=$2",
                                  ev['client_id'], ev['kind'])
     if not autos:
+        return
+    if 'admin_managed' in autos[0] and not await company.has_module(pool, ev['client_id'], 'automations'):
         return
     payload = json.loads(ev['payload']) if ev['payload'] else await build_payload(pool, ev['client_id'], ev['kind'], ev['ref_id'])
     if payload is None:
@@ -664,7 +702,8 @@ async def retry_due(pool) -> None:
         if run is None:
             break
         auto = await pool.fetchrow('SELECT * FROM automations WHERE id=$1', run['automation_id'])
-        if auto is None or not auto['enabled']:
+        if (auto is None or not auto['enabled'] or auto.get('admin_managed')
+                or ('admin_managed' in auto and not await company.has_module(pool, run['client_id'], 'automations'))):
             await pool.execute("UPDATE automation_runs SET status='failed' WHERE id=$1", run['id'])
             continue
         spec = json.loads(auto['spec']) if isinstance(auto['spec'], str) else auto['spec']
@@ -738,7 +777,7 @@ async def sample_payload(pool, client_id: int, kind: str) -> tuple[dict, bool]:
     """Данные для пробы: последнее настоящее событие этого вида, иначе пример. (payload, настоящее ли)."""
     table = {'lead.added': ('crm_leads', 'id'), 'call.outcome': ('crm_outcomes', 'id'), 'call.reviewed': ('call_reviews', 'call_id')}
     ref = None
-    if kind.startswith('deal.'):
+    if kind.startswith('deal.') and kind != 'deal.stage_changed':
         ref = await pool.fetchval('SELECT max(id) FROM deal_events WHERE client_id=$1 AND kind=$2', client_id, kind[5:])
     elif kind in table:
         name, col = table[kind]
@@ -762,6 +801,8 @@ async def test_run(pool, client_id: int, automation_id: int) -> dict:
     spec = json.loads(auto['spec']) if isinstance(auto['spec'], str) else auto['spec']
     kind = spec['trigger']['type']
     payload, real = await sample_payload(pool, client_id, kind)
+    if auto.get('admin_managed'):
+        raise ValueError('Проверьте правило в админке платформы.')
     steps = await run_actions(pool, client_id, spec, payload, kind)
     status = 'ok' if all(s['ok'] for s in steps) else 'failed'
     await pool.execute(

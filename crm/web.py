@@ -25,6 +25,7 @@ import mango_client  # noqa: E402
 from tools import Forbidden, home_client_id, is_privileged  # noqa: E402
 from . import activity, economics, lead_import, lead_qualification
 from . import learning, tour, personal, personal_connections
+from . import admin_api, admin_integrations, admin_permissions, admin_pipelines
 from . import accounts, ask as asking, auth, automation_agent, automations, cabinet, call_analysis, callcenter_access, callcenter_db, callcenter_match, callcenter_robot, company, contracts, deals, donor_agent, gpt, journal, overview, people, platform, recording, reviews, sources, staff, store, training  # noqa: E402
 from . import prompts as prompt_mode, robot, webphone, robot_api, robot_prices, robot_runner, robot_store  # noqa: E402
 from .dial import dial  # noqa: E402
@@ -81,6 +82,10 @@ async def guard(request: web.Request, handler):
             response.headers.update(HEADERS)
             return response
     try:
+        permission = admin_permissions.permission_for(request.method, request.path)
+        if permission:
+            who = await auth.viewer_for(request.app[POOL], request.cookies.get(COOKIE))
+            await admin_permissions.enforce(request.app[POOL], who, permission)
         response = await handler(request)
     except web.HTTPException as exc:
         if exc.status < 400 or not request.path.startswith('/api/'):
@@ -893,6 +898,17 @@ async def api_deal_event(request):
                                                    await author_name(pool, who)))
 
 
+async def api_deal_stage(request):
+    who = await actor(request, write=True)
+    pool = request.app[POOL]
+    if not await deals.has_table(pool, 'crm_pipeline_versions'):
+        raise web.HTTPServiceUnavailable(reason='Настраиваемые воронки пока недоступны.')
+    data = await body(request)
+    async with pool.acquire() as conn, conn.transaction():
+        result = await admin_pipelines.move(conn, who, request.match_info['phone'], data)
+    return web.json_response(result)
+
+
 # Автоматизации (crm/automations.py): настраивает директор; агент и редактор работают через эти же запросы.
 async def automation_admin(request, write: bool = False):
     who = await actor(request, write=write)
@@ -1596,6 +1612,7 @@ def build(pool) -> web.Application:
     app.router.add_static('/static/', STATIC, show_index=False)
     app.router.add_post('/api/logout', api_logout)
     app.router.add_get('/api/me', api_me)
+    app.router.add_routes(admin_api.routes(viewer, body, POOL))
     app.router.add_routes(personal.routes(viewer, body, POOL))
     app.router.add_routes(personal_connections.routes(viewer, body, POOL))
     from crm import personal_executor_api
@@ -1659,6 +1676,7 @@ def build(pool) -> web.Application:
     app.router.add_get('/api/deals', api_deals)
     app.router.add_get('/api/deals/{phone}', api_deal)
     app.router.add_post('/api/deals/{phone}/event', api_deal_event)
+    app.router.add_post('/api/deals/{phone}/stage', api_deal_stage)
     app.router.add_get('/api/tgchats/{peer}', api_tgchat)
     app.router.add_post('/api/tgchats/{peer}/link', api_tgchat_link)
     app.router.add_get('/api/sources/selections', api_sources)
@@ -1770,6 +1788,8 @@ async def make_app() -> web.Application:
     async def robot_cabinet(_app):  # кампании робота по расписанию, перенос итогов его звонков и себестоимость
         tasks = [asyncio.create_task(robot_runner.loop(pool))] if robot_runner.enabled() else []
         tasks.append(asyncio.create_task(robot_prices.loop(pool)))
+        if os.getenv('CRM_PLATFORM_ADMIN_WRITES') == '1':
+            tasks.append(asyncio.create_task(admin_integrations.loop(pool)))
         if os.getenv('AUTOMATIONS', 'on') != 'off':  # сценарии конструктора автоматизаций
             tasks.append(asyncio.create_task(automations.loop(pool)))
         if os.getenv('DONOR_AGENT', 'on') != 'off':  # агент доноров: прогоны поиска по очереди
