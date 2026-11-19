@@ -1,0 +1,9 @@
+[Unit]
+Description=Refresh verified packaging reply archive
+
+[Service]
+Type=oneshot
+User=callbot-astra
+WorkingDirectory=/opt/callbot-astra
+EnvironmentFile=/opt/callbot-astra/.env
+ExecStart=/opt/averon-crm-venvs/699c50b/bin/python -m scripts.robot_reply_archive --owner "" --client-id 1 --project-id 1 --olga-extension 14 --apply
