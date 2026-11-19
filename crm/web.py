@@ -1626,6 +1626,9 @@ def build(pool) -> web.Application:
     app.router.add_get('/api/me', api_me)
     app.router.add_routes(admin_api.routes(viewer, body, POOL))
     app.router.add_routes(personal.routes(viewer, body, POOL))
+    if os.getenv('CRM_PERSONAL_DAY_ENABLED') == '1':
+        from . import personal_day
+        app.router.add_routes(personal_day.routes(viewer, body, POOL))
     app.router.add_routes(team_assignments.routes(viewer, body, POOL))
     app.router.add_routes(team_meetings.routes(viewer, body, POOL))
     app.router.add_routes(personal_connections.routes(viewer, body, POOL))
