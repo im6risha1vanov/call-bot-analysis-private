@@ -291,6 +291,15 @@ async def api_me(request):
             'platform_admin': not tour.active(request) and await admin_store.allowed(pool, who),
             'learning_mode':tour.active(request) and who.role in {'manager','director'},
             'personal_agent_enabled': not tour.active(request) and await personal.identity(pool, who) is not None}
+    team_ident = None
+    if not tour.active(request):
+        try:
+            team_ident = await team_assignments.identity(pool, who)
+        except Forbidden:
+            pass
+    firm['capabilities'] = {'team_pilot': bool(team_ident),
+                            'team_day': bool(team_ident) and os.getenv('CRM_PERSONAL_DAY_ENABLED') == '1',
+                            'team_actor_id': team_ident[1] if team_ident else None}
     if who.role == 'client':
         return web.json_response({'name': who.client_key, 'role': 'client', 'test': who.test, 'client': who.client_key,
                                   'privileged': False, 'can_dial': False, 'team': [], **firm,

@@ -1,0 +1,14 @@
+.team-panel { display: grid; gap: 14px; max-width: 980px; }
+.team-panel h2,.team-panel h3,.team-panel p { margin: 0; }
+.team-list { display: grid; gap: 12px; margin: 0; padding-left: 22px; overflow-wrap: anywhere; }
+.team-list li { line-height: 1.5; }
+.team-list p { white-space: pre-wrap; }
+.team-link { border: 0; background: none; color: var(--accent, #315ac8); padding: 3px 0; font: inherit; text-align: left; text-decoration: underline; cursor: pointer; }
+.team-form { display: grid; gap: 10px; max-width: 620px; margin: 12px 0; }
+.team-form label { display: grid; gap: 5px; }
+.team-form input,.team-form textarea,.team-form select { width: 100%; max-width: 100%; font: inherit; padding: 9px; border: 1px solid #c9ced9; border-radius: 8px; background: white; color: #202636; }
+.team-form textarea { min-height: 80px; resize: vertical; }
+.team-form .btn { justify-self: start; }
+.team-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.team-panel blockquote { margin: 8px 0; padding: 10px; border-left: 3px solid #aab7d3; white-space: pre-wrap; overflow-wrap: anywhere; }
+@media(max-width:600px) { .team-panel { gap: 12px; } .team-form .btn { width: 100%; } }

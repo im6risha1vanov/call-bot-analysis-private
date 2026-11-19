@@ -1,0 +1,7 @@
+# Pilot team API
+
+`GET /api/me` includes `capabilities.team_pilot`, `team_day`, and `team_actor_id`. The first is true only for a direct, active invite-backed pilot employee; the second additionally requires `CRM_PERSONAL_DAY_ENABLED=1`. The actor id is null when access is unavailable. These flags are hints for display; every endpoint checks access again.
+
+`GET /api/team/assignments/people` returns `{ "people": [{ "id": 123, "display_name": "..." }] }`. It excludes the caller, archived staff, revoked invitations, other companies, and identities outside `CRM_PERSONAL_PILOT_TELEGRAM_IDS`. Assignment access remains limited to its creator and assignee. Listing returns at most 500 records.
+
+Telegram must resolve its authenticated actor through `team_assignments.telegram_identity(db, actor)` on each interaction; it rechecks the employee, role, pilot membership, and a current direct invitation. Then use `people`, `list_items`, `get_item`, `create`, and `change` from the same module. The latter two require a database transaction; both require a stable idempotency key, and `change` requires the version displayed to the user. Meeting reads use `team_meetings.list_items`, `get_item`, and `agenda_items` with the verified identity. Day sections use `personal_day.sections` with the profile belonging to that identity and its timezone, and require the day feature flag. These functions do not authenticate an arbitrary identity tuple themselves: callers must obtain it through the appropriate identity function each time.

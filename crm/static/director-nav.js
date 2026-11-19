@@ -19,6 +19,7 @@ window.CRMWorkspaceNav = (() => {
       {page: 'robot', description: 'Кампании, номера, операторы и голос', keywords: 'озвучка'},
     ]},
     {id: 'team', label: 'Команда', links: [
+      {page: 'team-pilot', label: 'Встречи и поручения', description: 'Планёрки, поручения и мой день'},
       {page: 'staff', description: 'Сотрудники и показатели по каждому', keywords: 'менеджер добавить менеджера'},
       {page: 'learning', description: 'Подсказки по работе в CRM'},
     ]},
@@ -48,6 +49,7 @@ window.CRMWorkspaceNav = (() => {
       {page: 'callcenter', description: 'Прозвон клиентов колл-центра'},
     ]},
     {id: 'my-work', label: 'Моя работа', links: [
+      {page: 'team-pilot', label: 'Встречи и поручения', description: 'Планёрки, поручения и мой день'},
       {page: 'personal', description: 'Личные задачи и проекты'},
       {page: 'me', description: 'Ваши показатели и тренировки'},
       {page: 'reports', description: 'Итоги дня и отчёты бота'},

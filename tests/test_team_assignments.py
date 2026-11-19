@@ -24,10 +24,10 @@ class TeamAssignmentsIntegration(unittest.IsolatedAsyncioTestCase):
                 raise RuntimeError('Refusing to reset a database other than callbot_methodology_test_assignments')
             await c.execute('DROP SCHEMA public CASCADE; CREATE SCHEMA public')
             await c.execute('''CREATE TABLE clients(id integer PRIMARY KEY); INSERT INTO clients VALUES(1),(2);
-              CREATE TABLE employees(client_id integer,telegram_user_id bigint,archived_at timestamptz);
-              CREATE TABLE crm_invites(id integer,client_id integer,telegram_user_id bigint,revoked_at timestamptz);
-              INSERT INTO employees VALUES(1,101,NULL),(1,102,NULL),(2,101,NULL);
-              INSERT INTO crm_invites VALUES(1,1,101,NULL),(2,1,102,NULL),(3,2,101,NULL);
+              CREATE TABLE employees(client_id integer,telegram_user_id bigint,archived_at timestamptz, full_name text, role text);
+              CREATE TABLE crm_invites(id integer,client_id integer,telegram_user_id bigint,revoked_at timestamptz, name text, role text);
+              INSERT INTO employees VALUES(1,101,NULL,'A','manager'),(1,102,NULL,'B','manager'),(2,101,NULL,'Other','manager');
+              INSERT INTO crm_invites VALUES(1,1,101,NULL,'A','manager'),(2,1,102,NULL,'B','manager'),(3,2,101,NULL,'Other','manager');
               CREATE TABLE crm_personal_profiles(id bigint PRIMARY KEY, telegram_user_id bigint);
               CREATE TABLE crm_personal_tasks(id bigint PRIMARY KEY, owner_id bigint, title text);
               INSERT INTO crm_personal_profiles VALUES(1,101),(2,102);
@@ -48,6 +48,19 @@ class TeamAssignmentsIntegration(unittest.IsolatedAsyncioTestCase):
         await self.client.close(); await self.pool.close()
     async def call(self, method, path, data=None, key='key'):
         return await self.client.request(method,path,json=data,headers={'Idempotency-Key':key})
+    async def test_people_and_telegram_identity_are_scoped(self):
+        actor = SimpleNamespace(telegram_user_id=101, client_id=1, role='manager')
+        self.assertEqual(await ta.telegram_identity(self.pool, actor), (1, 101))
+        response = await self.call('GET', '/api/team/assignments/people')
+        self.assertEqual(await response.json(), {'people': [{'id': 102, 'display_name': 'B'}]})
+        await self.pool.execute('UPDATE crm_invites SET revoked_at=now() WHERE id=2')
+        response = await self.call('GET', '/api/team/assignments/people')
+        self.assertEqual((await response.json())['people'], [])
+        await self.pool.execute('UPDATE crm_invites SET revoked_at=now() WHERE id=1')
+        with self.assertRaises(Forbidden): await ta.telegram_identity(self.pool, actor)
+        response = await self.call('GET', '/api/team/assignments/people')
+        self.assertEqual(response.status, 403)
+
     async def test_retry_concurrency_tenant_and_review(self):
         async def create():
             async with self.pool.acquire() as c, c.transaction():
@@ -93,7 +106,7 @@ class TeamAssignmentsIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.pool.fetchval('SELECT count(*) FROM crm_team_assignment_history'),5)
 
     async def test_deal_redaction_and_retry_after_reassignment(self):
-        await self.pool.execute("ALTER TABLE employees ADD COLUMN role text DEFAULT 'manager', ADD COLUMN extension text")
+        await self.pool.execute("ALTER TABLE employees ADD COLUMN extension text")
         allowed = {101, 102}
         async def check_deal(db, actor, phone):
             if actor.telegram_user_id not in allowed: raise Forbidden('No access')

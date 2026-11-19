@@ -16,6 +16,19 @@ async def identity(db, who):
     return (who.company, tg)
 
 
+async def telegram_identity(db, actor):
+    """Revalidate a Telegram actor and an active direct CRM invitation."""
+    if not actor or actor.telegram_user_id not in personal.pilot_ids() or actor.role not in ('owner', 'head', 'manager'):
+        raise Forbidden('Командный раздел недоступен.')
+    role = 'director' if actor.role in ('owner', 'head') else 'manager'
+    valid = await db.fetchval('''SELECT 1 FROM employees e JOIN crm_invites i ON i.client_id=e.client_id
+        AND i.telegram_user_id=e.telegram_user_id AND i.revoked_at IS NULL AND i.role=$4
+        WHERE e.client_id=$1 AND e.telegram_user_id=$2 AND e.role=$3 AND e.archived_at IS NULL''',
+        actor.client_id, actor.telegram_user_id, actor.role, role)
+    if not valid: raise Forbidden('Командный раздел недоступен.')
+    return actor.client_id, actor.telegram_user_id
+
+
 def parse(data, partial=False):
     fields = {'title', 'description', 'assignee_id', 'due_at', 'deal_id'}
     if not isinstance(data, dict) or set(data) - fields:
@@ -151,6 +164,52 @@ def transition(row, actor, action, data):
     return changes
 
 
+async def people(db, ident):
+    rows = await db.fetch('''SELECT e.telegram_user_id AS id, COALESCE(NULLIF(MAX(e.full_name), ''), MAX(i.name), '') AS display_name
+        FROM employees e JOIN crm_invites i ON i.client_id=e.client_id
+        AND i.telegram_user_id=e.telegram_user_id AND i.revoked_at IS NULL
+        WHERE e.client_id=$1 AND e.archived_at IS NULL AND e.telegram_user_id <> $2
+        AND e.telegram_user_id=ANY($3::bigint[])
+        AND ((e.role='manager' AND i.role='manager') OR (e.role IN ('owner','head') AND i.role='director')) GROUP BY e.telegram_user_id ORDER BY display_name, id''', *ident, list(personal.pilot_ids()))
+    return [dict(r) for r in rows]
+
+
+async def list_items(db, ident, mode='assigned'):
+    if mode not in ('assigned','to_review','created'): raise ValueError('Неизвестный фильтр.')
+    condition = {'assigned': 'assignee_id=$2', 'to_review': "creator_id=$2 AND status='review'", 'created': 'creator_id=$2'}[mode]
+    rows = await db.fetch(f'SELECT * FROM crm_team_assignments WHERE company_id=$1 AND {condition} ORDER BY id DESC LIMIT 500', *ident)
+    return [await visible(db, ident, serial(r)) for r in rows]
+
+
+async def get_item(db, ident, task):
+    return await visible(db, ident, serial(await current_participant(db, ident, task)))
+
+
+async def change(conn, ident, task, version, action, data, key):
+    if not isinstance(data, dict): raise ValueError('Неверный запрос.')
+    if type(version) is not int or version < 1: raise ValueError('Укажите версию.')
+    fp, prior = await retry(conn, ident, key, {'id': task, 'version': version, 'action': action, 'data': data})
+    await employee(conn, *ident)
+    row = await current_participant(conn, ident, task, lock=True)
+    if prior is not None: return await visible(conn, ident, prior)
+    if row['version'] != version: raise web.HTTPConflict(reason='Поручение уже изменено.')
+    if action == 'edit':
+        if row['creator_id'] != ident[1]: raise Forbidden('Действие недоступно.')
+        if row['status'] not in ('assigned','in_progress'): raise web.HTTPConflict(reason='Редактирование недоступно.')
+        values = parse(data, partial=True)
+        if not values: raise ValueError('Укажите изменения.')
+        if 'assignee_id' in values:
+            if values['assignee_id'] == row['creator_id']: raise ValueError('Исполнитель должен отличаться от постановщика.')
+            await employee(conn, ident[0], values['assignee_id'])
+        if 'deal_id' in values or 'assignee_id' in values:
+            await verify_deal(conn, ident[0], (ident[1], values.get('assignee_id', row['assignee_id'])), values.get('deal_id', row['deal_id']))
+    else: values = transition(row, ident[1], action, data)
+    if 'result_links' in values: values['result_links'] = json.dumps(values['result_links'])
+    sets = ','.join(f'{k}=${i+3}' + ('::jsonb' if k == 'result_links' else '') for i,k in enumerate(values))
+    row = await conn.fetchrow(f'UPDATE crm_team_assignments SET {sets},version=version+1,updated_at=now() WHERE id=$1 AND company_id=$2 RETURNING *', task, ident[0], *values.values())
+    return await visible(conn, ident, await record(conn, ident, key, fp, row, action))
+
+
 def routes(viewer, body, pool_key):
     async def context(request):
         pool = request.app[pool_key]
@@ -163,11 +222,10 @@ def routes(viewer, body, pool_key):
         except ValueError: raise web.HTTPNotFound()
     async def listing(request):
         pool, ident = await context(request)
-        mode = request.query.get('filter', 'assigned')
-        if mode not in ('assigned','to_review','created'): raise ValueError('Неизвестный фильтр.')
-        condition = {'assigned': 'assignee_id=$2', 'to_review': "creator_id=$2 AND status=\'review\'", 'created': 'creator_id=$2'}[mode]
-        rows = await pool.fetch(f'SELECT * FROM crm_team_assignments WHERE company_id=$1 AND {condition} ORDER BY id DESC', *ident)
-        return web.json_response({'assignments': [await visible(pool, ident, serial(r)) for r in rows]})
+        return web.json_response({'assignments': await list_items(pool, ident, request.query.get('filter', 'assigned'))})
+    async def people_route(request):
+        pool, ident = await context(request)
+        return web.json_response({'people': await people(pool, ident)})
     async def mine(request):
         pool, ident = await context(request)
         rows = await pool.fetch('SELECT * FROM crm_team_assignments WHERE company_id=$1 AND assignee_id=$2 ORDER BY id DESC', *ident)
@@ -185,35 +243,16 @@ def routes(viewer, body, pool_key):
         async with pool.acquire() as conn, conn.transaction():
             item = await create(conn, ident, data, idempotency_key=request.headers.get('Idempotency-Key'))
         return web.json_response({'assignment': await visible(pool, ident, item)}, status=201)
-    async def change(request):
+    async def change_route(request):
         pool, ident = await context(request); task = number(request); data = await body(request)
         if not isinstance(data, dict): raise ValueError('Неверный запрос.')
         version = data.pop('version', None)
         if type(version) is not int or version < 1: raise ValueError('Укажите версию.')
         action = request.match_info.get('action', 'edit'); key = request.headers.get('Idempotency-Key')
         async with pool.acquire() as conn, conn.transaction():
-            fp, prior = await retry(conn, ident, key, {'id': task, 'version': version, 'action': action, 'data': data})
-            await employee(conn, *ident)
-            row = await current_participant(conn, ident, task, lock=True)
-            if prior is not None: return web.json_response({'assignment': await visible(conn, ident, prior)})
-            if row['version'] != version: raise web.HTTPConflict(reason='Поручение уже изменено.')
-            if action == 'edit':
-                if row['creator_id'] != ident[1]: raise Forbidden('Действие недоступно.')
-                if row['status'] not in ('assigned','in_progress'): raise web.HTTPConflict(reason='Редактирование недоступно.')
-                values = parse(data, partial=True)
-                if not values: raise ValueError('Укажите изменения.')
-                if 'assignee_id' in values:
-                    if values['assignee_id'] == row['creator_id']: raise ValueError('Исполнитель должен отличаться от постановщика.')
-                    await employee(conn, ident[0], values['assignee_id'])
-                if 'deal_id' in values or 'assignee_id' in values:
-                    await verify_deal(conn, ident[0], (ident[1], values.get('assignee_id', row['assignee_id'])), values.get('deal_id', row['deal_id']))
-            else: values = transition(row, ident[1], action, data)
-            if 'result_links' in values: values['result_links'] = json.dumps(values['result_links'])
-            sets = ','.join(f'{k}=${i+3}' + ('::jsonb' if k == 'result_links' else '') for i,k in enumerate(values))
-            row = await conn.fetchrow(f'UPDATE crm_team_assignments SET {sets},version=version+1,updated_at=now() WHERE id=$1 AND company_id=$2 RETURNING *', task, ident[0], *values.values())
-            item = await record(conn, ident, key, fp, row, action)
-        return web.json_response({'assignment': await visible(pool, ident, item)})
+            item = await change(conn, ident, task, version, action, data, key)
+        return web.json_response({'assignment': item})
     return [web.get('/api/team/assignments', listing), web.post('/api/team/assignments', post),
-            web.get('/api/team/mine', mine), web.get('/api/team/assignments/{id}', detail),
-            web.get('/api/team/assignments/{id}/history', detail), web.patch('/api/team/assignments/{id}', change),
-            web.post('/api/team/assignments/{id}/{action}', change)]
+            web.get('/api/team/mine', mine), web.get('/api/team/assignments/people', people_route), web.get('/api/team/assignments/{id}', detail),
+            web.get('/api/team/assignments/{id}/history', detail), web.patch('/api/team/assignments/{id}', change_route),
+            web.post('/api/team/assignments/{id}/{action}', change_route)]

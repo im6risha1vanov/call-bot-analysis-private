@@ -67,6 +67,20 @@ def classify(item, day, zone, kind):
     return None
 
 
+async def sections(db, ident, profile, zone, day):
+    private = await db.fetch("SELECT * FROM crm_personal_tasks WHERE owner_id=$1 AND status NOT IN ('done','cancelled') ORDER BY id DESC", profile['id'])
+    team = await db.fetch("SELECT * FROM crm_team_assignments WHERE company_id=$1 AND assignee_id=$2 AND status NOT IN ('accepted','cancelled') ORDER BY id DESC", *ident)
+    groups = {'today': [], 'overdue': [], 'blocked': [], 'unscheduled': []}
+    for kind, rows in (('personal', private), ('team', team)):
+        for row in rows:
+            group = classify(row, day, zone, kind)
+            if group:
+                item = personal.serial(row) if kind == 'personal' else await team_assignments.visible(db, ident, team_assignments.serial(row))
+                groups[group].append({'kind':kind, **item})
+    return {'date':day.isoformat(), 'timezone':profile['timezone'], **groups,
+            'appointments':None, 'appointments_status':'not_connected'}
+
+
 def routes(viewer, body, pool_key):
     async def context(request):
         pool = request.app[pool_key]; who = await viewer(request)
@@ -96,16 +110,7 @@ def routes(viewer, body, pool_key):
     async def plan(request):
         pool, ident, profile, zone = await context(request)
         day = parse_day(request.query['date']) if 'date' in request.query else datetime.now(zone).date()
-        private = await pool.fetch("SELECT * FROM crm_personal_tasks WHERE owner_id=$1 AND status NOT IN ('done','cancelled') ORDER BY id DESC", profile['id'])
-        team = await pool.fetch("SELECT * FROM crm_team_assignments WHERE company_id=$1 AND assignee_id=$2 AND status NOT IN ('accepted','cancelled') ORDER BY id DESC", *ident)
-        groups = {'today': [], 'overdue': [], 'blocked': [], 'unscheduled': []}
-        for kind, rows in (('personal', private), ('team', team)):
-            for row in rows:
-                group = classify(row, day, zone, kind)
-                if group:
-                    item = personal.serial(row) if kind == 'personal' else await team_assignments.visible(pool, ident, team_assignments.serial(row))
-                    groups[group].append({'kind':kind, **item})
-        return web.json_response({'date':day.isoformat(), 'timezone':profile['timezone'], **groups,
-                                  'appointments':None, 'appointments_status':'not_connected'})
+        return web.json_response(await sections(pool, ident, profile, zone, day))
+
     return [web.get('/api/personal/day', plan), web.get('/api/personal/day/settings', get_settings),
             web.put('/api/personal/day/settings', put_settings)]

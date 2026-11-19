@@ -57,18 +57,22 @@ async def _bind_by_username(message) -> str | None:
     return f'Узнал вас, {html.escape(row["full_name"] or username)} — вы подключены как {who}. Отчёты будут приходить сюда.'
 
 
-def head_menu(tg_id: int) -> ReplyKeyboardMarkup:
-    """«Сравнить методики» и «Объединённый разбор» убраны с клавиатуры (команды
-    /compare_analysis и /combined_analysis остаются). «Режим промта» — тем, кто в PROMPT_EDITORS."""
-    from review.prompt_ui import MENU as PROMPT_MENU
-    rows = [[KeyboardButton(text=PROMPT_MENU)]] if is_editor(tg_id) else []
-    if tg_id in __import__('crm.personal', fromlist=['pilot_ids']).pilot_ids():
-        rows.append([KeyboardButton(text='📋 Личные задачи')])
-    if tg_id in __import__('crm.personal', fromlist=['pilot_ids']).pilot_ids():
-        rows.append([KeyboardButton(text='🤖 Личный агент')])
-    rows += [[KeyboardButton(text='↩️ Старая методика'), KeyboardButton(text='🔄 Вернуть сохранённую версию')],
-             [KeyboardButton(text='ℹ️ Версия анализа')]]
-    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True)
+async def head_menu(message):
+    from aiogram.types import ReplyKeyboardRemove
+    from personal_telegram import authorized
+    actor = await authorized(PG_POOL, message.from_user, message.chat)
+    if not actor: return ReplyKeyboardRemove()
+    from crm.team_assignments import telegram_identity
+    from tools import Forbidden
+    try:
+        await telegram_identity(PG_POOL, actor)
+    except Forbidden:
+        return ReplyKeyboardRemove()
+    if actor:
+        rows = [[KeyboardButton(text='☀️ Мой день'), KeyboardButton(text='🗓 Планёрки')],
+                [KeyboardButton(text='📌 Поручения'), KeyboardButton(text='🤖 Личный агент')]]
+        return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True)
+    return ReplyKeyboardRemove()
 
 
 @router.message(CommandStart())
@@ -94,6 +98,10 @@ async def start_command(message):
                              'Разборы и отчёты будут приходить сюда.')
         await help_command(message)
         return
+    if message.chat.type == 'private':
+        from personal_telegram import authorized, set_state
+        if await authorized(PG_POOL, message.from_user, message.chat):
+            await set_state(PG_POOL, message.from_user.id, 'idle')
     bound = await _bind_by_username(message)
     if bound:
         await message.answer(bound)
@@ -103,18 +111,19 @@ async def start_command(message):
 @router.message(Command('help'))
 async def help_command(message):
     actor = await resolve_actor(PG_POOL, message.from_user.id) if PG_POOL else None
+    menu = await head_menu(message) if message.chat.type == 'private' else None
     if actor is None or actor.role == 'manager':
         await message.answer(
             'Это бот анализа рабочих звонков Averon. Записи поступают автоматически из телефонии — присылать аудио не нужно.\n\n'
             'Разбор приходит одним сообщением: итог разговора, оценка качества, сильные действия и рекомендации. '
             '«Расширенный обзор» под сообщением открывает критерии и цитаты того же разбора.\n\n'
             'Менеджеру автоматически приходят звонки, требующие разбора; остальные результаты доступны в вечерней сводке. '
-            'Для сохранённого звонка можно использовать /review и его номер.\n\n'
+            'Для сохранённого звонка можно использовать /review и его номер.\n'
+            '/menu — обновить меню.\n\n'
             + ('Если доступ ещё не выдан, попросите своего руководителя подключить вас, затем снова отправьте /start.'
                if actor is None else ''),
-            parse_mode=None)
+            parse_mode=None, reply_markup=menu)
         return
-    menu = head_menu(message.from_user.id) if actor and actor.role in {'head', 'owner'} else None
     await message.answer(
         'Звонки разбираются автоматически из Mango — присылать записи не нужно.\n\n'
         'По одному звонку приходит один объединённый разбор: итог, качество, сильные действия и рекомендации. '
@@ -129,9 +138,9 @@ async def help_command(message):
         '/methodology_stats &lt;начало&gt; &lt;конец&gt; [добавочный] — наблюдения по курсу\n'
         '/approvals — задачи, ждущие подтверждения (руководителю)\n'
         + ('/trainings — история тренировок, /training &lt;номер&gt; — подробно\n' if actor.role == 'owner' else '')
-        + ('/prompt или «✏️ Режим промта» — править свои промты: разбор звонка и отчёты\n'
+        + ('/prompt — править свои промты: разбор звонка и отчёты\n'
            if is_editor(message.from_user.id) else '') + '\n'
-        'Свободный текст — вопрос по отделу.\n'
+        '/menu — обновить меню. Свободный текст — вопрос по отделу.\n'
         + 'id этого чата: <code>{}</code>'.format(message.chat.id),
         parse_mode='HTML', reply_markup=menu)
 
@@ -549,6 +558,9 @@ async def methodology_stats_command(message: Message):
     if not data['criteria']:
         lines.append('Наблюдений за этот период пока нет.')
     await send_plain(message, '\n'.join(lines))
+
+from team_pilot_telegram import install as install_team_pilot
+install_team_pilot(router, lambda: PG_POOL, head_menu)
 
 from comparison.ui import install as install_comparison
 install_comparison(router, lambda: PG_POOL)

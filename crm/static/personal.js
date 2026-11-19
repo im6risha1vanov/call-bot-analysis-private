@@ -1,5 +1,5 @@
 /* The personal workspace uses only the authenticated user's own API. */
-VIEWS.personal = async function personalView(root) {
+VIEWS.personal = async function personalView(root, arg) {
   const viewToken = {}; root._personalViewToken = viewToken;
   let tab = 'day', selected = null, projects = [], tasks = [], profile = null, history = null, agentJobs = [], agentDetail = null, connections = {};
   const statusLabels = {planned: 'Запланировано', in_progress: 'В работе', done: 'Готово', cancelled: 'Отменено'};
@@ -156,7 +156,11 @@ VIEWS.personal = async function personalView(root) {
     } catch (err) { const out = root.querySelector('.personal-error'); if (out) out.textContent = err.message; else alert(err.message); }
     finally { saving = false; connectionFields.forEach(field => { field.disabled = false; }); if (agentInput) agentInput.readOnly = false; form.querySelectorAll('button[type=submit], button:not([type])').forEach(button => { button.disabled = false; }); }
   });
-  await load(); render();
+  await load();
+  if (arg === 'profile') tab = 'profile';
+  const taskMatch = String(arg || '').match(/^task-(\d+)$/);
+  if (taskMatch) { tab = 'tasks'; selected = tasks.find(t => t.id === Number(taskMatch[1])) || null; }
+  render();
   let refreshing = false, pendingRender = false;
   async function refreshPersonal() {
     if (!root.isConnected || root._personalViewToken !== viewToken || !root.querySelector('.personal-panel')) { clearInterval(timer); window.removeEventListener('focus', refreshPersonal); return; }

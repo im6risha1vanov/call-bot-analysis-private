@@ -147,6 +147,34 @@ def _view(row, detail=False):
     return out
 
 
+async def list_items(db, ident):
+    rows = await db.fetch('SELECT * FROM crm_team_meetings WHERE company_id=$1 AND $2=ANY(owner_ids) ORDER BY source_updated_at DESC LIMIT 100', *ident)
+    return [_view(row) for row in rows if _allowed(row, ident)]
+
+async def get_item(db, ident, meeting_id):
+    return _view(await _meeting(db, ident, meeting_id), True)
+
+
+async def agenda_items(db, ident, series):
+    if not series or len(series) > 100:
+        raise ValueError('Укажите серию встреч.')
+    meetings = await db.fetch('SELECT * FROM crm_team_meetings WHERE company_id=$1 AND series_id=$2 AND $3=ANY(owner_ids) ORDER BY source_updated_at DESC LIMIT 100', ident[0], series, ident[1])
+    meetings = [r for r in meetings if _allowed(r, ident)]
+    meeting_ids = [r['id'] for r in meetings]
+    assignments = await db.fetch("""SELECT id,title,status,assignee_id,due_at,blocker,result_text,result_links,source_meeting_id
+        FROM crm_team_assignments WHERE company_id=$1 AND source_meeting_id=ANY($2::bigint[])
+        AND status <> 'cancelled' AND (creator_id=$3 OR assignee_id=$3) ORDER BY due_at NULLS LAST""", ident[0], meeting_ids, ident[1])
+    tasks = []
+    for row in assignments:
+        task = dict(row)
+        task['result_links'] = _decode(task['result_links'])
+        task['overdue'] = bool(task['due_at'] and task['due_at'] < datetime.now(task['due_at'].tzinfo) and task['status'] != 'accepted')
+        task['due_at'] = task['due_at'].isoformat() if task['due_at'] else None
+        tasks.append(task)
+    questions = [{'meeting_id': r['id'], **i} for r in meetings for i in items(_decode(r['report'])) if i['section'] == 'open_questions' and i['id'] not in (_decode(r['protocol']) or {}).get('resolved_question_ids', [])]
+    return {'series_id': series, 'assignments': [t for t in tasks if t['status'] != 'accepted'], 'accepted': [t for t in tasks if t['status'] == 'accepted'], 'open_questions': questions}
+
+
 def routes(viewer, body, pool_key):
     async def import_route(request):
         if any(k in request.headers for k in ('Forwarded', 'X-Forwarded-For', 'X-Forwarded-Host', 'X-Forwarded-Proto')) or request.remote not in ('127.0.0.1', '::1') or request.host not in ('127.0.0.1:8095', 'localhost:8095', '[::1]:8095'):
@@ -172,14 +200,12 @@ def routes(viewer, body, pool_key):
     async def listing(request):
         pool = request.app[pool_key]
         ident = await team_assignments.identity(pool, await viewer(request))
-        rows = await pool.fetch('SELECT * FROM crm_team_meetings WHERE company_id=$1 AND $2=ANY(owner_ids) ORDER BY source_updated_at DESC LIMIT 100', *ident)
-        return web.json_response({'meetings': [_view(row) for row in rows if _allowed(row, ident)]})
+        return web.json_response({'meetings': await list_items(pool, ident)})
 
     async def detail(request):
         pool = request.app[pool_key]
         ident = await team_assignments.identity(pool, await viewer(request))
-        row = await _meeting(pool, ident, int(request.match_info['id']))
-        return web.json_response(_view(row, True))
+        return web.json_response(await get_item(pool, ident, int(request.match_info['id'])))
 
     async def snippets(request):
         pool = request.app[pool_key]
@@ -244,23 +270,7 @@ def routes(viewer, body, pool_key):
         pool = request.app[pool_key]
         ident = await team_assignments.identity(pool, await viewer(request))
         series = request.query.get('series_id', '')
-        if not series or len(series) > 100:
-            raise ValueError('Укажите серию встреч.')
-        meetings = await pool.fetch('SELECT * FROM crm_team_meetings WHERE company_id=$1 AND series_id=$2 AND $3=ANY(owner_ids) ORDER BY source_updated_at DESC LIMIT 100', ident[0], series, ident[1])
-        meetings = [r for r in meetings if _allowed(r, ident)]
-        meeting_ids = [r['id'] for r in meetings]
-        assignments = await pool.fetch("""SELECT id,title,status,assignee_id,due_at,blocker,result_text,result_links,source_meeting_id
-            FROM crm_team_assignments WHERE company_id=$1 AND source_meeting_id=ANY($2::bigint[])
-            AND status <> 'cancelled' AND (creator_id=$3 OR assignee_id=$3) ORDER BY due_at NULLS LAST""", ident[0], meeting_ids, ident[1])
-        tasks = []
-        for row in assignments:
-            task = dict(row)
-            task['result_links'] = _decode(task['result_links'])
-            task['overdue'] = bool(task['due_at'] and task['due_at'] < datetime.now(task['due_at'].tzinfo) and task['status'] != 'accepted')
-            task['due_at'] = task['due_at'].isoformat() if task['due_at'] else None
-            tasks.append(task)
-        questions = [{'meeting_id': r['id'], **i} for r in meetings for i in items(_decode(r['report'])) if i['section'] == 'open_questions' and i['id'] not in (_decode(r['protocol']) or {}).get('resolved_question_ids', [])]
-        return web.json_response({'series_id': series, 'assignments': [t for t in tasks if t['status'] != 'accepted'], 'accepted': [t for t in tasks if t['status'] == 'accepted'], 'open_questions': questions})
+        return web.json_response(await agenda_items(pool, ident, series))
 
     return [web.post('/api/internal/team/meetings/import', import_route), web.get('/api/team/meetings/agenda', agenda), web.get('/api/team/meetings', listing),
             web.get('/api/team/meetings/{id:\\d+}', detail), web.get('/api/team/meetings/{id:\\d+}/snippets', snippets),
