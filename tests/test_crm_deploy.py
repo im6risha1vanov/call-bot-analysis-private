@@ -56,7 +56,9 @@ class DeploymentTests(unittest.TestCase):
   oldroot,oldbase=packager.ROOT,packager.BASE;packager.ROOT=self.source;packager.BASE=self.base
   try:self.release=self.base_dir/'release';self.report=packager.package(self.release)
   finally:packager.ROOT=oldroot;packager.BASE=oldbase
-  script=self.release/'deploy.sh';script.write_text(script.read_text().replace('APP=/opt/callbot-astra','APP='+str(self.app),1));self.checksums()
+  guard=self.base_dir/'guard.py'
+  guard.write_text("import json,os,sys\nfrom pathlib import Path\ncfg=json.loads(Path(os.environ['CRM_DEPLOY_TEST_STATE']).read_text())\nassert '--commit' in sys.argv\nsys.exit(1 if cfg.get('reject_analysis') else 0)\n")
+  script=self.release/'deploy.sh';script.write_text(script.read_text().replace('APP=/opt/callbot-astra','APP='+str(self.app),1).replace('GUARD=/opt/callbot-astra-releases/check_analysis_release.py','GUARD='+str(guard),1));self.checksums()
  def git(self,*args,cwd=None):return subprocess.check_output(['git',*args],cwd=cwd or self.app,stderr=subprocess.DEVNULL,text=True)
  def commit(self,path,message):
   self.git('add','.',cwd=path);self.git('-c','user.name=Fixture','-c','user.email=fixture@invalid','commit','-m',message,cwd=path)
@@ -82,6 +84,10 @@ class DeploymentTests(unittest.TestCase):
   self.assertEqual((self.app/'crm/learning.py').stat().st_mode&0o777,0o644)
  def test_denied_systemd_never_changes_code(self):
   self.configure(deny_systemd=True);result=self.run_deploy();self.assertNotEqual(result.returncode,0);self.assertIn('No code changed',result.stderr);self.assertEqual(self.git('rev-parse','HEAD').strip(),self.base);self.assertFalse((self.app/'.deployments').exists());self.assert_private_state()
+ def test_bad_analysis_candidate_is_blocked_before_files_backups_or_restart(self):
+  self.configure(reject_analysis=True);result=self.run_deploy();self.assertNotEqual(result.returncode,0)
+  self.assertEqual(self.git('rev-parse','HEAD').strip(),self.base);self.assertEqual(self.restarts(),[])
+  self.assertFalse((self.app/'.deployments').exists());self.assert_private_state()
  def test_wrong_host_and_newer_head_stop(self):
   self.configure(hostname='different-server');self.assertNotEqual(self.run_deploy().returncode,0);self.configure();(self.app/'README.md').write_text('another change');self.commit(self.app,'another deployment');head=self.git('rev-parse','HEAD');self.assertNotEqual(self.run_deploy().returncode,0);self.assertEqual(self.git('rev-parse','HEAD'),head);self.assertEqual(self.restarts(),[])
  def test_local_edits_and_untracked_collision_are_not_overwritten(self):

@@ -125,6 +125,9 @@ def main():
     validate_package(package, args.manifest_sha256)
     if command('git', 'rev-parse', 'HEAD') != BASE or command('git', 'status', '--porcelain', '--untracked-files=all'):
         raise RuntimeError('Production checkout differs from clean baseline')
+    subprocess.run([PYTHON, '/opt/callbot-astra-releases/check_analysis_release.py',
+                    '--root', str(PROJECT), '--overlay', str(package / 'files'),
+                    '--files', *FILES], cwd=PROJECT, check=True)
     working = command('systemctl', 'show', 'callbot-crm.service', '-p', 'WorkingDirectory', '--value')
     execution = command('systemctl', 'show', 'callbot-crm.service', '-p', 'ExecStart', '--value')
     if working != str(PROJECT) or f'path={PYTHON} ' not in execution or f'argv[]={PYTHON} -m crm.web ' not in execution:

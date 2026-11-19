@@ -13,6 +13,8 @@ SERVICES="callbot-astra callbot-astra-worker callbot-astra-queue-runner callbot-
 if [ -n "$(git status --porcelain)" ]; then
   echo "СТОП: в /opt/callbot-astra есть незакоммиченные изменения"; git status --short; exit 1
 fi
+TARGET=$(git rev-parse --verify 'FETCH_HEAD^{commit}')
+.venv/bin/python /opt/callbot-astra-releases/check_analysis_release.py --root /opt/callbot-astra --commit "$TARGET"
 mkdir -p "$STATE"
 git rev-parse HEAD > "$STATE/head"
 git rev-parse --abbrev-ref HEAD > "$STATE/branch"

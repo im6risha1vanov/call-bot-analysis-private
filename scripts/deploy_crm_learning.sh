@@ -6,6 +6,7 @@ umask 077
 APP=/opt/callbot-astra
 UNIT=callbot-crm.service
 PYTHON="$APP/.venv/bin/python"
+GUARD=/opt/callbot-astra-releases/check_analysis_release.py
 DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 MODE=${1:-apply}
 case "$MODE" in apply|check|rollback) ;; *) echo 'Use apply, check or rollback.' >&2; exit 2;; esac
@@ -24,6 +25,10 @@ git diff --quiet && git diff --cached --quiet || { echo 'STOP: tracked local edi
 if [[ "$MODE" == check || "$MODE" == apply ]]; then
   [[ $(git rev-parse HEAD) == "$BASE" ]] || { echo 'STOP: production commit changed; rebuild the release.' >&2; exit 1; }
   git bundle verify "$DIR/update.bundle" >/dev/null
+  # Fetch only Git objects; no working files or services change before this check.
+  git fetch --no-tags "$DIR/update.bundle" "$SOURCE_REF"
+  [[ $(git rev-parse FETCH_HEAD) == "$TARGET" ]] || { echo 'STOP: bundle target mismatch.' >&2; exit 1; }
+  "$PYTHON" "$GUARD" --root "$APP" --commit "$TARGET"
   [[ "$MODE" != check ]] || { echo 'Preflight OK. No changes made.'; exit 0; }
 fi
 mkdir -p "$APP/.deployments"
@@ -53,6 +58,7 @@ health_release() {
 rollback_code() {
   [[ $(git rev-parse HEAD) == "$TARGET" ]] || { echo 'Rollback stopped: HEAD changed.' >&2; return 1; }
   git diff --quiet && git diff --cached --quiet || { echo 'Rollback stopped: tracked files changed.' >&2; return 1; }
+  "$PYTHON" "$GUARD" --root "$APP" --commit "$BASE" || return 1
   git apply --index --check "$DIR/rollback.patch" || return 1
   (umask 022; git apply --index --binary "$DIR/rollback.patch") || return 1
   git -c user.name='Averon deploy' -c user.email='deploy@localhost' commit -m "Rollback CRM learning release ${TARGET:0:7}" || return 1

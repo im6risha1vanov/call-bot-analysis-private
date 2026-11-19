@@ -23,6 +23,7 @@ UNITS = ['callbot-astra.service', 'callbot-astra-worker.service',
 CRM_UNIT = 'callbot-crm.service'
 CRM_HTTP_PORT = 8095
 CRM_READY_TIMEOUT_SECONDS = 120
+ANALYSIS_GUARD = Path('/opt/callbot-astra-releases/check_analysis_release.py')
 
 
 def command(args, *, cwd=PROJECT, umask=-1):
@@ -169,6 +170,8 @@ def switch(target, *, rollback=False, schema_compatible=False, baseline_manifest
     if command(['git','status','--porcelain']):
         raise RuntimeError('Uncommitted changes: save them before switching releases')
     current=command(['git','rev-parse','HEAD'])
+    # Reject the exported candidate before stopping services or changing checkout.
+    analysis_preflight(target)
     if rollback and not schema_compatible and command(['git', 'diff', '--name-only', current, target, '--', 'migrations']):
         raise RuntimeError('Migration files differ. Verify the database is compatible with the rollback target before using --schema-compatible')
     current_units = units_for(current)
@@ -217,6 +220,10 @@ def switch(target, *, rollback=False, schema_compatible=False, baseline_manifest
         raise
     print(json.dumps({'commit':target,'verified_tracked_files':files,'services':f'{len(target_units)} active',
                       'database':'preserved; no down migration'},ensure_ascii=False))
+
+
+def analysis_preflight(target):
+    command([sys.executable, str(ANALYSIS_GUARD), '--root', str(PROJECT), '--commit', target])
 
 
 def run_plan(args, config_path):

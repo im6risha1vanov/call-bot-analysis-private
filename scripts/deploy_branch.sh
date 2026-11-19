@@ -14,6 +14,8 @@ echo "откат: $(g rev-parse --short HEAD)"
 if ! g diff --quiet || ! g diff --cached --quiet; then
   echo 'СТОП: на сервере есть незакоммиченные правки:'; g status --short; exit 1
 fi
+TARGET=$(g rev-parse --verify "private-backup/$BRANCH^{commit}")
+.venv/bin/python /opt/callbot-astra-releases/check_analysis_release.py --root /opt/callbot-astra --commit "$TARGET"
 if ! g merge --no-edit "private-backup/$BRANCH"; then
   conflicts=$(g diff --name-only --diff-filter=U)
   if [ "$conflicts" = crm/static/index.html ]; then

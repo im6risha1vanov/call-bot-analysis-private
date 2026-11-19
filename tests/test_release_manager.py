@@ -99,6 +99,7 @@ class ReleaseSwitchTests(unittest.TestCase):
         self.unresolved_review_at = 0
         stack = self.enterContext(ExitStack())
         stack.enter_context(patch.object(release, 'command', self.command))
+        self.preflight = stack.enter_context(patch.object(release, 'analysis_preflight'))
         stack.enter_context(patch.object(release, 'database', self.database))
         stack.enter_context(patch.object(release, 'verify_files', self.verify_files))
         stack.enter_context(patch.object(release, 'wait_healthy', self.wait_healthy))
@@ -155,11 +156,18 @@ class ReleaseSwitchTests(unittest.TestCase):
 
     def test_migration_follows_quiescence_and_verification_and_includes_crm(self):
         release.switch(TARGET)
+        self.preflight.assert_called_once_with(TARGET)
         units = (*release.UNITS, 'callbot-crm.service')
         self.assertEqual(self.events, [
             ('status', 1), ('stop', units), ('status', 2), ('checkout', TARGET),
             ('verify', TARGET), ('migrate', TARGET), ('start', units), ('health', units),
         ])
+
+    def test_bad_analysis_release_aborts_before_database_services_or_checkout(self):
+        self.preflight.side_effect = RuntimeError('Original analysis package changed: analysis.py')
+        with self.assertRaisesRegex(RuntimeError, 'Original analysis package changed'):
+            release.switch(TARGET)
+        self.assertEqual(self.events, [])
 
     def test_work_claimed_during_shutdown_aborts_before_migration(self):
         self.busy_after_stop = True

@@ -28,6 +28,9 @@
 set -euo pipefail
 APP=/opt/callbot-astra
 cd "$APP"
+case "${1:-}" in
+  install|update) .venv/bin/python /opt/callbot-astra-releases/check_analysis_release.py --root "$APP" ;;
+esac
 DATABASE_URL=$(grep -m1 '^DATABASE_URL=' .env | cut -d= -f2- | sed "s/^[\"']//; s/[\"']\$//")
 BOT_SERVICES="callbot-astra callbot-astra-worker callbot-astra-queue-runner"
 PORT=8095
