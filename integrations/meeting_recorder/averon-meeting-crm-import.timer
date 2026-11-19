@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodically import finalized meetings to local CRM
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=1min
+Persistent=true
+Unit=averon-meeting-crm-import.service
+
+[Install]
+WantedBy=timers.target

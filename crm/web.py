@@ -24,7 +24,7 @@ from aiohttp import BodyPartReader, web  # noqa: E402
 import mango_client  # noqa: E402
 from tools import Forbidden, home_client_id, is_privileged  # noqa: E402
 from . import activity, economics, lead_import, lead_qualification
-from . import learning, tour, personal, personal_connections
+from . import learning, tour, personal, personal_connections, team_assignments, team_meetings
 from . import admin_api, admin_integrations, admin_permissions, admin_pipelines, admin_store
 from . import accounts, ask as asking, auth, automation_agent, automations, cabinet, call_analysis, callcenter_access, callcenter_db, callcenter_match, callcenter_robot, company, contracts, deals, donor_agent, gpt, journal, overview, people, platform, recording, reviews, sources, staff, store, training  # noqa: E402
 from . import prompts as prompt_mode, robot, webphone, robot_api, robot_prices, robot_runner, robot_store  # noqa: E402
@@ -1626,6 +1626,8 @@ def build(pool) -> web.Application:
     app.router.add_get('/api/me', api_me)
     app.router.add_routes(admin_api.routes(viewer, body, POOL))
     app.router.add_routes(personal.routes(viewer, body, POOL))
+    app.router.add_routes(team_assignments.routes(viewer, body, POOL))
+    app.router.add_routes(team_meetings.routes(viewer, body, POOL))
     app.router.add_routes(personal_connections.routes(viewer, body, POOL))
     from crm import personal_executor_api
     app.router.add_routes(personal_executor_api.routes(viewer, body, POOL))

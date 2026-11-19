@@ -1,0 +1,18 @@
+[Unit]
+Description=Averon meeting import to local CRM
+After=network.target
+
+[Service]
+Type=oneshot
+User=averon-meetings
+Group=averon-meetings
+LoadCredential=meeting_dispatch:/var/lib/averon-meetings/teams/dispatch-ledger.json
+EnvironmentFile=/etc/averon-meeting-crm-import.env
+ExecStart=/usr/bin/python3 /opt/averon-meetings-crm-import/importer.py
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/averon-meetings/crm-import
+TimeoutStartSec=180
