@@ -82,14 +82,29 @@ async def train_assignment(pool, actor, call_id: int) -> int:
         actor.client_id, actor.extension, f'review:{call_id}', actor.telegram_user_id)
 
 
+def env_copy_tokens() -> list[str]:
+    return [t for t in (t.strip() for t in os.getenv('REVIEW_COPY_TO', '').split(',')) if t]
+
+
+async def copy_tokens(pool, client_id: int) -> tuple[list[str], str]:
+    """Список получателей копий и откуда он: 'crm' (раздел «Сотрудники») или 'env' (REVIEW_COPY_TO)."""
+    try:
+        tokens = await pool.fetchval('SELECT tokens FROM review_copy_lists WHERE client_id=$1', client_id)
+    except Exception as exc:
+        if exc.__class__.__name__ != 'UndefinedTableError':
+            raise
+        tokens = None  # до миграции 019
+    return (list(tokens), 'crm') if tokens is not None else (env_copy_tokens(), 'env')
+
+
 async def copy_chat_ids(pool, client_id: int) -> list[int]:
-    """Кому уходит полная копия каждого разбора: REVIEW_COPY_TO через запятую.
+    """Кому уходит полная копия каждого разбора: список из CRM, а пока его нет, REVIEW_COPY_TO через запятую.
 
     Число — Telegram ID. Иначе сотрудник бота по добавочному или имени
     (`head:marozeto`, `@marozeto`): его ID берётся из employees, когда он нажмёт
     /start; до этого он просто пропускается."""
     ids = []
-    for token in (t.strip() for t in os.getenv('REVIEW_COPY_TO', '').split(',')):
+    for token in (await copy_tokens(pool, client_id))[0]:
         if re.fullmatch(r'-?\d+', token):
             ids.append(int(token))
         elif token:
@@ -132,9 +147,21 @@ async def deliver_now(pool, bot, call_id: int) -> dict:
         claimed = await pool.fetchval(
             'UPDATE call_reviews SET copy_sent_at=now() WHERE call_id=$1 AND copy_sent_at IS NULL RETURNING call_id', call_id)
         if claimed:
+            from . import prompts
             for chat in copies:
+                # Личный промт из режима промта: свой разбор этого звонка; если сломался —
+                # причина и стандартная копия.
                 try:
-                    await bot.send_message(chat, render.details_message(row['meta'], row['data']), parse_mode='HTML')
+                    text, problem, cost = await prompts.personal_review(pool, row, chat)
+                    await prompts.add_spend(pool, row['client_id'], cost)
+                except Exception:
+                    log.exception('личный разбор не собран, call id=%s chat=%s', call_id, chat)
+                    text, problem = None, None
+                try:
+                    if problem:
+                        await bot.send_message(chat, f'⚠️ Ваш личный промт разбора не сработал на этом звонке: {problem}. '
+                                                     'Ниже стандартный разбор.', parse_mode=None)
+                    await bot.send_message(chat, text or render.details_message(row['meta'], row['data']), parse_mode='HTML')
                     sent.setdefault('copy', []).append(chat)
                 except Exception:
                     log.exception('копия разбора не доставлена, call id=%s chat=%s', call_id, chat)

@@ -41,7 +41,7 @@ def install(router, pool_getter):
             logging.getLogger(__name__).exception('review details failed')
             await cq.bot.send_message(cq.from_user.id, 'Не удалось открыть разбор. Попробуйте позже.', parse_mode=None)
 
-    @router.callback_query(F.data.startswith('cb:'))
+    @router.callback_query(F.data.regexp(r'^cb:[a-z]:\d+$'))
     async def callback_task(cq):
         await cq.answer()
         try:

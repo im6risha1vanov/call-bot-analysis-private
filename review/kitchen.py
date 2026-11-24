@@ -373,8 +373,10 @@ async def write(tables: list[sheets.Table], *, http=None, access_token=None) -> 
                 if grid_cols < table.width:
                     grow.append({'appendDimension': {'sheetId': sheet_id, 'dimension': 'COLUMNS', 'length': table.width - grid_cols}})
                     grid_cols = table.width
-                if grow:
-                    await batch(grow, sheet_id)
+                # Объединения прошлых разделителей снимаются до записи, иначе строка на их месте теряет ячейки.
+                grow.append({'unmergeCells': {'range': {'sheetId': sheet_id, 'startRowIndex': 0, 'endRowIndex': grid_rows,
+                                                        'startColumnIndex': 0, 'endColumnIndex': grid_cols}}})
+                await batch(grow, sheet_id)
             response = await client.post(sheets.API + spreadsheet + f"/values/'{title}':clear", headers=headers, json={})
             response.raise_for_status()
             response = await client.put(sheets.API + spreadsheet + f"/values/'{title}'!A1", headers=headers,

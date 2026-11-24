@@ -24,6 +24,7 @@ from crypto_util import decrypt
 from deepgram_client import transcribe_bytes
 from queue_runner import RetryLater, on_startup, register
 from review import callbacks as review_callbacks, engine as review_engine, kitchen as review_kitchen, store as review_store
+from review import prompts as review_prompts
 
 log = logging.getLogger("callbot-astra-worker.analyze_call")
 
@@ -145,7 +146,8 @@ async def analyze_call(pool: asyncpg.Pool, task: asyncpg.Record) -> dict:
             elif review_engine.enabled():
                 # Разбор по результату: один запрос вместо оценки и короткого
                 # отчёта. Балла нет; level нужен только для статистики.
-                review, cost = await review_engine.run(transcript, await _review_meta(pool, client, call))
+                review, cost = await review_prompts.run_common_review(
+                    pool, transcript, await _review_meta(pool, client, call), bot=_bot)
                 analysis, score, level = review, None, review_engine.level(review)
                 short_report = {"result": review.get("rop_line"), "good": [], "weak": []}
             else:

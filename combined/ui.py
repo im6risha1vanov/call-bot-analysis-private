@@ -32,7 +32,8 @@ def install(router,pool_getter):
             logging.getLogger(__name__).exception('combined command failed')
             await message.answer('Не удалось открыть разбор. Результат сохранён; повторите /combined_analysis.')
 
-    @router.callback_query(F.data.startswith('cb:'))
+    # cb:d:<id>:<n>; перезвоны (review/ui.py) тоже начинаются с cb:, но у них три части.
+    @router.callback_query(F.data.regexp(r'^cb:d:\d+:\d+$'))
     async def callback(cq):
         await cq.answer()
         pool=pool_getter()
