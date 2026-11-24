@@ -2,12 +2,14 @@
 import asyncio
 import json
 import os
+import sys
 import tempfile
 import tomllib
 import unittest
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace as NS
+from unittest.mock import AsyncMock, patch
 
 import httpx
 
@@ -1362,6 +1364,81 @@ class PhoneTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RuntimeError):
             await sip.dial("79990001122", originate=asterisk_down)
         self.assertEqual(sip.PENDING, {})  # иначе робот навсегда «занят» для кампаний CRM
+
+    async def test_ari_read_timeout_preserves_pending_call_metadata(self):
+        from voice import sip
+
+        request_ids = []
+
+        def lose_response(request):
+            request_ids.append(json.loads(request.content)['variables']['VOICE_ID'])
+            raise httpx.ReadTimeout('Mock Asterisk response lost', request=request)
+
+        async def originate(call_id, phone):
+            client = httpx.AsyncClient(transport=httpx.MockTransport(lose_response))
+            return await sip.ari_originate(call_id, phone, http=client)
+
+        metadata = {'campaign_id': 10, 'target_id': 20, 'owner': 'fixture'}
+        with (
+            patch.dict(sip.PENDING, clear=True),
+            patch.dict(os.environ, {'VOICE_ARI_PASSWORD': 'fixture'}),
+            patch.object(sip, '_warm_up_greeting', new_callable=AsyncMock),
+        ):
+            with self.assertRaises(sip.OriginateUnconfirmed):
+                await sip.dial('0000000000', meta=metadata, originate=originate)
+            call_id, = request_ids
+            self.assertIn(call_id, sip.PENDING, 'A late AudioSocket event must still identify the campaign')
+            pending = sip.PENDING[call_id]
+            self.assertEqual(pending.meta, metadata)
+            pending.connected.set()
+
+    async def test_ari_connect_timeout_releases_pending_call_for_retry(self):
+        from voice import sip
+
+        def reject_connection(request):
+            raise httpx.ConnectTimeout('Mock Asterisk connection not opened', request=request)
+
+        async def originate(call_id, phone):
+            client = httpx.AsyncClient(transport=httpx.MockTransport(reject_connection))
+            return await sip.ari_originate(call_id, phone, http=client)
+
+        with (
+            patch.dict(sip.PENDING, clear=True),
+            patch.dict(os.environ, {'VOICE_ARI_PASSWORD': 'fixture'}),
+            patch.object(sip, '_warm_up_greeting', new_callable=AsyncMock),
+        ):
+            with self.assertRaises(httpx.ConnectTimeout):
+                await sip.dial('0000000000', originate=originate)
+            self.assertEqual(sip.PENDING, {})
+
+    async def test_ari_unconfirmed_timeout_does_not_record_no_answer(self):
+        from voice import sip
+
+        pending = sip.Pending('0000000000', 'kitchen')
+        with (
+            patch.dict(sip.PENDING, {'unconfirmed-fixture': pending}, clear=True),
+            patch.object(sip, 'RING_TIMEOUT_S', -15),
+            patch.object(sip.results, 'save', new_callable=AsyncMock) as save,
+        ):
+            await sip._no_answer_watch('unconfirmed-fixture', pending, confirmed=False)
+            self.assertEqual(sip.PENDING, {})
+            save.assert_not_awaited()
+
+    async def test_dial_api_only_flags_ambiguous_origination(self):
+        from voice import sip
+
+        response_web = NS(json_response=lambda body, status: NS(body=body, status=status))
+        request = NS(json=AsyncMock(return_value={'phone': '0000000000', 'target_id': 20}))
+        errors = (
+            (sip.OriginateUnconfirmed('Mock Asterisk did not confirm'), True),
+            (httpx.ConnectTimeout('Mock Asterisk connection not opened'), False),
+        )
+        with patch.dict(sys.modules, {'aiohttp': NS(web=response_web)}):
+            for error, uncertain in errors:
+                with self.subTest(error=type(error).__name__), patch.object(sip, 'dial', side_effect=error):
+                    response = await sip.api_dial(request)
+                    self.assertEqual(response.status, 503)
+                    self.assertIs(response.body.get('uncertain', False), uncertain)
 
     def test_downsample(self):
         import array

@@ -193,6 +193,10 @@ PENDING: dict[str, Pending] = {}
 ACTIVE = [0]  # звонков на линии сейчас
 
 
+class OriginateUnconfirmed(RuntimeError):
+    """Asterisk might have received the dial request, but gave no usable confirmation."""
+
+
 async def ari_originate(call_id: str, phone: str, *, http: httpx.AsyncClient | None = None) -> dict:
     params = {
         "endpoint": f"PJSIP/{phone}@{TRUNK}",
@@ -203,11 +207,19 @@ async def ari_originate(call_id: str, phone: str, *, http: httpx.AsyncClient | N
     if caller_id:
         params["callerId"] = caller_id
     auth = (ARI_USER, os.environ["VOICE_ARI_PASSWORD"])
-    async with (http or httpx.AsyncClient(timeout=10)) as client:
-        r = await client.post(ARI_URL + "/channels", params=params, auth=auth, json={"variables": {"VOICE_ID": call_id}})
+    try:
+        async with (http or httpx.AsyncClient(timeout=10)) as client:
+            r = await client.post(ARI_URL + "/channels", params=params, auth=auth, json={"variables": {"VOICE_ID": call_id}})
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout):
+        raise  # заявка ещё не была отправлена
+    except (httpx.TransportError, httpx.DecodingError) as exc:
+        raise OriginateUnconfirmed("Asterisk не подтвердил заявку на звонок") from exc
     if r.status_code >= 300:
         raise RuntimeError(f"Asterisk ARI {r.status_code}: {r.text[:300]}")
-    return r.json()
+    try:
+        return r.json()
+    except ValueError as exc:
+        raise OriginateUnconfirmed("Asterisk не подтвердил заявку на звонок") from exc
 
 
 async def dial(phone: str, operator: str = "kitchen", *, meta: dict | None = None, originate=ari_originate) -> str:
@@ -220,6 +232,9 @@ async def dial(phone: str, operator: str = "kitchen", *, meta: dict | None = Non
     pending = PENDING[call_id] = Pending(phone, operator, dict(meta or {}))
     try:
         await originate(call_id, phone)
+    except OriginateUnconfirmed:
+        asyncio.create_task(_no_answer_watch(call_id, pending, confirmed=False))
+        raise
     except BaseException:
         PENDING.pop(call_id, None)  # иначе /status навсегда «занят» и кампании CRM встают до перезапуска робота
         raise
@@ -241,12 +256,14 @@ async def _warm_up_greeting(op) -> None:
             return
 
 
-async def _no_answer_watch(call_id: str, pending: Pending) -> None:
+async def _no_answer_watch(call_id: str, pending: Pending, *, confirmed: bool = True) -> None:
     """Клиент не взял трубку: AudioSocket так и не подключился. Пишем НДЗ."""
     try:
         await asyncio.wait_for(pending.connected.wait(), RING_TIMEOUT_S + 15)
     except asyncio.TimeoutError:
         PENDING.pop(call_id, None)
+        if not confirmed:
+            return  # без подтверждения неизвестно, прозвучали ли гудки
         dialog = Dialog(load(pending.operator), backend=_NoModel())
         dialog.result = CallResult("ndz", "Не взял трубку")
         await results.save(dialog, phone=pending.phone, mode="телефон", extra={"call_id": call_id, **{k: v for k, v in pending.meta.items() if k not in ("approved_replies", "contact_context")}})
@@ -523,6 +540,24 @@ async def reply_audio(operator_id: str, owner: str, text: str, synthesize=speech
     finally:
         speech.settings_override.reset(token)
 
+async def api_dial(request):
+    from aiohttp import web
+
+    data = await request.json()
+    meta = {k: data[k] for k in ("campaign_id", "owner", "target_id", "approved_replies", "contact_context") if data.get(k) not in (None, "")}
+    try:
+        call_id = await dial(str(data.get("phone", "")), str(data.get("operator") or "kitchen"), meta=meta)
+    except OriginateUnconfirmed as e:
+        log.warning("%s, цель %s", e, meta.get("target_id"))
+        return web.json_response({"error": str(e), "uncertain": True}, status=503)
+    except ValueError as e:  # номер или оператор не годятся: повторять бесполезно
+        return web.json_response({"error": str(e)}, status=400)
+    except Exception as e:  # Asterisk или связь с ним: CRM повторит номер позже
+        log.warning("звонок %s не заказан: %s", data.get("phone"), e)
+        return web.json_response({"error": str(e) or type(e).__name__}, status=503)
+    return web.json_response({"id": call_id})
+
+
 async def serve() -> None:
     from aiohttp import web
 
@@ -545,18 +580,6 @@ async def serve() -> None:
         except Exception:
             log.exception("Не удалось создать аудио ответа")
             return web.json_response({"error": "Не удалось создать аудио ответа"}, status=503)
-
-    async def api_dial(request: web.Request) -> web.Response:
-        data = await request.json()
-        meta = {k: data[k] for k in ("campaign_id", "owner", "target_id", "approved_replies", "contact_context") if data.get(k) not in (None, "")}
-        try:
-            call_id = await dial(str(data.get("phone", "")), str(data.get("operator") or "kitchen"), meta=meta)
-        except ValueError as e:  # номер или оператор не годятся: повторять бесполезно
-            return web.json_response({"error": str(e)}, status=400)
-        except Exception as e:  # Asterisk или связь с ним: CRM повторит номер позже
-            log.warning("звонок %s не заказан: %s", data.get("phone"), e)
-            return web.json_response({"error": str(e) or type(e).__name__}, status=503)
-        return web.json_response({"id": call_id})
 
     async def api_status(request: web.Request) -> web.Response:
         """Сколько звонков идёт: CRM не заказывает следующий, пока робот занят."""
