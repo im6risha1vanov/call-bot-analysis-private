@@ -362,6 +362,9 @@ class CallSession:
         except Exception as e:
             log.exception("ошибка ответа модели")
             await self.send_event({"type": "error", "text": f"модель: {e}"})
+            if self.mode == "телефон":
+                self.dialog.result = CallResult("error", "Диалог прерван из-за ошибки модели", error="model_unavailable")
+                await self._finish("ошибка ответа модели")
             return
         finally:
             started.set()
@@ -426,7 +429,7 @@ class CallSession:
     async def parting_words(self) -> bytes:
         """Робот попрощался: ждём, не скажет ли клиент «до свидания», и отвечаем, как Ольга. Звук или b""."""
         if not self.voice_enabled or not speech.setting("goodbye_wait", True) or self.saved is None \
-                or self.saved.get("outcome") == "ndz":
+                or self.saved.get("outcome") in ("ndz", "error"):
             return b""
         try:
             text = await asyncio.wait_for(self.after_end.get(), GOODBYE_WAIT_S)

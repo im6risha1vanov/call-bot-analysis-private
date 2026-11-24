@@ -1249,6 +1249,75 @@ class CallSessionTest(unittest.IsolatedAsyncioTestCase):
 
 
 class PhoneTest(unittest.IsolatedAsyncioTestCase):
+    async def test_model_permission_error_records_failure_and_closes_audiosocket(self):
+        from uuid import UUID, uuid4
+        from voice import sip
+
+        requests = []
+        finished = asyncio.Event()
+
+        def deny_model(request):
+            if request.method == "POST":
+                requests.append(request)
+            return httpx.Response(403, json={"error": {"type": "permission_error", "message": "fixture"}})
+
+        class ScriptASR:
+            def __init__(self, call):
+                self.call = call
+
+            async def run(self):
+                await self.call.heard("Алло", True)
+                await asyncio.sleep(0.15)
+                await self.call.heard("Расскажите подробнее о вашем предложении", True)
+
+            async def send(self, pcm):
+                pass
+
+            async def close(self):
+                pass
+
+        async def synth(text, voice):
+            return b"\x10\x00" * (speech.TTS_RATE // 50)
+
+        call_id = str(uuid4())
+        with (
+            tempfile.TemporaryDirectory() as temp,
+            patch.dict(sip.PENDING, {call_id: sip.Pending("0000000000", "kitchen", {"campaign_id": 7})}, clear=True),
+            patch.dict(os.environ, {"VOICE_LOG": str(Path(temp) / "calls.jsonl"), "VOICE_SHEET_ID": ""}),
+        ):
+            async with httpx.AsyncClient(transport=httpx.MockTransport(deny_model)) as http:
+                async def on_socket(reader, writer):
+                    backend = YandexBackend("yandexgpt", folder="fixture", api_key="fixture", http=http)
+                    call = sip.PhoneCall(reader, writer, make_dialog=lambda op: Dialog(op, backend),
+                                         make_asr=ScriptASR, synthesize=synth)
+                    call.recording = False
+                    try:
+                        await call.run()
+                    finally:
+                        finished.set()
+
+                server = await asyncio.start_server(on_socket, "127.0.0.1", 0)
+                async with server:
+                    reader, writer = await asyncio.open_connection("127.0.0.1", server.sockets[0].getsockname()[1])
+                    try:
+                        writer.write(sip.frame(sip.KIND_UUID, UUID(call_id).bytes))
+                        await writer.drain()
+                        async with asyncio.timeout(3):
+                            while (await sip.read_frame(reader))[0] != sip.KIND_HANGUP:
+                                pass
+                            await finished.wait()
+                    finally:
+                        writer.close()
+                        await writer.wait_closed()
+                        await asyncio.wait_for(finished.wait(), 3)
+
+            entry, = Path(os.environ["VOICE_LOG"]).read_text(encoding="utf-8").splitlines()
+            result = json.loads(entry)
+            self.assertEqual((result["outcome"], result["error"]), ("error", "model_unavailable"))
+            self.assertEqual((result["call_id"], result["campaign_id"]), (call_id, 7))
+            self.assertEqual(len(requests), 1)
+            self.assertEqual(sip.PENDING, {})
+
     async def test_audiosocket_call_end_to_end(self):
         import uuid as uuidlib
         from voice import sip
